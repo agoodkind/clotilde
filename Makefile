@@ -38,7 +38,7 @@ build: ## Build the clotilde binary
 	@echo "✓ Built to dist/clotilde"
 
 test: ## Run tests with Ginkgo
-	@go run github.com/onsi/ginkgo/v2/ginkgo -r --randomize-all --randomize-suites --fail-on-pending
+	@go run github.com/onsi/ginkgo/v2/ginkgo -r --randomize-all --randomize-suites --fail-on-pending --race
 
 test-watch: ## Run tests in watch mode
 	@echo "Starting test watch mode..."
