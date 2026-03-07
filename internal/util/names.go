@@ -2,8 +2,7 @@ package util
 
 import (
 	"fmt"
-	"math/rand"
-	"time"
+	"math/rand/v2"
 )
 
 var adjectives = []string{
@@ -22,12 +21,10 @@ var nouns = []string{
 	"mouse", "owl", "seal", "swan", "bat",
 }
 
-var rng = rand.New(rand.NewSource(time.Now().UnixNano()))
-
 // GenerateRandomName generates a random name in the format "adjective-noun"
 func GenerateRandomName() string {
-	adjective := adjectives[rng.Intn(len(adjectives))]
-	noun := nouns[rng.Intn(len(nouns))]
+	adjective := adjectives[rand.IntN(len(adjectives))]
+	noun := nouns[rand.IntN(len(nouns))]
 	return fmt.Sprintf("%s-%s", adjective, noun)
 }
 
@@ -49,5 +46,5 @@ func GenerateUniqueRandomName(existingNames []string) string {
 	}
 
 	// If we still can't find a unique name, append a random number
-	return fmt.Sprintf("%s-%d", GenerateRandomName(), rng.Intn(1000))
+	return fmt.Sprintf("%s-%d", GenerateRandomName(), rand.IntN(1000))
 }
