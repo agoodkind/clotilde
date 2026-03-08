@@ -1,43 +1,56 @@
 package util
 
 import (
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGenerateRandomName(t *testing.T) {
 	name := GenerateRandomName()
 
-	// Should be in format "adjective-noun"
-	parts := strings.Split(name, "-")
+	// Should be in format "YYYY-MM-DD-adjective-noun"
+	datePrefix := time.Now().Format("2006-01-02")
+	if !strings.HasPrefix(name, datePrefix+"-") {
+		t.Errorf("Expected name to start with '%s-', got '%s'", datePrefix, name)
+	}
+
+	// Extract adjective-noun suffix
+	suffix := strings.TrimPrefix(name, datePrefix+"-")
+	parts := strings.Split(suffix, "-")
 	if len(parts) != 2 {
-		t.Errorf("Expected name in format 'adjective-noun', got '%s'", name)
+		t.Errorf("Expected adjective-noun suffix, got '%s'", suffix)
 	}
 
 	// Should contain valid adjective
-	adjective := parts[0]
 	found := false
 	for _, adj := range adjectives {
-		if adj == adjective {
+		if adj == parts[0] {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("Generated name '%s' has invalid adjective '%s'", name, adjective)
+		t.Errorf("Generated name '%s' has invalid adjective '%s'", name, parts[0])
 	}
 
 	// Should contain valid noun
-	noun := parts[1]
 	found = false
 	for _, n := range nouns {
-		if n == noun {
+		if n == parts[1] {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("Generated name '%s' has invalid noun '%s'", name, noun)
+		t.Errorf("Generated name '%s' has invalid noun '%s'", name, parts[1])
+	}
+
+	// Full format check: YYYY-MM-DD-adjective-noun
+	pattern := `^\d{4}-\d{2}-\d{2}-[a-z]+-[a-z]+$`
+	if !regexp.MustCompile(pattern).MatchString(name) {
+		t.Errorf("Expected name matching '%s', got '%s'", pattern, name)
 	}
 }
 
@@ -56,7 +69,12 @@ func TestGenerateRandomName_Variety(t *testing.T) {
 }
 
 func TestGenerateUniqueRandomName(t *testing.T) {
-	existing := []string{"happy-fox", "brave-wolf", "clever-bear"}
+	datePrefix := time.Now().Format("2006-01-02")
+	existing := []string{
+		datePrefix + "-happy-fox",
+		datePrefix + "-brave-wolf",
+		datePrefix + "-clever-bear",
+	}
 
 	name := GenerateUniqueRandomName(existing)
 
@@ -67,30 +85,29 @@ func TestGenerateUniqueRandomName(t *testing.T) {
 		}
 	}
 
-	// Should be in valid format
-	parts := strings.Split(name, "-")
-	if len(parts) < 2 {
-		t.Errorf("Expected name in format 'adjective-noun', got '%s'", name)
+	// Should start with date prefix
+	if !strings.HasPrefix(name, datePrefix+"-") {
+		t.Errorf("Expected name to start with '%s-', got '%s'", datePrefix, name)
 	}
 }
 
 func TestGenerateUniqueRandomName_FallbackWithNumber(t *testing.T) {
 	// Create a scenario where all possible combinations are taken
-	// This is actually hard to test since we have 25*25 = 625 combinations
-	// So we'll just test that the function doesn't hang
+	// We have 25*25 = 625 combinations
+	datePrefix := time.Now().Format("2006-01-02")
 	existing := []string{}
 	for _, adj := range adjectives {
 		for _, noun := range nouns {
-			existing = append(existing, adj+"-"+noun)
+			existing = append(existing, datePrefix+"-"+adj+"-"+noun)
 		}
 	}
 
 	name := GenerateUniqueRandomName(existing)
 
-	// Should have added a number suffix
-	parts := strings.Split(name, "-")
-	if len(parts) != 3 {
-		t.Errorf("Expected name with number suffix in format 'adjective-noun-number', got '%s'", name)
+	// Should have added a number suffix: YYYY-MM-DD-adjective-noun-number
+	pattern := `^\d{4}-\d{2}-\d{2}-[a-z]+-[a-z]+-\d+$`
+	if !regexp.MustCompile(pattern).MatchString(name) {
+		t.Errorf("Expected name with number suffix matching '%s', got '%s'", pattern, name)
 	}
 }
 
@@ -102,8 +119,9 @@ func TestGenerateUniqueRandomName_Empty(t *testing.T) {
 		t.Error("Expected non-empty name")
 	}
 
-	parts := strings.Split(name, "-")
-	if len(parts) != 2 {
-		t.Errorf("Expected name in format 'adjective-noun', got '%s'", name)
+	// Should match YYYY-MM-DD-adjective-noun format
+	pattern := `^\d{4}-\d{2}-\d{2}-[a-z]+-[a-z]+$`
+	if !regexp.MustCompile(pattern).MatchString(name) {
+		t.Errorf("Expected name matching '%s', got '%s'", pattern, name)
 	}
 }
