@@ -266,6 +266,26 @@ var _ = Describe("Start Command", func() {
 		Expect(store.Exists("used-session")).To(BeTrue())
 	})
 
+	It("should auto-generate a date-prefixed name when no name provided", func() {
+		rootCmd := cmd.NewRootCmd()
+		rootCmd.SetOut(io.Discard)
+		rootCmd.SetErr(io.Discard)
+		rootCmd.SetArgs([]string{"--claude-bin", filepath.Join(fakeClaudeDir, "claude"), "start"})
+
+		err := rootCmd.Execute()
+		Expect(err).NotTo(HaveOccurred())
+
+		// Verify a session was created with a date-prefixed name
+		store := session.NewFileStore(clotildeRoot)
+		sessions, err := store.List()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sessions).To(HaveLen(1))
+
+		// Name should match YYYY-MM-DD-noun format
+		name := sessions[0].Name
+		Expect(name).To(MatchRegexp(`^\d{4}-\d{2}-\d{2}-[a-z]+-[a-z]+$`))
+	})
+
 	It("should use profile model when specified", func() {
 		// Set up global config with profiles
 		cfg := &config.Config{

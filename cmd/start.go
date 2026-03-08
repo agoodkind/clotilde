@@ -26,15 +26,17 @@ func init() {
 // newStartCmd creates a fresh start command instance (avoids flag pollution in tests)
 func newStartCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "start <name> [-- <claude-flags>...]",
+		Use:   "start [name] [-- <claude-flags>...]",
 		Short: "Start a new named session",
 		Long: `Start a new Claude Code session with a human-friendly name.
+If no name is provided, one is generated automatically (e.g. "2026-03-08-happy-fox").
 Optionally specify a model and system prompt.
 
 Pass additional flags to Claude Code after '--':
   clotilde start my-session -- --debug api,hooks
-  clotilde start test --model haiku -- --verbose`,
-		Args: cobra.MinimumNArgs(1),
+  clotilde start test --model haiku -- --verbose
+  clotilde start                       # auto-generated name`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Extract additional args after '--'
 			var additionalArgs []string
@@ -43,12 +45,37 @@ Pass additional flags to Claude Code after '--':
 				additionalArgs = args[argsLenAtDash:]
 			}
 
-			// Check if session already exists - offer to resume instead
-			if clotildeRoot, err := config.FindClotildeRoot(); err == nil {
-				store := session.NewFileStore(clotildeRoot)
-				if store.Exists(args[0]) {
-					return handleExistingSession(cmd, args[0], clotildeRoot, store, additionalArgs)
+			// Generate or use provided name
+			var name string
+			if len(args) > 0 {
+				name = args[0]
+
+				// Check if session already exists - offer to resume instead
+				// (only for explicitly provided names)
+				if clotildeRoot, err := config.FindClotildeRoot(); err == nil {
+					store := session.NewFileStore(clotildeRoot)
+					if store.Exists(name) {
+						return handleExistingSession(cmd, name, clotildeRoot, store, additionalArgs)
+					}
 				}
+			} else {
+				// Generate a unique random name
+				clotildeRoot, err := config.FindClotildeRoot()
+				if err != nil {
+					return fmt.Errorf("not in a clotilde project (run 'clotilde init' first)")
+				}
+				store := session.NewFileStore(clotildeRoot)
+				sessions, err := store.List()
+				if err != nil {
+					return fmt.Errorf("failed to list sessions: %w", err)
+				}
+
+				existingNames := make([]string, len(sessions))
+				for i, sess := range sessions {
+					existingNames[i] = sess.Name
+				}
+
+				name = util.GenerateUniqueRandomName(existingNames)
 			}
 
 			// Resolve shorthand flags
@@ -70,7 +97,7 @@ Pass additional flags to Claude Code after '--':
 			}
 
 			// Build params from flags
-			params, err := buildSessionCreateParams(cmd, args[0])
+			params, err := buildSessionCreateParams(cmd, name)
 			if err != nil {
 				return err
 			}

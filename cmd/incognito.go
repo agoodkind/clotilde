@@ -20,13 +20,13 @@ func newIncognitoCmd() *cobra.Command {
 		Long: `Start a new incognito Claude Code session that automatically deletes
 itself when you exit. Useful for quick queries, testing, or sensitive work.
 
-If no name is provided, a random name like "happy-fox" will be generated.
+If no name is provided, one is generated automatically (e.g. "2026-03-08-happy-fox").
 
 The session and all associated data (transcripts, logs) will be permanently
 deleted when you exit Claude.
 
 Pass additional flags to Claude Code after '--':
-  clotilde incognito              # Random name like "brave-wolf"
+  clotilde incognito              # Auto-generated name
   clotilde incognito quick-test   # Explicit name
   clotilde incognito -- --debug api,hooks
 

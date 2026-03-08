@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-03-08
+
+### Changed
+
+- **Auto-generated session names**: `start` no longer requires a name argument. When omitted, a date-prefixed name is generated automatically (e.g. `2026-03-08-happy-fox`). The `incognito` command uses the same `YYYY-MM-DD-adjective-noun` format.
+
 ## [0.5.0] - 2026-02-23
 
 ### Added

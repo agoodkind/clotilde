@@ -3,6 +3,7 @@ package util
 import (
 	"fmt"
 	"math/rand/v2"
+	"time"
 )
 
 var adjectives = []string{
@@ -21,11 +22,12 @@ var nouns = []string{
 	"mouse", "owl", "seal", "swan", "bat",
 }
 
-// GenerateRandomName generates a random name in the format "adjective-noun"
+// GenerateRandomName generates a random name in the format "YYYY-MM-DD-noun"
 func GenerateRandomName() string {
+	date := time.Now().Format("2006-01-02")
 	adjective := adjectives[rand.IntN(len(adjectives))]
 	noun := nouns[rand.IntN(len(nouns))]
-	return fmt.Sprintf("%s-%s", adjective, noun)
+	return fmt.Sprintf("%s-%s-%s", date, adjective, noun)
 }
 
 // GenerateUniqueRandomName generates a random name that doesn't conflict with existing names
