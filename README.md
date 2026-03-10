@@ -55,7 +55,19 @@ Clotilde never patches or modifies Claude Code.
 
 **Download binary** (recommended)
 
-Download the latest release for your platform from [GitHub Releases](https://github.com/fgrehm/clotilde/releases).
+```bash
+# Linux (amd64)
+curl -fsSL https://github.com/fgrehm/clotilde/releases/latest/download/clotilde_linux_amd64.tar.gz | tar xz -C ~/.local/bin
+
+# Linux (arm64)
+curl -fsSL https://github.com/fgrehm/clotilde/releases/latest/download/clotilde_linux_arm64.tar.gz | tar xz -C ~/.local/bin
+
+# macOS (Apple Silicon)
+curl -fsSL https://github.com/fgrehm/clotilde/releases/latest/download/clotilde_darwin_arm64.tar.gz | tar xz -C ~/.local/bin
+
+# macOS (Intel)
+curl -fsSL https://github.com/fgrehm/clotilde/releases/latest/download/clotilde_darwin_amd64.tar.gz | tar xz -C ~/.local/bin
+```
 
 **mise:**
 ```bash
