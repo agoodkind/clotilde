@@ -148,6 +148,42 @@ Context is stored in session metadata and automatically injected into Claude at 
 
 Use `clotilde inspect <name>` to see a session's current context.
 
+## Zellij Tab Status (experimental)
+
+When running inside [Zellij](https://zellij.dev/), clotilde can update the tab name with an emoji showing what Claude is doing:
+
+| Status | Tab name |
+|---|---|
+| Claude finished | `✅ my-feature` |
+| Needs permission | `⚠️ my-feature` |
+| Waiting for input | `💤 my-feature` |
+| Running a command | `⚡ my-feature` |
+| Reading/searching | `📖 my-feature` |
+| Editing files | `✏️ my-feature` |
+| Thinking | `🤔 my-feature` |
+
+**Setup:**
+
+1. Install the [zellij-tab-name](https://github.com/Cynary/zellij-tab-name) plugin. Add to your Zellij config (`~/.config/zellij/config.kdl`):
+
+   ```kdl
+   load_plugins {
+       "https://github.com/Cynary/zellij-tab-name/releases/download/v0.4.2/zellij-tab-name.wasm"
+   }
+   ```
+
+2. Restart Zellij so the plugin loads.
+
+3. Opt in:
+
+   ```bash
+   clotilde setup --zellij-tab-status
+   ```
+
+**Disable per-session:** Set `CLOTILDE_NO_TAB_STATUS=1` in your environment.
+
+**How it works:** Clotilde hooks into Claude Code lifecycle events and sends tab rename messages via `zellij pipe` to the zellij-tab-name plugin, which targets the correct tab by pane ID (so it renames the right tab even when you're looking at a different one).
+
 ## Shorthand Flags
 
 Common permission modes and presets have short, memorable flags available on all session commands (`start`, `incognito`, `resume`, `fork`):
@@ -292,7 +328,7 @@ clotilde start myfeature --output-style-file ./my-style.md
 
 ## Commands
 
-### `clotilde setup [--local]`
+### `clotilde setup [--local] [--zellij-tab-status]`
 
 One-time setup that registers SessionStart hooks in `~/.claude/settings.json` (Claude Code's global user settings). Run this once after installing clotilde.
 
@@ -302,6 +338,9 @@ clotilde setup
 
 # Install hooks in ~/.claude/settings.local.json instead
 clotilde setup --local
+
+# Enable Zellij tab status (see Zellij Tab Status section)
+clotilde setup --zellij-tab-status
 ```
 
 After setup, `clotilde start` works in any project directory. The `.claude/clotilde/sessions/` directory is created automatically on first use.
