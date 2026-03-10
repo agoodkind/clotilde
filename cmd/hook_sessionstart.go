@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/fgrehm/clotilde/internal/config"
+	"github.com/fgrehm/clotilde/internal/notify"
 	"github.com/fgrehm/clotilde/internal/session"
 )
 
@@ -36,6 +37,11 @@ Handles fork registration, session ID updates, and context injection.`,
 		var hookData hookInput
 		if err := json.Unmarshal(input, &hookData); err != nil {
 			return fmt.Errorf("failed to parse hook input: %w", err)
+		}
+
+		// Log raw event for debugging (before any other processing)
+		if err := notify.LogEvent(input, hookData.SessionID); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Warning: failed to log event: %v\n", err)
 		}
 
 		// Guard against double execution (global + per-project hooks).
