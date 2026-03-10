@@ -39,7 +39,7 @@ Core functionality complete and tested. Recent work focused on session profiles 
 - **`/fork` slash command support**: Auto-detect and register forks created via Claude Code's `/fork` command ([spec](specs/slash-fork-handling.md))
 - **`adopt` command**: Register existing Claude Code sessions into Clotilde
 - **Session search**: Full-text search across transcripts
-- **Session export**: Export conversations to markdown
+- **Session export**: Export conversations to self-contained HTML ([spec](specs/session-export.md))
 - **Context templates**: Dynamic context (git branch, ticket info)
 - **Session tags**: Organize with labels
 - **Bulk operations**: Multi-select for batch delete
