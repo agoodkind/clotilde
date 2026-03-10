@@ -4,6 +4,10 @@ package config
 type Config struct {
 	// Profiles is a map of named session profiles
 	Profiles map[string]Profile `json:"profiles,omitempty"`
+
+	// ZellijTabStatus enables Zellij tab renaming with emoji status indicators.
+	// Requires the zellij-tab-name plugin.
+	ZellijTabStatus bool `json:"zellijTabStatus,omitempty"`
 }
 
 // Profile represents a named preset of session settings.
