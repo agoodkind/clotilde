@@ -47,7 +47,7 @@ Use --local to install hooks in ~/.claude/settings.local.json instead.`,
 			settingsPath := filepath.Join(claudeDir, settingsFile)
 
 			// Ensure ~/.claude directory exists
-			if !util.FileExists(claudeDir) {
+			if !util.DirExists(claudeDir) {
 				if err := os.MkdirAll(claudeDir, 0o755); err != nil {
 					return fmt.Errorf("failed to create ~/.claude directory: %w", err)
 				}

@@ -2,10 +2,12 @@ package export
 
 import (
 	"bufio"
+	"bytes"
 	"embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"os"
 	"strings"
@@ -26,34 +28,35 @@ type ExportData struct {
 }
 
 // FilterTranscript reads JSONL from r and returns only user and assistant entries as raw JSON.
+// Uses bufio.Reader instead of bufio.Scanner to handle arbitrarily long lines
+// (Claude transcripts can contain tool output blocks larger than 1MB).
 func FilterTranscript(r io.Reader) ([]json.RawMessage, error) {
-	scanner := bufio.NewScanner(r)
-	const maxCapacity = 1024 * 1024 // 1MB
-	buf := make([]byte, maxCapacity)
-	scanner.Buffer(buf, maxCapacity)
+	reader := bufio.NewReader(r)
 
 	var entries []json.RawMessage
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			// Trim trailing newline/carriage return
+			line = bytes.TrimRight(line, "\r\n")
 
-		var entry transcriptEntry
-		if err := json.Unmarshal(line, &entry); err != nil {
-			continue
+			if len(line) > 0 {
+				var entry transcriptEntry
+				if jsonErr := json.Unmarshal(line, &entry); jsonErr == nil {
+					if entry.Type == "user" || entry.Type == "assistant" {
+						raw := make(json.RawMessage, len(line))
+						copy(raw, line)
+						entries = append(entries, raw)
+					}
+				}
+			}
 		}
-
-		if entry.Type == "user" || entry.Type == "assistant" {
-			// Copy the line to avoid scanner buffer reuse
-			raw := make(json.RawMessage, len(line))
-			copy(raw, line)
-			entries = append(entries, raw)
+		if err == io.EOF {
+			break
 		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("reading transcript: %w", err)
+		if err != nil {
+			return nil, fmt.Errorf("reading transcript: %w", err)
+		}
 	}
 
 	if entries == nil {
@@ -105,7 +108,7 @@ func BuildHTML(sessionName string, entries []json.RawMessage) (string, error) {
 
 	// Replace placeholders
 	result := string(htmlTemplate)
-	result = strings.Replace(result, "{{TITLE}}", sessionName, 1)
+	result = strings.Replace(result, "{{TITLE}}", html.EscapeString(sessionName), 1)
 	result = strings.Replace(result, "{{CSS}}", string(css), 1)
 	result = strings.Replace(result, "{{SESSION_DATA}}", b64, 1)
 	result = strings.Replace(result, "{{MARKED_JS}}", string(markedJS), 1)
