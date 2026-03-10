@@ -5,16 +5,29 @@
   var dataEl = document.getElementById("session-data");
   if (!dataEl) return;
 
-  var raw = atob(dataEl.textContent.trim());
+  var b64 = dataEl.textContent.trim();
+  var binaryStr = atob(b64);
+  var bytes = new Uint8Array(binaryStr.length);
+  for (var i = 0; i < binaryStr.length; i++) {
+    bytes[i] = binaryStr.charCodeAt(i);
+  }
+  var raw = new TextDecoder("utf-8").decode(bytes);
   var data = JSON.parse(raw);
   var sessionName = data.sessionName || "unnamed";
   var entries = data.entries || [];
 
   // --- Configure marked ---
   if (typeof marked !== "undefined") {
+    var renderer = new marked.Renderer();
+    // Escape raw HTML in transcript content to prevent XSS
+    renderer.html = function (text) {
+      var src = typeof text === "object" ? text.raw || text.text || "" : text;
+      return escapeHtml(src);
+    };
     marked.setOptions({
       breaks: true,
       gfm: true,
+      renderer: renderer,
     });
   }
 
