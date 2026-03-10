@@ -31,6 +31,9 @@ go.work.sum
 # Build artifacts
 clotilde
 
+# Exported sessions
+/*.html
+
 # env file
 .env
 
