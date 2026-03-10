@@ -118,12 +118,6 @@ var _ = Describe("Path helpers", func() {
 		path := config.GetConfigPath(root)
 		Expect(path).To(Equal("/project/.claude/clotilde/config.json"))
 	})
-
-	It("should construct global context path", func() {
-		root := "/project/.claude/clotilde"
-		path := config.GetGlobalContextPath(root)
-		Expect(path).To(Equal("/project/.claude/clotilde/context.md"))
-	})
 })
 
 var _ = Describe("EnsureClotildeStructure", func() {
@@ -142,9 +136,6 @@ var _ = Describe("EnsureClotildeStructure", func() {
 
 		sessionsPath := filepath.Join(clotildePath, config.SessionsDir)
 		Expect(util.DirExists(sessionsPath)).To(BeTrue())
-
-		configPath := filepath.Join(clotildePath, config.ConfigFile)
-		Expect(util.FileExists(configPath)).To(BeTrue())
 	})
 
 	It("should not error if structure already exists", func() {
@@ -154,6 +145,135 @@ var _ = Describe("EnsureClotildeStructure", func() {
 		// Run again
 		err = config.EnsureClotildeStructure(tempDir)
 		Expect(err).NotTo(HaveOccurred())
+	})
+})
+
+var _ = Describe("EnsureSessionsDir", func() {
+	var tempDir string
+
+	BeforeEach(func() {
+		tempDir = GinkgoT().TempDir()
+	})
+
+	It("should create .claude/clotilde/sessions in one call", func() {
+		err := config.EnsureSessionsDir(tempDir)
+		Expect(err).NotTo(HaveOccurred())
+
+		sessionsPath := filepath.Join(tempDir, config.ClotildeDir, config.SessionsDir)
+		Expect(util.DirExists(sessionsPath)).To(BeTrue())
+	})
+
+	It("should not create config.json", func() {
+		err := config.EnsureSessionsDir(tempDir)
+		Expect(err).NotTo(HaveOccurred())
+
+		configPath := filepath.Join(tempDir, config.ClotildeDir, config.ConfigFile)
+		Expect(util.FileExists(configPath)).To(BeFalse())
+	})
+
+	It("should be idempotent", func() {
+		err := config.EnsureSessionsDir(tempDir)
+		Expect(err).NotTo(HaveOccurred())
+
+		err = config.EnsureSessionsDir(tempDir)
+		Expect(err).NotTo(HaveOccurred())
+	})
+})
+
+var _ = Describe("ProjectRootFromPath", func() {
+	var tempDir string
+
+	BeforeEach(func() {
+		tempDir = GinkgoT().TempDir()
+	})
+
+	It("should find project root with .claude directory", func() {
+		claudeDir := filepath.Join(tempDir, ".claude")
+		err := util.EnsureDir(claudeDir)
+		Expect(err).NotTo(HaveOccurred())
+
+		root := config.ProjectRootFromPath(tempDir)
+		Expect(root).To(Equal(tempDir))
+	})
+
+	It("should find project root from nested path", func() {
+		claudeDir := filepath.Join(tempDir, ".claude")
+		err := util.EnsureDir(claudeDir)
+		Expect(err).NotTo(HaveOccurred())
+
+		nestedDir := filepath.Join(tempDir, "nested", "deep")
+		err = util.EnsureDir(nestedDir)
+		Expect(err).NotTo(HaveOccurred())
+
+		root := config.ProjectRootFromPath(nestedDir)
+		Expect(root).To(Equal(tempDir))
+	})
+
+	It("should return start path if no .claude directory found", func() {
+		root := config.ProjectRootFromPath(tempDir)
+		Expect(root).To(Equal(tempDir))
+	})
+})
+
+var _ = Describe("FindOrCreateClotildeRoot", func() {
+	var tempDir string
+	var originalWd string
+
+	BeforeEach(func() {
+		tempDir = GinkgoT().TempDir()
+		var err error
+		originalWd, err = os.Getwd()
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	AfterEach(func() {
+		err := os.Chdir(originalWd)
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("should return existing clotilde root if present", func() {
+		clotildePath := filepath.Join(tempDir, config.ClotildeDir)
+		err := util.EnsureDir(clotildePath)
+		Expect(err).NotTo(HaveOccurred())
+
+		err = os.Chdir(tempDir)
+		Expect(err).NotTo(HaveOccurred())
+
+		root, err := config.FindOrCreateClotildeRoot()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(root).To(Equal(clotildePath))
+	})
+
+	It("should create clotilde structure if not present", func() {
+		// Create .claude/ marker so project root is detected
+		claudeDir := filepath.Join(tempDir, ".claude")
+		err := util.EnsureDir(claudeDir)
+		Expect(err).NotTo(HaveOccurred())
+
+		err = os.Chdir(tempDir)
+		Expect(err).NotTo(HaveOccurred())
+
+		root, err := config.FindOrCreateClotildeRoot()
+		Expect(err).NotTo(HaveOccurred())
+
+		expectedRoot := filepath.Join(tempDir, config.ClotildeDir)
+		Expect(root).To(Equal(expectedRoot))
+
+		// Verify sessions dir was created
+		sessionsDir := filepath.Join(root, config.SessionsDir)
+		Expect(util.DirExists(sessionsDir)).To(BeTrue())
+	})
+
+	It("should create clotilde structure even without .claude marker", func() {
+		err := os.Chdir(tempDir)
+		Expect(err).NotTo(HaveOccurred())
+
+		root, err := config.FindOrCreateClotildeRoot()
+		Expect(err).NotTo(HaveOccurred())
+
+		expectedRoot := filepath.Join(tempDir, config.ClotildeDir)
+		Expect(root).To(Equal(expectedRoot))
+		Expect(util.DirExists(filepath.Join(root, config.SessionsDir))).To(BeTrue())
 	})
 })
 

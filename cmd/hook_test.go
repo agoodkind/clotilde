@@ -87,12 +87,7 @@ var _ = Describe("Hook Commands", func() {
 
 	Describe("hook sessionstart", func() {
 		Context("source: startup", func() {
-			It("should output contexts for new sessions", func() {
-				// Create global context
-				globalContext := filepath.Join(clotildeRoot, "context.md")
-				err := os.WriteFile(globalContext, []byte("Global context content"), 0o644)
-				Expect(err).NotTo(HaveOccurred())
-
+			It("should handle startup for new sessions without error", func() {
 				// Create hook input
 				hookInput := map[string]string{
 					"session_id": "some-uuid",
@@ -104,7 +99,6 @@ var _ = Describe("Hook Commands", func() {
 				// Execute hook sessionstart with input via stdin
 				err = executeHookWithInput("sessionstart", inputJSON)
 				Expect(err).NotTo(HaveOccurred())
-				// Note: We can't easily capture stdout in tests, but we verify it doesn't error
 			})
 
 			It("should be idempotent - not overwrite existing UUID", func() {
@@ -135,27 +129,6 @@ var _ = Describe("Hook Commands", func() {
 				updatedFork, err := store.Get("existing-fork")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(updatedFork.Metadata.SessionID).To(Equal("existing-uuid"))
-			})
-
-			It("should output global context if exists", func() {
-				// Create global context file
-				globalCtx := filepath.Join(clotildeRoot, config.GlobalContextFile)
-				err := os.WriteFile(globalCtx, []byte("Global context content"), 0o644)
-				Expect(err).NotTo(HaveOccurred())
-
-				// Create hook input
-				hookInput := map[string]string{
-					"session_id": "test-uuid",
-					"source":     "startup",
-				}
-				inputJSON, err := json.Marshal(hookInput)
-				Expect(err).NotTo(HaveOccurred())
-
-				// Execute hook sessionstart
-				err = executeHookWithInput("sessionstart", inputJSON)
-				Expect(err).NotTo(HaveOccurred())
-
-				// Note: Output goes to stdout, would need to capture to verify content
 			})
 
 			It("should handle non-clotilde project gracefully", func() {
@@ -292,25 +265,6 @@ var _ = Describe("Hook Commands", func() {
 				updatedFork, err := store.Get("existing-fork-resume")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(updatedFork.Metadata.SessionID).To(Equal("existing-uuid-resume"))
-			})
-
-			It("should output global context if exists", func() {
-				// Create global context file
-				globalCtx := filepath.Join(clotildeRoot, config.GlobalContextFile)
-				err := os.WriteFile(globalCtx, []byte("Global context for resume"), 0o644)
-				Expect(err).NotTo(HaveOccurred())
-
-				// Create hook input
-				hookInput := map[string]string{
-					"session_id": "resume-uuid",
-					"source":     "resume",
-				}
-				inputJSON, err := json.Marshal(hookInput)
-				Expect(err).NotTo(HaveOccurred())
-
-				// Execute hook sessionstart
-				err = executeHookWithInput("sessionstart", inputJSON)
-				Expect(err).NotTo(HaveOccurred())
 			})
 
 			It("should handle non-clotilde project gracefully", func() {

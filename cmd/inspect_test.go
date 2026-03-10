@@ -134,12 +134,8 @@ var _ = Describe("Inspect Command", func() {
 	It("should show context information", func() {
 		// Create session with context
 		sess := session.NewSession("ctx-session", "uuid-ctx")
+		sess.Metadata.Context = "working on GH-42"
 		err := store.Create(sess)
-		Expect(err).NotTo(HaveOccurred())
-
-		// Add global context
-		globalCtx := filepath.Join(clotildeRoot, config.GlobalContextFile)
-		err = os.WriteFile(globalCtx, []byte("Global context line 1\nGlobal context line 2\n"), 0o644)
 		Expect(err).NotTo(HaveOccurred())
 
 		// Execute inspect command

@@ -106,10 +106,10 @@ func createSession(params SessionCreateParams) (*SessionCreateResult, error) {
 		return nil, fmt.Errorf("cannot use both append and replace system prompt flags")
 	}
 
-	// Find clotilde root
-	clotildeRoot, err := config.FindClotildeRoot()
+	// Find or create clotilde root
+	clotildeRoot, err := config.FindOrCreateClotildeRoot()
 	if err != nil {
-		return nil, fmt.Errorf("not in a clotilde project (run 'clotilde init' first)")
+		return nil, fmt.Errorf("failed to initialize session storage: %w", err)
 	}
 
 	// Validate session name

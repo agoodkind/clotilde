@@ -25,7 +25,7 @@ func newExportCmd() *cobra.Command {
 
 			clotildeRoot, err := config.FindClotildeRoot()
 			if err != nil {
-				return fmt.Errorf("not in a clotilde project (run 'clotilde init' first)")
+				return fmt.Errorf("no sessions found (create one with 'clotilde start <name>')")
 			}
 
 			store := session.NewFileStore(clotildeRoot)

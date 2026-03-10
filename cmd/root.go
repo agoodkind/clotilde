@@ -34,15 +34,11 @@ func runDashboard(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	// Try to find clotilde root
-	clotildeRoot, err := config.FindClotildeRoot()
+	// Find or create clotilde root (dashboard always works)
+	clotildeRoot, err := config.FindOrCreateClotildeRoot()
 	if err != nil {
-		// Not in a clotilde project - show help
-		_, _ = fmt.Fprintln(os.Stderr, "Not in a clotilde project. Initialize with:")
-		_, _ = fmt.Fprintln(os.Stderr, "  clotilde init")
-		_, _ = fmt.Fprintln(os.Stderr, "")
-		_ = cmd.Help()
-		return
+		_, _ = fmt.Fprintf(os.Stderr, "Failed to initialize session storage: %v\n", err)
+		os.Exit(1)
 	}
 
 	// Load sessions
@@ -289,6 +285,7 @@ func initRootCmd() {
 
 	// Add all subcommands
 	rootCmd.AddCommand(freshInitCmd)
+	rootCmd.AddCommand(newSetupCmd())
 	rootCmd.AddCommand(newStartCmd())
 	rootCmd.AddCommand(newIncognitoCmd())
 	rootCmd.AddCommand(newResumeCmd())
@@ -339,6 +336,7 @@ func NewRootCmd() *cobra.Command {
 
 	// Add all subcommands (use factory functions to avoid flag pollution)
 	root.AddCommand(freshInitCmd)
+	root.AddCommand(newSetupCmd())
 	root.AddCommand(newStartCmd())
 	root.AddCommand(newIncognitoCmd())
 	root.AddCommand(newResumeCmd())

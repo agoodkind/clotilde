@@ -96,10 +96,10 @@ make install  # Installs to ~/.local/bin
 ## Quick Start
 
 ```bash
-# Initialize in your project
-clotilde init
+# One-time setup (registers hooks globally)
+clotilde setup
 
-# Start a new named session
+# Start a new named session (creates .claude/clotilde/ automatically)
 clotilde start auth-feature
 
 # Resume it later
@@ -292,26 +292,21 @@ clotilde start myfeature --output-style-file ./my-style.md
 
 ## Commands
 
-### `clotilde init [--global]`
+### `clotilde setup [--local]`
 
-Initialize clotilde in the current project. Creates `.claude/clotilde/` directory and configures hooks.
-
-By default, hooks are installed in `.claude/settings.local.json` (local to your machine, not committed to git). Use `--global` to install hooks in `.claude/settings.json` instead (shared with team, committed to git).
+One-time setup that registers SessionStart hooks in `~/.claude/settings.json` (Claude Code's global user settings). Run this once after installing clotilde.
 
 ```bash
-# Initialize with local hooks (default - recommended for experimental use)
-clotilde init
+# Install hooks globally (default)
+clotilde setup
 
-# Initialize with project-wide hooks (team shares clotilde setup)
-clotilde init --global
+# Install hooks in ~/.claude/settings.local.json instead
+clotilde setup --local
 ```
 
-**Why settings.local.json by default?**
-- Clotilde is experimental - people can try it without affecting team members
-- `.local.json` files are typically gitignored, keeping your config private
-- Team members who don't use clotilde won't see the hooks in project settings
+After setup, `clotilde start` works in any project directory. The `.claude/clotilde/sessions/` directory is created automatically on first use.
 
-**Note:** The `.claude/clotilde/` directory (containing session metadata, transcripts paths, and context) should be gitignored. This is intentional - sessions are ephemeral, per-user state that shouldn't be committed to the repository. Each developer maintains their own independent session list.
+**Note:** The `.claude/clotilde/` directory (containing session metadata and transcript paths) should be gitignored. Sessions are ephemeral, per-user state that shouldn't be committed to the repository.
 
 ### `clotilde start [name] [options]`
 

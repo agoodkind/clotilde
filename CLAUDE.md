@@ -26,7 +26,8 @@ Clotilde is a **thin, non-invasive wrapper**. It:
 
 ```
 cmd/                    # Cobra command implementations
-  init.go               # Initialize clotilde structure and hooks
+  setup.go              # One-time global hook registration
+  init.go               # Initialize clotilde (deprecated, use setup)
   start.go              # Start new session
   incognito.go          # Start incognito session (auto-deletes on exit)
   resume.go             # Resume existing session
@@ -51,8 +52,7 @@ Each session is a folder in `.claude/clotilde/sessions/<name>/`:
 
 ```
 .claude/clotilde/
-  config.json             # Project config (profiles, etc - optional)
-  context.md              # Global context for all sessions (deprecated, use --context flag)
+  config.json             # Project config (profiles - optional, created manually)
   sessions/
     my-session/
       metadata.json       # Session metadata (name, sessionId, timestamps, parent info)
@@ -138,7 +138,6 @@ Same structure as the project config. Respects `$XDG_CONFIG_HOME` if set, otherw
 **Context loading**: Context is injected at session start via SessionStart hooks:
 - **Session name**: Always output if available
 - **Session context**: From metadata `context` field (set via `--context` flag)
-- **Global** (`.claude/clotilde/context.md`): Deprecated, will be removed in 1.0. Use `--context` flag instead.
 
 ### Claude Code Integration Patterns
 
@@ -168,7 +167,7 @@ Note: `--settings` and `--append-system-prompt-file` are only added if the files
 
 **Unified SessionStart hook** (`clotilde hook sessionstart`) handles all session lifecycle events internally based on the `source` field in JSON input:
 
-**Hook registration** (in `.claude/settings.json`):
+**Hook registration** (in `~/.claude/settings.json`, installed by `clotilde setup`):
 ```json
 {
   "hooks": {
@@ -214,7 +213,6 @@ No matcher field - the single hook handles all sources (startup, resume, compact
 - Hook outputs context to stdout which gets automatically injected by Claude Code
 - Session name is always output if available (e.g. "Session name: my-feature")
 - Session context from metadata is output if set (e.g. "Context: working on GH-123")
-- Global context (`.claude/clotilde/context.md`): Deprecated, will be removed in 1.0. Use `--context` flag instead.
 - Hooks use os.Stdin piping to read JSON input from Claude Code
 
 ### Claude Code Path Conversion

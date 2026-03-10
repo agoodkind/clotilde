@@ -52,7 +52,7 @@ Pass additional flags to Claude Code after '--':
 
 				// Check if session already exists - offer to resume instead
 				// (only for explicitly provided names)
-				if clotildeRoot, err := config.FindClotildeRoot(); err == nil {
+				if clotildeRoot, err := config.FindOrCreateClotildeRoot(); err == nil {
 					store := session.NewFileStore(clotildeRoot)
 					if store.Exists(name) {
 						return handleExistingSession(cmd, name, clotildeRoot, store, additionalArgs)
@@ -60,9 +60,9 @@ Pass additional flags to Claude Code after '--':
 				}
 			} else {
 				// Generate a unique random name
-				clotildeRoot, err := config.FindClotildeRoot()
+				clotildeRoot, err := config.FindOrCreateClotildeRoot()
 				if err != nil {
-					return fmt.Errorf("not in a clotilde project (run 'clotilde init' first)")
+					return fmt.Errorf("failed to initialize session storage: %w", err)
 				}
 				store := session.NewFileStore(clotildeRoot)
 				sessions, err := store.List()
