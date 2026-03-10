@@ -27,9 +27,15 @@
     // Only allow safe URL schemes in links and images
     renderer.link = function (token) {
       var href = (typeof token === "object" ? token.href : token) || "";
-      var text = (typeof token === "object" ? token.text : arguments[1]) || href;
-      if (!isSafeUrl(href)) return escapeHtml(text);
-      return '<a href="' + escapeHtml(href) + '">' + escapeHtml(text) + "</a>";
+      // Marked v15 uses token.tokens for the link label (not token.text)
+      var label;
+      if (typeof token === "object" && token.tokens && this.parser) {
+        label = this.parser.parseInline(token.tokens);
+      } else {
+        label = escapeHtml((typeof token === "object" ? token.text : arguments[1]) || href);
+      }
+      if (!isSafeUrl(href)) return label;
+      return '<a href="' + escapeHtml(href) + '">' + label + '</a>';
     };
     renderer.image = function (token) {
       var src = (typeof token === "object" ? token.href : token) || "";
@@ -142,9 +148,11 @@
   }
 
   // --- Keyboard shortcuts ---
+  // Use Alt+Shift combos to avoid conflicting with browser-reserved shortcuts
+  // (Ctrl+T = new tab, Ctrl+O = open file)
   document.addEventListener("keydown", function (e) {
-    // Ctrl+T: toggle all thinking blocks
-    if (e.ctrlKey && e.key === "t") {
+    // Alt+Shift+T: toggle all thinking blocks
+    if (e.altKey && e.shiftKey && e.key === "T") {
       e.preventDefault();
       var blocks = document.querySelectorAll(".thinking-content");
       var anyVisible = false;
@@ -155,8 +163,8 @@
         b.classList.toggle("visible", !anyVisible);
       });
     }
-    // Ctrl+O: toggle all tool outputs
-    if (e.ctrlKey && e.key === "o") {
+    // Alt+Shift+O: toggle all tool outputs
+    if (e.altKey && e.shiftKey && e.key === "O") {
       e.preventDefault();
       var outputs = document.querySelectorAll(".tool-output-content");
       var anyExpanded = false;
