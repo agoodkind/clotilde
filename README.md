@@ -23,20 +23,26 @@ Claude Code is great for single conversations, but as you start juggling multipl
 Clotilde is a thin wrapper around Claude Code that adds named sessions, profiles, context management, and user-friendly forking.
 
 ```bash
-# Named sessions you can instantly switch between
+# Start a session (auto-generates a name if omitted)
 clotilde start auth-feature
-clotilde start bugfix-db-timeout
-clotilde resume auth-feature
+clotilde start                            # e.g. "2026-03-09-happy-fox"
 
-# Fork a session to explore a tangent
-clotilde fork auth-feature auth-alternative-approach
+# Resume, fork, list
+clotilde resume auth-feature
+clotilde fork auth-feature experiment
+
+# Interactive dashboard (no subcommand)
+clotilde
 
 # Incognito sessions that auto-delete on exit
-clotilde incognito quick-question
+clotilde incognito
 
 # Profiles for different workflows
 clotilde start review --profile strict     # deny Bash/Write permissions
 clotilde start spike --profile quick       # use Haiku, bypass permissions
+
+# Export a session as self-contained HTML
+clotilde export auth-feature
 ```
 
 Session names are stored as external name-to-UUID mappings, so they work reliably regardless of Claude Code's internal naming behavior. Profiles let you define reusable presets (model, permissions, output style) in a single config file. Context files are automatically injected at session start via hooks.
@@ -307,12 +313,15 @@ clotilde init --global
 
 **Note:** The `.claude/clotilde/` directory (containing session metadata, transcripts paths, and context) should be gitignored. This is intentional - sessions are ephemeral, per-user state that shouldn't be committed to the repository. Each developer maintains their own independent session list.
 
-### `clotilde start <name> [options]`
+### `clotilde start [name] [options]`
 
-Start a new named session.
+Start a new named session. If no name is provided, one is auto-generated using the format `YYYY-MM-DD-adjective-noun` (e.g. `2026-03-09-happy-fox`).
 
 ```bash
-# Basic usage
+# Auto-generated name
+clotilde start
+
+# Explicit name
 clotilde start my-session
 
 # With profile
@@ -434,12 +443,55 @@ clotilde fork auth-feature --incognito
 
 **Note:** You cannot fork FROM incognito sessions, but you can fork TO incognito sessions.
 
+### `clotilde stats <name>`
+
+Show session activity statistics including turn count, timing, and response times.
+
+```bash
+clotilde stats auth-feature
+# Session stats: auth-feature
+# ---------------------------------
+# Turns         42
+# Started       Mar 9, 2026 10:30
+# Last active   Mar 9, 2026 18:42
+# Total time    8h 12m
+# Active time   2h 35m     (approx)
+# Avg response  3m 41s     (approx)
+```
+
+### `clotilde export <name> [options]`
+
+Export a session transcript as a self-contained HTML file. The output includes markdown rendering, syntax-highlighted code blocks, per-tool formatting, collapsible thinking blocks, and expandable tool outputs.
+
+```bash
+# Export to default file (<name>.html)
+clotilde export auth-feature
+
+# Export to specific path
+clotilde export auth-feature -o ~/Desktop/auth-session.html
+
+# Pipe to stdout
+clotilde export auth-feature --stdout | wc -c
+```
+
+**Options:**
+- `-o, --output <path>` - Output file path (default: `./<name>.html`)
+- `--stdout` - Write to stdout instead of file
+
+**Keyboard shortcuts** (in the exported HTML):
+- `Ctrl+T` - Toggle all thinking blocks
+- `Ctrl+O` - Toggle all tool outputs
+
 ### `clotilde delete <name> [--force]`
 
 Delete a session and all associated Claude Code data (transcripts, agent logs).
 
 **Options:**
 - `--force, -f` - Skip confirmation prompt
+
+### `clotilde` (no subcommand)
+
+When run without a subcommand in a TTY, clotilde shows an interactive dashboard with quick actions: start a new session, resume, fork, list, or delete.
 
 ### `clotilde completion <shell>`
 

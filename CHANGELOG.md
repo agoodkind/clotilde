@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`export` command**: `clotilde export <name>` renders a session transcript into a self-contained HTML file. Dark theme, markdown rendering, syntax highlighting, per-tool formatting, collapsible thinking blocks, expandable tool outputs, and keyboard shortcuts (Ctrl+T, Ctrl+O). Supports `-o` for custom output path and `--stdout` for piping.
+
+### Fixed
+
+- **Dashboard start action**: Now auto-generates a session name and launches Claude directly instead of printing a placeholder message.
+- **Dashboard fork action**: Now shows a session picker, auto-generates a fork name, and launches Claude instead of printing a placeholder message.
+
 ## [0.6.0] - 2026-03-08
 
 ### Changed

@@ -92,10 +92,27 @@ func runDashboard(cmd *cobra.Command, args []string) {
 func handleDashboardAction(selectedAction string, sessions []*session.Session, clotildeRoot string, store session.Store) bool {
 	switch selectedAction {
 	case "start":
-		// TODO: Interactive prompt for session name (commit 24 in plan)
-		fmt.Println("\nStarting new session...")
-		fmt.Println("Run: clotilde start <session-name>")
-		return true // Exit dashboard
+		// Auto-generate a session name and start immediately
+		existingNames := make([]string, len(sessions))
+		for i, sess := range sessions {
+			existingNames[i] = sess.Name
+		}
+		name := util.GenerateUniqueRandomName(existingNames)
+
+		result, err := createSession(SessionCreateParams{Name: name})
+		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Failed to create session: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Println(ui.Success(fmt.Sprintf("Created session '%s' (%s)", result.Session.Name, result.Session.Metadata.SessionID)))
+		fmt.Println("\nStarting Claude Code...")
+
+		if err := claude.Start(result.ClotildeRoot, result.Session, result.SettingsFile, result.SystemPromptFile, nil); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Failed to start session: %v\n", err)
+			os.Exit(1)
+		}
+		return true
 
 	case "resume":
 		// Show picker to select session
@@ -133,10 +150,38 @@ func handleDashboardAction(selectedAction string, sessions []*session.Session, c
 		return true
 
 	case "fork":
-		// TODO: Interactive prompts for parent and new session names (commit 24 in plan)
-		fmt.Println("\nForking session...")
-		fmt.Println("Run: clotilde fork <parent-session> <new-session>")
-		return true // Exit dashboard
+		if len(sessions) == 0 {
+			fmt.Println("No sessions available to fork.")
+			return false
+		}
+
+		// Filter out incognito sessions (can't fork from them)
+		var forkable []*session.Session
+		for _, s := range sessions {
+			if !s.Metadata.IsIncognito {
+				forkable = append(forkable, s)
+			}
+		}
+		if len(forkable) == 0 {
+			fmt.Println("No non-incognito sessions available to fork.")
+			return false
+		}
+
+		picker := ui.NewPicker(forkable, "Select session to fork").WithPreview()
+		parent, err := ui.RunPicker(picker)
+		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Picker failed: %v\n", err)
+			os.Exit(1)
+		}
+		if parent == nil {
+			return false
+		}
+
+		if err := forkFromDashboard(clotildeRoot, parent, sessions, store); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Failed to fork session: %v\n", err)
+			os.Exit(1)
+		}
+		return true
 
 	case "list":
 		// Show interactive table
@@ -422,4 +467,56 @@ func deleteSession(clotildeRoot string, sess *session.Session, store session.Sto
 	}
 
 	return nil
+}
+
+// forkFromDashboard creates a fork with an auto-generated name and launches Claude
+func forkFromDashboard(clotildeRoot string, parent *session.Session, sessions []*session.Session, store session.Store) error {
+	existingNames := make([]string, len(sessions))
+	for i, s := range sessions {
+		existingNames[i] = s.Name
+	}
+	forkName := util.GenerateUniqueRandomName(existingNames)
+
+	// Create fork session with empty sessionId (filled by hook)
+	fork := session.NewSession(forkName, "")
+	fork.Metadata.IsForkedSession = true
+	fork.Metadata.ParentSession = parent.Name
+	fork.Metadata.SystemPromptMode = parent.Metadata.SystemPromptMode
+	fork.Metadata.Context = parent.Metadata.Context
+
+	if err := store.Create(fork); err != nil {
+		return fmt.Errorf("failed to create fork: %w", err)
+	}
+
+	forkDir := config.GetSessionDir(clotildeRoot, forkName)
+	parentDir := config.GetSessionDir(clotildeRoot, parent.Name)
+
+	// Copy settings.json if exists
+	parentSettings := filepath.Join(parentDir, "settings.json")
+	if util.FileExists(parentSettings) {
+		if err := util.CopyFile(parentSettings, filepath.Join(forkDir, "settings.json")); err != nil {
+			return fmt.Errorf("failed to copy settings: %w", err)
+		}
+	}
+
+	// Copy system-prompt.md if exists
+	parentPrompt := filepath.Join(parentDir, "system-prompt.md")
+	if util.FileExists(parentPrompt) {
+		if err := util.CopyFile(parentPrompt, filepath.Join(forkDir, "system-prompt.md")); err != nil {
+			return fmt.Errorf("failed to copy system prompt: %w", err)
+		}
+	}
+
+	fmt.Println(ui.Success(fmt.Sprintf("Created fork '%s' from '%s'", forkName, parent.Name)))
+	fmt.Println("\nStarting Claude Code with fork...")
+
+	var settingsFile, systemPromptFile string
+	if util.FileExists(filepath.Join(forkDir, "settings.json")) {
+		settingsFile = filepath.Join(forkDir, "settings.json")
+	}
+	if util.FileExists(filepath.Join(forkDir, "system-prompt.md")) {
+		systemPromptFile = filepath.Join(forkDir, "system-prompt.md")
+	}
+
+	return claude.Fork(clotildeRoot, parent, forkName, settingsFile, systemPromptFile, nil, fork)
 }
