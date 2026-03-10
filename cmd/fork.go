@@ -48,9 +48,9 @@ Pass additional flags to Claude Code after '--':
 				}
 
 				// Generate unique random name
-				clotildeRoot, err := config.FindClotildeRoot()
+				clotildeRoot, err := config.FindOrCreateClotildeRoot()
 				if err != nil {
-					return fmt.Errorf("not in a clotilde project (run 'clotilde init' first)")
+					return fmt.Errorf("failed to initialize session storage: %w", err)
 				}
 				store := session.NewFileStore(clotildeRoot)
 				sessions, err := store.List()
@@ -90,10 +90,10 @@ Pass additional flags to Claude Code after '--':
 				additionalArgs = append(additionalArgs, "--model", "haiku", "--effort", "low")
 			}
 
-			// Find clotilde root
-			clotildeRoot, err := config.FindClotildeRoot()
+			// Find or create clotilde root
+			clotildeRoot, err := config.FindOrCreateClotildeRoot()
 			if err != nil {
-				return fmt.Errorf("not in a clotilde project (run 'clotilde init' first)")
+				return fmt.Errorf("failed to initialize session storage: %w", err)
 			}
 
 			// Validate fork name

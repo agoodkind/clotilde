@@ -23,7 +23,10 @@ var listCmd = &cobra.Command{
 		// Find clotilde root
 		clotildeRoot, err := config.FindClotildeRoot()
 		if err != nil {
-			return fmt.Errorf("not in a clotilde project (run 'clotilde init' first)")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No sessions found.")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\nCreate a session with:")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  clotilde start <session-name>")
+			return nil
 		}
 
 		// Load all sessions

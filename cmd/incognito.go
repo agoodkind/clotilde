@@ -66,9 +66,9 @@ process crashes or is killed (SIGKILL), the session may persist. Use
 				name = args[0]
 			} else {
 				// Generate a unique random name
-				clotildeRoot, err := config.FindClotildeRoot()
+				clotildeRoot, err := config.FindOrCreateClotildeRoot()
 				if err != nil {
-					return fmt.Errorf("not in a clotilde project (run 'clotilde init' first)")
+					return fmt.Errorf("failed to initialize session storage: %w", err)
 				}
 				store := session.NewFileStore(clotildeRoot)
 				sessions, err := store.List()

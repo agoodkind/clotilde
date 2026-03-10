@@ -15,8 +15,9 @@ import (
 )
 
 var initCmd = &cobra.Command{
-	Use:   "init",
-	Short: "Initialize clotilde in the current project",
+	Use:        "init",
+	Short:      "Initialize clotilde in the current project",
+	Deprecated: "use 'clotilde setup' for global hook installation. Sessions are now created automatically.",
 	Long: `Initialize clotilde by creating the .claude/clotilde directory structure
 and setting up SessionStart hooks in .claude/settings.local.json (local to your machine).
 
@@ -85,22 +86,16 @@ Use --global to install hooks in .claude/settings.json instead (shared with team
 	},
 }
 
-func setupHooks(projectRoot, clotildeBinary, settingsFile string) error {
-	claudeDir := filepath.Join(projectRoot, ".claude")
-	settingsPath := filepath.Join(claudeDir, settingsFile)
-
-	// Ensure .claude directory exists
-	if !util.FileExists(claudeDir) {
-		if err := os.MkdirAll(claudeDir, 0o755); err != nil {
-			return fmt.Errorf("failed to create .claude directory: %w", err)
-		}
-	}
-
+// mergeHooksIntoSettings reads a Claude settings file, merges clotilde's
+// SessionStart hook, and writes it back. Returns the merged hooks map for
+// display purposes. The caller is responsible for ensuring the parent
+// directory exists.
+func mergeHooksIntoSettings(settingsPath, clotildeBinary string) (map[string]interface{}, error) {
 	// Read existing settings if they exist
 	var settings map[string]interface{}
 	if util.FileExists(settingsPath) {
 		if err := util.ReadJSON(settingsPath, &settings); err != nil {
-			return fmt.Errorf("failed to read existing settings: %w", err)
+			return nil, fmt.Errorf("failed to read existing settings: %w", err)
 		}
 	} else {
 		settings = make(map[string]interface{})
@@ -112,19 +107,35 @@ func setupHooks(projectRoot, clotildeBinary, settingsFile string) error {
 	// Merge hooks into settings
 	var hooks map[string]interface{}
 	if existingHooks, ok := settings["hooks"].(map[string]interface{}); ok {
-		// Start with existing hooks
 		hooks = existingHooks
 	} else {
 		hooks = make(map[string]interface{})
 	}
 
-	// Add/update clotilde hooks (SessionStart only)
 	hooks["SessionStart"] = hookConfig.SessionStart
 	settings["hooks"] = hooks
 
-	// Write settings back
 	if err := util.WriteJSON(settingsPath, settings); err != nil {
-		return fmt.Errorf("failed to write settings: %w", err)
+		return nil, fmt.Errorf("failed to write settings: %w", err)
+	}
+
+	return hooks, nil
+}
+
+func setupHooks(projectRoot, clotildeBinary, settingsFile string) error {
+	claudeDir := filepath.Join(projectRoot, ".claude")
+	settingsPath := filepath.Join(claudeDir, settingsFile)
+
+	// Ensure .claude directory exists
+	if !util.FileExists(claudeDir) {
+		if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+			return fmt.Errorf("failed to create .claude directory: %w", err)
+		}
+	}
+
+	hooks, err := mergeHooksIntoSettings(settingsPath, clotildeBinary)
+	if err != nil {
+		return err
 	}
 
 	// Pretty print the hooks for user confirmation

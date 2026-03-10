@@ -76,11 +76,6 @@ var _ = Describe("Init Command", func() {
 		info, err = os.Stat(sessionsDir)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(info.IsDir()).To(BeTrue())
-
-		// Verify config.json exists
-		configPath := filepath.Join(clotildeDir, config.ConfigFile)
-		_, err = os.Stat(configPath)
-		Expect(err).NotTo(HaveOccurred())
 	})
 
 	It("should create .claude/settings.local.json with hooks by default", func() {
@@ -202,23 +197,11 @@ var _ = Describe("Init Command", func() {
 		err := rootCmd1.Execute()
 		Expect(err).NotTo(HaveOccurred())
 
-		// Verify initial structure
-		clotildeDir := filepath.Join(tempDir, config.ClotildeDir)
-		configPath := filepath.Join(clotildeDir, config.ConfigFile)
-		initialConfigStat, err := os.Stat(configPath)
-		Expect(err).NotTo(HaveOccurred())
-		initialModTime := initialConfigStat.ModTime()
-
 		// Try to initialize again - should succeed and update hooks
 		rootCmd2 := cmd.NewRootCmd()
 		rootCmd2.SetArgs([]string{"init"})
 		err = rootCmd2.Execute()
 		Expect(err).NotTo(HaveOccurred())
-
-		// Verify config.json was not modified (same mod time)
-		newConfigStat, err := os.Stat(configPath)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(newConfigStat.ModTime()).To(Equal(initialModTime))
 
 		// Verify hooks still exist in settings.local.json
 		settingsPath := filepath.Join(tempDir, ".claude", "settings.local.json")

@@ -5,14 +5,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/fgrehm/clotilde/internal/config"
 	"github.com/fgrehm/clotilde/internal/session"
-	"github.com/fgrehm/clotilde/internal/util"
 )
 
 // hookInput represents the JSON structure passed to SessionStart hooks.
@@ -28,6 +26,11 @@ var sessionStartCmd = &cobra.Command{
 	Long: `Called by Claude Code's SessionStart hook for all sources (startup, resume, compact, clear).
 Handles fork registration, session ID updates, and context injection.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Guard against double execution (global + per-project hooks)
+		if os.Getenv("CLOTILDE_HOOK_EXECUTED") != "" {
+			return nil
+		}
+
 		// Read hook input from stdin
 		input, err := io.ReadAll(os.Stdin)
 		if err != nil {
@@ -45,6 +48,9 @@ Handles fork registration, session ID updates, and context injection.`,
 			// Not in a clotilde project, silently exit
 			return nil
 		}
+
+		// Mark as executed to prevent double-run from global + project hooks
+		markHookExecuted()
 
 		store := session.NewFileStore(clotildeRoot)
 
@@ -286,6 +292,23 @@ func saveTranscriptPath(store session.Store, sessionName, transcriptPath string)
 	return nil
 }
 
+// markHookExecuted writes CLOTILDE_HOOK_EXECUTED=1 to CLAUDE_ENV_FILE so that
+// a second hook invocation (from global + project hooks) is skipped.
+func markHookExecuted() {
+	claudeEnvFile := os.Getenv("CLAUDE_ENV_FILE")
+	if claudeEnvFile == "" {
+		return
+	}
+
+	f, err := os.OpenFile(claudeEnvFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer func() { _ = f.Close() }()
+
+	_, _ = fmt.Fprintln(f, "CLOTILDE_HOOK_EXECUTED=1")
+}
+
 // writeSessionNameToEnv writes the session name to Claude's env file for statusline use.
 func writeSessionNameToEnv(sessionName string) error {
 	claudeEnvFile := os.Getenv("CLAUDE_ENV_FILE")
@@ -309,14 +332,11 @@ func writeSessionNameToEnv(sessionName string) error {
 	return nil
 }
 
-// outputContexts loads and outputs session name, session context, and global context.
-func outputContexts(clotildeRoot string, store session.Store, sessionName string) {
-	var hasOutput bool
-
+// outputContexts loads and outputs session name and session context.
+func outputContexts(_ string, store session.Store, sessionName string) {
 	// Output session name
 	if sessionName != "" {
 		fmt.Printf("\nSession name: %s\n", sessionName)
-		hasOutput = true
 	}
 
 	// Output session context from metadata
@@ -324,19 +344,6 @@ func outputContexts(clotildeRoot string, store session.Store, sessionName string
 		sess, err := store.Get(sessionName)
 		if err == nil && sess.Metadata.Context != "" {
 			fmt.Printf("Context: %s\n", sess.Metadata.Context)
-			hasOutput = true
-		}
-	}
-
-	// Output global context if exists (deprecated)
-	globalContext := filepath.Join(clotildeRoot, config.GlobalContextFile)
-	if util.FileExists(globalContext) {
-		content, err := os.ReadFile(globalContext)
-		if err == nil {
-			if !hasOutput {
-				fmt.Println()
-			}
-			fmt.Printf("\n--- Loaded from .claude/clotilde/context.md (deprecated, will be removed in 1.0) ---\n\n%s\n", string(content))
 		}
 	}
 }

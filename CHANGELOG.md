@@ -9,7 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`setup` command**: `clotilde setup` registers SessionStart hooks in `~/.claude/settings.json` (global). Run once after installing. Supports `--local` flag for `~/.claude/settings.local.json`. Idempotent and merges with existing settings.
+- **Lazy session directory creation**: `clotilde start` (and other session-creating commands) automatically create `.claude/clotilde/sessions/` on first use. No `init` required.
+- **Double-hook execution guard**: Prevents duplicate context output when both global and per-project hooks exist (migration safety).
 - **`export` command**: `clotilde export <name>` renders a session transcript into a self-contained HTML file. Dark theme, markdown rendering, syntax highlighting, per-tool formatting, collapsible thinking blocks, expandable tool outputs, and keyboard shortcuts (Ctrl+T, Ctrl+O). Supports `-o` for custom output path and `--stdout` for piping.
+
+### Changed
+
+- **Session-reading commands**: `list`, `resume`, `inspect`, `delete`, `stats`, and `export` show friendly "no sessions found" messages instead of "not in a clotilde project" errors.
+- **Dashboard**: Opens in any directory (auto-creates session storage). Empty session list is handled gracefully.
+
+### Deprecated
+
+- **`init` command**: Replaced by `setup`. Still works but prints a deprecation notice.
+
+### Removed
+
+- **`context.md` file**: The deprecated global context file (`.claude/clotilde/context.md`) has been removed. Use the `--context` flag instead.
+- **Auto-created `config.json`**: Project-level config is no longer created automatically. Profiles still work if the file exists.
 
 ### Fixed
 

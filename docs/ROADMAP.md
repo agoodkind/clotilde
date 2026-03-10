@@ -4,11 +4,11 @@ Named sessions, profiles, and context management for Claude Code.
 
 ## Current Status: v0.4.0 (unreleased)
 
-Core functionality complete and tested. Recent work focused on session profiles and output styles.
+Core functionality complete and tested. Recent work focused on global installation mode.
 
 ### What's Working
 
-- **Commands**: init, start, resume, list, inspect, fork, delete, incognito, completion
+- **Commands**: setup, start, resume, list, inspect, fork, delete, incognito, completion
 - **Features**: Named sessions, forking, incognito mode, system prompts, permissions, session context, session profiles (global + project), output styles
 - **Shorthand flags**: `--accept-edits`, `--yolo`, `--plan`, `--dont-ask`, `--fast`
 - **TUI**: Dashboard, session picker, confirmation dialogs, styled output
@@ -16,6 +16,9 @@ Core functionality complete and tested. Recent work focused on session profiles 
 
 ### v0.4.0 Highlights
 
+- **Global installation**: New `clotilde setup` command registers hooks in `~/.claude/settings.json`. No more per-project `init` required. Session directories are created automatically on first use.
+- **`init` deprecated**: Still works but prints a deprecation notice directing to `setup`.
+- **Removed `context.md`**: The deprecated global context file has been removed. Use the `--context` flag instead.
 - **Session profiles**: Named presets in `config.json` for model, permissions, and output style. Apply with `--profile <name>`.
 - **Global profiles**: Profiles defined in `~/.config/clotilde/config.json` are available in all projects. Project-level profiles take precedence on name collisions.
 - **Output styles**: Per-session output style via `--output-style` and `--output-style-file`. Supports built-in styles, project/user styles, and custom inline content.
