@@ -26,14 +26,8 @@ var sessionStartCmd = &cobra.Command{
 	Long: `Called by Claude Code's SessionStart hook for all sources (startup, resume, compact, clear).
 Handles fork registration, session ID updates, and context injection.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Guard against double execution (global + per-project hooks).
-		// Check both the env var (set by Claude Code after sourcing CLAUDE_ENV_FILE)
-		// and the file contents directly (in case Claude Code hasn't re-sourced yet).
-		if os.Getenv("CLOTILDE_HOOK_EXECUTED") != "" || checkHookExecutedInEnvFile() {
-			return nil
-		}
-
-		// Read hook input from stdin
+		// Read hook input from stdin (must happen before guard check,
+		// since we need session_id and source to scope the guard)
 		input, err := io.ReadAll(os.Stdin)
 		if err != nil {
 			return fmt.Errorf("failed to read hook input: %w", err)
@@ -44,6 +38,14 @@ Handles fork registration, session ID updates, and context injection.`,
 			return fmt.Errorf("failed to parse hook input: %w", err)
 		}
 
+		// Guard against double execution (global + per-project hooks).
+		// Scoped to session_id:source so that different events (e.g. startup
+		// vs clear) are not blocked by a previous invocation's marker.
+		marker := hookData.SessionID + ":" + hookData.Source
+		if isHookExecuted(marker) {
+			return nil
+		}
+
 		// Find clotilde root
 		clotildeRoot, err := config.FindClotildeRoot()
 		if err != nil {
@@ -52,7 +54,7 @@ Handles fork registration, session ID updates, and context injection.`,
 		}
 
 		// Mark as executed to prevent double-run from global + project hooks
-		markHookExecuted()
+		markHookExecuted(marker)
 
 		store := session.NewFileStore(clotildeRoot)
 
@@ -294,10 +296,15 @@ func saveTranscriptPath(store session.Store, sessionName, transcriptPath string)
 	return nil
 }
 
-// checkHookExecutedInEnvFile reads CLAUDE_ENV_FILE directly to check if the
-// hook has already been marked as executed. This handles the case where Claude
-// Code hasn't re-sourced the env file between running multiple hooks.
-func checkHookExecutedInEnvFile() bool {
+// isHookExecuted checks if a hook with this marker has already run.
+// It checks both the env var (set by Claude Code after sourcing CLAUDE_ENV_FILE)
+// and the file contents directly (in case Claude Code hasn't re-sourced yet).
+// The marker is scoped to "session_id:source" so different events don't block each other.
+func isHookExecuted(marker string) bool {
+	if os.Getenv("CLOTILDE_HOOK_EXECUTED") == marker {
+		return true
+	}
+
 	claudeEnvFile := os.Getenv("CLAUDE_ENV_FILE")
 	if claudeEnvFile == "" {
 		return false
@@ -308,17 +315,23 @@ func checkHookExecutedInEnvFile() bool {
 		return false
 	}
 
+	// Check if the last CLOTILDE_HOOK_EXECUTED assignment matches this marker.
+	// Using last-wins semantics (like shell sourcing) so older markers don't
+	// block new events.
+	var lastValue string
 	for _, line := range strings.Split(string(content), "\n") {
-		if strings.TrimSpace(line) == "CLOTILDE_HOOK_EXECUTED=1" {
-			return true
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "CLOTILDE_HOOK_EXECUTED=") {
+			lastValue = strings.TrimPrefix(line, "CLOTILDE_HOOK_EXECUTED=")
 		}
 	}
-	return false
+	return lastValue == marker
 }
 
-// markHookExecuted writes CLOTILDE_HOOK_EXECUTED=1 to CLAUDE_ENV_FILE so that
-// a second hook invocation (from global + project hooks) is skipped.
-func markHookExecuted() {
+// markHookExecuted writes CLOTILDE_HOOK_EXECUTED=<marker> to CLAUDE_ENV_FILE
+// so that a second hook invocation (from global + project hooks) for the same
+// event is skipped.
+func markHookExecuted(marker string) {
 	claudeEnvFile := os.Getenv("CLAUDE_ENV_FILE")
 	if claudeEnvFile == "" {
 		return
@@ -330,7 +343,7 @@ func markHookExecuted() {
 	}
 	defer func() { _ = f.Close() }()
 
-	_, _ = fmt.Fprintln(f, "CLOTILDE_HOOK_EXECUTED=1")
+	_, _ = fmt.Fprintf(f, "CLOTILDE_HOOK_EXECUTED=%s\n", marker)
 }
 
 // writeSessionNameToEnv writes the session name to Claude's env file for statusline use.
