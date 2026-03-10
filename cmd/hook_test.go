@@ -42,10 +42,12 @@ func executeHookWithInput(hookName string, input []byte) error { //nolint:unpara
 
 var _ = Describe("Hook Commands", func() {
 	var (
-		tempDir      string
-		clotildeRoot string
-		originalWd   string
-		store        session.Store
+		tempDir        string
+		clotildeRoot   string
+		originalWd     string
+		originalLogDir string
+		notifyLogDir   string
+		store          session.Store
 	)
 
 	BeforeEach(func() {
@@ -77,10 +79,15 @@ var _ = Describe("Hook Commands", func() {
 
 		clotildeRoot = filepath.Join(tempDir, config.ClotildeDir)
 		store = session.NewFileStore(clotildeRoot)
+
+		// Override notify log dir for all hook tests
+		originalLogDir = notify.LogDir
+		notifyLogDir = filepath.Join(tempDir, "notify-logs")
+		notify.LogDir = notifyLogDir
 	})
 
 	AfterEach(func() {
-		// Restore PATH
+		notify.LogDir = originalLogDir
 
 		// Restore working directory
 		_ = os.Chdir(originalWd)
@@ -149,6 +156,26 @@ var _ = Describe("Hook Commands", func() {
 				// Execute hook sessionstart - should not error
 				err = executeHookWithInput("sessionstart", inputJSON)
 				Expect(err).NotTo(HaveOccurred())
+			})
+
+			It("should log event to JSONL file", func() {
+				hookInput := map[string]string{
+					"session_id": "log-test-uuid",
+					"source":     "startup",
+				}
+				inputJSON, err := json.Marshal(hookInput)
+				Expect(err).NotTo(HaveOccurred())
+
+				err = executeHookWithInput("sessionstart", inputJSON)
+				Expect(err).NotTo(HaveOccurred())
+
+				logFile := filepath.Join(notifyLogDir, "log-test-uuid.events.jsonl")
+				Expect(logFile).To(BeAnExistingFile())
+
+				content, err := os.ReadFile(logFile)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(string(content)).To(ContainSubstring("log-test-uuid"))
+				Expect(string(content)).To(ContainSubstring("startup"))
 			})
 
 			It("should not error when session has context set", func() {
@@ -326,21 +353,6 @@ var _ = Describe("Hook Commands", func() {
 	})
 
 	Describe("hook notify", func() {
-		var (
-			originalLogDir string
-			notifyLogDir   string
-		)
-
-		BeforeEach(func() {
-			originalLogDir = notify.LogDir
-			notifyLogDir = filepath.Join(tempDir, "notify-logs")
-			notify.LogDir = notifyLogDir
-		})
-
-		AfterEach(func() {
-			notify.LogDir = originalLogDir
-		})
-
 		It("should exit without error on valid JSON input", func() {
 			hookInput := map[string]string{
 				"session_id": "test-notify-uuid",
