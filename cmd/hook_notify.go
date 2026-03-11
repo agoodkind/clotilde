@@ -40,11 +40,8 @@ Always appends the raw hook payload to /tmp/clotilde/<session-id>.events.jsonl f
 			_, _ = fmt.Fprintf(os.Stderr, "Warning: failed to log event: %v\n", err)
 		}
 
-		// Tab renaming: requires Zellij + opt-in via global config
+		// Tab renaming: only when running inside Zellij with tab status enabled
 		if os.Getenv("ZELLIJ") == "" || os.Getenv("CLOTILDE_NO_TAB_STATUS") == "1" {
-			return nil
-		}
-		if !isTabStatusEnabled() {
 			return nil
 		}
 
@@ -97,15 +94,6 @@ func resolveNotifySessionName(sessionID string) string {
 	}
 
 	return ""
-}
-
-// isTabStatusEnabled checks if Zellij tab status is enabled in the global config.
-func isTabStatusEnabled() bool {
-	cfg, err := config.LoadGlobalOrDefault()
-	if err != nil {
-		return false
-	}
-	return cfg.ZellijTabStatus
 }
 
 func init() {

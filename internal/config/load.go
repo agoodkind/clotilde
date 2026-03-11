@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/fgrehm/clotilde/internal/util"
 )
@@ -37,15 +36,6 @@ func LoadOrDefault(clotildeRoot string) (*Config, error) {
 		return nil, err
 	}
 	return cfg, nil
-}
-
-// SaveGlobal writes the config to the global config path.
-func SaveGlobal(cfg *Config) error {
-	path := GlobalConfigPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("failed to create global config directory: %w", err)
-	}
-	return util.WriteJSON(path, cfg)
 }
 
 // LoadGlobalOrDefault loads the global ~/.config/clotilde/config.json.
