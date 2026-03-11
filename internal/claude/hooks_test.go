@@ -27,8 +27,20 @@ var _ = Describe("Hooks", func() {
 			Expect(config.SessionStart[0].Hooks[0].Command).To(Equal("./clotilde hook sessionstart"))
 		})
 
-		It("should include Stop hook with notify command", func() {
+		It("should not register notify hooks", func() {
 			config := claude.GenerateHookConfig("/usr/local/bin/clotilde")
+
+			Expect(config.Stop).To(BeEmpty())
+			Expect(config.Notification).To(BeEmpty())
+			Expect(config.PreToolUse).To(BeEmpty())
+			Expect(config.PostToolUse).To(BeEmpty())
+			Expect(config.SessionEnd).To(BeEmpty())
+		})
+	})
+
+	Describe("GenerateNotifyHookConfig", func() {
+		It("should include Stop hook with notify command", func() {
+			config := claude.GenerateNotifyHookConfig("/usr/local/bin/clotilde")
 
 			Expect(config.Stop).To(HaveLen(1))
 			Expect(config.Stop[0].Matcher).To(BeEmpty())
@@ -36,7 +48,7 @@ var _ = Describe("Hooks", func() {
 		})
 
 		It("should include Notification hook with notify command", func() {
-			config := claude.GenerateHookConfig("/usr/local/bin/clotilde")
+			config := claude.GenerateNotifyHookConfig("/usr/local/bin/clotilde")
 
 			Expect(config.Notification).To(HaveLen(1))
 			Expect(config.Notification[0].Matcher).To(BeEmpty())
@@ -44,7 +56,7 @@ var _ = Describe("Hooks", func() {
 		})
 
 		It("should include PreToolUse hook with matcher '.*'", func() {
-			config := claude.GenerateHookConfig("/usr/local/bin/clotilde")
+			config := claude.GenerateNotifyHookConfig("/usr/local/bin/clotilde")
 
 			Expect(config.PreToolUse).To(HaveLen(1))
 			Expect(config.PreToolUse[0].Matcher).To(Equal(".*"))
@@ -52,7 +64,7 @@ var _ = Describe("Hooks", func() {
 		})
 
 		It("should include PostToolUse hook with matcher '.*'", func() {
-			config := claude.GenerateHookConfig("/usr/local/bin/clotilde")
+			config := claude.GenerateNotifyHookConfig("/usr/local/bin/clotilde")
 
 			Expect(config.PostToolUse).To(HaveLen(1))
 			Expect(config.PostToolUse[0].Matcher).To(Equal(".*"))
@@ -60,11 +72,17 @@ var _ = Describe("Hooks", func() {
 		})
 
 		It("should include SessionEnd hook with notify command", func() {
-			config := claude.GenerateHookConfig("/usr/local/bin/clotilde")
+			config := claude.GenerateNotifyHookConfig("/usr/local/bin/clotilde")
 
 			Expect(config.SessionEnd).To(HaveLen(1))
 			Expect(config.SessionEnd[0].Matcher).To(BeEmpty())
 			Expect(config.SessionEnd[0].Hooks[0].Command).To(Equal("/usr/local/bin/clotilde hook notify"))
+		})
+
+		It("should not register SessionStart hook", func() {
+			config := claude.GenerateNotifyHookConfig("/usr/local/bin/clotilde")
+
+			Expect(config.SessionStart).To(BeEmpty())
 		})
 	})
 
@@ -75,12 +93,19 @@ var _ = Describe("Hooks", func() {
 			str := claude.HookConfigString(config)
 			Expect(str).To(ContainSubstring(`"hooks":`))
 			Expect(str).To(ContainSubstring(`"SessionStart"`))
+			Expect(str).To(ContainSubstring("hook sessionstart"))
+		})
+
+		It("should include notify hooks when using GenerateNotifyHookConfig", func() {
+			config := claude.GenerateNotifyHookConfig("/usr/local/bin/clotilde")
+
+			str := claude.HookConfigString(config)
+			Expect(str).To(ContainSubstring(`"hooks":`))
 			Expect(str).To(ContainSubstring(`"Stop"`))
 			Expect(str).To(ContainSubstring(`"Notification"`))
 			Expect(str).To(ContainSubstring(`"PreToolUse"`))
 			Expect(str).To(ContainSubstring(`"PostToolUse"`))
 			Expect(str).To(ContainSubstring(`"SessionEnd"`))
-			Expect(str).To(ContainSubstring("hook sessionstart"))
 			Expect(str).To(ContainSubstring("hook notify"))
 		})
 	})

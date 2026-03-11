@@ -31,17 +31,6 @@ type HookConfig struct {
 // Returns a HookConfig that should be merged into .claude/settings.json
 func GenerateHookConfig(clotildeBinaryPath string) HookConfig {
 	sessionStartCommand := fmt.Sprintf("%s hook sessionstart", clotildeBinaryPath)
-	notifyCommand := fmt.Sprintf("%s hook notify", clotildeBinaryPath)
-
-	notifyHook := func(matcher string) HookMatcher {
-		m := HookMatcher{
-			Hooks: []Hook{{Type: "command", Command: notifyCommand}},
-		}
-		if matcher != "" {
-			m.Matcher = matcher
-		}
-		return m
-	}
 
 	return HookConfig{
 		SessionStart: []HookMatcher{
@@ -55,6 +44,26 @@ func GenerateHookConfig(clotildeBinaryPath string) HookConfig {
 				},
 			},
 		},
+	}
+}
+
+// GenerateNotifyHookConfig returns hook matchers for Stop, Notification, PreToolUse,
+// PostToolUse, and SessionEnd, all pointing to `clotilde hook notify`.
+// These are opt-in and registered only when a feature requires them (e.g. Zellij tab status).
+func GenerateNotifyHookConfig(clotildeBinaryPath string) HookConfig {
+	notifyCommand := fmt.Sprintf("%s hook notify", clotildeBinaryPath)
+
+	notifyHook := func(matcher string) HookMatcher {
+		m := HookMatcher{
+			Hooks: []Hook{{Type: "command", Command: notifyCommand}},
+		}
+		if matcher != "" {
+			m.Matcher = matcher
+		}
+		return m
+	}
+
+	return HookConfig{
 		Stop:         []HookMatcher{notifyHook("")},
 		Notification: []HookMatcher{notifyHook("")},
 		PreToolUse:   []HookMatcher{notifyHook(".*")},
