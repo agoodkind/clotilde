@@ -419,34 +419,16 @@ var _ = Describe("Hook Commands", func() {
 			var (
 				fakeRenamer     *testFakeTabRenamer
 				originalRenamer notify.TabRenamer
-				originalXDG     string
 			)
 
 			BeforeEach(func() {
 				fakeRenamer = &testFakeTabRenamer{}
 				originalRenamer = cmd.NotifyTabRenamer
 				cmd.NotifyTabRenamer = fakeRenamer
-
-				// Enable tab status in global config
-				originalXDG = os.Getenv("XDG_CONFIG_HOME")
-				globalConfigDir := filepath.Join(tempDir, "xdg-config")
-				_ = os.Setenv("XDG_CONFIG_HOME", globalConfigDir)
-				clotildeConfigDir := filepath.Join(globalConfigDir, "clotilde")
-				Expect(os.MkdirAll(clotildeConfigDir, 0o755)).To(Succeed())
-				Expect(os.WriteFile(
-					filepath.Join(clotildeConfigDir, "config.json"),
-					[]byte(`{"zellijTabStatus": true}`),
-					0o644,
-				)).To(Succeed())
 			})
 
 			AfterEach(func() {
 				cmd.NotifyTabRenamer = originalRenamer
-				if originalXDG == "" {
-					_ = os.Unsetenv("XDG_CONFIG_HOME")
-				} else {
-					_ = os.Setenv("XDG_CONFIG_HOME", originalXDG)
-				}
 				_ = os.Unsetenv("ZELLIJ")
 				_ = os.Unsetenv("CLOTILDE_SESSION_NAME")
 				_ = os.Unsetenv("CLOTILDE_NO_TAB_STATUS")
@@ -476,31 +458,6 @@ var _ = Describe("Hook Commands", func() {
 
 				hookInput := map[string]interface{}{
 					"session_id":      "disabled-test-uuid",
-					"hook_event_name": "Stop",
-				}
-				inputJSON, err := json.Marshal(hookInput)
-				Expect(err).NotTo(HaveOccurred())
-
-				err = executeHookWithInput("notify", inputJSON)
-				Expect(err).NotTo(HaveOccurred())
-
-				Expect(fakeRenamer.calls).To(BeEmpty())
-			})
-
-			It("should not rename tab when zellijTabStatus is not enabled in config", func() {
-				_ = os.Setenv("ZELLIJ", "0")
-				_ = os.Setenv("CLOTILDE_SESSION_NAME", "my-session")
-
-				// Override global config to NOT have tab status enabled
-				globalConfigDir := filepath.Join(tempDir, "xdg-config", "clotilde")
-				Expect(os.WriteFile(
-					filepath.Join(globalConfigDir, "config.json"),
-					[]byte(`{}`),
-					0o644,
-				)).To(Succeed())
-
-				hookInput := map[string]interface{}{
-					"session_id":      "no-optin-uuid",
 					"hook_event_name": "Stop",
 				}
 				inputJSON, err := json.Marshal(hookInput)
