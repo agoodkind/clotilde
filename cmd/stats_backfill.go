@@ -1,0 +1,129 @@
+package cmd
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/fgrehm/clotilde/internal/claude"
+	"github.com/fgrehm/clotilde/internal/config"
+	"github.com/fgrehm/clotilde/internal/session"
+	"github.com/fgrehm/clotilde/internal/util"
+)
+
+func newStatsBackfillCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "backfill",
+		Short: "Generate stats records from existing session transcripts",
+		Long: `Parse transcripts for all sessions in the current project and write
+stats records to the daily JSONL files. Skips sessions that already have
+a record in the last 30 days. Useful for populating stats after enabling
+tracking on an existing project.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			clotildeRoot, err := config.FindClotildeRoot()
+			if err != nil {
+				return fmt.Errorf("no sessions found (create one with 'clotilde start <name>')")
+			}
+
+			store := session.NewFileStore(clotildeRoot)
+			sessions, err := store.List()
+			if err != nil {
+				return fmt.Errorf("failed to list sessions: %w", err)
+			}
+
+			if len(sessions) == 0 {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No sessions found.")
+				return nil
+			}
+
+			now := time.Now().UTC()
+
+			// Build a set of session IDs that already have records,
+			// reading stats files once instead of per-session (avoids N+1 reads).
+			knownIDs, err := buildKnownSessionIDs(now)
+			if err != nil {
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "  warning: failed to read existing stats: %v\n", err)
+				// Continue anyway; worst case we write duplicate records
+				// that ConsolidateStatsFile can deduplicate later.
+			}
+
+			projectPath := config.ProjectRoot(clotildeRoot)
+			homeDir, err := util.HomeDir()
+			if err != nil {
+				return fmt.Errorf("resolving home directory: %w", err)
+			}
+
+			var wrote, skipped, errored int
+
+			for _, sess := range sessions {
+				name := sess.Name
+				sid := sess.Metadata.SessionID
+				if sid == "" {
+					skipped++
+					continue
+				}
+
+				if knownIDs[sid] {
+					skipped++
+					continue
+				}
+
+				stats, err := collectSessionStatsWithHome(sess, clotildeRoot, homeDir)
+				if err != nil {
+					_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "  warning: %s: %v\n", name, err)
+					errored++
+					continue
+				}
+				if stats == nil || stats.Turns == 0 {
+					skipped++
+					continue
+				}
+
+				record := claude.SessionStatsRecord{
+					SessionName:         name,
+					SessionID:           sid,
+					ProjectPath:         projectPath,
+					Turns:               stats.Turns,
+					ActiveTimeS:         int(stats.ActiveTime.Seconds()),
+					TotalTimeS:          int(stats.TotalTime.Seconds()),
+					InputTokens:         stats.InputTokens,
+					OutputTokens:        stats.OutputTokens,
+					CacheCreationTokens: stats.CacheCreationTokens,
+					CacheReadTokens:     stats.CacheReadTokens,
+					Models:              stats.Models,
+					ToolUses:            stats.ToolUses,
+					EndedAt:             backfillEndedAt(stats, sess.Metadata.LastAccessed),
+				}
+
+				if err := claude.AppendStatsRecord(record); err != nil {
+					_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "  warning: %s: failed to write record: %v\n", name, err)
+					errored++
+					continue
+				}
+
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s: %d turns, %s tokens\n",
+					name, stats.Turns, formatTokenCount(stats.InputTokens+stats.OutputTokens))
+				wrote++
+			}
+
+			_, _ = fmt.Fprintln(cmd.OutOrStdout())
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Backfill complete: %d written, %d skipped", wrote, skipped)
+			if errored > 0 {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), ", %d errors", errored)
+			}
+			_, _ = fmt.Fprintln(cmd.OutOrStdout())
+
+			return nil
+		},
+	}
+}
+
+// backfillEndedAt returns the best available timestamp for a backfill record's
+// EndedAt: the transcript's last message time if present, otherwise LastAccessed.
+func backfillEndedAt(stats *claude.TranscriptStats, lastAccessed time.Time) time.Time {
+	if stats != nil && !stats.LastMessage.IsZero() {
+		return stats.LastMessage.UTC()
+	}
+	return lastAccessed.UTC()
+}
