@@ -2,7 +2,7 @@
 
 A power-user companion for Claude Code.
 
-## Current Status: v0.7.0
+## Current Status: v0.8.0
 
 ### What's Working
 
@@ -46,5 +46,6 @@ A power-user companion for Claude Code.
 - **Consolidate test framework**: Migrate to a single testing approach (standard `testing` or Ginkgo). Currently mixed: some packages use Ginkgo (`cmd/`, `internal/claude/hooks_test.go`), others use standard `testing` (`internal/claude/transcript_test.go`, `internal/claude/stats_file_test.go`). Both work with `go test` but the inconsistency adds friction.
 - **Session search**: Full-text search across transcripts
 - **Context templates**: Dynamic context (git branch, ticket info)
+- **Auto-update**: `clotilde update` command that checks for a newer release on GitHub and replaces the binary in-place. Could also support `clotilde setup --auto-update` to register a periodic background check.
 - **Session tags**: Organize with labels
 - **Bulk operations**: Multi-select for batch delete
