@@ -1,9 +1,9 @@
 package util
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -99,16 +99,30 @@ func CountLines(path string) (int, error) {
 	}
 	defer func() { _ = file.Close() }()
 
-	scanner := bufio.NewScanner(file)
 	count := 0
-	for scanner.Scan() {
+	buf := make([]byte, 32*1024)
+	lastByte := byte('\n') // treat start-of-file as after a newline
+	for {
+		n, err := file.Read(buf)
+		for i := range n {
+			if buf[i] == '\n' {
+				count++
+			}
+		}
+		if n > 0 {
+			lastByte = buf[n-1]
+		}
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return 0, err
+		}
+	}
+	// If the file is non-empty and doesn't end with a newline, count the last line
+	if lastByte != '\n' {
 		count++
 	}
-
-	if err := scanner.Err(); err != nil {
-		return 0, err
-	}
-
 	return count, nil
 }
 

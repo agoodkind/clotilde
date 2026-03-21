@@ -1,7 +1,11 @@
 package claude
 
 import (
+	"bufio"
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -260,6 +264,108 @@ func cleanupEmptySession(clotildeRoot string, sess *session.Session) {
 	}
 }
 
+// InvokeStreaming runs claude in non-interactive mode, streaming output to a callback.
+// Each line of stdout is passed to onLine. Returns when the process exits.
+// Canceling ctx kills the claude process.
+func InvokeStreaming(ctx context.Context, opts InvokeOptions, prompt string, onLine func(line string)) error {
+	var args []string
+
+	if opts.Resume {
+		args = append(args, "--resume", opts.SessionID)
+	} else {
+		args = append(args, "--session-id", opts.SessionID)
+	}
+
+	args = appendCommonArgs(args, opts.SettingsFile, opts.SystemPromptFile, opts.SystemPromptMode)
+	args = append(args, "-p", prompt, "--output-format", "stream-json", "--verbose")
+	args = append(args, opts.AdditionalArgs...)
+
+	claudeBin := ClaudeBinaryPathFunc()
+
+	if VerboseFunc() {
+		displayCommand(claudeBin, args, opts.Env)
+	}
+
+	cmd := exec.CommandContext(ctx, claudeBin, args...)
+	stderrTail := &tailBuffer{maxSize: 4096}
+	cmd.Stderr = io.MultiWriter(os.Stderr, stderrTail)
+
+	// Set environment variables
+	cmd.Env = os.Environ()
+	for key, value := range opts.Env {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start claude: %w", err)
+	}
+
+	var lastResult string
+	reader := bufio.NewReader(stdout)
+	var readErr error
+	for {
+		line, err := reader.ReadString('\n')
+		line = strings.TrimRight(line, "\r\n")
+		if line != "" {
+			// Capture any result event (error or success) for error reporting
+			var ev struct {
+				Type   string `json:"type"`
+				Result string `json:"result"`
+			}
+			if json.Unmarshal([]byte(line), &ev) == nil && ev.Type == "result" && ev.Result != "" {
+				lastResult = ev.Result
+			}
+			onLine(line)
+		}
+		if err != nil {
+			if err != io.EOF {
+				readErr = err
+			}
+			break
+		}
+	}
+
+	if readErr != nil {
+		return fmt.Errorf("error reading stdout: %w", readErr)
+	}
+
+	if err := cmd.Wait(); err != nil {
+		if lastResult != "" {
+			return fmt.Errorf("claude error: %s", lastResult)
+		}
+		if stderr := strings.TrimSpace(stderrTail.String()); stderr != "" {
+			return fmt.Errorf("claude exited with error: %w\n%s", err, stderr)
+		}
+		return fmt.Errorf("claude exited with error: %w", err)
+	}
+
+	return nil
+}
+
+// tailBuffer is a bounded writer that keeps only the last maxSize bytes.
+// Used to capture stderr tail for error messages without unbounded memory growth.
+type tailBuffer struct {
+	maxSize int
+	buf     []byte
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > t.maxSize {
+		t.buf = t.buf[len(t.buf)-t.maxSize:]
+	}
+	return len(p), nil
+}
+
+func (t *tailBuffer) String() string {
+	return string(t.buf)
+}
+
 // Invoke executes claude CLI with custom options (for advanced use cases).
 func Invoke(opts InvokeOptions) error {
 	var args []string
@@ -273,19 +379,7 @@ func Invoke(opts InvokeOptions) error {
 		args = append(args, "--session-id", opts.SessionID)
 	}
 
-	if opts.SettingsFile != "" && util.FileExists(opts.SettingsFile) {
-		args = append(args, "--settings", opts.SettingsFile)
-	}
-
-	if opts.SystemPromptFile != "" && util.FileExists(opts.SystemPromptFile) {
-		// Use correct flag based on mode (default to append)
-		if opts.SystemPromptMode == "replace" {
-			args = append(args, "--system-prompt-file", opts.SystemPromptFile)
-		} else {
-			args = append(args, "--append-system-prompt-file", opts.SystemPromptFile)
-		}
-	}
-
+	args = appendCommonArgs(args, opts.SettingsFile, opts.SystemPromptFile, opts.SystemPromptMode)
 	args = append(args, opts.AdditionalArgs...)
 
 	return invokeInteractive(args, opts.Env)
