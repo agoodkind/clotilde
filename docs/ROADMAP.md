@@ -6,8 +6,8 @@ A power-user companion for Claude Code.
 
 ### What's Working
 
-- **Commands**: setup, start, resume, list, inspect, fork, delete, incognito, export, completion
-- **Features**: Named sessions, forking, incognito mode, system prompts, permissions, session context, session profiles (global + project), output styles, session export (HTML)
+- **Commands**: setup, start, resume, list, inspect, fork, delete, incognito, export, tour, completion
+- **Features**: Named sessions, forking, incognito mode, system prompts, permissions, session context, session profiles (global + project), output styles, session export (HTML), interactive codebase tours
 - **Shorthand flags**: `--accept-edits`, `--yolo`, `--plan`, `--dont-ask`, `--fast`
 - **TUI**: Dashboard (with start/fork actions), session picker, confirmation dialogs, styled output
 - **Debugging**: `hook notify` subcommand logs hook events to JSONL (opt-in)
@@ -36,6 +36,13 @@ A power-user companion for Claude Code.
 - `/compact` UUID tracking is defensive (Claude Code doesn't currently create new UUIDs for it)
 - `/fork` slash command inside a Clotilde session creates an untracked fork (see [slash-fork-handling spec](specs/slash-fork-handling.md))
 - Zellij tab status integration blocked by Zellij limitations (see [investigation notes](zellij-tab-status.md))
+
+## Tour Follow-ups
+
+- **Debug/verbose mode for tour generation**: Show all stream-json events Claude emits during `tour generate` (tool inputs/outputs, assistant text blocks, result events). Currently only tool call summaries are shown. Could be `--verbose` or `CLOTILDE_TOUR_DEBUG=1`. Would help diagnose extraction failures and prompt issues.
+- **Tour regeneration**: `tour generate --name existing` should detect an existing tour and offer to overwrite or diff.
+- **Tour editing**: `tour edit <name>` to open the tour file in `$EDITOR` with validation on save.
+- **Custom generation prompts**: Allow users to provide their own prompt template or append instructions (e.g. "focus on error handling patterns", "use a casual tone").
 
 ## Future Ideas
 
