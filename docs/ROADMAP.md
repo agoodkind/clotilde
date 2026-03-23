@@ -2,16 +2,25 @@
 
 A power-user companion for Claude Code.
 
-## Current Status: v0.8.1
+## Current Status: v0.9.0
 
 ### What's Working
 
 - **Commands**: setup, start, resume, list, inspect, fork, delete, incognito, export, tour, completion
-- **Features**: Named sessions, forking, incognito mode, system prompts, permissions, session context, session profiles (global + project), output styles, session export (HTML), interactive codebase tours
+- **Features**: Named sessions, forking, incognito mode, system prompts, permissions, session context, session profiles (global + project), output styles, session export (HTML), interactive codebase tours (experimental)
 - **Shorthand flags**: `--accept-edits`, `--yolo`, `--plan`, `--dont-ask`, `--fast`
 - **TUI**: Dashboard (with start/fork actions), session picker, confirmation dialogs, styled output
 - **Debugging**: `hook notify` subcommand logs hook events to JSONL (opt-in)
 - **Distribution**: Cross-platform binaries via goreleaser
+
+### v0.9.0 Highlights
+
+- **Interactive codebase tours (experimental)**: `clotilde tour` subcommand serves a browser-based code viewer with a Claude chat sidebar. Tours use the CodeTour JSON format (`.tours/*.tour`) with file+line+description steps. `clotilde tour generate` uses Claude to autonomously crawl the repo and produce a tour. `clotilde tour serve` starts a local HTTP server with syntax-highlighted code viewer, tour navigation, and persistent chat session.
+
+### v0.8.0 / v0.8.1 Highlights
+
+- **Session stats**: `clotilde hook sessionend` records session statistics (turns, time, tokens) to daily JSONL files with crash recovery
+- **Passthrough args fix**: `--` args now work correctly with positional args (v0.8.1 patch)
 
 ### v0.7.0 Highlights
 
