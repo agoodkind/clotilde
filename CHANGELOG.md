@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-03-24
+
 ### Added
 
 - **`--effort` flag**: Pass reasoning effort level (`low`, `medium`, `high`, `max`) through to Claude CLI on `start`, `resume`, `fork`, and `incognito` commands. Conflicts with `--fast` (which sets effort to `low` automatically). Includes shell completion for valid values.
