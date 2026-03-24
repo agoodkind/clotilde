@@ -2,44 +2,7 @@
 
 A power-user companion for Claude Code.
 
-## Current Status: v0.9.0
-
-### What's Working
-
-- **Commands**: setup, start, resume, list, inspect, fork, delete, incognito, export, tour, completion
-- **Features**: Named sessions, forking, incognito mode, system prompts, permissions, session context, session profiles (global + project), output styles, session export (HTML), interactive codebase tours (experimental)
-- **Shorthand flags**: `--accept-edits`, `--yolo`, `--plan`, `--dont-ask`, `--fast`, `--effort`
-- **TUI**: Dashboard (with start/fork actions), session picker, confirmation dialogs, styled output
-- **Debugging**: `hook notify` subcommand logs hook events to JSONL (opt-in)
-- **Distribution**: Cross-platform binaries via goreleaser
-
-### v0.9.0 Highlights
-
-- **Interactive codebase tours (experimental)**: `clotilde tour` subcommand serves a browser-based code viewer with a Claude chat sidebar. Tours use the CodeTour JSON format (`.tours/*.tour`) with file+line+description steps. `clotilde tour generate` uses Claude to autonomously crawl the repo and produce a tour. `clotilde tour serve` starts a local HTTP server with syntax-highlighted code viewer, tour navigation, and persistent chat session.
-
-### v0.8.0 / v0.8.1 Highlights
-
-- **Session stats**: `clotilde hook sessionend` records session statistics (turns, time, tokens) to daily JSONL files with crash recovery
-- **Passthrough args fix**: `--` args now work correctly with positional args (v0.8.1 patch)
-
-### v0.7.0 Highlights
-
-- **Global installation**: `clotilde setup` registers hooks in `~/.claude/settings.json`. No more per-project `init` required. Session directories are created automatically on first use.
-- **`init` deprecated**: Still works but prints a deprecation notice directing to `setup`.
-- **`export` command**: `clotilde export <name>` renders a session transcript into a self-contained HTML file with dark theme, syntax highlighting, collapsible thinking blocks, and keyboard shortcuts.
-- **Dashboard actions**: Start and fork actions now work end-to-end from the dashboard TUI.
-- **Hook event logging**: `clotilde hook notify` logs Claude Code events to `/tmp/clotilde/<session-id>.events.jsonl` for debugging. Opt-in, not registered by default setup.
-
-### Previous Releases
-
-- **v0.6.0**: Auto-generated session names (`YYYY-MM-DD-adjective-noun` format)
-- **v0.5.0**: Global profiles, `--context` flag, session name injection via hooks
-- **v0.4.0**: Session profiles, removed implicit global defaults
-- **v0.3.0**: Permission mode shortcuts, `--fast` preset, ghost session cleanup
-- **v0.2.0**: Simplified context system, goreleaser fixes
-- **v0.1.0**: Initial release
-
-### Known Limitations
+## Known Limitations
 
 - Incognito cleanup only runs on normal exit (not SIGKILL/crashes)
 - `/compact` UUID tracking is defensive (Claude Code doesn't currently create new UUIDs for it)
