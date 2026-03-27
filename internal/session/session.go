@@ -29,6 +29,7 @@ type Metadata struct {
 // Settings represents Claude Code session-specific settings stored in settings.json.
 type Settings struct {
 	Model       string      `json:"model,omitempty"`
+	EffortLevel string      `json:"effortLevel,omitempty"`
 	OutputStyle string      `json:"outputStyle,omitempty"`
 	Permissions Permissions `json:"permissions,omitempty"`
 }
@@ -54,23 +55,6 @@ func NewSession(name, sessionID string) *Session {
 			Created:         now,
 			LastAccessed:    now,
 			IsForkedSession: false,
-		},
-	}
-}
-
-// NewForkedSession creates a new forked session with empty sessionId.
-// The sessionId will be filled in later by the session-start hook.
-func NewForkedSession(name, parentName string) *Session {
-	now := time.Now()
-	return &Session{
-		Name: name,
-		Metadata: Metadata{
-			Name:            name,
-			SessionID:       "", // Will be filled by hook
-			Created:         now,
-			LastAccessed:    now,
-			ParentSession:   parentName,
-			IsForkedSession: true,
 		},
 	}
 }
@@ -105,8 +89,6 @@ func (s *Session) AddPreviousSessionID(newSessionID string) {
 		}
 	}
 
-	// Always update to new session ID, even if current is empty
-	// (handles forks that haven't had registerFork called yet)
 	s.Metadata.SessionID = newSessionID
 }
 

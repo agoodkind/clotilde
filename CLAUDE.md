@@ -161,10 +161,11 @@ claude --resume <uuid> \
 **Forking a session:**
 ```bash
 claude --resume <parent-uuid> --fork-session \
+  --session-id <fork-uuid> -n <fork-name> \
   [--settings ...] [--append-system-prompt-file ...]
 ```
 
-Note: `--settings` and `--append-system-prompt-file` are only added if the files exist.
+Note: `--settings` and `--append-system-prompt-file` are only added if the files exist. `--session-id` pre-assigns the fork's UUID (avoids hook-based UUID registration). `-n` sets the display name shown in Claude's native session picker.
 
 ### Session Hooks
 
@@ -186,17 +187,17 @@ Note: `--settings` and `--append-system-prompt-file` are only added if the files
 No matcher field - the single hook handles all sources (startup, resume, compact, clear) internally.
 
 **Source-based dispatch:**
-- **`startup`**: New sessions - outputs global context, saves transcript path
-- **`resume`**: Resuming/forking - registers fork UUID if `CLOTILDE_FORK_NAME` env var set, outputs context
+- **`startup`**: New sessions - outputs session name and context, saves transcript path
+- **`resume`**: Resuming or `clotilde fork` - outputs context
 - **`compact`**: Session compaction - defensive handler (Claude Code doesn't currently create new UUID for `/compact`, but we handle it anyway in case behavior changes)
 - **`clear`**: Session clear - updates metadata with new UUID, preserves old UUID in `previousSessionIds` array
 
-**Fork registration:**
-1. `clotilde fork` creates fork folder with empty `sessionId` in metadata.json
-2. Sets env vars: `CLOTILDE_FORK_NAME`, `CLOTILDE_PARENT_SESSION`, `CLOTILDE_SESSION_NAME`
-3. Invokes `claude --resume <parent> --fork-session`
-4. Claude triggers SessionStart with `source: "resume"` → hook detects `CLOTILDE_FORK_NAME` and updates fork metadata with new UUID
-5. Hook is idempotent (won't overwrite existing UUIDs)
+**`clotilde fork` registration:**
+1. `clotilde fork` pre-assigns a UUID via `util.GenerateUUID()` before creating the session
+2. Sets env var: `CLOTILDE_SESSION_NAME` (for context output in hook)
+3. Invokes `claude --resume <parent> --fork-session --session-id <forkUUID> -n <forkName>`
+4. Claude triggers SessionStart with `source: "resume"` → hook outputs context for the new session
+5. Fork UUID is guaranteed to match because it was pre-assigned (no hook-based UUID registration needed)
 
 **Clear handling:**
 1. User runs `/clear` in Claude Code

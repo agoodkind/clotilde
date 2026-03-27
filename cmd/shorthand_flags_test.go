@@ -139,7 +139,7 @@ var _ = Describe("Shorthand Flags", func() {
 	})
 
 	Describe("--fast on start", func() {
-		It("should set model to haiku and pass --effort low to claude", func() {
+		It("should store model=haiku and effortLevel=low in settings (not CLI args)", func() {
 			rootCmd := cmd.NewRootCmd()
 			rootCmd.SetOut(io.Discard)
 			rootCmd.SetErr(io.Discard)
@@ -148,15 +148,16 @@ var _ = Describe("Shorthand Flags", func() {
 			err := rootCmd.Execute()
 			Expect(err).NotTo(HaveOccurred())
 
-			// Verify model stored in settings
+			// Verify model and effort stored in settings
 			settings, err := store.LoadSettings("fast-session")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(settings.Model).To(Equal("haiku"))
+			Expect(settings.EffortLevel).To(Equal("low"))
 
-			// Verify effort passed to claude
+			// Effort should NOT be passed as a CLI arg (it's in settings.json)
 			args, err := testutil.ReadClaudeArgs(claudeArgsFile)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(args).To(ContainSubstring("--effort low"))
+			Expect(args).NotTo(ContainSubstring("--effort"))
 		})
 
 		It("should reject --fast with --model", func() {
@@ -182,11 +183,12 @@ var _ = Describe("Shorthand Flags", func() {
 			settings, err := store.LoadSettings("combo-session")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(settings.Model).To(Equal("haiku"))
+			Expect(settings.EffortLevel).To(Equal("low"))
 			Expect(settings.Permissions.DefaultMode).To(Equal("acceptEdits"))
 
 			args, err := testutil.ReadClaudeArgs(claudeArgsFile)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(args).To(ContainSubstring("--effort low"))
+			Expect(args).NotTo(ContainSubstring("--effort"))
 		})
 	})
 
@@ -267,7 +269,7 @@ var _ = Describe("Shorthand Flags", func() {
 	})
 
 	Describe("--fast on fork", func() {
-		It("should pass --model and --effort to claude", func() {
+		It("should persist model and effort in settings (not CLI args)", func() {
 			parent := session.NewSession("fork-parent-fast", "uuid-fork-parent-fast")
 			err := store.Create(parent)
 			Expect(err).NotTo(HaveOccurred())
@@ -282,8 +284,12 @@ var _ = Describe("Shorthand Flags", func() {
 
 			args, err := testutil.ReadClaudeArgs(claudeArgsFile)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(args).To(ContainSubstring("--model haiku"))
-			Expect(args).To(ContainSubstring("--effort low"))
+			Expect(args).NotTo(ContainSubstring("--effort"))
+
+			settings, err := store.LoadSettings("fork-child-fast")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(settings.Model).To(Equal("haiku"))
+			Expect(settings.EffortLevel).To(Equal("low"))
 		})
 	})
 
@@ -310,7 +316,7 @@ var _ = Describe("Shorthand Flags", func() {
 	})
 
 	Describe("--fast on incognito", func() {
-		It("should pass --effort low to claude", func() {
+		It("should not pass --effort as CLI arg (stored in settings instead)", func() {
 			rootCmd := cmd.NewRootCmd()
 			rootCmd.SetOut(io.Discard)
 			rootCmd.SetErr(io.Discard)
@@ -319,14 +325,15 @@ var _ = Describe("Shorthand Flags", func() {
 			err := rootCmd.Execute()
 			Expect(err).NotTo(HaveOccurred())
 
+			// Session is auto-deleted (incognito), so check CLI args only
 			args, err := testutil.ReadClaudeArgs(claudeArgsFile)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(args).To(ContainSubstring("--effort low"))
+			Expect(args).NotTo(ContainSubstring("--effort"))
 		})
 	})
 
 	Describe("--effort on fork", func() {
-		It("should pass --effort to claude", func() {
+		It("should persist effort in settings (not CLI args)", func() {
 			parent := session.NewSession("fork-parent-effort", "uuid-fork-parent-effort")
 			err := store.Create(parent)
 			Expect(err).NotTo(HaveOccurred())
@@ -341,12 +348,16 @@ var _ = Describe("Shorthand Flags", func() {
 
 			args, err := testutil.ReadClaudeArgs(claudeArgsFile)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(args).To(ContainSubstring("--effort medium"))
+			Expect(args).NotTo(ContainSubstring("--effort"))
+
+			settings, err := store.LoadSettings("fork-child-effort")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(settings.EffortLevel).To(Equal("medium"))
 		})
 	})
 
 	Describe("--effort on incognito", func() {
-		It("should pass --effort to claude", func() {
+		It("should not pass --effort as CLI arg (stored in settings instead)", func() {
 			rootCmd := cmd.NewRootCmd()
 			rootCmd.SetOut(io.Discard)
 			rootCmd.SetErr(io.Discard)
@@ -355,14 +366,15 @@ var _ = Describe("Shorthand Flags", func() {
 			err := rootCmd.Execute()
 			Expect(err).NotTo(HaveOccurred())
 
+			// Session is auto-deleted (incognito), so check CLI args only
 			args, err := testutil.ReadClaudeArgs(claudeArgsFile)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(args).To(ContainSubstring("--effort high"))
+			Expect(args).NotTo(ContainSubstring("--effort"))
 		})
 	})
 
 	Describe("--effort on start", func() {
-		It("should pass --effort to claude", func() {
+		It("should persist effort in settings (not CLI args)", func() {
 			rootCmd := cmd.NewRootCmd()
 			rootCmd.SetOut(io.Discard)
 			rootCmd.SetErr(io.Discard)
@@ -371,9 +383,15 @@ var _ = Describe("Shorthand Flags", func() {
 			err := rootCmd.Execute()
 			Expect(err).NotTo(HaveOccurred())
 
+			// Effort should be stored in settings
+			settings, err := store.LoadSettings("effort-session")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(settings.EffortLevel).To(Equal("high"))
+
+			// Effort should NOT be passed as a CLI arg (it's in settings.json)
 			args, err := testutil.ReadClaudeArgs(claudeArgsFile)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(args).To(ContainSubstring("--effort high"))
+			Expect(args).NotTo(ContainSubstring("--effort"))
 		})
 
 		It("should reject --effort with --fast", func() {

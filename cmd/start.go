@@ -93,9 +93,7 @@ Pass additional flags to Claude Code after '--':
 			}
 			if fastEnabled {
 				_ = cmd.Flags().Set("model", "haiku")
-				additionalArgs = append(additionalArgs, "--effort", "low")
-			} else {
-				additionalArgs = collectEffortFlag(cmd, additionalArgs)
+				_ = cmd.Flags().Set("effort", "low")
 			}
 
 			// Build params from flags

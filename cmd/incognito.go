@@ -57,9 +57,7 @@ process crashes or is killed (SIGKILL), the session may persist. Use
 			}
 			if fastEnabled {
 				_ = cmd.Flags().Set("model", "haiku")
-				additionalArgs = append(additionalArgs, "--effort", "low")
-			} else {
-				additionalArgs = collectEffortFlag(cmd, additionalArgs)
+				_ = cmd.Flags().Set("effort", "low")
 			}
 
 			// Generate or use provided name
