@@ -11,9 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`effortLevel` persisted in `settings.json`**: The `--effort` flag (and `--fast`, which implies `effort: low`) is now stored in the session's `settings.json` as `effortLevel`. This means the effort level is automatically applied on resume without needing to pass `--effort` again.
 - **Session names in Claude's native picker**: All commands (`start`, `resume`, `fork`) now pass `-n <name>` to Claude, so clotilde session names appear as display names in Claude's built-in `/resume` picker and terminal title instead of raw UUIDs.
+- **Fork inherits model and effort from parent**: Forked sessions now copy the parent's `settings.json` (including model and effort level). You can override with `--fast`, `--model`, or `--effort` on the fork command.
 
 ### Fixed
 
+- **Lazy creation picks wrong project root**: `FindOrCreateClotildeRoot` would find a legacy `~/.claude/clotilde` (or any ancestor's) before checking the current project, causing new sessions to be created in the wrong directory. Now resolves the project root first (respecting the `$HOME` boundary) and only looks for `.claude/clotilde` within it. Also returns a clear error when the path exists but is not a directory, or when `os.Stat` fails for reasons other than "not found".
 - **`clotilde fork` UUID mismatch**: Forked sessions ended up with the parent's UUID because `SessionStart` fires with the parent's UUID when using `--fork-session`. Fixed by pre-assigning the fork's UUID via `--session-id` before invocation, the same pattern used by `start`.
 - **Propagate errors in fork custom output style handling**: `json.MarshalIndent`, `os.WriteFile`, and `store.Update` errors during fork style inheritance were previously silently discarded. They now fail loudly instead of leaving the fork in an inconsistent state.
 
