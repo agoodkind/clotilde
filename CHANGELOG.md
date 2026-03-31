@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - **Interactive Codebase Tours**: Removed `clotilde tour` command (list, serve, generate), `internal/tour/`, `internal/server/`, and streaming invocation code. Tours may return as a standalone project in the future.
+- **Session statistics**: Removed `clotilde stats`, `stats backfill`, SessionEnd hook, crash recovery, and `--stats`/`--no-stats` flags from `setup`. Stats may return as a standalone tool in the future.
 
 ### Fixed
 
@@ -87,7 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Session-reading commands**: `list`, `resume`, `inspect`, `delete`, `stats`, and `export` show friendly "no sessions found" messages instead of "not in a clotilde project" errors.
+- **Session-reading commands**: `list`, `resume`, `inspect`, `delete`, and `export` show friendly "no sessions found" messages instead of "not in a clotilde project" errors.
 - **Dashboard**: Opens in any directory (auto-creates session storage). Empty session list is handled gracefully.
 
 ### Deprecated

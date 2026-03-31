@@ -314,7 +314,6 @@ func registerSubcommands(root *cobra.Command) {
 	root.AddCommand(newResumeCmd())
 	root.AddCommand(listCmd)
 	root.AddCommand(inspectCmd)
-	root.AddCommand(newStatsCmd())
 	root.AddCommand(newForkCmd())
 	root.AddCommand(deleteCmd)
 	root.AddCommand(newExportCmd())
