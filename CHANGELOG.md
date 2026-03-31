@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Session names in Claude's native picker**: All commands (`start`, `resume`, `fork`) now pass `-n <name>` to Claude, so clotilde session names appear as display names in Claude's built-in `/resume` picker and terminal title instead of raw UUIDs.
 - **Fork inherits model and effort from parent**: Forked sessions now copy the parent's `settings.json` (including model and effort level). You can override with `--fast`, `--model`, or `--effort` on the fork command.
 
+### Removed
+
+- **Interactive Codebase Tours**: Removed `clotilde tour` command (list, serve, generate), `internal/tour/`, `internal/server/`, and streaming invocation code. Tours may return as a standalone project in the future.
+- **Session statistics**: Removed `clotilde stats`, `stats backfill`, SessionEnd hook, crash recovery, and `--stats`/`--no-stats` flags from `setup`. Stats may return as a standalone tool in the future.
+- **System prompt support**: Removed `--append-system-prompt`, `--append-system-prompt-file`, `--replace-system-prompt`, `--replace-system-prompt-file` flags, `systemPromptMode` metadata, `system-prompt.md` file handling, and all related store/invocation plumbing.
+
 ### Fixed
 
 - **Lazy creation picks wrong project root**: `FindOrCreateClotildeRoot` would find a legacy `~/.claude/clotilde` (or any ancestor's) before checking the current project, causing new sessions to be created in the wrong directory. Now resolves the project root first (respecting the `$HOME` boundary) and only looks for `.claude/clotilde` within it. Also returns a clear error when the path exists but is not a directory, or when `os.Stat` fails for reasons other than "not found".
@@ -44,7 +50,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **URL persistence** — Current step is saved to URL query parameter (`?step=N`) for bookmarking and resumability
   - **Chat reset** — Button to clear chat history and start a fresh conversation
   - **Tour format** — Supports CodeTour JSON format (`.tours/<name>.tour`)
-- **Streaming JSON output** — New `InvokeStreaming()` function in `internal/claude/` for non-interactive Claude invocations with streaming JSON output capture
 
 ## [0.8.1] - 2026-03-17
 
@@ -84,7 +89,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Session-reading commands**: `list`, `resume`, `inspect`, `delete`, `stats`, and `export` show friendly "no sessions found" messages instead of "not in a clotilde project" errors.
+- **Session-reading commands**: `list`, `resume`, `inspect`, `delete`, and `export` show friendly "no sessions found" messages instead of "not in a clotilde project" errors.
 - **Dashboard**: Opens in any directory (auto-creates session storage). Empty session list is handled gracefully.
 
 ### Deprecated

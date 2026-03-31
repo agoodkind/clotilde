@@ -2,7 +2,6 @@ package util
 
 import (
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -32,24 +31,6 @@ func FormatSize(bytes int64) string {
 	}
 
 	return fmt.Sprintf("%.1f TB", float64(bytes)/float64(divisor/unit))
-}
-
-// TruncateText truncates text to maxChars, replacing newlines with spaces.
-// If text is longer than maxChars, appends "..." to indicate truncation.
-// Examples: TruncateText("Hello\nWorld", 10) -> "Hello World"
-//
-//	TruncateText("Very long text here", 10) -> "Very long..."
-func TruncateText(text string, maxChars int) string {
-	// Replace newlines and collapse multiple spaces
-	text = strings.ReplaceAll(text, "\n", " ")
-	text = strings.ReplaceAll(text, "\r", " ")
-	text = strings.Join(strings.Fields(text), " ")
-
-	if len(text) <= maxChars {
-		return text
-	}
-
-	return text[:maxChars-3] + "..."
 }
 
 // FormatRelativeTime formats a time as a human-readable relative string.
@@ -82,32 +63,4 @@ func FormatRelativeTime(t time.Time) string {
 	default:
 		return t.Format("2006-01-02")
 	}
-}
-
-// FormatDuration formats a duration as a compact human-readable string.
-// Examples: "0s", "15s", "2m 8s", "1h", "2h 5m"
-func FormatDuration(d time.Duration) string {
-	if d <= 0 {
-		return "0s"
-	}
-
-	h := int(d.Hours())
-	m := int(d.Minutes()) % 60
-	s := int(d.Seconds()) % 60
-
-	if h > 0 {
-		if m > 0 {
-			return fmt.Sprintf("%dh %dm", h, m)
-		}
-		return fmt.Sprintf("%dh", h)
-	}
-
-	if m > 0 {
-		if s > 0 {
-			return fmt.Sprintf("%dm %ds", m, s)
-		}
-		return fmt.Sprintf("%dm", m)
-	}
-
-	return fmt.Sprintf("%ds", s)
 }

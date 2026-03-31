@@ -57,24 +57,4 @@ var _ = Describe("Session", func() {
 			Expect(s.Metadata.LastAccessed).To(BeTemporally("~", time.Now(), time.Second))
 		})
 	})
-
-	Describe("GetSystemPromptMode", func() {
-		It("should return empty string when SystemPromptMode is not set", func() {
-			s := session.NewSession("test", "uuid")
-			Expect(s.Metadata.SystemPromptMode).To(BeEmpty())
-			Expect(s.Metadata.GetSystemPromptMode()).To(BeEmpty())
-		})
-
-		It("should return 'append' when SystemPromptMode is set to 'append'", func() {
-			s := session.NewSession("test", "uuid")
-			s.Metadata.SystemPromptMode = "append"
-			Expect(s.Metadata.GetSystemPromptMode()).To(Equal("append"))
-		})
-
-		It("should return 'replace' when SystemPromptMode is set to 'replace'", func() {
-			s := session.NewSession("test", "uuid")
-			s.Metadata.SystemPromptMode = "replace"
-			Expect(s.Metadata.GetSystemPromptMode()).To(Equal("replace"))
-		})
-	})
 })

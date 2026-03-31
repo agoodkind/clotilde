@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
@@ -38,10 +37,6 @@ func buildIncognitoParams(cmd *cobra.Command, name string) SessionCreateParams {
 // buildCommonParams extracts common session creation parameters from command flags.
 func buildCommonParams(cmd *cobra.Command, name string) SessionCreateParams {
 	model, _ := cmd.Flags().GetString("model")
-	systemPrompt, _ := cmd.Flags().GetString("append-system-prompt")
-	systemPromptFile, _ := cmd.Flags().GetString("append-system-prompt-file")
-	replaceSystemPrompt, _ := cmd.Flags().GetString("replace-system-prompt")
-	replaceSystemPromptFile, _ := cmd.Flags().GetString("replace-system-prompt-file")
 	profile, _ := cmd.Flags().GetString("profile")
 	permissionMode, _ := cmd.Flags().GetString("permission-mode")
 	allowedTools, _ := cmd.Flags().GetStringSlice("allowed-tools")
@@ -53,62 +48,46 @@ func buildCommonParams(cmd *cobra.Command, name string) SessionCreateParams {
 	effort, _ := cmd.Flags().GetString("effort")
 
 	return SessionCreateParams{
-		Name:                    name,
-		Model:                   model,
-		SystemPrompt:            systemPrompt,
-		SystemPromptFile:        systemPromptFile,
-		ReplaceSystemPrompt:     replaceSystemPrompt,
-		ReplaceSystemPromptFile: replaceSystemPromptFile,
-		Profile:                 profile,
-		PermissionMode:          permissionMode,
-		AllowedTools:            allowedTools,
-		DisallowedTools:         disallowedTools,
-		AdditionalDirs:          additionalDirs,
-		OutputStyle:             outputStyle,
-		OutputStyleFile:         outputStyleFile,
-		Context:                 context,
-		EffortLevel:             effort,
+		Name:            name,
+		Model:           model,
+		Profile:         profile,
+		PermissionMode:  permissionMode,
+		AllowedTools:    allowedTools,
+		DisallowedTools: disallowedTools,
+		AdditionalDirs:  additionalDirs,
+		OutputStyle:     outputStyle,
+		OutputStyleFile: outputStyleFile,
+		Context:         context,
+		EffortLevel:     effort,
 	}
 }
 
 // SessionCreateParams holds parameters for creating a new session.
 type SessionCreateParams struct {
-	Name                    string
-	Model                   string
-	SystemPrompt            string // inline content (append mode)
-	SystemPromptFile        string // path to read from (append mode)
-	ReplaceSystemPrompt     string // inline content (replace mode)
-	ReplaceSystemPromptFile string // path to read from (replace mode)
-	Profile                 string // named profile from config
-	PermissionMode          string
-	AllowedTools            []string
-	DisallowedTools         []string
-	AdditionalDirs          []string
-	OutputStyle             string // built-in style, custom style name, or inline content
-	OutputStyleFile         string // path to custom style file
-	Context                 string // session context (e.g. "working on ticket GH-123")
-	EffortLevel             string // effort level (low, medium, high, max)
-	Incognito               bool
+	Name            string
+	Model           string
+	Profile         string // named profile from config
+	PermissionMode  string
+	AllowedTools    []string
+	DisallowedTools []string
+	AdditionalDirs  []string
+	OutputStyle     string // built-in style, custom style name, or inline content
+	OutputStyleFile string // path to custom style file
+	Context         string // session context (e.g. "working on ticket GH-123")
+	EffortLevel     string // effort level (low, medium, high, max)
+	Incognito       bool
 }
 
 // SessionCreateResult holds the created session and file paths.
 type SessionCreateResult struct {
-	ClotildeRoot     string
-	Session          *session.Session
-	SettingsFile     string
-	SystemPromptFile string
+	ClotildeRoot string
+	Session      *session.Session
+	SettingsFile string
 }
 
 // createSession handles common session creation logic.
 // Returns the session ready for claude.Start() invocation.
 func createSession(params SessionCreateParams) (*SessionCreateResult, error) {
-	// Validate system prompt flags
-	hasAppend := params.SystemPrompt != "" || params.SystemPromptFile != ""
-	hasReplace := params.ReplaceSystemPrompt != "" || params.ReplaceSystemPromptFile != ""
-	if hasAppend && hasReplace {
-		return nil, fmt.Errorf("cannot use both append and replace system prompt flags")
-	}
-
 	// Find or create clotilde root
 	clotildeRoot, err := config.FindOrCreateClotildeRoot()
 	if err != nil {
@@ -137,13 +116,6 @@ func createSession(params SessionCreateParams) (*SessionCreateResult, error) {
 		sess = session.NewIncognitoSession(params.Name, sessionID)
 	} else {
 		sess = session.NewSession(params.Name, sessionID)
-	}
-
-	// Set system prompt mode
-	if hasReplace {
-		sess.Metadata.SystemPromptMode = "replace"
-	} else {
-		sess.Metadata.SystemPromptMode = "append"
 	}
 
 	// Set context
@@ -263,34 +235,6 @@ func createSession(params SessionCreateParams) (*SessionCreateResult, error) {
 		ClotildeRoot: clotildeRoot,
 		Session:      sess,
 		SettingsFile: filepath.Join(sessionDir, "settings.json"),
-	}
-
-	// Save system prompt (handle both append and replace modes)
-	var promptContent string
-	switch {
-	case params.SystemPrompt != "":
-		promptContent = params.SystemPrompt
-	case params.SystemPromptFile != "":
-		content, err := os.ReadFile(params.SystemPromptFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read system prompt file: %w", err)
-		}
-		promptContent = string(content)
-	case params.ReplaceSystemPrompt != "":
-		promptContent = params.ReplaceSystemPrompt
-	case params.ReplaceSystemPromptFile != "":
-		content, err := os.ReadFile(params.ReplaceSystemPromptFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read system prompt file: %w", err)
-		}
-		promptContent = string(content)
-	}
-
-	if promptContent != "" {
-		if err := store.SaveSystemPrompt(params.Name, promptContent); err != nil {
-			return nil, fmt.Errorf("failed to save system prompt: %w", err)
-		}
-		result.SystemPromptFile = filepath.Join(sessionDir, "system-prompt.md")
 	}
 
 	return result, nil

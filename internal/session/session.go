@@ -23,7 +23,6 @@ type Metadata struct {
 	IsIncognito          bool      `json:"isIncognito"`
 	PreviousSessionIDs   []string  `json:"previousSessionIds,omitempty"`
 	Context              string    `json:"context,omitempty"`
-	SystemPromptMode     string    `json:"systemPromptMode,omitempty"` // "append" (default) or "replace"
 	HasCustomOutputStyle bool      `json:"hasCustomOutputStyle,omitempty"`
 }
 
@@ -83,10 +82,4 @@ func (s *Session) AddPreviousSessionID(newSessionID string) {
 	}
 
 	s.Metadata.SessionID = newSessionID
-}
-
-// GetSystemPromptMode returns the system prompt mode ("append" or "replace").
-// Returns empty string if not set.
-func (m *Metadata) GetSystemPromptMode() string {
-	return m.SystemPromptMode
 }

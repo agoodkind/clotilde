@@ -104,7 +104,7 @@ func handleDashboardAction(selectedAction string, sessions []*session.Session, c
 		fmt.Println(ui.Success(fmt.Sprintf("Created session '%s' (%s)", result.Session.Name, result.Session.Metadata.SessionID)))
 		fmt.Println("\nStarting Claude Code...")
 
-		if err := claude.Start(result.ClotildeRoot, result.Session, result.SettingsFile, result.SystemPromptFile, nil); err != nil {
+		if err := claude.Start(result.ClotildeRoot, result.Session, result.SettingsFile, nil); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Failed to start session: %v\n", err)
 			os.Exit(1)
 		}
@@ -314,12 +314,10 @@ func registerSubcommands(root *cobra.Command) {
 	root.AddCommand(newResumeCmd())
 	root.AddCommand(listCmd)
 	root.AddCommand(inspectCmd)
-	root.AddCommand(newStatsCmd())
 	root.AddCommand(newForkCmd())
 	root.AddCommand(deleteCmd)
 	root.AddCommand(newExportCmd())
 	root.AddCommand(hookCmd)
-	root.AddCommand(newTourCmd())
 	root.AddCommand(versionCmd)
 	root.AddCommand(newCompletionCmd())
 
@@ -359,17 +357,10 @@ func resumeSession(clotildeRoot string, sess *session.Session, _ session.Store) 
 		settingsFile = settingsPath
 	}
 
-	// Check for system prompt file
-	var systemPromptFile string
-	promptPath := filepath.Join(sessionDir, "system-prompt.md")
-	if util.FileExists(promptPath) {
-		systemPromptFile = promptPath
-	}
-
 	fmt.Printf("Resuming session '%s' (%s)\n\n", sess.Name, sess.Metadata.SessionID)
 
 	// Invoke claude
-	return claude.Resume(clotildeRoot, sess, settingsFile, systemPromptFile, nil)
+	return claude.Resume(clotildeRoot, sess, settingsFile, nil)
 }
 
 // deleteSession deletes a session (extracted from delete command)
@@ -449,7 +440,6 @@ func forkFromDashboard(clotildeRoot string, parent *session.Session, sessions []
 	fork := session.NewSession(forkName, "")
 	fork.Metadata.IsForkedSession = true
 	fork.Metadata.ParentSession = parent.Name
-	fork.Metadata.SystemPromptMode = parent.Metadata.SystemPromptMode
 	fork.Metadata.Context = parent.Metadata.Context
 
 	if err := store.Create(fork); err != nil {
@@ -467,24 +457,13 @@ func forkFromDashboard(clotildeRoot string, parent *session.Session, sessions []
 		}
 	}
 
-	// Copy system-prompt.md if exists
-	parentPrompt := filepath.Join(parentDir, "system-prompt.md")
-	if util.FileExists(parentPrompt) {
-		if err := util.CopyFile(parentPrompt, filepath.Join(forkDir, "system-prompt.md")); err != nil {
-			return fmt.Errorf("failed to copy system prompt: %w", err)
-		}
-	}
-
 	fmt.Println(ui.Success(fmt.Sprintf("Created fork '%s' from '%s'", forkName, parent.Name)))
 	fmt.Println("\nStarting Claude Code with fork...")
 
-	var settingsFile, systemPromptFile string
+	var settingsFile string
 	if util.FileExists(filepath.Join(forkDir, "settings.json")) {
 		settingsFile = filepath.Join(forkDir, "settings.json")
 	}
-	if util.FileExists(filepath.Join(forkDir, "system-prompt.md")) {
-		systemPromptFile = filepath.Join(forkDir, "system-prompt.md")
-	}
 
-	return claude.Fork(clotildeRoot, parent, forkName, settingsFile, systemPromptFile, nil, fork)
+	return claude.Fork(clotildeRoot, parent, forkName, settingsFile, nil, fork)
 }

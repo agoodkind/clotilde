@@ -363,13 +363,6 @@ func (m PickerModel) renderPreviewPane(sess *session.Session) string {
 	lines = append(lines, DimStyle.Render("Last accessed:"))
 	lines = append(lines, "  "+formatTimeAgo(sess.Metadata.LastAccessed))
 
-	// System prompt mode
-	if sess.Metadata.SystemPromptMode != "" {
-		lines = append(lines, "")
-		lines = append(lines, DimStyle.Render("System prompt:"))
-		lines = append(lines, "  "+sess.Metadata.SystemPromptMode)
-	}
-
 	return InfoBoxStyle.Render(strings.Join(lines, "\n"))
 }
 

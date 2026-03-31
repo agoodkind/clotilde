@@ -79,8 +79,7 @@ var _ = Describe("Inspect Command", func() {
 		// Actual output would be to stdout
 	})
 
-	It("should show session with settings and prompt", func() {
-		// Create session with settings and system prompt
+	It("should show session with settings", func() {
 		sess := session.NewSession("full-inspect", "uuid-full-inspect")
 		err := store.Create(sess)
 		Expect(err).NotTo(HaveOccurred())
@@ -93,9 +92,6 @@ var _ = Describe("Inspect Command", func() {
 			},
 		}
 		err = store.SaveSettings("full-inspect", settings)
-		Expect(err).NotTo(HaveOccurred())
-
-		err = store.SaveSystemPrompt("full-inspect", "Test system prompt")
 		Expect(err).NotTo(HaveOccurred())
 
 		// Execute inspect command
