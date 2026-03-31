@@ -145,37 +145,6 @@ var _ = Describe("Fork Command", func() {
 		Expect(args).To(ContainSubstring("--append-system-prompt-file"))
 	})
 
-	It("should inherit system prompt mode from parent", func() {
-		// Create parent with replace mode
-		parent := session.NewSession("parent-replace", "uuid-parent-replace")
-		parent.Metadata.SystemPromptMode = "replace"
-		err := store.Create(parent)
-		Expect(err).NotTo(HaveOccurred())
-
-		err = store.SaveSystemPrompt("parent-replace", "You are a code reviewer")
-		Expect(err).NotTo(HaveOccurred())
-
-		// Execute fork command
-		rootCmd := cmd.NewRootCmd()
-		rootCmd.SetOut(io.Discard)
-		rootCmd.SetErr(io.Discard)
-		rootCmd.SetArgs([]string{"--claude-bin", filepath.Join(fakeClaudeDir, "claude"), "fork", "parent-replace", "child-replace"})
-
-		err = rootCmd.Execute()
-		Expect(err).NotTo(HaveOccurred())
-
-		// Verify fork inherited replace mode
-		fork, err := store.Get("child-replace")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(fork.Metadata.SystemPromptMode).To(Equal("replace"))
-
-		// Verify claude was invoked with --system-prompt-file (not --append-system-prompt-file)
-		args, err := testutil.ReadClaudeArgs(claudeArgsFile)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(args).To(ContainSubstring("--system-prompt-file"))
-		Expect(args).NotTo(ContainSubstring("--append-system-prompt-file"))
-	})
-
 	It("should reject fork of non-existent parent", func() {
 		rootCmd := cmd.NewRootCmd()
 		rootCmd.SetOut(io.Discard)

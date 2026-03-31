@@ -129,7 +129,6 @@ Pass additional flags to Claude Code after '--':
 			}
 			fork.Metadata.IsForkedSession = true
 			fork.Metadata.ParentSession = parentName
-			fork.Metadata.SystemPromptMode = parentSess.Metadata.SystemPromptMode // Inherit from parent
 
 			// Set context: use --context flag if provided, otherwise inherit from parent
 			forkContext, _ := cmd.Flags().GetString("context")

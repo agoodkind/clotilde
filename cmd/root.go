@@ -447,7 +447,6 @@ func forkFromDashboard(clotildeRoot string, parent *session.Session, sessions []
 	fork := session.NewSession(forkName, "")
 	fork.Metadata.IsForkedSession = true
 	fork.Metadata.ParentSession = parent.Name
-	fork.Metadata.SystemPromptMode = parent.Metadata.SystemPromptMode
 	fork.Metadata.Context = parent.Metadata.Context
 
 	if err := store.Create(fork); err != nil {

@@ -10,7 +10,6 @@ Key capabilities:
 - Named sessions (vs UUIDs)
 - Session forking (branch conversations)
 - Incognito sessions (auto-delete on exit)
-- System prompt customization per session
 - Full cleanup (sessions + Claude Code transcripts/logs)
 
 ## Architecture
@@ -57,7 +56,6 @@ Each session is a folder in `.claude/clotilde/sessions/<name>/`:
     my-session/
       metadata.json       # Session metadata (name, sessionId, timestamps, parent info)
       settings.json       # Claude Code settings (model, permissions - optional)
-      system-prompt.md    # System prompt content (optional)
 ```
 
 **Metadata format** (`metadata.json`):
@@ -144,25 +142,23 @@ Same structure as the project config. Respects `$XDG_CONFIG_HOME` if set, otherw
 **Starting a session:**
 ```bash
 claude --session-id <uuid> \
-  --settings .claude/clotilde/sessions/<name>/settings.json \
-  --append-system-prompt-file .claude/clotilde/sessions/<name>/system-prompt.md
+  --settings .claude/clotilde/sessions/<name>/settings.json
 ```
 
 **Resuming a session:**
 ```bash
 claude --resume <uuid> \
-  --settings .claude/clotilde/sessions/<name>/settings.json \
-  --append-system-prompt-file .claude/clotilde/sessions/<name>/system-prompt.md
+  --settings .claude/clotilde/sessions/<name>/settings.json
 ```
 
 **Forking a session:**
 ```bash
 claude --resume <parent-uuid> --fork-session \
   --session-id <fork-uuid> -n <fork-name> \
-  [--settings ...] [--append-system-prompt-file ...]
+  [--settings ...]
 ```
 
-Note: `--settings` and `--append-system-prompt-file` are only added if the files exist. `--session-id` pre-assigns the fork's UUID (avoids hook-based UUID registration). `-n` sets the display name shown in Claude's native session picker.
+Note: `--settings` is only added if the file exists. `--session-id` pre-assigns the fork's UUID (avoids hook-based UUID registration). `-n` sets the display name shown in Claude's native session picker.
 
 ### Session Hooks
 
