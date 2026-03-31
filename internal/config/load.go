@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"path/filepath"
 
 	"github.com/fgrehm/clotilde/internal/util"
 )
@@ -44,16 +43,6 @@ func LoadGlobalOrDefault() (*Config, error) {
 		return nil, err
 	}
 	return &cfg, nil
-}
-
-// SaveGlobal writes the config to the global config file.
-// Creates the parent directory if it doesn't exist.
-func SaveGlobal(cfg *Config) error {
-	path := GlobalConfigPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("failed to create global config directory: %w", err)
-	}
-	return util.WriteJSON(path, cfg)
 }
 
 // MergedProfiles returns a profile map combining global and project configs.

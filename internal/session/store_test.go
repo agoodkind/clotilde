@@ -208,31 +208,6 @@ var _ = Describe("FileStore", func() {
 		})
 	})
 
-	Describe("System prompt operations", func() {
-		BeforeEach(func() {
-			s := session.NewSession("test-session", "uuid-123")
-			err := store.Create(s)
-			Expect(err).NotTo(HaveOccurred())
-		})
-
-		It("should save and load system prompt", func() {
-			content := "You are a helpful assistant"
-
-			err := store.SaveSystemPrompt("test-session", content)
-			Expect(err).NotTo(HaveOccurred())
-
-			loaded, err := store.LoadSystemPrompt("test-session")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(loaded).To(Equal(content))
-		})
-
-		It("should return empty string if system prompt doesn't exist", func() {
-			loaded, err := store.LoadSystemPrompt("test-session")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(loaded).To(BeEmpty())
-		})
-	})
-
 	Describe("File existence checks", func() {
 		It("should check if settings file exists", func() {
 			s := session.NewSession("test-session", "uuid-123")

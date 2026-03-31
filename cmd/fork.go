@@ -129,7 +129,6 @@ Pass additional flags to Claude Code after '--':
 			}
 			fork.Metadata.IsForkedSession = true
 			fork.Metadata.ParentSession = parentName
-			fork.Metadata.SystemPromptMode = parentSess.Metadata.SystemPromptMode // Inherit from parent
 
 			// Set context: use --context flag if provided, otherwise inherit from parent
 			forkContext, _ := cmd.Flags().GetString("context")
@@ -216,15 +215,6 @@ Pass additional flags to Claude Code after '--':
 				}
 			}
 
-			// Copy system-prompt.md if exists
-			parentPrompt := filepath.Join(parentDir, "system-prompt.md")
-			if util.FileExists(parentPrompt) {
-				forkPrompt := filepath.Join(forkDir, "system-prompt.md")
-				if err := util.CopyFile(parentPrompt, forkPrompt); err != nil {
-					return fmt.Errorf("failed to copy system prompt: %w", err)
-				}
-			}
-
 			if incognito {
 				_, _ = fmt.Fprintln(cmd.OutOrStdout(), ui.Info(fmt.Sprintf("👻 Created incognito fork '%s' from '%s'", forkName, parentName)))
 				_, _ = fmt.Fprintln(cmd.OutOrStdout(), ui.Info("👻 This fork will auto-delete when you exit Claude"))
@@ -234,16 +224,13 @@ Pass additional flags to Claude Code after '--':
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\nStarting Claude Code with fork...")
 
 			// Build file paths for claude invocation
-			var settingsFile, systemPromptFile string
+			var settingsFile string
 			if util.FileExists(filepath.Join(forkDir, "settings.json")) {
 				settingsFile = filepath.Join(forkDir, "settings.json")
 			}
-			if util.FileExists(filepath.Join(forkDir, "system-prompt.md")) {
-				systemPromptFile = filepath.Join(forkDir, "system-prompt.md")
-			}
 
 			// Invoke claude with fork (pass fork session for cleanup handling)
-			return claude.Fork(clotildeRoot, parentSess, forkName, settingsFile, systemPromptFile, additionalArgs, fork)
+			return claude.Fork(clotildeRoot, parentSess, forkName, settingsFile, additionalArgs, fork)
 		},
 	}
 	cmd.Flags().Bool("incognito", false, "Create fork as incognito session (auto-deletes on exit)")

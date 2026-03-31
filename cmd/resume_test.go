@@ -120,32 +120,7 @@ var _ = Describe("Resume Command", func() {
 		Expect(args).To(ContainSubstring("settings.json"))
 	})
 
-	It("should pass system prompt file if it exists", func() {
-		// Create a session with system prompt
-		sess := session.NewSession("with-prompt", "uuid-789")
-		err := store.Create(sess)
-		Expect(err).NotTo(HaveOccurred())
-
-		err = store.SaveSystemPrompt("with-prompt", "You are helpful")
-		Expect(err).NotTo(HaveOccurred())
-
-		// Execute resume command
-		rootCmd := cmd.NewRootCmd()
-		rootCmd.SetOut(io.Discard)
-		rootCmd.SetErr(io.Discard)
-		rootCmd.SetArgs([]string{"--claude-bin", filepath.Join(fakeClaudeDir, "claude"), "resume", "with-prompt"})
-
-		err = rootCmd.Execute()
-		Expect(err).NotTo(HaveOccurred())
-
-		// Verify claude was invoked with --append-system-prompt-file
-		args, err := testutil.ReadClaudeArgs(claudeArgsFile)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(args).To(ContainSubstring("--append-system-prompt-file"))
-		Expect(args).To(ContainSubstring("system-prompt.md"))
-	})
-
-	It("should not pass settings or system prompt if they don't exist", func() {
+	It("should not pass settings if they don't exist", func() {
 		// Create a minimal session
 		sess := session.NewSession("minimal", "uuid-minimal")
 		err := store.Create(sess)
@@ -164,7 +139,6 @@ var _ = Describe("Resume Command", func() {
 		args, err := testutil.ReadClaudeArgs(claudeArgsFile)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(args).NotTo(ContainSubstring("--settings"))
-		Expect(args).NotTo(ContainSubstring("--append-system-prompt-file"))
 	})
 
 	It("should return error for non-existent session", func() {

@@ -135,17 +135,10 @@ Pass additional flags to Claude Code after '--':
 				settingsFile = settingsPath
 			}
 
-			// Check for system prompt file
-			var systemPromptFile string
-			promptPath := filepath.Join(sessionDir, "system-prompt.md")
-			if util.FileExists(promptPath) {
-				systemPromptFile = promptPath
-			}
-
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Resuming session '%s' (%s)\n\n", name, sess.Metadata.SessionID)
 
 			// Invoke claude
-			return claude.Resume(clotildeRoot, sess, settingsFile, systemPromptFile, additionalArgs)
+			return claude.Resume(clotildeRoot, sess, settingsFile, additionalArgs)
 		},
 	}
 	cmd.Flags().String("model", "", "Claude model to use (haiku, sonnet, opus)")

@@ -91,7 +91,7 @@ Use --global to install hooks in .claude/settings.json instead (shared with team
 // mergeHooksIntoSettings reads a Claude settings file, merges clotilde's
 // hooks, and writes it back. Returns the merged hooks map for display purposes.
 // The caller is responsible for ensuring the parent directory exists.
-func mergeHooksIntoSettings(settingsPath, clotildeBinary string, opts claude.HookConfigOptions) (map[string]any, error) {
+func mergeHooksIntoSettings(settingsPath, clotildeBinary string) (map[string]any, error) {
 	// Read existing settings if they exist
 	var settings map[string]any
 	if util.FileExists(settingsPath) {
@@ -103,7 +103,7 @@ func mergeHooksIntoSettings(settingsPath, clotildeBinary string, opts claude.Hoo
 	}
 
 	// Generate hook config
-	hookConfig := claude.GenerateHookConfig(clotildeBinary, opts)
+	hookConfig := claude.GenerateHookConfig(clotildeBinary)
 
 	// Merge hooks into settings, preserving non-clotilde hooks
 	var hooks map[string]any
@@ -128,7 +128,6 @@ func mergeHooksIntoSettings(settingsPath, clotildeBinary string, opts claude.Hoo
 	mergeHookType("Notification", hookConfig.Notification)
 	mergeHookType("PreToolUse", hookConfig.PreToolUse)
 	mergeHookType("PostToolUse", hookConfig.PostToolUse)
-	mergeHookType("SessionEnd", hookConfig.SessionEnd)
 	settings["hooks"] = hooks
 
 	if err := util.WriteJSON(settingsPath, settings); err != nil {
@@ -216,7 +215,7 @@ func setupHooks(projectRoot, clotildeBinary, settingsFile string) error {
 		return fmt.Errorf("failed to create .claude directory: %w", err)
 	}
 
-	hooks, err := mergeHooksIntoSettings(settingsPath, clotildeBinary, claude.HookConfigOptions{})
+	hooks, err := mergeHooksIntoSettings(settingsPath, clotildeBinary)
 	if err != nil {
 		return err
 	}
