@@ -19,23 +19,19 @@ var VerboseFunc func() bool = func() bool { return false }
 // Can be overridden in tests where the fake claude binary doesn't create transcripts.
 var SessionUsedFunc = DefaultSessionUsed
 
-// appendCommonArgs adds settings and system prompt flags to the arg list.
-func appendCommonArgs(args []string, settingsFile, systemPromptFile string) []string {
+// appendCommonArgs adds settings flags to the arg list.
+func appendCommonArgs(args []string, settingsFile string) []string {
 	if settingsFile != "" && util.FileExists(settingsFile) {
 		args = append(args, "--settings", settingsFile)
-	}
-
-	if systemPromptFile != "" && util.FileExists(systemPromptFile) {
-		args = append(args, "--append-system-prompt-file", systemPromptFile)
 	}
 
 	return args
 }
 
 // Start invokes claude CLI to start a new session.
-func Start(clotildeRoot string, sess *session.Session, settingsFile, systemPromptFile string, additionalArgs []string) error {
+func Start(clotildeRoot string, sess *session.Session, settingsFile string, additionalArgs []string) error {
 	args := []string{"--session-id", sess.Metadata.SessionID, "-n", sess.Name}
-	args = appendCommonArgs(args, settingsFile, systemPromptFile)
+	args = appendCommonArgs(args, settingsFile)
 	args = append(args, additionalArgs...)
 
 	env := map[string]string{
@@ -52,9 +48,9 @@ func Start(clotildeRoot string, sess *session.Session, settingsFile, systemPromp
 }
 
 // Resume invokes claude CLI to resume an existing session.
-func Resume(clotildeRoot string, sess *session.Session, settingsFile, systemPromptFile string, additionalArgs []string) error {
+func Resume(clotildeRoot string, sess *session.Session, settingsFile string, additionalArgs []string) error {
 	args := []string{"--resume", sess.Metadata.SessionID, "-n", sess.Name}
-	args = appendCommonArgs(args, settingsFile, systemPromptFile)
+	args = appendCommonArgs(args, settingsFile)
 	args = append(args, additionalArgs...)
 
 	env := map[string]string{
@@ -71,9 +67,9 @@ func Resume(clotildeRoot string, sess *session.Session, settingsFile, systemProm
 // Fork invokes claude CLI to fork an existing session.
 // The parent session will be resumed with --fork-session flag.
 // For ephemeral forks, cleanup will happen when Claude exits.
-func Fork(clotildeRoot string, parentSess *session.Session, forkName string, settingsFile, systemPromptFile string, additionalArgs []string, forkSession *session.Session) error {
+func Fork(clotildeRoot string, parentSess *session.Session, forkName string, settingsFile string, additionalArgs []string, forkSession *session.Session) error {
 	args := []string{"--resume", parentSess.Metadata.SessionID, "--fork-session", "--session-id", forkSession.Metadata.SessionID, "-n", forkName}
-	args = appendCommonArgs(args, settingsFile, systemPromptFile)
+	args = appendCommonArgs(args, settingsFile)
 	args = append(args, additionalArgs...)
 
 	env := map[string]string{

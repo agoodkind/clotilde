@@ -80,10 +80,9 @@ type SessionCreateParams struct {
 
 // SessionCreateResult holds the created session and file paths.
 type SessionCreateResult struct {
-	ClotildeRoot     string
-	Session          *session.Session
-	SettingsFile     string
-	SystemPromptFile string
+	ClotildeRoot string
+	Session      *session.Session
+	SettingsFile string
 }
 
 // createSession handles common session creation logic.

@@ -14,9 +14,8 @@ import (
 var _ Store = (*FileStore)(nil)
 
 const (
-	metadataFile     = "metadata.json"
-	settingsFile     = "settings.json"
-	systemPromptFile = "system-prompt.md"
+	metadataFile = "metadata.json"
+	settingsFile = "settings.json"
 )
 
 // Store defines the interface for session storage operations.
@@ -44,12 +43,6 @@ type Store interface {
 
 	// SaveSettings saves settings.json for a session
 	SaveSettings(name string, settings *Settings) error
-
-	// LoadSystemPrompt loads system-prompt.md for a session (returns empty if not exists)
-	LoadSystemPrompt(name string) (string, error)
-
-	// SaveSystemPrompt saves system-prompt.md for a session
-	SaveSystemPrompt(name string, content string) error
 }
 
 // FileStore implements Store using the filesystem.
@@ -218,41 +211,4 @@ func (fs *FileStore) SaveSettings(name string, settings *Settings) error {
 	settingsPath := filepath.Join(sessionDir, settingsFile)
 
 	return util.WriteJSON(settingsPath, settings)
-}
-
-// LoadSystemPrompt loads system-prompt.md for a session (returns empty if not exists).
-func (fs *FileStore) LoadSystemPrompt(name string) (string, error) {
-	if err := ValidateName(name); err != nil {
-		return "", err
-	}
-
-	sessionDir := config.GetSessionDir(fs.clotildeRoot, name)
-	promptPath := filepath.Join(sessionDir, systemPromptFile)
-
-	if !util.FileExists(promptPath) {
-		return "", nil
-	}
-
-	content, err := util.ReadFile(promptPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read system prompt: %w", err)
-	}
-
-	return string(content), nil
-}
-
-// SaveSystemPrompt saves system-prompt.md for a session.
-func (fs *FileStore) SaveSystemPrompt(name string, content string) error {
-	if err := ValidateName(name); err != nil {
-		return err
-	}
-
-	if !fs.Exists(name) {
-		return fmt.Errorf("session '%s' not found", name)
-	}
-
-	sessionDir := config.GetSessionDir(fs.clotildeRoot, name)
-	promptPath := filepath.Join(sessionDir, systemPromptFile)
-
-	return util.WriteFile(promptPath, []byte(content))
 }

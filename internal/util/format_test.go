@@ -38,56 +38,6 @@ var _ = Describe("FormatSize", func() {
 	})
 })
 
-var _ = Describe("TruncateText", func() {
-	It("should replace newlines with spaces", func() {
-		text := "Hello\nWorld\nFoo"
-		result := util.TruncateText(text, 100)
-		Expect(result).To(Equal("Hello World Foo"))
-	})
-
-	It("should collapse multiple spaces", func() {
-		text := "Hello    World   \n  Foo"
-		result := util.TruncateText(text, 100)
-		Expect(result).To(Equal("Hello World Foo"))
-	})
-
-	It("should truncate text longer than maxChars", func() {
-		text := "This is a very long text that needs to be truncated"
-		result := util.TruncateText(text, 20)
-		Expect(result).To(Equal("This is a very lo..."))
-	})
-
-	It("should not truncate text shorter than maxChars", func() {
-		text := "Short text"
-		result := util.TruncateText(text, 20)
-		Expect(result).To(Equal("Short text"))
-	})
-
-	It("should handle text exactly at maxChars", func() {
-		text := "Exactly twenty chars"
-		result := util.TruncateText(text, 20)
-		Expect(result).To(Equal("Exactly twenty chars"))
-	})
-
-	It("should handle multiline text with truncation", func() {
-		text := "Line one\nLine two\nLine three\nLine four\nLine five"
-		result := util.TruncateText(text, 30)
-		Expect(result).To(Equal("Line one Line two Line thre..."))
-	})
-
-	It("should handle carriage returns", func() {
-		text := "Hello\r\nWorld\r\nFoo"
-		result := util.TruncateText(text, 100)
-		Expect(result).To(Equal("Hello World Foo"))
-	})
-
-	It("should handle empty text", func() {
-		text := ""
-		result := util.TruncateText(text, 10)
-		Expect(result).To(Equal(""))
-	})
-})
-
 var _ = Describe("FormatRelativeTime", func() {
 	It("should return 'just now' for times less than a minute ago", func() {
 		now := time.Now()

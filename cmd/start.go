@@ -30,7 +30,7 @@ func newStartCmd() *cobra.Command {
 		Short: "Start a new named session",
 		Long: `Start a new Claude Code session with a human-friendly name.
 If no name is provided, one is generated automatically (e.g. "2026-03-08-happy-fox").
-Optionally specify a model and system prompt.
+Optionally specify a model, profile, and context.
 
 Pass additional flags to Claude Code after '--':
   clotilde start my-session -- --debug api,hooks
@@ -118,7 +118,7 @@ Pass additional flags to Claude Code after '--':
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\nStarting Claude Code...")
 
 			// Invoke claude
-			return claude.Start(result.ClotildeRoot, result.Session, result.SettingsFile, result.SystemPromptFile, additionalArgs)
+			return claude.Start(result.ClotildeRoot, result.Session, result.SettingsFile, additionalArgs)
 		},
 	}
 	cmd.Flags().String("model", "", "Claude model to use (haiku, sonnet, opus)")
@@ -204,11 +204,6 @@ func handleExistingSession(cmd *cobra.Command, name, clotildeRoot string, store 
 		settingsFile = filepath.Join(sessionDir, "settings.json")
 	}
 
-	var systemPromptFile string
-	if util.FileExists(filepath.Join(sessionDir, "system-prompt.md")) {
-		systemPromptFile = filepath.Join(sessionDir, "system-prompt.md")
-	}
-
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\nResuming session '%s' (%s)\n\n", sess.Name, sess.Metadata.SessionID)
-	return claude.Resume(clotildeRoot, sess, settingsFile, systemPromptFile, additionalArgs)
+	return claude.Resume(clotildeRoot, sess, settingsFile, additionalArgs)
 }
