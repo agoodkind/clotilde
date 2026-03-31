@@ -6,15 +6,12 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/fgrehm/clotilde/internal/claude"
 	"github.com/fgrehm/clotilde/internal/config"
 	"github.com/fgrehm/clotilde/internal/notify"
 	"github.com/fgrehm/clotilde/internal/session"
-	"github.com/fgrehm/clotilde/internal/util"
 )
 
 // hookInput represents the JSON structure passed to SessionStart hooks.
@@ -83,20 +80,10 @@ Handles fork registration, session ID updates, and context injection.`,
 }
 
 // handleStartupOrResume handles new session startup and session resumption.
-// On resume, it also runs crash recovery for stats tracking.
 func handleStartupOrResume(clotildeRoot string, hookData hookInput, store session.Store) error {
 	sessionName := os.Getenv("CLOTILDE_SESSION_NAME")
 
 	if sessionName != "" {
-		// Crash recovery on resume: must run before saveTranscriptPath (which updates
-		// LastAccessed), otherwise the <30s fast-path would always skip recovery.
-		if hookData.Source == "resume" {
-			globalCfg, cfgErr := config.LoadGlobalOrDefault()
-			if cfgErr == nil && globalCfg.StatsTracking != nil && *globalCfg.StatsTracking {
-				attemptCrashRecovery(clotildeRoot, sessionName, store)
-			}
-		}
-
 		if err := writeSessionNameToEnv(sessionName); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Warning: failed to write session name to env: %v\n", err)
 		}
@@ -111,97 +98,6 @@ func handleStartupOrResume(clotildeRoot string, hookData hookInput, store sessio
 	outputContexts(clotildeRoot, store, sessionName)
 
 	return nil
-}
-
-// attemptCrashRecovery checks if the previous invocation of this session ended
-// without a SessionEnd hook firing (crash, SIGKILL, power loss). If so, writes
-// a recovery stats record using the transcript data available now.
-func attemptCrashRecovery(clotildeRoot, sessionName string, store session.Store) {
-	sess, err := store.Get(sessionName)
-	if err != nil {
-		return
-	}
-
-	// Fast-path: if lastAccessed is within 30 seconds, skip (double-fire or immediate resume)
-	if time.Since(sess.Metadata.LastAccessed) < 30*time.Second {
-		return
-	}
-
-	// Skip recovery if the session is older than the FindLastRecord lookback window (30 days).
-	// Beyond that window FindLastRecord returns nil even for clean exits, causing false positives.
-	if time.Since(sess.Metadata.LastAccessed) > 30*24*time.Hour {
-		return
-	}
-
-	// Check if a stats record already exists for the last invocation.
-	// Only skip recovery if the record's EndedAt is after LastAccessed,
-	// meaning the prior run exited cleanly after the session was last opened.
-	prev, err := claude.FindLastRecord(sess.Metadata.SessionID, time.Now().UTC())
-	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "clotilde: crash recovery lookup failed: %v\n", err)
-		return
-	}
-	if prev != nil && prev.EndedAt.After(sess.Metadata.LastAccessed) {
-		return // Normal exit, stats already recorded for this invocation
-	}
-
-	// No prior record found: write a recovery record
-	homeDir, err := util.HomeDir()
-	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "clotilde: crash recovery skipped: %v\n", err)
-		return
-	}
-	paths := allTranscriptPaths(sess, clotildeRoot, homeDir)
-	if len(paths) == 0 {
-		return
-	}
-
-	var statsList []*claude.TranscriptStats
-	for _, p := range paths {
-		s, parseErr := claude.ParseTranscriptStats(p)
-		if parseErr != nil {
-			continue
-		}
-		statsList = append(statsList, s)
-	}
-	if len(statsList) == 0 {
-		return
-	}
-
-	merged := claude.MergeTranscriptStats(statsList)
-	if merged.Turns == 0 {
-		return // Empty transcript, nothing to recover
-	}
-
-	endedAt := sess.Metadata.LastAccessed.UTC()
-	if !merged.LastMessage.IsZero() {
-		endedAt = merged.LastMessage.UTC()
-	}
-	record := claude.SessionStatsRecord{
-		SessionName:         sessionName,
-		SessionID:           sess.Metadata.SessionID,
-		ProjectPath:         config.ProjectRoot(clotildeRoot),
-		Turns:               merged.Turns,
-		ActiveTimeS:         int(merged.ActiveTime.Seconds()),
-		TotalTimeS:          int(merged.TotalTime.Seconds()),
-		InputTokens:         merged.InputTokens,
-		OutputTokens:        merged.OutputTokens,
-		CacheCreationTokens: merged.CacheCreationTokens,
-		CacheReadTokens:     merged.CacheReadTokens,
-		Models:              merged.Models,
-		ToolUses:            merged.ToolUses,
-		EndedAt:             endedAt,
-	}
-	if record.Models == nil {
-		record.Models = []string{}
-	}
-	if record.ToolUses == nil {
-		record.ToolUses = make(map[string]int)
-	}
-
-	if writeErr := claude.AppendStatsRecord(record); writeErr != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "clotilde: crash recovery write failed: %v\n", writeErr)
-	}
 }
 
 // handleCompact handles session compaction, updating session ID and preserving history.

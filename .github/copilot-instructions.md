@@ -47,7 +47,7 @@ and context injection all happen through this hook.
 Transcripts live in `~/.claude/projects/<encoded-project-dir>/<uuid>.jsonl`.
 When a user runs `/clear`, Claude Code creates a new UUID; the old one is
 appended to `previousSessionIds` in `metadata.json`. Commands that need the
-full conversation history (stats, export) must collect all paths via the
+full conversation history (export) must collect all paths via the
 shared helper:
 
 ```go
@@ -61,10 +61,7 @@ lines are skipped without halting (unlike `bufio.Scanner` which stops
 permanently on `ErrTooLong`). All tail readers (`ExtractLastModel`,
 `LastTranscriptTime`, `ExtractModelAndLastTime`) use this helper.
 
-`ParseTranscriptStats` uses the same `ReadSlice` + drain approach with a 1MB
-buffer (reads the full file, not just the tail).
-
-Multi-transcript loops (stats, export) skip `os.IsNotExist` errors (expected
+Multi-transcript loops (export) skip `os.IsNotExist` errors (expected
 for old `/clear` transcripts) and surface all other errors to the user.
 
 ## Export HTML Format

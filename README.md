@@ -277,15 +277,13 @@ Pass-through flags apply to that invocation only and are not persisted. Use name
 
 ## Commands
 
-### `clotilde setup [--local] [--stats] [--no-stats]`
+### `clotilde setup [--local]`
 
 One-time setup. Registers a SessionStart hook in `~/.claude/settings.json`.
 
 ```bash
 clotilde setup              # registers hooks globally (recommended)
 clotilde setup --local      # registers in ~/.claude/settings.local.json instead
-clotilde setup --stats      # also registers a SessionEnd hook for stats tracking
-clotilde setup --no-stats   # disable stats tracking
 ```
 
 After setup, `clotilde start` works in any project directory.
@@ -383,21 +381,6 @@ Show detailed session info: UUID, timestamps, settings, context, associated file
 Delete a session and all associated Claude Code data (current and previous transcripts, agent logs).
 
 - `--force, -f` — Skip confirmation.
-
-### `clotilde stats [name] [--all]`
-
-Show session statistics: turns, timing, tokens, models used, tool usage. Parsed from Claude Code transcripts.
-
-```bash
-clotilde stats auth-feature
-clotilde stats --all         # aggregate across sessions active in last 7 days
-```
-
-`--all` reads from daily JSONL stats files (enable with `clotilde setup --stats`), falling back to parsing transcripts. Stats files at `$XDG_DATA_HOME/clotilde/stats/` are available for external tools and dashboards.
-
-### `clotilde stats backfill`
-
-Generate stats records from existing transcripts for sessions that don't have them yet.
 
 ### `clotilde export <name> [options]`
 
