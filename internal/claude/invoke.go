@@ -20,17 +20,13 @@ var VerboseFunc func() bool = func() bool { return false }
 var SessionUsedFunc = DefaultSessionUsed
 
 // appendCommonArgs adds settings and system prompt flags to the arg list.
-func appendCommonArgs(args []string, settingsFile, systemPromptFile, systemPromptMode string) []string {
+func appendCommonArgs(args []string, settingsFile, systemPromptFile string) []string {
 	if settingsFile != "" && util.FileExists(settingsFile) {
 		args = append(args, "--settings", settingsFile)
 	}
 
 	if systemPromptFile != "" && util.FileExists(systemPromptFile) {
-		if systemPromptMode == "replace" {
-			args = append(args, "--system-prompt-file", systemPromptFile)
-		} else {
-			args = append(args, "--append-system-prompt-file", systemPromptFile)
-		}
+		args = append(args, "--append-system-prompt-file", systemPromptFile)
 	}
 
 	return args
@@ -39,7 +35,7 @@ func appendCommonArgs(args []string, settingsFile, systemPromptFile, systemPromp
 // Start invokes claude CLI to start a new session.
 func Start(clotildeRoot string, sess *session.Session, settingsFile, systemPromptFile string, additionalArgs []string) error {
 	args := []string{"--session-id", sess.Metadata.SessionID, "-n", sess.Name}
-	args = appendCommonArgs(args, settingsFile, systemPromptFile, sess.Metadata.GetSystemPromptMode())
+	args = appendCommonArgs(args, settingsFile, systemPromptFile)
 	args = append(args, additionalArgs...)
 
 	env := map[string]string{
@@ -58,7 +54,7 @@ func Start(clotildeRoot string, sess *session.Session, settingsFile, systemPromp
 // Resume invokes claude CLI to resume an existing session.
 func Resume(clotildeRoot string, sess *session.Session, settingsFile, systemPromptFile string, additionalArgs []string) error {
 	args := []string{"--resume", sess.Metadata.SessionID, "-n", sess.Name}
-	args = appendCommonArgs(args, settingsFile, systemPromptFile, sess.Metadata.GetSystemPromptMode())
+	args = appendCommonArgs(args, settingsFile, systemPromptFile)
 	args = append(args, additionalArgs...)
 
 	env := map[string]string{
@@ -77,7 +73,7 @@ func Resume(clotildeRoot string, sess *session.Session, settingsFile, systemProm
 // For ephemeral forks, cleanup will happen when Claude exits.
 func Fork(clotildeRoot string, parentSess *session.Session, forkName string, settingsFile, systemPromptFile string, additionalArgs []string, forkSession *session.Session) error {
 	args := []string{"--resume", parentSess.Metadata.SessionID, "--fork-session", "--session-id", forkSession.Metadata.SessionID, "-n", forkName}
-	args = appendCommonArgs(args, settingsFile, systemPromptFile, forkSession.Metadata.GetSystemPromptMode())
+	args = appendCommonArgs(args, settingsFile, systemPromptFile)
 	args = append(args, additionalArgs...)
 
 	env := map[string]string{

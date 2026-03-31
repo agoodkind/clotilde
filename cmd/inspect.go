@@ -122,9 +122,7 @@ files present, settings, context sources, and Claude Code data status.`,
 		if util.FileExists(systemPromptPath) {
 			content, err := os.ReadFile(systemPromptPath)
 			if err == nil && len(content) > 0 {
-				mode := sess.Metadata.GetSystemPromptMode()
 				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "System Prompt:")
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Mode: %s\n", mode)
 				excerpt := util.TruncateText(string(content), 200)
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Content: %s\n", excerpt)
 				_, _ = fmt.Fprintln(cmd.OutOrStdout())

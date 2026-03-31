@@ -104,10 +104,6 @@ process crashes or is killed (SIGKILL), the session may persist. Use
 		},
 	}
 	cmd.Flags().String("model", "", "Claude model to use (haiku, sonnet, opus)")
-	cmd.Flags().String("append-system-prompt", "", "System prompt text to append")
-	cmd.Flags().String("append-system-prompt-file", "", "Path to system prompt file to append")
-	cmd.Flags().String("replace-system-prompt", "", "System prompt text to replace default (use instead of append)")
-	cmd.Flags().String("replace-system-prompt-file", "", "Path to system prompt file to replace default (use instead of append)")
 	cmd.Flags().String("context", "", "Session context (e.g. \"working on ticket GH-123\")")
 	cmd.Flags().String("profile", "", "Named profile from config (model, permissions, output style)")
 

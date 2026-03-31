@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Interactive Codebase Tours**: Removed `clotilde tour` command (list, serve, generate), `internal/tour/`, `internal/server/`, and streaming invocation code. Tours may return as a standalone project in the future.
 - **Session statistics**: Removed `clotilde stats`, `stats backfill`, SessionEnd hook, crash recovery, and `--stats`/`--no-stats` flags from `setup`. Stats may return as a standalone tool in the future.
+- **System prompt flags**: Removed `--append-system-prompt`, `--append-system-prompt-file`, `--replace-system-prompt`, `--replace-system-prompt-file` from `start` and `incognito` commands. Removed `systemPromptMode` from session metadata and `GetSystemPromptMode()` helper.
 
 ### Fixed
 

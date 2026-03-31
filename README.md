@@ -318,10 +318,6 @@ clotilde start auth-feature --context "working on GH-123"
 - `--add-dir <directories>` — Additional directories to allow access to. Persisted.
 - `--output-style <style>` — Built-in name, existing style name, or inline content. Persisted.
 - `--output-style-file <path>` — Path to custom output style file. Persisted.
-- `--append-system-prompt <text>` — System prompt text to append to Claude's default.
-- `--append-system-prompt-file <path>` — System prompt file to append.
-- `--replace-system-prompt <text>` — Replace Claude's default system prompt entirely.
-- `--replace-system-prompt-file <path>` — Replace default system prompt from file.
 
 ### `clotilde incognito [name] [options]`
 
