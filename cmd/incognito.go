@@ -100,7 +100,7 @@ process crashes or is killed (SIGKILL), the session may persist. Use
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\nStarting Claude Code...")
 
 			// Invoke claude
-			return claude.Start(result.ClotildeRoot, result.Session, result.SettingsFile, result.SystemPromptFile, additionalArgs)
+			return claude.Start(result.ClotildeRoot, result.Session, result.SettingsFile, additionalArgs)
 		},
 	}
 	cmd.Flags().String("model", "", "Claude model to use (haiku, sonnet, opus)")

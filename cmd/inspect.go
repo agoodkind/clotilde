@@ -72,7 +72,7 @@ files present, settings, context sources, and Claude Code data status.`,
 
 		// Show files present
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Files:")
-		files := []string{"metadata.json", "settings.json", "system-prompt.md"}
+		files := []string{"metadata.json", "settings.json"}
 		for _, file := range files {
 			path := filepath.Join(sessionDir, file)
 			if util.FileExists(path) {
@@ -113,18 +113,6 @@ files present, settings, context sources, and Claude Code data status.`,
 				if len(settings.Permissions.Deny) > 0 {
 					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Denied tools: %d\n", len(settings.Permissions.Deny))
 				}
-				_, _ = fmt.Fprintln(cmd.OutOrStdout())
-			}
-		}
-
-		// Show system prompt
-		systemPromptPath := filepath.Join(sessionDir, "system-prompt.md")
-		if util.FileExists(systemPromptPath) {
-			content, err := os.ReadFile(systemPromptPath)
-			if err == nil && len(content) > 0 {
-				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "System Prompt:")
-				excerpt := util.TruncateText(string(content), 200)
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Content: %s\n", excerpt)
 				_, _ = fmt.Fprintln(cmd.OutOrStdout())
 			}
 		}

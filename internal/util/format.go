@@ -2,7 +2,6 @@ package util
 
 import (
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -32,24 +31,6 @@ func FormatSize(bytes int64) string {
 	}
 
 	return fmt.Sprintf("%.1f TB", float64(bytes)/float64(divisor/unit))
-}
-
-// TruncateText truncates text to maxChars, replacing newlines with spaces.
-// If text is longer than maxChars, appends "..." to indicate truncation.
-// Examples: TruncateText("Hello\nWorld", 10) -> "Hello World"
-//
-//	TruncateText("Very long text here", 10) -> "Very long..."
-func TruncateText(text string, maxChars int) string {
-	// Replace newlines and collapse multiple spaces
-	text = strings.ReplaceAll(text, "\n", " ")
-	text = strings.ReplaceAll(text, "\r", " ")
-	text = strings.Join(strings.Fields(text), " ")
-
-	if len(text) <= maxChars {
-		return text
-	}
-
-	return text[:maxChars-3] + "..."
 }
 
 // FormatRelativeTime formats a time as a human-readable relative string.

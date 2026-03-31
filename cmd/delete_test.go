@@ -111,17 +111,11 @@ var _ = Describe("Delete Command", func() {
 		err = store.SaveSettings("full-session", settings)
 		Expect(err).NotTo(HaveOccurred())
 
-		err = store.SaveSystemPrompt("full-session", "Test prompt")
-		Expect(err).NotTo(HaveOccurred())
-
 		// Verify files exist
 		sessionDir := config.GetSessionDir(clotildeRoot, "full-session")
 		settingsPath := filepath.Join(sessionDir, "settings.json")
-		promptPath := filepath.Join(sessionDir, "system-prompt.md")
 
 		_, err = os.Stat(settingsPath)
-		Expect(err).NotTo(HaveOccurred())
-		_, err = os.Stat(promptPath)
 		Expect(err).NotTo(HaveOccurred())
 
 		// Delete session
