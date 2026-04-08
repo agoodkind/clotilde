@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-04-08
+
+### Added
+
+- **`--model` on fork**: The `fork` command now accepts `--model` to override the inherited model, matching `start`, `incognito`, and `resume`.
+- **`--model opus` defaults to 1M context**: `opus` is automatically normalized to `opus[1m]` so users get the 1M context window without needing to quote the suffix. Applies to `start`, `resume`, `fork`, and `incognito`, as well as profiles.
+
+### Fixed
+
+- **`--model opus` used 200K context instead of 1M**: Plain `opus` resolved to the 200K context variant. Now automatically maps to `opus[1m]`.
+
 ## [0.11.0] - 2026-03-31
 
 ### Added
