@@ -95,6 +95,9 @@ Pass additional flags to Claude Code after '--':
 				forkModel = "haiku"
 				forkEffort = "low"
 			} else {
+				if model, _ := cmd.Flags().GetString("model"); model != "" {
+					forkModel = normalizeModel(model)
+				}
 				effort, _ := cmd.Flags().GetString("effort")
 				forkEffort = effort
 			}
@@ -235,6 +238,8 @@ Pass additional flags to Claude Code after '--':
 	}
 	cmd.Flags().Bool("incognito", false, "Create fork as incognito session (auto-deletes on exit)")
 	cmd.Flags().String("context", "", "Session context (e.g. \"working on ticket GH-123\")")
+	cmd.Flags().String("model", "", "Claude model to use (haiku, sonnet, opus); opus defaults to 1M context")
 	registerShorthandFlags(cmd)
+	_ = cmd.RegisterFlagCompletionFunc("model", modelCompletion)
 	return cmd
 }

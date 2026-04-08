@@ -171,6 +171,10 @@ func createSession(params SessionCreateParams) (*SessionCreateResult, error) {
 	if params.Model != "" {
 		settings.Model = params.Model
 	}
+
+	// Normalize model shorthand (e.g. "opus" -> "opus[1m]")
+	settings.Model = normalizeModel(settings.Model)
+
 	if params.EffortLevel != "" {
 		settings.EffortLevel = params.EffortLevel
 	}

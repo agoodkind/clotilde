@@ -121,7 +121,7 @@ Pass additional flags to Claude Code after '--':
 			return claude.Start(result.ClotildeRoot, result.Session, result.SettingsFile, additionalArgs)
 		},
 	}
-	cmd.Flags().String("model", "", "Claude model to use (haiku, sonnet, opus)")
+	cmd.Flags().String("model", "", "Claude model to use (haiku, sonnet, opus); opus defaults to 1M context")
 	cmd.Flags().Bool("incognito", false, "Create incognito session (auto-deletes on exit)")
 	cmd.Flags().String("context", "", "Session context (e.g. \"working on ticket GH-123\")")
 	cmd.Flags().String("profile", "", "Named profile from config (model, permissions, output style)")
