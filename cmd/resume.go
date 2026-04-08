@@ -103,7 +103,7 @@ Pass additional flags to Claude Code after '--':
 				additionalArgs = append(additionalArgs, "--model", "haiku", "--effort", "low")
 			} else {
 				if model, _ := cmd.Flags().GetString("model"); model != "" {
-					additionalArgs = append(additionalArgs, "--model", model)
+					additionalArgs = append(additionalArgs, "--model", normalizeModel(model))
 				}
 				additionalArgs = collectEffortFlag(cmd, additionalArgs)
 			}
@@ -141,7 +141,7 @@ Pass additional flags to Claude Code after '--':
 			return claude.Resume(clotildeRoot, sess, settingsFile, additionalArgs)
 		},
 	}
-	cmd.Flags().String("model", "", "Claude model to use (haiku, sonnet, opus)")
+	cmd.Flags().String("model", "", "Claude model to use (haiku, sonnet, opus); opus defaults to 1M context")
 	cmd.Flags().String("context", "", "Session context (e.g. \"working on ticket GH-123\")")
 	registerShorthandFlags(cmd)
 	_ = cmd.RegisterFlagCompletionFunc("model", modelCompletion)

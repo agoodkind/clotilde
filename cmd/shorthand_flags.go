@@ -120,6 +120,16 @@ func resolveFastMode(cmd *cobra.Command) (bool, error) {
 	return true, nil
 }
 
+// normalizeModel rewrites model shorthands so the user doesn't need to
+// remember extended-context suffixes. Currently maps "opus" to "opus[1m]"
+// because plain "opus" defaults to 200K context instead of the 1M window.
+func normalizeModel(model string) string {
+	if model == "opus" {
+		return "opus[1m]"
+	}
+	return model
+}
+
 // collectEffortFlag appends --effort to additionalArgs if the flag is set.
 // Called after resolveFastMode; when --fast is enabled, the caller appends
 // ["--effort", "low"] directly instead of calling this function.

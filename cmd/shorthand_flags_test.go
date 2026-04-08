@@ -442,7 +442,7 @@ var _ = Describe("Shorthand Flags", func() {
 
 			args, err := testutil.ReadClaudeArgs(claudeArgsFile)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(args).To(ContainSubstring("--model opus"))
+			Expect(args).To(ContainSubstring("--model opus[1m]"))
 		})
 
 		It("should not pass --model when --fast is used", func() {
@@ -472,6 +472,121 @@ var _ = Describe("Shorthand Flags", func() {
 			rootCmd.SetOut(io.Discard)
 			rootCmd.SetErr(io.Discard)
 			rootCmd.SetArgs([]string{"--claude-bin", filepath.Join(fakeClaudeDir, "claude"), "resume", "resume-conflict-model", "--fast", "--model", "opus"})
+
+			err = rootCmd.Execute()
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("cannot use --fast with --model"))
+		})
+	})
+
+	Describe("--model opus normalization", func() {
+		It("should normalize opus to opus[1m] in settings on start", func() {
+			rootCmd := cmd.NewRootCmd()
+			rootCmd.SetOut(io.Discard)
+			rootCmd.SetErr(io.Discard)
+			rootCmd.SetArgs([]string{"--claude-bin", filepath.Join(fakeClaudeDir, "claude"), "start", "opus-start", "--model", "opus"})
+
+			err := rootCmd.Execute()
+			Expect(err).NotTo(HaveOccurred())
+
+			settings, err := store.LoadSettings("opus-start")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(settings.Model).To(Equal("opus[1m]"))
+		})
+
+		It("should not normalize sonnet or haiku", func() {
+			rootCmd := cmd.NewRootCmd()
+			rootCmd.SetOut(io.Discard)
+			rootCmd.SetErr(io.Discard)
+			rootCmd.SetArgs([]string{"--claude-bin", filepath.Join(fakeClaudeDir, "claude"), "start", "sonnet-start", "--model", "sonnet"})
+
+			err := rootCmd.Execute()
+			Expect(err).NotTo(HaveOccurred())
+
+			settings, err := store.LoadSettings("sonnet-start")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(settings.Model).To(Equal("sonnet"))
+		})
+
+		It("should not double-normalize opus[1m]", func() {
+			rootCmd := cmd.NewRootCmd()
+			rootCmd.SetOut(io.Discard)
+			rootCmd.SetErr(io.Discard)
+			rootCmd.SetArgs([]string{"--claude-bin", filepath.Join(fakeClaudeDir, "claude"), "start", "opus-1m-start", "--model", "opus[1m]"})
+
+			err := rootCmd.Execute()
+			Expect(err).NotTo(HaveOccurred())
+
+			settings, err := store.LoadSettings("opus-1m-start")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(settings.Model).To(Equal("opus[1m]"))
+		})
+
+		It("should normalize opus to opus[1m] on resume", func() {
+			sess := session.NewSession("opus-resume", "uuid-opus-resume")
+			err := store.Create(sess)
+			Expect(err).NotTo(HaveOccurred())
+
+			rootCmd := cmd.NewRootCmd()
+			rootCmd.SetOut(io.Discard)
+			rootCmd.SetErr(io.Discard)
+			rootCmd.SetArgs([]string{"--claude-bin", filepath.Join(fakeClaudeDir, "claude"), "resume", "opus-resume", "--model", "opus"})
+
+			err = rootCmd.Execute()
+			Expect(err).NotTo(HaveOccurred())
+
+			args, err := testutil.ReadClaudeArgs(claudeArgsFile)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(args).To(ContainSubstring("--model opus[1m]"))
+		})
+	})
+
+	Describe("--model on fork", func() {
+		It("should persist model in fork settings.json", func() {
+			parent := session.NewSession("fork-model-parent", "uuid-fork-model-parent")
+			err := store.Create(parent)
+			Expect(err).NotTo(HaveOccurred())
+
+			rootCmd := cmd.NewRootCmd()
+			rootCmd.SetOut(io.Discard)
+			rootCmd.SetErr(io.Discard)
+			rootCmd.SetArgs([]string{"--claude-bin", filepath.Join(fakeClaudeDir, "claude"), "fork", "fork-model-parent", "fork-model-child", "--model", "sonnet"})
+
+			err = rootCmd.Execute()
+			Expect(err).NotTo(HaveOccurred())
+
+			settings, err := store.LoadSettings("fork-model-child")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(settings.Model).To(Equal("sonnet"))
+		})
+
+		It("should normalize opus to opus[1m] in fork settings", func() {
+			parent := session.NewSession("fork-opus-parent", "uuid-fork-opus-parent")
+			err := store.Create(parent)
+			Expect(err).NotTo(HaveOccurred())
+
+			rootCmd := cmd.NewRootCmd()
+			rootCmd.SetOut(io.Discard)
+			rootCmd.SetErr(io.Discard)
+			rootCmd.SetArgs([]string{"--claude-bin", filepath.Join(fakeClaudeDir, "claude"), "fork", "fork-opus-parent", "fork-opus-child", "--model", "opus"})
+
+			err = rootCmd.Execute()
+			Expect(err).NotTo(HaveOccurred())
+
+			settings, err := store.LoadSettings("fork-opus-child")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(settings.Model).To(Equal("opus[1m]"))
+		})
+
+		It("should reject --model with --fast on fork", func() {
+			parent := session.NewSession("fork-conflict-parent", "uuid-fork-conflict-parent")
+			err := store.Create(parent)
+			Expect(err).NotTo(HaveOccurred())
+
+			rootCmd := cmd.NewRootCmd()
+			rootCmd.SetOut(io.Discard)
+			rootCmd.SetErr(io.Discard)
+			rootCmd.SetArgs([]string{"--claude-bin", filepath.Join(fakeClaudeDir, "claude"), "fork", "fork-conflict-parent", "fork-conflict-child", "--fast", "--model", "opus"})
 
 			err = rootCmd.Execute()
 			Expect(err).To(HaveOccurred())
