@@ -15,9 +15,5 @@
     ],
     "ask": [],
     "deny": []
-  },
-  "statusLine": {
-    "command": "bash .claude/scripts/context-monitor.sh",
-    "type": "command"
   }
 }
