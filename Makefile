@@ -48,7 +48,9 @@ test-watch: ## Run tests in watch mode
 install: build ## Install clotilde to ~/.local/bin (symlink)
 	@mkdir -p "$(HOME)/.local/bin"
 	@ln -sf "$(CURDIR)/dist/clotilde" "$(HOME)/.local/bin/clotilde"
+	@-pkill -f "clotilde daemon" 2>/dev/null; true
 	@echo "✓ Installed to ~/.local/bin/clotilde"
+	@echo "  Daemon killed (restarts on next session; running sessions keep old daemon until resumed)"
 
 clean: ## Remove build artifacts
 	@echo "Cleaning..."
