@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Per-session model isolation via daemon**: A background daemon (lazily started, exits after 5 min idle) writes per-session `settings.json` files so `/model` changes in one Claude session do not affect others.
+- **Flock-based daemon launch**: Multiple concurrent `clotilde` invocations use `flock(2)` to serialise daemon startup, eliminating the race where two processes could both spawn the daemon.
+- **Idle timeout**: The daemon shuts down gracefully after 5 minutes with no active sessions, keeping the system clean.
+- **`clotilde setup --launch-agent`**: Optionally register the daemon as a macOS LaunchAgent so it pre-warms at login. The daemon still launches on demand without this flag.
+- **`make sign` / `make notarize`**: Code signing (Developer ID) and notarization targets, configured via a local `config.mk` (see `config.mk.example`). Pattern mirrors `macos-smc-fan`.
+- **`make install-launch-agent`**: Installs and bootstraps the LaunchAgent from the Makefile.
+
 ## [0.12.0] - 2026-04-08
 
 ### Added
