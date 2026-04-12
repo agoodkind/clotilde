@@ -133,12 +133,16 @@ Pass additional flags to Claude Code after '--':
 				additionalArgs = collectEffortFlag(cmd, additionalArgs)
 			}
 
-			// Load session by name, falling back to display name lookup
+			// Load session by name, falling back to display name lookup.
+			// If still not found, let Claude resolve the name directly
+			// (handles sessions started outside clotilde). Daemon wrapping
+			// in invokeInteractive still provides model isolation.
 			sess, err := store.Get(name)
 			if err != nil {
 				sess, err = store.GetByDisplayName(name)
 				if err != nil {
-					return fmt.Errorf("session '%s' not found", name)
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Session '%s' not in clotilde, resuming via Claude...\n\n", name)
+					return claude.ResumeByName(name, additionalArgs)
 				}
 				name = sess.Name
 			}
