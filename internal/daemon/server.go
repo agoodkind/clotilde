@@ -133,7 +133,25 @@ func (s *Server) AcquireSession(ctx context.Context, req *daemonpb.AcquireSessio
 		return nil, status.Error(codes.InvalidArgument, "wrapper_id is required")
 	}
 
-	model, effortLevel := s.resolveSessionSettings(req.SessionName)
+	// Check if this session already has a settings file on disk (re-acquire
+	// after daemon restart). Preserve its current model/effort rather than
+	// resetting to global defaults.
+	existingModel, existingEffort := s.readSessionSettings(req.WrapperId)
+
+	var model, effortLevel string
+	if existingModel != "" || existingEffort != "" {
+		// Re-registering after daemon restart — keep what claude has.
+		model = existingModel
+		effortLevel = existingEffort
+		s.log.Info("re-acquired session with preserved settings",
+			"wrapper_id", req.WrapperId,
+			"model", model,
+			"effort", effortLevel,
+		)
+	} else {
+		// Fresh session — resolve from clotilde session settings + global.
+		model, effortLevel = s.resolveSessionSettings(req.SessionName)
+	}
 
 	settingsFile, err := s.writeSettingsJSON(req.WrapperId, model, effortLevel)
 	if err != nil {
