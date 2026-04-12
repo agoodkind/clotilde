@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **CWD restore on resume**: Sessions now remember the working directory where they were created. `clotilde resume <name>` restores Claude to the original directory regardless of where the resume command is run from. Applies to `start`, `fork`, and `incognito` sessions.
+
 ## [0.12.0] - 2026-04-08
 
 ### Added

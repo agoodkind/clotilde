@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -128,6 +129,33 @@ func normalizeModel(model string) string {
 		return "opus[1m]"
 	}
 	return model
+}
+
+// splitArgs separates positional args from pass-through claude flags.
+//
+// Two styles are supported:
+//
+//  1. Explicit "--" separator:  clotilde start name -- --some-claude-flag
+//     Everything after "--" is pass-through; positional args are before it.
+//
+//  2. No separator (drop-in):   clotilde start name --some-claude-flag
+//     Args starting with "-" that cobra didn't recognise are pass-through;
+//     everything else is a positional arg.
+//
+// The caller should set FParseErrWhitelist{UnknownFlags:true} on the command
+// so cobra doesn't error on unrecognised flags before this function runs.
+func splitArgs(cmd *cobra.Command, args []string) (positional, passthrough []string) {
+	if dash := cmd.Flags().ArgsLenAtDash(); dash >= 0 {
+		return args[:dash], args[dash:]
+	}
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") {
+			passthrough = append(passthrough, a)
+		} else {
+			positional = append(positional, a)
+		}
+	}
+	return positional, passthrough
 }
 
 // collectEffortFlag appends --effort to additionalArgs if the flag is set.

@@ -36,14 +36,10 @@ Pass additional flags to Claude Code after '--':
   clotilde start my-session -- --debug api,hooks
   clotilde start test --model haiku -- --verbose
   clotilde start                       # auto-generated name`,
-		Args: maxPositionalArgs(1),
+		Args:                  maxPositionalArgs(1),
+		FParseErrWhitelist:    cobra.FParseErrWhitelist{UnknownFlags: true},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Extract additional args after '--'
-			var additionalArgs []string
-			argsLenAtDash := cmd.Flags().ArgsLenAtDash()
-			if argsLenAtDash > 0 && len(args) > argsLenAtDash {
-				additionalArgs = args[argsLenAtDash:]
-			}
+			args, additionalArgs := splitArgs(cmd, args)
 
 			// Generate or use provided name
 			var name string

@@ -16,6 +16,7 @@ type Metadata struct {
 	Name                 string    `json:"name"`
 	SessionID            string    `json:"sessionId"`
 	TranscriptPath       string    `json:"transcriptPath,omitempty"`
+	WorkDir              string    `json:"workDir,omitempty"`
 	Created              time.Time `json:"created"`
 	LastAccessed         time.Time `json:"lastAccessed"`
 	ParentSession        string    `json:"parentSession,omitempty"`

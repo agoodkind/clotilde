@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
@@ -121,6 +122,11 @@ func createSession(params SessionCreateParams) (*SessionCreateResult, error) {
 	// Set context
 	if params.Context != "" {
 		sess.Metadata.Context = params.Context
+	}
+
+	// Capture current working directory for CWD restore on resume
+	if wd, err := os.Getwd(); err == nil {
+		sess.Metadata.WorkDir = wd
 	}
 
 	if err := store.Create(sess); err != nil {

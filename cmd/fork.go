@@ -30,7 +30,8 @@ If fork-name is not provided for incognito forks, a random name will be generate
 Pass additional flags to Claude Code after '--':
   clotilde fork my-session experiment -- --debug api,hooks
   clotilde fork my-session --incognito  # Random name like "happy-fox"`,
-		Args:              rangePositionalArgs(1, 2),
+		Args:               rangePositionalArgs(1, 2),
+		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 		ValidArgsFunction: sessionNameCompletion,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			parentName := args[0]
@@ -68,12 +69,7 @@ Pass additional flags to Claude Code after '--':
 				forkName = util.GenerateUniqueRandomName(existingNames)
 			}
 
-			// Extract additional args after '--'
-			var additionalArgs []string
-			argsLenAtDash := cmd.Flags().ArgsLenAtDash()
-			if argsLenAtDash > 0 && len(args) > argsLenAtDash {
-				additionalArgs = args[argsLenAtDash:]
-			}
+			args, additionalArgs := splitArgs(cmd, args)
 
 			// Resolve shorthand flags
 			permMode, err := resolvePermissionMode(cmd)
@@ -139,6 +135,11 @@ Pass additional flags to Claude Code after '--':
 				fork.Metadata.Context = forkContext
 			} else if parentSess.Metadata.Context != "" {
 				fork.Metadata.Context = parentSess.Metadata.Context
+			}
+
+			// Capture current working directory for CWD restore on future resumes
+			if wd, err := os.Getwd(); err == nil {
+				fork.Metadata.WorkDir = wd
 			}
 
 			if err := store.Create(fork); err != nil {

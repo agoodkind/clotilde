@@ -33,14 +33,10 @@ Pass additional flags to Claude Code after '--':
 Note: Incognito sessions are deleted on normal exit (Ctrl+D, /exit). If the
 process crashes or is killed (SIGKILL), the session may persist. Use
 'clotilde delete <name>' to clean up manually if needed.`,
-		Args: maxPositionalArgs(1),
+		Args:               maxPositionalArgs(1),
+		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Extract additional args after '--'
-			var additionalArgs []string
-			argsLenAtDash := cmd.Flags().ArgsLenAtDash()
-			if argsLenAtDash > 0 && len(args) > argsLenAtDash {
-				additionalArgs = args[argsLenAtDash:]
-			}
+			args, additionalArgs := splitArgs(cmd, args)
 
 			// Resolve shorthand flags
 			permMode, err := resolvePermissionMode(cmd)
