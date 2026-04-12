@@ -133,10 +133,14 @@ Pass additional flags to Claude Code after '--':
 				additionalArgs = collectEffortFlag(cmd, additionalArgs)
 			}
 
-			// Load session
+			// Load session by name, falling back to display name lookup
 			sess, err := store.Get(name)
 			if err != nil {
-				return fmt.Errorf("session '%s' not found", name)
+				sess, err = store.GetByDisplayName(name)
+				if err != nil {
+					return fmt.Errorf("session '%s' not found", name)
+				}
+				name = sess.Name
 			}
 
 			// Update context if --context flag provided

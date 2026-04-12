@@ -26,6 +26,7 @@ type Metadata struct {
 	Context              string    `json:"context,omitempty"`
 	HasCustomOutputStyle bool      `json:"hasCustomOutputStyle,omitempty"`
 	WorkspaceRoot        string    `json:"workspaceRoot,omitempty"`
+	DisplayName          string    `json:"displayName,omitempty"`
 }
 
 // Settings represents Claude Code session-specific settings stored in settings.json.
