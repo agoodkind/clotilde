@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/fgrehm/clotilde/internal/daemon"
 	"github.com/fgrehm/clotilde/internal/session"
@@ -126,19 +127,15 @@ func invokeInteractive(args []string, env map[string]string, workDir string) err
 
 	client, err := daemon.ConnectOrStart(ctx)
 	if err == nil {
-		defer client.Close()
-
 		resp, acqErr := client.AcquireSession(wrapperID, sessionName)
 		if acqErr == nil {
 			// Inject per-session settings before other args.
 			args = append([]string{"--settings", resp.SettingsFile}, args...)
-
-			defer func() {
-				_ = client.ReleaseSession(wrapperID)
-			}()
 		} else if VerboseFunc() {
 			fmt.Fprintf(os.Stderr, "[DEBUG] daemon acquire failed: %v\n", acqErr)
 		}
+		// Close initial connection — the monitor goroutine manages its own.
+		client.Close()
 	} else if VerboseFunc() {
 		fmt.Fprintf(os.Stderr, "[DEBUG] daemon not available: %v\n", err)
 	}
@@ -161,7 +158,58 @@ func invokeInteractive(args []string, env map[string]string, workDir string) err
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
 	}
 
-	return cmd.Run()
+	// Start a background goroutine that monitors the daemon connection.
+	// If the daemon restarts (e.g. after `make install`), this re-registers
+	// the session with the new daemon so global settings sync continues.
+	done := make(chan struct{})
+	go monitorDaemon(ctx, wrapperID, sessionName, done)
+
+	runErr := cmd.Run()
+
+	// Signal the monitor to stop and release the session.
+	close(done)
+
+	return runErr
+}
+
+// monitorDaemon runs alongside claude, periodically checking the daemon
+// connection. If the daemon restarted (kill + relaunch during deploy),
+// this re-acquires the session so global settings sync keeps working.
+// On done signal, releases the session from whichever daemon is current.
+func monitorDaemon(ctx context.Context, wrapperID, sessionName string, done <-chan struct{}) {
+	const interval = 30 * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-done:
+			// Session ended — release from current daemon.
+			c, err := daemon.ConnectOrStart(ctx)
+			if err == nil {
+				_ = c.ReleaseSession(wrapperID)
+				c.Close()
+			}
+			return
+
+		case <-ticker.C:
+			// Health check: try to connect and re-acquire.
+			// ConnectOrStart is idempotent (flock prevents double-start).
+			// AcquireSession is idempotent (daemon overwrites existing entry).
+			c, err := daemon.ConnectOrStart(ctx)
+			if err != nil {
+				if VerboseFunc() {
+					fmt.Fprintf(os.Stderr, "[DEBUG] daemon monitor: connect failed: %v\n", err)
+				}
+				continue
+			}
+			_, acqErr := c.AcquireSession(wrapperID, sessionName)
+			if acqErr != nil && VerboseFunc() {
+				fmt.Fprintf(os.Stderr, "[DEBUG] daemon monitor: re-acquire failed: %v\n", acqErr)
+			}
+			c.Close()
+		}
+	}
 }
 
 // ResumeByName invokes claude with --resume <name>, letting Claude resolve
