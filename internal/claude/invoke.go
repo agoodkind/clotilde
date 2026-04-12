@@ -121,7 +121,7 @@ func invokeInteractive(args []string, env map[string]string) error {
 	wrapperID := fmt.Sprintf("%d", os.Getpid())
 	sessionName := env["CLOTILDE_SESSION_NAME"]
 
-	client, err := daemon.Connect(ctx)
+	client, err := daemon.ConnectOrStart(ctx)
 	if err == nil {
 		defer client.Close()
 

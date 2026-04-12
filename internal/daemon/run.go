@@ -13,7 +13,7 @@ import (
 )
 
 // Run starts the daemon gRPC server on the XDG runtime Unix socket.
-// It blocks until the server stops.
+// It blocks until the server stops (via idle timeout or signal).
 func Run(log *slog.Logger) error {
 	if err := config.EnsureRuntimeDir(); err != nil {
 		return err
@@ -40,6 +40,12 @@ func Run(log *slog.Logger) error {
 	grpcServer := grpc.NewServer()
 	daemonpb.RegisterAgentGateDServer(grpcServer, srv)
 
-	log.Info("daemon listening", "socket", socketPath)
+	// Wire idle timeout to graceful stop.
+	srv.SetShutdown(func() {
+		log.Info("graceful stop from idle timeout")
+		grpcServer.GracefulStop()
+	})
+
+	log.Info("daemon listening", "socket", socketPath, "idle_timeout", idleTimeout)
 	return grpcServer.Serve(listener)
 }
