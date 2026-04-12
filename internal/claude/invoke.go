@@ -164,6 +164,19 @@ func invokeInteractive(args []string, env map[string]string, workDir string) err
 	return cmd.Run()
 }
 
+// ResumeByName invokes claude with --resume <name>, letting Claude resolve
+// the display name to a session UUID internally. Used when clotilde doesn't
+// have the session in its own store. The daemon wrapping in invokeInteractive
+// still provides model isolation.
+func ResumeByName(name string, additionalArgs []string) error {
+	args := []string{"--resume", name}
+	args = append(args, additionalArgs...)
+	env := map[string]string{
+		"CLOTILDE_SESSION_NAME": name,
+	}
+	return invokeInteractive(args, env, "")
+}
+
 // Exec is the entry point for the `clotilde exec` shell wrapper.
 // It acquires a per-process settings file from the daemon for model
 // isolation and execs the real claude with those settings injected.
