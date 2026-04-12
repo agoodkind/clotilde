@@ -320,6 +320,7 @@ func registerSubcommands(root *cobra.Command) {
 	root.AddCommand(hookCmd)
 	root.AddCommand(versionCmd)
 	root.AddCommand(newCompletionCmd())
+	root.AddCommand(newDaemonCmd())
 
 	root.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
 	root.PersistentFlags().StringVar(&claudeBinaryPath, "claude-bin", "", "Path to claude binary (hidden, for testing)")
