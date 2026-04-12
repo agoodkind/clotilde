@@ -31,38 +31,45 @@ Pass additional flags to Claude Code after '--':
 		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 		ValidArgsFunction: sessionNameCompletion,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Find clotilde root
-			clotildeRoot, err := config.FindClotildeRoot()
+			// Use global session store
+			store, err := globalStore()
 			if err != nil {
-				return fmt.Errorf("no sessions found (create one with 'clotilde start <name>')")
+				return err
 			}
-
-			// Create store
-			store := session.NewFileStore(clotildeRoot)
+			clotildeRoot := config.GlobalDataDir()
 
 			args, earlyAdditionalArgs := splitArgs(cmd, args)
 
 			// Determine session name
 			var name string
 			if len(args) == 0 {
-				// No session name — show picker in TTY or list in non-interactive mode.
+				// No session name — show workspace-scoped picker in TTY or list in non-interactive mode.
+				workspaceRoot, _ := config.FindProjectRoot()
+
+				loadSessions := func() ([]*session.Session, error) {
+					if workspaceRoot != "" {
+						return store.ListForWorkspace(workspaceRoot)
+					}
+					return store.List()
+				}
+
 				isTTY := isatty.IsTerminal(os.Stdout.Fd())
 				if !isTTY {
-					sessions, listErr := store.List()
+					sessions, listErr := loadSessions()
 					if listErr != nil {
 						return fmt.Errorf("failed to list sessions: %w", listErr)
 					}
 					return showStaticTable(cmd, sessions, store)
 				}
 
-				// Load all sessions
-				sessions, err := store.List()
+				// Load workspace-scoped sessions
+				sessions, err := loadSessions()
 				if err != nil {
 					return fmt.Errorf("failed to list sessions: %w", err)
 				}
 
 				if len(sessions) == 0 {
-					return fmt.Errorf("no sessions available")
+					return fmt.Errorf("no sessions available (use 'clotilde list --all' to see all workspaces)")
 				}
 
 				// Sort by last accessed (most recent first)
@@ -87,14 +94,12 @@ Pass additional flags to Claude Code after '--':
 				if looksLikeUUID(name) {
 					resolved, resolveErr := findSessionByUUID(store, name)
 					if resolveErr != nil {
-						// Not in current store — try to find and adopt the transcript.
-						adoptedName, adoptedRoot, adoptErr := tryAdoptByUUID(name)
+						// Not in global store — try to find and adopt the transcript.
+						adoptedName, adoptErr := tryAdoptByUUID(name)
 						if adoptErr != nil {
 							return fmt.Errorf("no session found with UUID %s", name)
 						}
 						_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Auto-adopted session '%s'\n", adoptedName)
-						clotildeRoot = adoptedRoot
-						store = session.NewFileStore(adoptedRoot)
 						name = adoptedName
 					} else {
 						name = resolved

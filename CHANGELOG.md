@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **CWD restore on resume**: Sessions now remember the working directory where they were created. `clotilde resume <name>` restores Claude to the original directory regardless of where the resume command is run from. Applies to `start`, `fork`, and `incognito` sessions.
+- **Centralized global session storage**: Session metadata is now stored in a single global directory (`$XDG_DATA_HOME/clotilde/sessions/`, defaulting to `~/.local/share/clotilde/sessions/`) instead of per-project `.claude/clotilde/` directories. Sessions track their originating workspace via a `workspaceRoot` metadata field. `clotilde list` shows only sessions for the current workspace by default; use `--all` to see all sessions across all workspaces. `clotilde adopt` now imports untracked sessions directly into the global store.
+
+### Changed
+
+- **`clotilde list` is workspace-scoped by default**: Shows only sessions whose `workspaceRoot` matches the current directory's project root. Pass `--all` to list every session regardless of workspace.
 
 ## [0.12.0] - 2026-04-08
 

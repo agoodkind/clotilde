@@ -25,6 +25,7 @@ type Metadata struct {
 	PreviousSessionIDs   []string  `json:"previousSessionIds,omitempty"`
 	Context              string    `json:"context,omitempty"`
 	HasCustomOutputStyle bool      `json:"hasCustomOutputStyle,omitempty"`
+	WorkspaceRoot        string    `json:"workspaceRoot,omitempty"`
 }
 
 // Settings represents Claude Code session-specific settings stored in settings.json.

@@ -14,38 +14,56 @@ import (
 	"github.com/fgrehm/clotilde/internal/util"
 )
 
-var listCmd = &cobra.Command{
-	Use:     "list",
-	Aliases: []string{"ls"},
-	Short:   "List all sessions",
-	Long:    `List all clotilde sessions in the current project, sorted by last used.`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		// Find clotilde root
-		clotildeRoot, err := config.FindClotildeRoot()
-		if err != nil {
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No sessions found.")
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\nCreate a session with:")
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  clotilde start <session-name>")
-			return nil
-		}
+func newListCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List sessions",
+		Long: `List clotilde sessions, filtered to the current workspace by default.
 
-		// Load all sessions
-		store := session.NewFileStore(clotildeRoot)
-		sessions, err := store.List()
-		if err != nil {
-			return fmt.Errorf("failed to list sessions: %w", err)
-		}
+Use --all to show every session across all workspaces.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			showAll, _ := cmd.Flags().GetBool("all")
 
-		if len(sessions) == 0 {
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No sessions found.")
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\nCreate a session with:")
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  clotilde start <session-name>")
-			return nil
-		}
+			store, err := globalStore()
+			if err != nil {
+				return err
+			}
 
-		// Always use static table - dashboard has interactive list
-		return showStaticTable(cmd, sessions, store)
-	},
+			var sessions []*session.Session
+			if showAll {
+				sessions, err = store.List()
+			} else {
+				workspaceRoot, wsErr := config.FindProjectRoot()
+				if wsErr != nil {
+					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No sessions found.")
+					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\nCreate a session with:")
+					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  clotilde start <session-name>")
+					return nil
+				}
+				sessions, err = store.ListForWorkspace(workspaceRoot)
+			}
+			if err != nil {
+				return fmt.Errorf("failed to list sessions: %w", err)
+			}
+
+			if len(sessions) == 0 {
+				if showAll {
+					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No sessions found.")
+				} else {
+					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No sessions for this workspace.")
+					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Use --all to see every session, or:")
+				}
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\nCreate a session with:")
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  clotilde start <session-name>")
+				return nil
+			}
+
+			return showStaticTable(cmd, sessions, store)
+		},
+	}
+	cmd.Flags().Bool("all", false, "Show sessions from all workspaces")
+	return cmd
 }
 
 // showInteractiveTable displays sessions in an interactive TUI table with sorting

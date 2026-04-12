@@ -23,6 +23,10 @@ type Store interface {
 	// List returns all sessions, sorted by lastAccessed (most recent first)
 	List() ([]*Session, error)
 
+	// ListForWorkspace returns sessions whose WorkspaceRoot matches the given path,
+	// sorted by lastAccessed (most recent first).
+	ListForWorkspace(workspaceRoot string) ([]*Session, error)
+
 	// Get retrieves a session by name
 	Get(name string) (*Session, error)
 
@@ -57,6 +61,15 @@ func NewFileStore(clotildeRoot string) *FileStore {
 	}
 }
 
+// NewGlobalFileStore creates a FileStore pointing at the global sessions directory.
+// Creates the directory if it doesn't exist.
+func NewGlobalFileStore() (*FileStore, error) {
+	if err := config.EnsureGlobalSessionsDir(); err != nil {
+		return nil, fmt.Errorf("failed to create global sessions directory: %w", err)
+	}
+	return &FileStore{clotildeRoot: config.GlobalDataDir()}, nil
+}
+
 // List returns all sessions, sorted by lastAccessed (most recent first).
 func (fs *FileStore) List() ([]*Session, error) {
 	sessionsDir := config.GetSessionsDir(fs.clotildeRoot)
@@ -89,6 +102,23 @@ func (fs *FileStore) List() ([]*Session, error) {
 	})
 
 	return sessions, nil
+}
+
+// ListForWorkspace returns sessions whose WorkspaceRoot matches the given path,
+// sorted by lastAccessed (most recent first).
+func (fs *FileStore) ListForWorkspace(workspaceRoot string) ([]*Session, error) {
+	all, err := fs.List()
+	if err != nil {
+		return nil, err
+	}
+
+	var result []*Session
+	for _, sess := range all {
+		if sess.Metadata.WorkspaceRoot == workspaceRoot {
+			result = append(result, sess)
+		}
+	}
+	return result, nil
 }
 
 // Get retrieves a session by name.

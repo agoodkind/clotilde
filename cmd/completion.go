@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -13,21 +14,21 @@ import (
 )
 
 // sessionNameCompletion provides dynamic completion for session names
-func sessionNameCompletion(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-	// Find clotilde root
-	clotildeRoot, err := config.FindClotildeRoot()
+func sessionNameCompletion(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+	store, err := globalStore()
 	if err != nil {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
 
-	// Get all sessions
-	store := session.NewFileStore(clotildeRoot)
-	sessions, err := store.List()
-	if err != nil {
-		return nil, cobra.ShellCompDirectiveNoFileComp
+	// Scope completions to the current workspace when possible
+	var sessions []*session.Session
+	if workspaceRoot, wsErr := config.FindProjectRoot(); wsErr == nil {
+		sessions, _ = store.ListForWorkspace(workspaceRoot)
+	}
+	if len(sessions) == 0 {
+		sessions, _ = store.List()
 	}
 
-	// Extract session names
 	var names []string
 	for _, sess := range sessions {
 		names = append(names, sess.Metadata.Name)
@@ -47,11 +48,11 @@ func effortCompletion(cmd *cobra.Command, args []string, toComplete string) ([]s
 }
 
 // profileNameCompletion provides dynamic completion for profile names
-func profileNameCompletion(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-	// Find clotilde root
-	clotildeRoot, err := config.FindClotildeRoot()
-	if err != nil {
-		return nil, cobra.ShellCompDirectiveNoFileComp
+func profileNameCompletion(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+	// Use project-level clotilde root for profiles (global profiles always loaded)
+	var clotildeRoot string
+	if projectRoot, err := config.FindProjectRoot(); err == nil {
+		clotildeRoot = filepath.Join(projectRoot, config.ClotildeDir)
 	}
 
 	// Load merged profiles (global + project)

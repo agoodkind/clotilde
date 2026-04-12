@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/fgrehm/clotilde/internal/session"
@@ -202,14 +203,13 @@ func cleanupIncognitoSession(clotildeRoot string, sess *session.Session) (*Delet
 
 // defaultSessionUsed checks if a Claude Code session was actually used by looking
 // for a transcript file. Sessions with no ID are considered unused.
-func DefaultSessionUsed(clotildeRoot string, sess *session.Session) bool {
+func DefaultSessionUsed(globalRoot string, sess *session.Session) bool {
 	sessionID := sess.Metadata.SessionID
 	if sessionID == "" {
 		return false
 	}
 
-	// Prefer the transcript path saved by the hook (accurate even with symlinks),
-	// fall back to computing it from the clotilde root.
+	// Prefer the transcript path saved by the hook (accurate even with symlinks).
 	if sess.Metadata.TranscriptPath != "" {
 		return util.FileExists(sess.Metadata.TranscriptPath)
 	}
@@ -218,6 +218,14 @@ func DefaultSessionUsed(clotildeRoot string, sess *session.Session) bool {
 	if err != nil {
 		return true // assume used if we can't check
 	}
+
+	// Derive project-specific clotilde root from WorkspaceRoot in session metadata.
+	// Sessions are stored globally, but transcripts live under the project directory.
+	clotildeRoot := globalRoot
+	if sess.Metadata.WorkspaceRoot != "" {
+		clotildeRoot = filepath.Join(sess.Metadata.WorkspaceRoot, ".claude", "clotilde")
+	}
+
 	transcriptPath := TranscriptPath(homeDir, clotildeRoot, sessionID)
 	return util.FileExists(transcriptPath)
 }

@@ -41,35 +41,39 @@ func runDashboard(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	// Find or create clotilde root (dashboard always works)
-	clotildeRoot, err := config.FindOrCreateClotildeRoot()
+	// Use global session store for dashboard
+	store, err := session.NewGlobalFileStore()
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Failed to initialize session storage: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Load sessions
-	store := session.NewFileStore(clotildeRoot)
-	sessions, err := store.List()
-	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Failed to load sessions: %v\n", err)
-		os.Exit(1)
+	// Scope dashboard to current workspace
+	workspaceRoot, _ := config.FindProjectRoot()
+
+	loadSessions := func() []*session.Session {
+		var sessions []*session.Session
+		var loadErr error
+		if workspaceRoot != "" {
+			sessions, loadErr = store.ListForWorkspace(workspaceRoot)
+		} else {
+			sessions, loadErr = store.List()
+		}
+		if loadErr != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Failed to load sessions: %v\n", loadErr)
+			os.Exit(1)
+		}
+		return sessions
 	}
 
-	// Sort by last accessed (most recent first)
+	sessions := loadSessions()
 	sortSessionsByLastAccessed(sessions)
 
 	// Dashboard loop - keep showing dashboard until quit or session launched
 	for {
-		// Reload sessions each loop iteration (in case they were modified)
-		sessions, err = store.List()
-		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Failed to load sessions: %v\n", err)
-			os.Exit(1)
-		}
+		sessions = loadSessions()
 		sortSessionsByLastAccessed(sessions)
 
-		// Show dashboard
 		dashboard := ui.NewDashboard(sessions)
 		selectedAction, err := ui.RunDashboard(dashboard)
 		if err != nil {
@@ -77,22 +81,19 @@ func runDashboard(cmd *cobra.Command, args []string) {
 			os.Exit(1)
 		}
 
-		// Handle cancelled (user pressed q/esc)
 		if selectedAction == "" {
 			return
 		}
 
-		// Dispatch to appropriate command based on selection
-		shouldReturn := handleDashboardAction(selectedAction, sessions, clotildeRoot, store)
+		shouldReturn := handleDashboardAction(selectedAction, sessions, store)
 		if shouldReturn {
 			return
 		}
-		// Otherwise loop back to dashboard
 	}
 }
 
 // handleDashboardAction handles a dashboard action and returns true if we should exit
-func handleDashboardAction(selectedAction string, sessions []*session.Session, clotildeRoot string, store session.Store) bool {
+func handleDashboardAction(selectedAction string, sessions []*session.Session, store session.Store) bool {
 	switch selectedAction {
 	case "start":
 		// Auto-generate a session name and start immediately
@@ -144,7 +145,7 @@ func handleDashboardAction(selectedAction string, sessions []*session.Session, c
 		}
 
 		// Resume the session (reuse logic from resume command)
-		if err := resumeSession(clotildeRoot, selected, store); err != nil {
+		if err := resumeSession(selected, store); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Failed to resume session: %v\n", err)
 			os.Exit(1)
 		}
@@ -180,7 +181,7 @@ func handleDashboardAction(selectedAction string, sessions []*session.Session, c
 			return false
 		}
 
-		if err := forkFromDashboard(clotildeRoot, parent, sessions, store); err != nil {
+		if err := forkFromDashboard(parent, sessions, store); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Failed to fork session: %v\n", err)
 			os.Exit(1)
 		}
@@ -207,7 +208,7 @@ func handleDashboardAction(selectedAction string, sessions []*session.Session, c
 		}
 
 		// Resume the selected session
-		if err := resumeSession(clotildeRoot, selected, store); err != nil {
+		if err := resumeSession(selected, store); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Failed to resume session: %v\n", err)
 			os.Exit(1)
 		}
@@ -235,7 +236,7 @@ func handleDashboardAction(selectedAction string, sessions []*session.Session, c
 		}
 
 		// Show confirmation with details
-		details := buildDeletionDetails(clotildeRoot, selected)
+		details := buildDeletionDetails(projectClotildeRootForSession(selected), selected)
 		confirmModel := ui.NewConfirm(
 			fmt.Sprintf("Delete session '%s'?", selected.Name),
 			"This will permanently delete:",
@@ -253,7 +254,7 @@ func handleDashboardAction(selectedAction string, sessions []*session.Session, c
 		}
 
 		// Delete the session (reuse logic from delete command)
-		if err := deleteSession(clotildeRoot, selected, store); err != nil {
+		if err := deleteSession(selected, store); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Failed to delete session: %v\n", err)
 			os.Exit(1)
 		}
@@ -319,10 +320,11 @@ func registerSubcommands(root *cobra.Command) {
 	root.AddCommand(newStartCmd())
 	root.AddCommand(newIncognitoCmd())
 	root.AddCommand(newResumeCmd())
-	root.AddCommand(listCmd)
-	root.AddCommand(inspectCmd)
+	root.AddCommand(newListCmd())
+	root.AddCommand(newInspectCmd())
 	root.AddCommand(newForkCmd())
-	root.AddCommand(deleteCmd)
+	root.AddCommand(newRenameCmd())
+	root.AddCommand(newDeleteCmd())
 	root.AddCommand(newExportCmd())
 	root.AddCommand(newAdoptCmd())
 	root.AddCommand(hookCmd)
@@ -386,10 +388,10 @@ func ForwardToClaude(args []string) int {
 }
 
 // resumeSession resumes a session (extracted from resume command)
-func resumeSession(clotildeRoot string, sess *session.Session, _ session.Store) error {
-	sessionDir := config.GetSessionDir(clotildeRoot, sess.Name)
+func resumeSession(sess *session.Session, _ session.Store) error {
+	globalRoot := config.GlobalDataDir()
+	sessionDir := config.GetSessionDir(globalRoot, sess.Name)
 
-	// Check for settings file
 	var settingsFile string
 	settingsPath := filepath.Join(sessionDir, "settings.json")
 	if util.FileExists(settingsPath) {
@@ -398,20 +400,22 @@ func resumeSession(clotildeRoot string, sess *session.Session, _ session.Store) 
 
 	fmt.Printf("Resuming session '%s' (%s)\n\n", sess.Name, sess.Metadata.SessionID)
 
-	// Invoke claude
-	return claude.Resume(clotildeRoot, sess, settingsFile, nil)
+	return claude.Resume(globalRoot, sess, settingsFile, nil)
 }
 
 // deleteSession deletes a session (extracted from delete command)
-func deleteSession(clotildeRoot string, sess *session.Session, store session.Store) error {
+func deleteSession(sess *session.Session, store session.Store) error {
 	// Track all deleted files for verbose output
 	allDeletedFiles := &claude.DeletedFiles{
 		Transcript: []string{},
 		AgentLogs:  []string{},
 	}
 
+	// Use project-level clotilde root for transcript/agent-log path computation
+	projClotildeRoot := projectClotildeRootForSession(sess)
+
 	// Delete Claude data for current session (transcript and agent logs)
-	deleted, err := claude.DeleteSessionData(clotildeRoot, sess.Metadata.SessionID, sess.Metadata.TranscriptPath)
+	deleted, err := claude.DeleteSessionData(projClotildeRoot, sess.Metadata.SessionID, sess.Metadata.TranscriptPath)
 	if err != nil {
 		fmt.Println(ui.Warning(fmt.Sprintf("Failed to delete Claude data for current session: %v", err)))
 	} else {
@@ -421,7 +425,7 @@ func deleteSession(clotildeRoot string, sess *session.Session, store session.Sto
 
 	// Delete Claude data for previous sessions (from /clear operations, and defensively from /compact)
 	for _, prevSessionID := range sess.Metadata.PreviousSessionIDs {
-		deleted, err := claude.DeleteSessionData(clotildeRoot, prevSessionID, "")
+		deleted, err := claude.DeleteSessionData(projClotildeRoot, prevSessionID, "")
 		if err != nil {
 			fmt.Println(ui.Warning(fmt.Sprintf("Failed to delete Claude data for previous session %s: %v", prevSessionID, err)))
 		} else {
@@ -437,7 +441,7 @@ func deleteSession(clotildeRoot string, sess *session.Session, store session.Sto
 
 	// Delete custom output style if it exists
 	if sess.Metadata.HasCustomOutputStyle {
-		if err := outputstyle.DeleteCustomStyleFile(clotildeRoot, sess.Name); err != nil {
+		if err := outputstyle.DeleteCustomStyleFile(config.GlobalOutputStyleRoot(), sess.Name); err != nil {
 			fmt.Println(ui.Warning(fmt.Sprintf("Failed to delete output style file: %v", err)))
 		}
 	}
@@ -468,18 +472,24 @@ func deleteSession(clotildeRoot string, sess *session.Session, store session.Sto
 }
 
 // forkFromDashboard creates a fork with an auto-generated name and launches Claude
-func forkFromDashboard(clotildeRoot string, parent *session.Session, sessions []*session.Session, store session.Store) error {
+func forkFromDashboard(parent *session.Session, sessions []*session.Session, store session.Store) error {
 	existingNames := make([]string, len(sessions))
 	for i, s := range sessions {
 		existingNames[i] = s.Name
 	}
 	forkName := util.GenerateUniqueRandomName(existingNames)
 
+	globalRoot := config.GlobalDataDir()
+
 	// Create fork session with empty sessionId (filled by hook)
 	fork := session.NewSession(forkName, "")
 	fork.Metadata.IsForkedSession = true
 	fork.Metadata.ParentSession = parent.Name
 	fork.Metadata.Context = parent.Metadata.Context
+	fork.Metadata.WorkspaceRoot = parent.Metadata.WorkspaceRoot
+	if fork.Metadata.WorkspaceRoot == "" {
+		fork.Metadata.WorkspaceRoot, _ = config.FindProjectRoot()
+	}
 	if wd, err := os.Getwd(); err == nil {
 		fork.Metadata.WorkDir = wd
 	}
@@ -488,8 +498,8 @@ func forkFromDashboard(clotildeRoot string, parent *session.Session, sessions []
 		return fmt.Errorf("failed to create fork: %w", err)
 	}
 
-	forkDir := config.GetSessionDir(clotildeRoot, forkName)
-	parentDir := config.GetSessionDir(clotildeRoot, parent.Name)
+	forkDir := config.GetSessionDir(globalRoot, forkName)
+	parentDir := config.GetSessionDir(globalRoot, parent.Name)
 
 	// Copy settings.json if exists
 	parentSettings := filepath.Join(parentDir, "settings.json")
@@ -507,5 +517,5 @@ func forkFromDashboard(clotildeRoot string, parent *session.Session, sessions []
 		settingsFile = filepath.Join(forkDir, "settings.json")
 	}
 
-	return claude.Fork(clotildeRoot, parent, forkName, settingsFile, nil, fork)
+	return claude.Fork(globalRoot, parent, forkName, settingsFile, nil, fork)
 }

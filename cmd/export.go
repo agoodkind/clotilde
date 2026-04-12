@@ -7,9 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/fgrehm/clotilde/internal/config"
 	"github.com/fgrehm/clotilde/internal/export"
-	"github.com/fgrehm/clotilde/internal/session"
 	"github.com/fgrehm/clotilde/internal/util"
 )
 
@@ -23,12 +21,11 @@ func newExportCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 
-			clotildeRoot, err := config.FindClotildeRoot()
+			store, err := globalStore()
 			if err != nil {
 				return fmt.Errorf("no sessions found (create one with 'clotilde start <name>')")
 			}
 
-			store := session.NewFileStore(clotildeRoot)
 			sess, err := store.Get(name)
 			if err != nil {
 				return fmt.Errorf("session '%s' not found", name)
@@ -40,6 +37,7 @@ func newExportCmd() *cobra.Command {
 				return fmt.Errorf("could not determine home directory: %w", err)
 			}
 
+			clotildeRoot := projectClotildeRootForSession(sess)
 			paths := allTranscriptPaths(sess, clotildeRoot, homeDir)
 			var allEntries []json.RawMessage
 			var readable int

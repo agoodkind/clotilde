@@ -141,6 +141,37 @@ keep-coding-instructions: true
 	return nil
 }
 
+// RenameCustomStyleFile renames a custom output style file and regenerates its
+// frontmatter to reflect the new session name. If the source file does not exist
+// the function returns nil (tolerant, matching DeleteCustomStyleFile behaviour).
+func RenameCustomStyleFile(clotildeRoot, oldName, newName string) error {
+	oldPath := GetCustomStylePath(clotildeRoot, oldName)
+
+	content, err := os.ReadFile(oldPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to read output style file: %w", err)
+	}
+
+	// Strip existing frontmatter; keep only the body content.
+	body := strings.TrimSpace(string(content))
+	if strings.HasPrefix(body, "---") {
+		parts := strings.SplitN(body, "---", 3)
+		if len(parts) == 3 {
+			body = strings.TrimSpace(parts[2])
+		}
+	}
+
+	// Write under the new name (regenerates frontmatter from newName).
+	if err := CreateCustomStyleFile(clotildeRoot, newName, body); err != nil {
+		return err
+	}
+
+	return os.Remove(oldPath)
+}
+
 // DeleteCustomStyleFile deletes a custom output style file
 func DeleteCustomStyleFile(clotildeRoot, sessionName string) error {
 	stylePath := GetCustomStylePath(clotildeRoot, sessionName)
