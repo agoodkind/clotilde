@@ -1,11 +1,13 @@
 package claude
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 
+	"github.com/fgrehm/clotilde/internal/daemon"
 	"github.com/fgrehm/clotilde/internal/session"
 	"github.com/fgrehm/clotilde/internal/ui"
 	"github.com/fgrehm/clotilde/internal/util"
@@ -107,21 +109,44 @@ func displayCommand(claudeBin string, args []string, env map[string]string) {
 }
 
 // invokeInteractive executes the claude CLI command interactively.
-// Stdin, stdout, and stderr are connected to the current process.
+// If the daemon is reachable, it acquires a per-session settings file
+// for model isolation and injects --settings. If the daemon is not
+// running, claude is invoked directly (graceful degradation).
 func invokeInteractive(args []string, env map[string]string) error {
 	claudeBin := ClaudeBinaryPathFunc()
 
-	// Display the command being executed
+	// Try to connect to daemon for per-session model isolation.
+	// If the daemon is not running, skip (non-fatal).
+	ctx := context.Background()
+	wrapperID := fmt.Sprintf("%d", os.Getpid())
+	sessionName := env["CLOTILDE_SESSION_NAME"]
+
+	client, err := daemon.Connect(ctx)
+	if err == nil {
+		defer client.Close()
+
+		resp, acqErr := client.AcquireSession(wrapperID, sessionName)
+		if acqErr == nil {
+			// Inject per-session settings before other args.
+			args = append([]string{"--settings", resp.SettingsFile}, args...)
+
+			defer func() {
+				_ = client.ReleaseSession(wrapperID)
+			}()
+		} else if VerboseFunc() {
+			fmt.Fprintf(os.Stderr, "[DEBUG] daemon acquire failed: %v\n", acqErr)
+		}
+	} else if VerboseFunc() {
+		fmt.Fprintf(os.Stderr, "[DEBUG] daemon not available: %v\n", err)
+	}
+
 	displayCommand(claudeBin, args, env)
 
 	cmd := exec.Command(claudeBin, args...)
-
-	// Set up stdio
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	// Set environment variables
 	cmd.Env = os.Environ()
 	for key, value := range env {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
