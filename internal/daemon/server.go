@@ -1,6 +1,7 @@
-// Package daemon implements the agent-gate daemon gRPC server.
+// Package daemon implements the clotilde daemon gRPC server.
 // It manages per-session settings.json files so that /model changes
-// in one Claude session don't leak to others.
+// in one Claude session don't leak to others. The daemon is lazily
+// started on first use and exits after an idle timeout.
 package daemon
 
 import (
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"google.golang.org/grpc/codes"
@@ -19,6 +21,8 @@ import (
 	"github.com/fgrehm/clotilde/api/daemonpb"
 	"github.com/fgrehm/clotilde/internal/config"
 )
+
+const idleTimeout = 5 * time.Minute
 
 // Server implements the AgentGateD gRPC service.
 type Server struct {
@@ -30,6 +34,11 @@ type Server struct {
 
 	watcher        *fsnotify.Watcher
 	globalSettings map[string]any // last-known global settings.json content
+
+	// idleTimer fires when the daemon has had zero sessions for idleTimeout.
+	// Reset on every AcquireSession; stopped while sessions are active.
+	idleTimer *time.Timer
+	shutdown  func() // called when idle timer fires; set by Run()
 }
 
 // wrapperSession holds runtime state for one active claude wrapper process.
@@ -47,9 +56,10 @@ func New(log *slog.Logger) (*Server, error) {
 	}
 
 	s := &Server{
-		log:      log,
-		sessions: make(map[string]*wrapperSession),
-		watcher:  watcher,
+		log:       log,
+		sessions:  make(map[string]*wrapperSession),
+		watcher:   watcher,
+		idleTimer: time.NewTimer(idleTimeout),
 	}
 
 	globalPath := globalSettingsPath()
@@ -67,8 +77,38 @@ func New(log *slog.Logger) (*Server, error) {
 	}
 
 	go s.watchGlobalSettings()
+	go s.watchIdleTimeout()
 
 	return s, nil
+}
+
+// SetShutdown sets the function called when the idle timer fires.
+func (s *Server) SetShutdown(fn func()) {
+	s.mu.Lock()
+	s.shutdown = fn
+	s.mu.Unlock()
+}
+
+// watchIdleTimeout exits the daemon when the idle timer fires.
+func (s *Server) watchIdleTimeout() {
+	<-s.idleTimer.C
+
+	s.mu.RLock()
+	n := len(s.sessions)
+	fn := s.shutdown
+	s.mu.RUnlock()
+
+	if n > 0 {
+		// Sessions appeared between timer fire and check. Reset.
+		s.idleTimer.Reset(idleTimeout)
+		go s.watchIdleTimeout()
+		return
+	}
+
+	s.log.Info("idle timeout reached, shutting down", "timeout", idleTimeout)
+	if fn != nil {
+		fn()
+	}
 }
 
 // Close shuts down the watcher and cleans up all active session runtime dirs.
@@ -87,7 +127,7 @@ func (s *Server) Close() {
 // AcquireSession writes a per-session settings.json (global settings with
 // model overridden) and returns the path along with the real claude binary.
 func (s *Server) AcquireSession(ctx context.Context, req *daemonpb.AcquireSessionRequest) (*daemonpb.AcquireSessionResponse, error) {
-	if req.WrapperId == "" {
+	if req.WrapperId == "" || req.WrapperId == "__probe__" {
 		return nil, status.Error(codes.InvalidArgument, "wrapper_id is required")
 	}
 
@@ -109,6 +149,7 @@ func (s *Server) AcquireSession(ctx context.Context, req *daemonpb.AcquireSessio
 
 	s.mu.Lock()
 	s.sessions[req.WrapperId] = sess
+	s.idleTimer.Stop()
 	s.mu.Unlock()
 
 	realClaude, err := findRealClaude()
@@ -133,23 +174,30 @@ func (s *Server) AcquireSession(ctx context.Context, req *daemonpb.AcquireSessio
 }
 
 // ReleaseSession removes the per-session runtime dir after claude exits.
+// When the last session is released, the idle timer starts.
 func (s *Server) ReleaseSession(ctx context.Context, req *daemonpb.ReleaseSessionRequest) (*daemonpb.ReleaseSessionResponse, error) {
 	s.mu.Lock()
 	sess, ok := s.sessions[req.WrapperId]
 	if ok {
 		delete(s.sessions, req.WrapperId)
 	}
+	remaining := len(s.sessions)
+	if remaining == 0 {
+		s.idleTimer.Reset(idleTimeout)
+	}
 	s.mu.Unlock()
 
 	if ok {
-		sessionDir := config.SessionRuntimeDir(sess.wrapperID)
-		_ = os.RemoveAll(sessionDir)
+		_ = os.RemoveAll(config.SessionRuntimeDir(sess.wrapperID))
 		s.log.Info("session released",
 			"wrapper_id", req.WrapperId,
 			"session", sess.sessionName,
 			"model", sess.model,
-			"active_sessions", len(s.sessions),
+			"active_sessions", remaining,
 		)
+		if remaining == 0 {
+			s.log.Info("no active sessions, idle timer started", "timeout", idleTimeout)
+		}
 	} else {
 		s.log.Warn("release for unknown session", "wrapper_id", req.WrapperId)
 	}
