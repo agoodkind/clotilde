@@ -155,6 +155,15 @@ func invokeInteractive(args []string, env map[string]string) error {
 	return cmd.Run()
 }
 
+// Exec is the entry point for the `clotilde exec` shell wrapper.
+// It acquires a per-process settings file from the daemon for model
+// isolation and execs the real claude with those settings injected.
+// No clotilde session metadata is written; this is purely a per-process
+// --settings shim so bare `claude` invocations are isolated from each other.
+func Exec(args []string) error {
+	return invokeInteractive(args, map[string]string{})
+}
+
 // invokeWithCleanup runs claude and cleans up incognito session on exit.
 // Uses defer to ensure cleanup runs even on panic or interrupt (Ctrl+C).
 func invokeWithCleanup(clotildeRoot string, sess *session.Session, args []string, env map[string]string) error {
