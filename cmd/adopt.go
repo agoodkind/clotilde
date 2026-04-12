@@ -50,11 +50,13 @@ then the metadata is written under .claude/clotilde/ at the appropriate project 
 		RunE: runAdopt,
 	}
 	cmd.Flags().Bool("dry-run", false, "Show what would be adopted without making changes")
+	cmd.Flags().Bool("refresh", false, "Re-scan transcripts and backfill display names for already-adopted sessions")
 	return cmd
 }
 
 func runAdopt(cmd *cobra.Command, _ []string) error {
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	refresh, _ := cmd.Flags().GetBool("refresh")
 
 	home, err := util.HomeDir()
 	if err != nil {
@@ -65,6 +67,10 @@ func runAdopt(cmd *cobra.Command, _ []string) error {
 	if _, statErr := os.Stat(projectsDir); os.IsNotExist(statErr) {
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No Claude Code projects directory found.")
 		return nil
+	}
+
+	if refresh {
+		return runAdoptRefresh(cmd, projectsDir)
 	}
 
 	transcripts, knownUUIDs, err := adoptScanAndIndex(projectsDir)
@@ -121,8 +127,79 @@ func runAdopt(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
+// runAdoptRefresh re-scans transcripts for already-adopted sessions and backfills
+// DisplayName from the "Session name: ..." hook output in the transcript.
+func runAdoptRefresh(cmd *cobra.Command, projectsDir string) error {
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		return fmt.Errorf("opening global store: %w", err)
+	}
+
+	sessions, err := store.List()
+	if err != nil {
+		return fmt.Errorf("listing sessions: %w", err)
+	}
+
+	// Build UUID→session index (current + previous IDs)
+	uuidToSession := make(map[string]*session.Session)
+	for _, sess := range sessions {
+		uuidToSession[sess.Metadata.SessionID] = sess
+		for _, prev := range sess.Metadata.PreviousSessionIDs {
+			if prev != "" {
+				uuidToSession[prev] = sess
+			}
+		}
+	}
+
+	// Scan all transcripts
+	entries, err := os.ReadDir(projectsDir)
+	if err != nil {
+		return fmt.Errorf("reading projects dir: %w", err)
+	}
+
+	updated := 0
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		projDir := filepath.Join(projectsDir, entry.Name())
+		files, readErr := os.ReadDir(projDir)
+		if readErr != nil {
+			continue
+		}
+
+		for _, f := range files {
+			if f.IsDir() || strings.HasPrefix(f.Name(), "agent-") || !strings.HasSuffix(f.Name(), ".jsonl") {
+				continue
+			}
+
+			info, extractErr := adoptExtractInfo(filepath.Join(projDir, f.Name()), entry.Name())
+			if extractErr != nil || info.SessionID == "" || info.ExtractedName == "" {
+				continue
+			}
+
+			sess, ok := uuidToSession[info.SessionID]
+			if !ok || sess.Metadata.DisplayName == info.ExtractedName {
+				continue
+			}
+
+			sess.Metadata.DisplayName = info.ExtractedName
+			if err := store.Update(sess); err != nil {
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "  failed to update '%s': %v\n", sess.Name, err)
+				continue
+			}
+			updated++
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  updated '%s' → display name '%s'\n", sess.Name, info.ExtractedName)
+		}
+	}
+
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\nRefreshed %d session(s).\n", updated)
+	return nil
+}
+
 // adoptScanAndIndex scans projectsDir for all transcripts and builds the set of
-// UUIDs already tracked in the global store.
+// UUIDs already tracked in the global store. Also scans legacy per-project
+// clotilde stores to recover original session names.
 func adoptScanAndIndex(projectsDir string) ([]*adoptTranscriptInfo, map[string]bool, error) {
 	knownUUIDs := make(map[string]bool)
 	var transcripts []*adoptTranscriptInfo
@@ -142,6 +219,11 @@ func adoptScanAndIndex(projectsDir string) ([]*adoptTranscriptInfo, map[string]b
 			}
 		}
 	}
+
+	// Build UUID→name map from legacy per-project clotilde stores.
+	// These are at ~/.claude/clotilde/sessions/<name>/metadata.json and
+	// <project>/.claude/clotilde/sessions/<name>/metadata.json.
+	legacyNames := adoptScanLegacyStores(projectsDir)
 
 	entries, err := os.ReadDir(projectsDir)
 	if err != nil {
@@ -173,11 +255,79 @@ func adoptScanAndIndex(projectsDir string) ([]*adoptTranscriptInfo, map[string]b
 			if extractErr != nil || info.SessionID == "" {
 				continue
 			}
+
+			// Prefer legacy clotilde name over transcript-extracted name
+			if legacyName, ok := legacyNames[info.SessionID]; ok {
+				info.ExtractedName = legacyName
+			}
+
 			transcripts = append(transcripts, info)
 		}
 	}
 
 	return transcripts, knownUUIDs, nil
+}
+
+// adoptScanLegacyStores scans old per-project .claude/clotilde/sessions/ directories
+// and returns a UUID→name mapping for sessions that were previously managed by clotilde.
+func adoptScanLegacyStores(projectsDir string) map[string]string {
+	result := make(map[string]string)
+
+	// Scan ~/.claude/clotilde/sessions/ (global legacy location)
+	home, err := util.HomeDir()
+	if err != nil {
+		return result
+	}
+	adoptScanLegacyDir(filepath.Join(home, ".claude", "clotilde", "sessions"), result)
+
+	// Scan each project's .claude/clotilde/sessions/ directory.
+	// Project dirs in ~/.claude/projects/ encode paths like -Users-alex-Sites-myproject.
+	// The actual project root is recovered by reversing the encoding.
+	entries, err := os.ReadDir(projectsDir)
+	if err != nil {
+		return result
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		// Decode project path: -Users-alex-Sites-myproject → /Users/alex/Sites/myproject
+		projectRoot := config.DecodeProjectDir(entry.Name())
+		if projectRoot == "" {
+			continue
+		}
+		adoptScanLegacyDir(filepath.Join(projectRoot, ".claude", "clotilde", "sessions"), result)
+	}
+
+	return result
+}
+
+// adoptScanLegacyDir reads session metadata from a legacy sessions directory
+// and adds UUID→name entries to the result map.
+func adoptScanLegacyDir(sessionsDir string, result map[string]string) {
+	entries, err := os.ReadDir(sessionsDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		metaPath := filepath.Join(sessionsDir, entry.Name(), "metadata.json")
+		var meta session.Metadata
+		if err := util.ReadJSON(metaPath, &meta); err != nil {
+			continue
+		}
+		if meta.SessionID != "" {
+			result[meta.SessionID] = entry.Name()
+		}
+		// Also index previous session IDs so forks/clears resolve correctly
+		for _, prev := range meta.PreviousSessionIDs {
+			if prev != "" {
+				result[prev] = entry.Name()
+			}
+		}
+	}
 }
 
 // adoptExtractInfo reads the first part of a JSONL transcript to pull out session
@@ -272,6 +422,7 @@ func adoptOne(t *adoptTranscriptInfo) (string, error) {
 			TranscriptPath: t.TranscriptPath,
 			WorkDir:        t.CWD,
 			WorkspaceRoot:  workspaceRoot,
+			DisplayName:    t.ExtractedName,
 			Created:        created,
 			LastAccessed:   t.LastAccessed,
 		},

@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"strings"
+
 	"github.com/fgrehm/clotilde/internal/util"
 )
 
@@ -198,6 +200,23 @@ func EnsureGlobalSessionsDir() error {
 func GlobalOutputStyleRoot() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".claude", "clotilde")
+}
+
+// DecodeProjectDir reverses Claude Code's project directory encoding.
+// Claude encodes /Users/alex/Sites/myproject as -Users-alex-Sites-myproject.
+// This returns the original absolute path, or "" if the input is empty.
+func DecodeProjectDir(encoded string) string {
+	if encoded == "" {
+		return ""
+	}
+	// The encoding replaces / with - and . with -.
+	// We can only reliably recover / (leading - is always /).
+	// Split on - and rejoin with /, skipping the empty first element from the leading -.
+	parts := strings.Split(encoded, "-")
+	if len(parts) < 2 {
+		return ""
+	}
+	return "/" + strings.Join(parts[1:], "/")
 }
 
 // IsInitialized checks if clotilde is initialized in the current directory tree.

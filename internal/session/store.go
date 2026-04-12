@@ -30,6 +30,10 @@ type Store interface {
 	// Get retrieves a session by name
 	Get(name string) (*Session, error)
 
+	// GetByDisplayName searches all sessions for one whose DisplayName matches.
+	// Returns nil if no match is found.
+	GetByDisplayName(displayName string) (*Session, error)
+
 	// Create creates a new session folder structure with metadata
 	Create(session *Session) error
 
@@ -142,6 +146,20 @@ func (fs *FileStore) Get(name string) (*Session, error) {
 		Name:     name,
 		Metadata: metadata,
 	}, nil
+}
+
+// GetByDisplayName searches all sessions for one whose DisplayName matches.
+func (fs *FileStore) GetByDisplayName(displayName string) (*Session, error) {
+	sessions, err := fs.List()
+	if err != nil {
+		return nil, err
+	}
+	for _, sess := range sessions {
+		if sess.Metadata.DisplayName == displayName {
+			return sess, nil
+		}
+	}
+	return nil, fmt.Errorf("no session found with display name %q", displayName)
 }
 
 // Create creates a new session folder structure with metadata.
