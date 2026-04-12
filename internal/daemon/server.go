@@ -20,6 +20,7 @@ import (
 
 	"github.com/fgrehm/clotilde/api/daemonpb"
 	"github.com/fgrehm/clotilde/internal/config"
+	"github.com/fgrehm/clotilde/internal/session"
 )
 
 const idleTimeout = 5 * time.Minute
@@ -46,6 +47,7 @@ type wrapperSession struct {
 	wrapperID   string
 	sessionName string // empty for bare claude invocations
 	model       string
+	effortLevel string
 }
 
 // New creates a new daemon Server and starts watching the global settings file.
@@ -131,12 +133,9 @@ func (s *Server) AcquireSession(ctx context.Context, req *daemonpb.AcquireSessio
 		return nil, status.Error(codes.InvalidArgument, "wrapper_id is required")
 	}
 
-	model, err := s.resolveModel(req.SessionName)
-	if err != nil {
-		s.log.Warn("model resolution failed, using global", "session", req.SessionName, "err", err)
-	}
+	model, effortLevel := s.resolveSessionSettings(req.SessionName)
 
-	settingsFile, err := s.writeSettingsJSON(req.WrapperId, model)
+	settingsFile, err := s.writeSettingsJSON(req.WrapperId, model, effortLevel)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to write settings: %v", err)
 	}
@@ -145,6 +144,7 @@ func (s *Server) AcquireSession(ctx context.Context, req *daemonpb.AcquireSessio
 		wrapperID:   req.WrapperId,
 		sessionName: req.SessionName,
 		model:       model,
+		effortLevel: effortLevel,
 	}
 
 	s.mu.Lock()
@@ -213,7 +213,7 @@ func (s *Server) HookEvent(ctx context.Context, req *daemonpb.HookEventRequest) 
 
 // writeSettingsJSON writes a per-session settings.json to the runtime dir,
 // merging global settings with the per-session model override.
-func (s *Server) writeSettingsJSON(wrapperID, model string) (string, error) {
+func (s *Server) writeSettingsJSON(wrapperID, model, effortLevel string) (string, error) {
 	s.mu.RLock()
 	globalCopy := make(map[string]any, len(s.globalSettings))
 	for k, v := range s.globalSettings {
@@ -225,12 +225,16 @@ func (s *Server) writeSettingsJSON(wrapperID, model string) (string, error) {
 	if model != "" {
 		globalCopy["model"] = model
 	}
+	if effortLevel != "" {
+		globalCopy["effortLevel"] = effortLevel
+	}
 
 	effectiveModel, _ := globalCopy["model"].(string)
 	s.log.Debug("writing per-session settings",
 		"wrapper_id", wrapperID,
 		"global_model", globalModel,
 		"session_model", model,
+		"session_effort", effortLevel,
 		"effective_model", effectiveModel,
 		"settings_keys", len(globalCopy),
 	)
@@ -265,16 +269,20 @@ func (s *Server) syncAllSessions() {
 	s.mu.RUnlock()
 
 	for _, sess := range sessions {
-		currentModel := s.readSessionModel(sess.wrapperID)
+		currentModel, currentEffort := s.readSessionSettings(sess.wrapperID)
 		if currentModel != "" {
 			sess.model = currentModel
+		}
+		if currentEffort != "" {
+			sess.effortLevel = currentEffort
 		}
 		s.log.Debug("syncing session",
 			"wrapper_id", sess.wrapperID,
 			"session", sess.sessionName,
 			"preserved_model", sess.model,
+			"preserved_effort", sess.effortLevel,
 		)
-		if _, err := s.writeSettingsJSON(sess.wrapperID, sess.model); err != nil {
+		if _, err := s.writeSettingsJSON(sess.wrapperID, sess.model, sess.effortLevel); err != nil {
 			s.log.Warn("failed to sync settings", "wrapper_id", sess.wrapperID, "err", err)
 		}
 	}
@@ -282,20 +290,21 @@ func (s *Server) syncAllSessions() {
 	s.log.Info("global settings synced to all sessions", "active_sessions", len(sessions))
 }
 
-// readSessionModel reads the model from a session's current settings.json.
-// Returns "" if the file doesn't exist or has no model.
-func (s *Server) readSessionModel(wrapperID string) string {
+// readSessionSettings reads model and effortLevel from a session's current settings.json.
+// Returns "" for either value if the file doesn't exist or lacks the field.
+func (s *Server) readSessionSettings(wrapperID string) (model, effortLevel string) {
 	path := filepath.Join(config.SessionRuntimeDir(wrapperID), "settings.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	var settings map[string]any
 	if err := json.Unmarshal(data, &settings); err != nil {
-		return ""
+		return "", ""
 	}
-	model, _ := settings["model"].(string)
-	return model
+	model, _ = settings["model"].(string)
+	effortLevel, _ = settings["effortLevel"].(string)
+	return model, effortLevel
 }
 
 // watchGlobalSettings runs in a goroutine, syncing global settings changes
@@ -355,21 +364,56 @@ func (s *Server) loadGlobalSettings() error {
 	return nil
 }
 
-// resolveModel returns the model for a session by looking up session metadata.
-// Falls back to the global settings model if no session-specific model is set.
-func (s *Server) resolveModel(sessionName string) (string, error) {
+// resolveSessionSettings loads per-session model and effortLevel from the
+// clotilde session's settings.json, falling back to global settings for any
+// field not set at the session level.
+func (s *Server) resolveSessionSettings(sessionName string) (model, effortLevel string) {
 	s.mu.RLock()
 	globalModel, _ := s.globalSettings["model"].(string)
+	globalEffort, _ := s.globalSettings["effortLevel"].(string)
 	s.mu.RUnlock()
 
+	model = globalModel
+	effortLevel = globalEffort
+
 	if sessionName == "" {
-		s.log.Debug("no session name, using global model", "model", globalModel)
-		return globalModel, nil
+		s.log.Debug("no session name, using global settings", "model", model, "effort", effortLevel)
+		return model, effortLevel
 	}
 
-	// TODO: look up session settings from .agent-gate/sessions/<name>/settings.json
-	s.log.Debug("session model resolution (stub, using global)", "session", sessionName, "model", globalModel)
-	return globalModel, nil
+	// Load session-specific settings from clotilde's global store
+	sessSettings := loadClotildeSessionSettings(sessionName)
+	if sessSettings != nil {
+		if sessSettings.Model != "" {
+			model = sessSettings.Model
+		}
+		if sessSettings.EffortLevel != "" {
+			effortLevel = sessSettings.EffortLevel
+		}
+		s.log.Debug("resolved session settings", "session", sessionName, "model", model, "effort", effortLevel)
+	} else {
+		s.log.Debug("no clotilde session settings, using global", "session", sessionName, "model", model, "effort", effortLevel)
+	}
+
+	return model, effortLevel
+}
+
+// loadClotildeSessionSettings loads settings.json from the clotilde global
+// store for the given session name. Returns nil if not found.
+func loadClotildeSessionSettings(sessionName string) *session.Settings {
+	sessionDir := config.GetSessionDir(config.GlobalDataDir(), sessionName)
+	settingsPath := filepath.Join(sessionDir, "settings.json")
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return nil
+	}
+
+	var settings session.Settings
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return nil
+	}
+	return &settings
 }
 
 func globalSettingsPath() string {

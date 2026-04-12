@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/fgrehm/clotilde/internal/config"
 	"github.com/fgrehm/clotilde/internal/notify"
 	"github.com/fgrehm/clotilde/internal/session"
 )
@@ -77,10 +78,20 @@ Handles fork registration, session ID updates, and context injection.`,
 }
 
 // handleStartupOrResume handles new session startup and session resumption.
+// If CLOTILDE_SESSION_NAME is set but the session doesn't exist in the store,
+// it auto-creates it (handles sessions started outside clotilde that are resumed
+// through clotilde's drop-in dispatch).
 func handleStartupOrResume(hookData hookInput, store session.Store) error {
 	sessionName := os.Getenv("CLOTILDE_SESSION_NAME")
 
 	if sessionName != "" {
+		// Auto-create session if it doesn't exist yet (drop-in resume path)
+		if !store.Exists(sessionName) && hookData.SessionID != "" {
+			if session.ValidateName(sessionName) == nil {
+				autoAdoptSession(store, sessionName, hookData)
+			}
+		}
+
 		if err := writeSessionNameToEnv(sessionName); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Warning: failed to write session name to env: %v\n", err)
 		}
@@ -95,6 +106,26 @@ func handleStartupOrResume(hookData hookInput, store session.Store) error {
 	outputContexts(store, sessionName)
 
 	return nil
+}
+
+// autoAdoptSession creates a new session in the store from hook data.
+// Used when a session started outside clotilde is resumed through clotilde's
+// drop-in dispatch — the hook fires and we capture the session into the store.
+func autoAdoptSession(store session.Store, name string, hookData hookInput) {
+	sess := session.NewSession(name, hookData.SessionID)
+	sess.Metadata.TranscriptPath = hookData.TranscriptPath
+	sess.Metadata.DisplayName = name
+
+	if wd, err := os.Getwd(); err == nil {
+		sess.Metadata.WorkDir = wd
+	}
+	if root, err := config.FindProjectRoot(); err == nil {
+		sess.Metadata.WorkspaceRoot = root
+	}
+
+	if err := store.Create(sess); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Warning: auto-adopt failed for '%s': %v\n", name, err)
+	}
 }
 
 // handleCompact handles session compaction, updating session ID and preserving history.
