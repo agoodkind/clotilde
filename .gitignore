@@ -37,6 +37,9 @@ clotilde
 # env file
 .env
 
+# Local build config (signing creds, never commit)
+config.mk
+
 # Claude Code
 .claude/settings.local.json
 CLAUDE.local.md
