@@ -27,7 +27,8 @@ If no session name is provided, an interactive picker will be shown
 
 Pass additional flags to Claude Code after '--':
   clotilde resume my-session -- --debug api,hooks`,
-		Args:              maxPositionalArgs(1),
+		Args:               maxPositionalArgs(1),
+		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 		ValidArgsFunction: sessionNameCompletion,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Find clotilde root
@@ -39,13 +40,19 @@ Pass additional flags to Claude Code after '--':
 			// Create store
 			store := session.NewFileStore(clotildeRoot)
 
+			args, earlyAdditionalArgs := splitArgs(cmd, args)
+
 			// Determine session name
 			var name string
 			if len(args) == 0 {
-				// No session name provided - show picker if in TTY
+				// No session name — show picker in TTY or list in non-interactive mode.
 				isTTY := isatty.IsTerminal(os.Stdout.Fd())
 				if !isTTY {
-					return fmt.Errorf("session name required in non-interactive mode")
+					sessions, listErr := store.List()
+					if listErr != nil {
+						return fmt.Errorf("failed to list sessions: %w", listErr)
+					}
+					return showStaticTable(cmd, sessions, store)
 				}
 
 				// Load all sessions
@@ -77,14 +84,27 @@ Pass additional flags to Claude Code after '--':
 				name = selected.Name
 			} else {
 				name = args[0]
+				if looksLikeUUID(name) {
+					resolved, resolveErr := findSessionByUUID(store, name)
+					if resolveErr != nil {
+						// Not in current store — try to find and adopt the transcript.
+						adoptedName, adoptedRoot, adoptErr := tryAdoptByUUID(name)
+						if adoptErr != nil {
+							return fmt.Errorf("no session found with UUID %s", name)
+						}
+						_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Auto-adopted session '%s'\n", adoptedName)
+						clotildeRoot = adoptedRoot
+						store = session.NewFileStore(adoptedRoot)
+						name = adoptedName
+					} else {
+						name = resolved
+					}
+				}
 			}
 
-			// Extract additional args after '--'
-			var additionalArgs []string
-			argsLenAtDash := cmd.Flags().ArgsLenAtDash()
-			if argsLenAtDash > 0 && len(args) > argsLenAtDash {
-				additionalArgs = args[argsLenAtDash:]
-			}
+			// Merge flags that were collected before name parsing with any remaining
+			// additional args (nothing left after the dash split above).
+			additionalArgs := earlyAdditionalArgs
 
 			// Resolve shorthand flags (resume doesn't create sessions, pass to claude CLI)
 			permMode, err := resolvePermissionMode(cmd)

@@ -39,10 +39,10 @@ func Start(clotildeRoot string, sess *session.Session, settingsFile string, addi
 	}
 
 	if sess.Metadata.IsIncognito {
-		return invokeWithCleanup(clotildeRoot, sess, args, env)
+		return invokeWithCleanup(clotildeRoot, sess, args, env, "")
 	}
 
-	err := invokeInteractive(args, env)
+	err := invokeInteractive(args, env, "")
 	cleanupEmptySession(clotildeRoot, sess)
 	return err
 }
@@ -58,10 +58,10 @@ func Resume(clotildeRoot string, sess *session.Session, settingsFile string, add
 	}
 
 	if sess.Metadata.IsIncognito {
-		return invokeWithCleanup(clotildeRoot, sess, args, env)
+		return invokeWithCleanup(clotildeRoot, sess, args, env, sess.Metadata.WorkDir)
 	}
 
-	return invokeInteractive(args, env)
+	return invokeInteractive(args, env, sess.Metadata.WorkDir)
 }
 
 // Fork invokes claude CLI to fork an existing session.
@@ -77,10 +77,10 @@ func Fork(clotildeRoot string, parentSess *session.Session, forkName string, set
 	}
 
 	if forkSession.Metadata.IsIncognito {
-		return invokeWithCleanup(clotildeRoot, forkSession, args, env)
+		return invokeWithCleanup(clotildeRoot, forkSession, args, env, "")
 	}
 
-	err := invokeInteractive(args, env)
+	err := invokeInteractive(args, env, "")
 	cleanupEmptySession(clotildeRoot, forkSession)
 	return err
 }
@@ -108,7 +108,8 @@ func displayCommand(claudeBin string, args []string, env map[string]string) {
 
 // invokeInteractive executes the claude CLI command interactively.
 // Stdin, stdout, and stderr are connected to the current process.
-func invokeInteractive(args []string, env map[string]string) error {
+// workDir, if non-empty, sets the working directory for the subprocess.
+func invokeInteractive(args []string, env map[string]string, workDir string) error {
 	claudeBin := ClaudeBinaryPathFunc()
 
 	// Display the command being executed
@@ -121,6 +122,11 @@ func invokeInteractive(args []string, env map[string]string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
+	// Restore working directory if stored (empty = inherit from parent process)
+	if workDir != "" {
+		cmd.Dir = workDir
+	}
+
 	// Set environment variables
 	cmd.Env = os.Environ()
 	for key, value := range env {
@@ -132,7 +138,7 @@ func invokeInteractive(args []string, env map[string]string) error {
 
 // invokeWithCleanup runs claude and cleans up incognito session on exit.
 // Uses defer to ensure cleanup runs even on panic or interrupt (Ctrl+C).
-func invokeWithCleanup(clotildeRoot string, sess *session.Session, args []string, env map[string]string) error {
+func invokeWithCleanup(clotildeRoot string, sess *session.Session, args []string, env map[string]string, workDir string) error {
 	// Setup cleanup to run after claude exits (even on panic/Ctrl+C)
 	defer func() {
 		deleted, err := cleanupIncognitoSession(clotildeRoot, sess)
@@ -164,7 +170,7 @@ func invokeWithCleanup(clotildeRoot string, sess *session.Session, args []string
 	}()
 
 	// Run claude (blocks until exit)
-	return invokeInteractive(args, env)
+	return invokeInteractive(args, env, workDir)
 }
 
 // cleanupIncognitoSession deletes session folder and Claude data.

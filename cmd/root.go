@@ -3,7 +3,9 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
@@ -26,10 +28,15 @@ var rootCmd = &cobra.Command{
 
 // runDashboard shows the interactive dashboard when no subcommand is provided
 func runDashboard(cmd *cobra.Command, args []string) {
+	// Non-interactive (piped) invocation with no subcommand: this is claude's
+	// "pipe a prompt" mode (e.g. `echo "query" | claude`). Forward to real claude.
+	if !isatty.IsTerminal(os.Stdin.Fd()) {
+		os.Exit(ForwardToClaude(os.Args[1:]))
+	}
+
 	// Check if in TTY (interactive terminal)
 	isTTY := isatty.IsTerminal(os.Stdout.Fd())
 	if !isTTY {
-		// Non-interactive mode: show help
 		_ = cmd.Help()
 		return
 	}
@@ -317,6 +324,7 @@ func registerSubcommands(root *cobra.Command) {
 	root.AddCommand(newForkCmd())
 	root.AddCommand(deleteCmd)
 	root.AddCommand(newExportCmd())
+	root.AddCommand(newAdoptCmd())
 	root.AddCommand(hookCmd)
 	root.AddCommand(versionCmd)
 	root.AddCommand(newCompletionCmd())
@@ -341,9 +349,40 @@ func IsVerbose() bool {
 }
 
 func Execute() {
+	// Suppress cobra's own error printing so we can handle passthrough ourselves.
+	rootCmd.SilenceErrors = true
+
 	if err := rootCmd.Execute(); err != nil {
+		// Unknown subcommand: forward transparently to the real claude binary.
+		// This handles internal Claude Code commands (e.g. "claude exec ...") that
+		// the shell alias routes through clotilde but that clotilde doesn't own.
+		if strings.HasPrefix(err.Error(), "unknown command") {
+			os.Exit(ForwardToClaude(os.Args[1:]))
+		}
+		_, _ = fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
+}
+
+// ForwardToClaude runs the real claude binary (bypassing the shell function) with
+// the given args, inheriting stdin/stdout/stderr. Returns the exit code.
+func ForwardToClaude(args []string) int {
+	claudePath, err := exec.LookPath("claude")
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "clotilde: cannot find claude binary: %v\n", err)
+		return 1
+	}
+	cmd := exec.Command(claudePath, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if runErr := cmd.Run(); runErr != nil {
+		if cmd.ProcessState != nil {
+			return cmd.ProcessState.ExitCode()
+		}
+		return 1
+	}
+	return 0
 }
 
 // resumeSession resumes a session (extracted from resume command)
@@ -441,6 +480,9 @@ func forkFromDashboard(clotildeRoot string, parent *session.Session, sessions []
 	fork.Metadata.IsForkedSession = true
 	fork.Metadata.ParentSession = parent.Name
 	fork.Metadata.Context = parent.Metadata.Context
+	if wd, err := os.Getwd(); err == nil {
+		fork.Metadata.WorkDir = wd
+	}
 
 	if err := store.Create(fork); err != nil {
 		return fmt.Errorf("failed to create fork: %w", err)

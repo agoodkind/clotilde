@@ -7,7 +7,14 @@ import (
 
 	"github.com/fgrehm/clotilde/internal/claude"
 	"github.com/fgrehm/clotilde/internal/session"
+	"github.com/google/uuid"
 )
+
+// looksLikeUUID returns true if s is a valid UUID.
+func looksLikeUUID(s string) bool {
+	_, err := uuid.Parse(s)
+	return err == nil
+}
 
 // allTranscriptPaths returns paths for all transcripts associated with a session,
 // in chronological order: previous UUIDs first (oldest to newest), then the current one.
