@@ -26,6 +26,8 @@ var clotildeSubcommands = map[string]bool{
 	"list":       true,
 	"ls":         true,
 	"inspect":    true,
+	"rename":     true,
+	"mv":         true,
 	"delete":     true,
 	"export":     true,
 	"adopt":      true,

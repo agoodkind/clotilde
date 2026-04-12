@@ -6,8 +6,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/fgrehm/clotilde/internal/claude"
-	"github.com/fgrehm/clotilde/internal/config"
-	"github.com/fgrehm/clotilde/internal/session"
 	"github.com/fgrehm/clotilde/internal/ui"
 	"github.com/fgrehm/clotilde/internal/util"
 )
@@ -61,12 +59,11 @@ process crashes or is killed (SIGKILL), the session may persist. Use
 			if len(args) > 0 {
 				name = args[0]
 			} else {
-				// Generate a unique random name
-				clotildeRoot, err := config.FindOrCreateClotildeRoot()
+				// Generate a unique random name using global store
+				store, err := globalStore()
 				if err != nil {
 					return fmt.Errorf("failed to initialize session storage: %w", err)
 				}
-				store := session.NewFileStore(clotildeRoot)
 				sessions, err := store.List()
 				if err != nil {
 					return fmt.Errorf("failed to list sessions: %w", err)

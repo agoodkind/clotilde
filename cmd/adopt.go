@@ -103,7 +103,7 @@ func runAdopt(cmd *cobra.Command, _ []string) error {
 
 	adopted := 0
 	for _, t := range toAdopt {
-		name, root, adoptErr := adoptOne(t)
+		name, adoptErr := adoptOne(t)
 		if adoptErr != nil {
 			id := t.SessionID
 			if len(id) > 8 {
@@ -114,7 +114,7 @@ func runAdopt(cmd *cobra.Command, _ []string) error {
 		}
 		adopted++
 		knownUUIDs[t.SessionID] = true
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  adopted '%s'  (%s)\n", name, root)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  adopted '%s'\n", name)
 	}
 
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\nAdopted %d of %d session(s).\n", adopted, len(toAdopt))
@@ -122,11 +122,26 @@ func runAdopt(cmd *cobra.Command, _ []string) error {
 }
 
 // adoptScanAndIndex scans projectsDir for all transcripts and builds the set of
-// UUIDs already tracked by reachable clotilde stores.
+// UUIDs already tracked in the global store.
 func adoptScanAndIndex(projectsDir string) ([]*adoptTranscriptInfo, map[string]bool, error) {
 	knownUUIDs := make(map[string]bool)
-	loadedRoots := make(map[string]bool)
 	var transcripts []*adoptTranscriptInfo
+
+	// Load all known UUIDs from the global store up-front.
+	globalSt, err := session.NewGlobalFileStore()
+	if err == nil {
+		sessions, listErr := globalSt.List()
+		if listErr == nil {
+			for _, s := range sessions {
+				knownUUIDs[s.Metadata.SessionID] = true
+				for _, prev := range s.Metadata.PreviousSessionIDs {
+					if prev != "" {
+						knownUUIDs[prev] = true
+					}
+				}
+			}
+		}
+	}
 
 	entries, err := os.ReadDir(projectsDir)
 	if err != nil {
@@ -159,26 +174,6 @@ func adoptScanAndIndex(projectsDir string) ([]*adoptTranscriptInfo, map[string]b
 				continue
 			}
 			transcripts = append(transcripts, info)
-
-			// Load known UUIDs from the clotilde root for this transcript's CWD.
-			if info.CWD != "" {
-				root, rootErr := config.ClotildeRootFromPath(info.CWD)
-				if rootErr == nil && !loadedRoots[root] {
-					loadedRoots[root] = true
-					store := session.NewFileStore(root)
-					sessions, listErr := store.List()
-					if listErr == nil {
-						for _, s := range sessions {
-							knownUUIDs[s.Metadata.SessionID] = true
-							for _, prev := range s.Metadata.PreviousSessionIDs {
-								if prev != "" {
-									knownUUIDs[prev] = true
-								}
-							}
-						}
-					}
-				}
-			}
 		}
 	}
 
@@ -251,21 +246,23 @@ func adoptExtractInfo(path, projectDirName string) (*adoptTranscriptInfo, error)
 	return info, nil
 }
 
-// adoptOne registers a single untracked transcript as a clotilde session.
-// Returns the session name and clotilde root it was registered under.
-func adoptOne(t *adoptTranscriptInfo) (string, string, error) {
-	clotildeRoot, err := adoptResolveRoot(t)
+// adoptOne registers a single untracked transcript as a clotilde session
+// in the global store. Returns the session name.
+func adoptOne(t *adoptTranscriptInfo) (string, error) {
+	store, err := session.NewGlobalFileStore()
 	if err != nil {
-		return "", "", err
+		return "", fmt.Errorf("opening global store: %w", err)
 	}
 
-	store := session.NewFileStore(clotildeRoot)
 	name := adoptChooseName(t, store)
 
 	created := t.LastAccessed
 	if !t.Created.IsZero() {
 		created = t.Created
 	}
+
+	// Determine workspace root from CWD
+	workspaceRoot := config.ProjectRootFromPath(t.CWD)
 
 	sess := &session.Session{
 		Name: name,
@@ -274,40 +271,17 @@ func adoptOne(t *adoptTranscriptInfo) (string, string, error) {
 			SessionID:      t.SessionID,
 			TranscriptPath: t.TranscriptPath,
 			WorkDir:        t.CWD,
+			WorkspaceRoot:  workspaceRoot,
 			Created:        created,
 			LastAccessed:   t.LastAccessed,
 		},
 	}
 
 	if err := store.Create(sess); err != nil {
-		return "", "", fmt.Errorf("creating session: %w", err)
+		return "", fmt.Errorf("creating session: %w", err)
 	}
 
-	return name, clotildeRoot, nil
-}
-
-// adoptResolveRoot determines the clotilde root for a transcript.
-// Walks up from the transcript CWD looking for an existing .claude/clotilde.
-// If none found, creates one at the CWD.
-func adoptResolveRoot(t *adoptTranscriptInfo) (string, error) {
-	cwd := t.CWD
-	if cwd == "" {
-		home, err := util.HomeDir()
-		if err != nil {
-			return "", fmt.Errorf("no cwd and cannot determine home: %w", err)
-		}
-		cwd = home
-	}
-
-	if root, err := config.ClotildeRootFromPath(cwd); err == nil {
-		return root, nil
-	}
-
-	// No existing root — create one at the cwd.
-	if err := config.EnsureSessionsDir(cwd); err != nil {
-		return "", fmt.Errorf("cannot create .claude/clotilde at %s: %w", cwd, err)
-	}
-	return filepath.Join(cwd, config.ClotildeDir), nil
+	return name, nil
 }
 
 // adoptChooseName returns a unique, valid session name for the transcript.
@@ -397,17 +371,17 @@ func adoptDeriveFromProjectDir(dirName string) string {
 }
 
 // tryAdoptByUUID scans all transcripts for one whose sessionId matches targetUUID,
-// adopts it, and returns the session name and clotilde root it was registered under.
-func tryAdoptByUUID(targetUUID string) (string, string, error) {
+// adopts it into the global store, and returns the session name.
+func tryAdoptByUUID(targetUUID string) (string, error) {
 	home, err := util.HomeDir()
 	if err != nil {
-		return "", "", fmt.Errorf("cannot determine home directory: %w", err)
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
 	}
 
 	projectsDir := filepath.Join(home, ".claude", "projects")
 	entries, err := os.ReadDir(projectsDir)
 	if err != nil {
-		return "", "", fmt.Errorf("reading projects dir: %w", err)
+		return "", fmt.Errorf("reading projects dir: %w", err)
 	}
 
 	for _, entry := range entries {
@@ -435,14 +409,14 @@ func tryAdoptByUUID(targetUUID string) (string, string, error) {
 				continue
 			}
 
-			// Found the matching transcript; adopt it.
-			name, root, adoptErr := adoptOne(info)
+			// Found the matching transcript; adopt it into global store.
+			name, adoptErr := adoptOne(info)
 			if adoptErr != nil {
-				return "", "", fmt.Errorf("auto-adopt: %w", adoptErr)
+				return "", fmt.Errorf("auto-adopt: %w", adoptErr)
 			}
-			return name, root, nil
+			return name, nil
 		}
 	}
 
-	return "", "", fmt.Errorf("no transcript found for UUID %s", targetUUID)
+	return "", fmt.Errorf("no transcript found for UUID %s", targetUUID)
 }

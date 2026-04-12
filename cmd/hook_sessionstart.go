@@ -9,7 +9,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/fgrehm/clotilde/internal/config"
 	"github.com/fgrehm/clotilde/internal/notify"
 	"github.com/fgrehm/clotilde/internal/session"
 )
@@ -52,35 +51,33 @@ Handles fork registration, session ID updates, and context injection.`,
 			return nil
 		}
 
-		// Find clotilde root
-		clotildeRoot, err := config.FindClotildeRoot()
+		// Use global session store — hooks run regardless of working directory.
+		store, err := session.NewGlobalFileStore()
 		if err != nil {
-			// Not in a clotilde project, silently exit
+			// Can't open store; silently exit so we don't break Claude.
 			return nil
 		}
 
 		// Mark as executed to prevent double-run from global + project hooks
 		markHookExecuted(marker)
 
-		store := session.NewFileStore(clotildeRoot)
-
 		// Dispatch based on source field
 		switch hookData.Source {
 		case "startup", "resume":
-			return handleStartupOrResume(clotildeRoot, hookData, store)
+			return handleStartupOrResume(hookData, store)
 		case "compact":
-			return handleCompact(clotildeRoot, hookData, store)
+			return handleCompact(hookData, store)
 		case "clear":
-			return handleClear(clotildeRoot, hookData, store)
+			return handleClear(hookData, store)
 		default:
 			// Fallback to startup for backward compatibility or unknown sources
-			return handleStartupOrResume(clotildeRoot, hookData, store)
+			return handleStartupOrResume(hookData, store)
 		}
 	},
 }
 
 // handleStartupOrResume handles new session startup and session resumption.
-func handleStartupOrResume(clotildeRoot string, hookData hookInput, store session.Store) error {
+func handleStartupOrResume(hookData hookInput, store session.Store) error {
 	sessionName := os.Getenv("CLOTILDE_SESSION_NAME")
 
 	if sessionName != "" {
@@ -95,7 +92,7 @@ func handleStartupOrResume(clotildeRoot string, hookData hookInput, store sessio
 		}
 	}
 
-	outputContexts(clotildeRoot, store, sessionName)
+	outputContexts(store, sessionName)
 
 	return nil
 }
@@ -103,18 +100,15 @@ func handleStartupOrResume(clotildeRoot string, hookData hookInput, store sessio
 // handleCompact handles session compaction, updating session ID and preserving history.
 // NOTE: Currently Claude Code does NOT create a new UUID for /compact (only /clear does).
 // This handler is defensive programming in case Claude Code's behavior changes in the future.
-func handleCompact(clotildeRoot string, hookData hookInput, store session.Store) error {
+func handleCompact(hookData hookInput, store session.Store) error {
 	// Resolve session name using three-level fallback
 	sessionName, err := resolveSessionName(hookData, store, true)
 	if err != nil {
-		// If we can't resolve the session name, silently continue
-		// This might be a non-clotilde session or first compact without env
 		_, _ = fmt.Fprintf(os.Stderr, "Warning: unable to resolve session name for compact: %v\n", err)
 		return nil
 	}
 
 	if sessionName == "" {
-		// No session name available, nothing to update
 		return nil
 	}
 
@@ -139,16 +133,15 @@ func handleCompact(clotildeRoot string, hookData hookInput, store session.Store)
 		_, _ = fmt.Fprintf(os.Stderr, "Warning: failed to write session name to env: %v\n", err)
 	}
 
-	// Output session name, context, and global context
-	outputContexts(clotildeRoot, store, sessionName)
+	outputContexts(store, sessionName)
 
 	return nil
 }
 
 // handleClear handles session clear - identical to compact.
 // Unlike /compact, /clear DOES create a new session UUID in Claude Code.
-func handleClear(clotildeRoot string, hookData hookInput, store session.Store) error {
-	return handleCompact(clotildeRoot, hookData, store)
+func handleClear(hookData hookInput, store session.Store) error {
+	return handleCompact(hookData, store)
 }
 
 // saveTranscriptPath saves the transcript path and updates lastAccessed in a single write.
@@ -237,7 +230,7 @@ func appendToEnvFile(key, value string) error {
 }
 
 // outputContexts loads and outputs session name and session context.
-func outputContexts(_ string, store session.Store, sessionName string) {
+func outputContexts(store session.Store, sessionName string) {
 	// Output session name
 	if sessionName != "" {
 		fmt.Printf("\nSession name: %s\n", sessionName)

@@ -3,12 +3,35 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 
 	"github.com/fgrehm/clotilde/internal/claude"
+	"github.com/fgrehm/clotilde/internal/config"
 	"github.com/fgrehm/clotilde/internal/session"
 	"github.com/google/uuid"
 )
+
+// globalStore returns the global session store, or panics on error.
+// Used by commands that always need the global store and treat an error as fatal.
+func globalStore() (*session.FileStore, error) {
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		return nil, fmt.Errorf("failed to open session store: %w", err)
+	}
+	return store, nil
+}
+
+// projectClotildeRootForSession returns the project-level .claude/clotilde path
+// for a session. Used when computing transcript/agent-log paths (which are
+// stored per-project in ~/.claude/projects/<encoded-project-path>/).
+func projectClotildeRootForSession(sess *session.Session) string {
+	root := sess.Metadata.WorkspaceRoot
+	if root == "" {
+		root, _ = config.FindProjectRoot()
+	}
+	return filepath.Join(root, config.ClotildeDir)
+}
 
 // looksLikeUUID returns true if s is a valid UUID.
 func looksLikeUUID(s string) bool {

@@ -48,19 +48,17 @@ Pass additional flags to Claude Code after '--':
 
 				// Check if session already exists - offer to resume instead
 				// (only for explicitly provided names)
-				if clotildeRoot, err := config.FindOrCreateClotildeRoot(); err == nil {
-					store := session.NewFileStore(clotildeRoot)
+				if store, err := globalStore(); err == nil {
 					if store.Exists(name) {
-						return handleExistingSession(cmd, name, clotildeRoot, store, additionalArgs)
+						return handleExistingSession(cmd, name, store, additionalArgs)
 					}
 				}
 			} else {
-				// Generate a unique random name
-				clotildeRoot, err := config.FindOrCreateClotildeRoot()
+				// Generate a unique random name using global store
+				store, err := globalStore()
 				if err != nil {
 					return fmt.Errorf("failed to initialize session storage: %w", err)
 				}
-				store := session.NewFileStore(clotildeRoot)
 				sessions, err := store.List()
 				if err != nil {
 					return fmt.Errorf("failed to list sessions: %w", err)
@@ -144,7 +142,7 @@ Pass additional flags to Claude Code after '--':
 
 // handleExistingSession prompts the user to resume an existing session instead of
 // creating a duplicate. In non-TTY mode, returns an error suggesting the resume command.
-func handleExistingSession(cmd *cobra.Command, name, clotildeRoot string, store *session.FileStore, additionalArgs []string) error {
+func handleExistingSession(cmd *cobra.Command, name string, store *session.FileStore, additionalArgs []string) error {
 	if !isatty.IsTerminal(os.Stdout.Fd()) {
 		return fmt.Errorf("session '%s' already exists, use 'clotilde resume %s' to resume it", name, name)
 	}
@@ -193,7 +191,8 @@ func handleExistingSession(cmd *cobra.Command, name, clotildeRoot string, store 
 		return fmt.Errorf("failed to update session: %w", err)
 	}
 
-	sessionDir := config.GetSessionDir(clotildeRoot, name)
+	globalRoot := config.GlobalDataDir()
+	sessionDir := config.GetSessionDir(globalRoot, name)
 
 	var settingsFile string
 	if util.FileExists(filepath.Join(sessionDir, "settings.json")) {
@@ -201,5 +200,5 @@ func handleExistingSession(cmd *cobra.Command, name, clotildeRoot string, store 
 	}
 
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\nResuming session '%s' (%s)\n\n", sess.Name, sess.Metadata.SessionID)
-	return claude.Resume(clotildeRoot, sess, settingsFile, additionalArgs)
+	return claude.Resume(globalRoot, sess, settingsFile, additionalArgs)
 }

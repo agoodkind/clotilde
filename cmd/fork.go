@@ -39,13 +39,12 @@ Pass additional flags to Claude Code after '--':
 			// Get incognito flag early to determine if we need a name
 			incognito, _ := cmd.Flags().GetBool("incognito")
 
-			// Find or create clotilde root
-			clotildeRoot, err := config.FindOrCreateClotildeRoot()
+			// Use global session store
+			store, err := globalStore()
 			if err != nil {
-				return fmt.Errorf("failed to initialize session storage: %w", err)
+				return err
 			}
-
-			store := session.NewFileStore(clotildeRoot)
+			clotildeRoot := config.GlobalDataDir()
 
 			var forkName string
 			if len(args) >= 2 {
@@ -142,6 +141,12 @@ Pass additional flags to Claude Code after '--':
 				fork.Metadata.WorkDir = wd
 			}
 
+			// Inherit workspace root from parent session
+			fork.Metadata.WorkspaceRoot = parentSess.Metadata.WorkspaceRoot
+			if fork.Metadata.WorkspaceRoot == "" {
+				fork.Metadata.WorkspaceRoot, _ = config.FindProjectRoot()
+			}
+
 			if err := store.Create(fork); err != nil {
 				return fmt.Errorf("failed to create fork: %w", err)
 			}
@@ -164,7 +169,8 @@ Pass additional flags to Claude Code after '--':
 					if err := json.Unmarshal(parentSettingsData, &parsedSettings); err == nil {
 						if parsedSettings.OutputStyle != "" && strings.HasPrefix(parsedSettings.OutputStyle, "clotilde/") {
 							parentStyleName := strings.TrimPrefix(parsedSettings.OutputStyle, "clotilde/")
-							parentStylePath := outputstyle.GetCustomStylePath(clotildeRoot, parentStyleName)
+							outputStyleRoot := config.GlobalOutputStyleRoot()
+							parentStylePath := outputstyle.GetCustomStylePath(outputStyleRoot, parentStyleName)
 							if util.FileExists(parentStylePath) {
 								styleContent, err := os.ReadFile(parentStylePath)
 								if err == nil {
@@ -174,7 +180,7 @@ Pass additional flags to Claude Code after '--':
 										content = strings.TrimSpace(parts[2])
 									}
 
-									if err := outputstyle.CreateCustomStyleFile(clotildeRoot, forkName, content); err != nil {
+									if err := outputstyle.CreateCustomStyleFile(outputStyleRoot, forkName, content); err != nil {
 										return fmt.Errorf("failed to copy custom output style: %w", err)
 									}
 

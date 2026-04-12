@@ -171,6 +171,35 @@ func FindOrCreateClotildeRoot() (string, error) {
 	return clotildeRoot, nil
 }
 
+// GlobalDataDir returns the global data directory for clotilde.
+// Respects $XDG_DATA_HOME if set, otherwise uses ~/.local/share/clotilde.
+func GlobalDataDir() string {
+	dataHome := os.Getenv("XDG_DATA_HOME")
+	if dataHome == "" {
+		home, _ := os.UserHomeDir()
+		dataHome = filepath.Join(home, ".local", "share")
+	}
+	return filepath.Join(dataHome, "clotilde")
+}
+
+// GlobalSessionsDir returns the path to the global sessions directory.
+func GlobalSessionsDir() string {
+	return filepath.Join(GlobalDataDir(), SessionsDir)
+}
+
+// EnsureGlobalSessionsDir creates the global sessions directory if it doesn't exist.
+func EnsureGlobalSessionsDir() error {
+	return os.MkdirAll(GlobalSessionsDir(), 0o755)
+}
+
+// GlobalOutputStyleRoot returns the "clotilde root" used when computing output style
+// paths that live in ~/.claude/output-styles/. The extra path component ensures
+// filepath.Join(root, "..", "output-styles") resolves to ~/.claude/output-styles/.
+func GlobalOutputStyleRoot() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".claude", "clotilde")
+}
+
 // IsInitialized checks if clotilde is initialized in the current directory tree.
 func IsInitialized() bool {
 	_, err := FindClotildeRoot()

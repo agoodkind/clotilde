@@ -81,7 +81,8 @@ type SessionCreateParams struct {
 
 // SessionCreateResult holds the created session and file paths.
 type SessionCreateResult struct {
-	ClotildeRoot string
+	ClotildeRoot string // global data dir (~/.local/share/clotilde)
+	ProjectRoot  string // workspace root (for transcript path computation)
 	Session      *session.Session
 	SettingsFile string
 }
@@ -89,19 +90,23 @@ type SessionCreateResult struct {
 // createSession handles common session creation logic.
 // Returns the session ready for claude.Start() invocation.
 func createSession(params SessionCreateParams) (*SessionCreateResult, error) {
-	// Find or create clotilde root
-	clotildeRoot, err := config.FindOrCreateClotildeRoot()
+	// Determine workspace (project) root — used for profiles, output styles, transcript paths.
+	projectRoot, err := config.FindProjectRoot()
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine project root: %w", err)
+	}
+
+	// Use global session storage.
+	store, err := session.NewGlobalFileStore()
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize session storage: %w", err)
 	}
+	clotildeRoot := config.GlobalDataDir()
 
 	// Validate session name
 	if err := session.ValidateName(params.Name); err != nil {
 		return nil, err
 	}
-
-	// Create store
-	store := session.NewFileStore(clotildeRoot)
 
 	// Check if session already exists
 	if store.Exists(params.Name) {
@@ -129,14 +134,19 @@ func createSession(params SessionCreateParams) (*SessionCreateResult, error) {
 		sess.Metadata.WorkDir = wd
 	}
 
+	// Record which workspace this session belongs to (for list filtering)
+	sess.Metadata.WorkspaceRoot = projectRoot
+
 	if err := store.Create(sess); err != nil {
 		return nil, fmt.Errorf("failed to create session: %w", err)
 	}
 
 	sessionDir := config.GetSessionDir(clotildeRoot, params.Name)
 
-	// Load merged profiles (global + project, project takes precedence)
-	profiles, err := config.MergedProfiles(clotildeRoot)
+	// Load merged profiles (global + project-level, project takes precedence).
+	// Pass the project's clotilde root so project-local config.json is picked up.
+	projectClotildeRoot := filepath.Join(projectRoot, config.ClotildeDir)
+	profiles, err := config.MergedProfiles(projectClotildeRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
@@ -185,11 +195,14 @@ func createSession(params SessionCreateParams) (*SessionCreateResult, error) {
 		settings.EffortLevel = params.EffortLevel
 	}
 
+	// Output styles live in ~/.claude/output-styles/clotilde/ so Claude Code can load them.
+	outputStyleRoot := config.GlobalOutputStyleRoot()
+
 	// Handle output style (CLI flags override profile)
 	var hasCustomStyle bool
 	if params.OutputStyleFile != "" {
 		// Create custom style from file (validates/injects frontmatter)
-		if err := outputstyle.CreateCustomStyleFileFromFile(clotildeRoot, params.Name, params.OutputStyleFile); err != nil {
+		if err := outputstyle.CreateCustomStyleFileFromFile(outputStyleRoot, params.Name, params.OutputStyleFile); err != nil {
 			return nil, fmt.Errorf("failed to create custom style: %w", err)
 		}
 		settings.OutputStyle = outputstyle.GetCustomStyleReference(params.Name)
@@ -200,13 +213,13 @@ func createSession(params SessionCreateParams) (*SessionCreateResult, error) {
 			// Use built-in style directly
 			settings.OutputStyle = params.OutputStyle
 			hasCustomStyle = false
-		case outputstyle.StyleExists(clotildeRoot, params.OutputStyle):
+		case outputstyle.StyleExists(outputStyleRoot, params.OutputStyle):
 			// Reference existing style by name (don't create new file)
 			settings.OutputStyle = params.OutputStyle
 			hasCustomStyle = false
 		default:
 			// Treat as custom inline content - create new session-specific style
-			if err := outputstyle.CreateCustomStyleFile(clotildeRoot, params.Name, params.OutputStyle); err != nil {
+			if err := outputstyle.CreateCustomStyleFile(outputStyleRoot, params.Name, params.OutputStyle); err != nil {
 				return nil, fmt.Errorf("failed to create custom style: %w", err)
 			}
 			settings.OutputStyle = outputstyle.GetCustomStyleReference(params.Name)
@@ -243,6 +256,7 @@ func createSession(params SessionCreateParams) (*SessionCreateResult, error) {
 	// Build result
 	result := &SessionCreateResult{
 		ClotildeRoot: clotildeRoot,
+		ProjectRoot:  projectRoot,
 		Session:      sess,
 		SettingsFile: filepath.Join(sessionDir, "settings.json"),
 	}
