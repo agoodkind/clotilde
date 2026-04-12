@@ -1,4 +1,7 @@
-.PHONY: help build test test-watch install clean lint fmt coverage vendor setup-hooks deadcode govulncheck audit
+.PHONY: help build test test-watch install clean lint fmt coverage vendor setup-hooks deadcode govulncheck audit sign notarize install-launch-agent
+
+# Optional local overrides (signing creds, never committed — copy config.mk.example)
+-include config.mk
 
 # Build variables
 BASE_VERSION := $(shell cat VERSION 2>/dev/null || echo "0.0.0")
@@ -98,3 +101,65 @@ vendor: ## Update vendored dependencies
 	@go mod tidy
 	@go mod vendor
 	@echo "✓ Dependencies vendored"
+
+ifdef CERT_ID
+sign: build ## Sign binary with Developer ID Application certificate
+	@echo "Signing dist/clotilde..."
+	@codesign -s "$(CERT_ID)" -f --options runtime --timestamp dist/clotilde
+	@echo "✓ Signed dist/clotilde"
+
+notarize: sign ## Sign and notarize binary for distribution (requires NOTARY_PROFILE in config.mk)
+	@echo "Creating notarization zip..."
+	@ditto -c -k --keepParent dist/clotilde dist/clotilde-notarize.zip
+	@echo "Submitting for notarization (waiting)..."
+	@xcrun notarytool submit dist/clotilde-notarize.zip \
+		--keychain-profile "$(NOTARY_PROFILE)" \
+		--wait
+	@rm dist/clotilde-notarize.zip
+	@echo "✓ Notarized dist/clotilde"
+else
+sign: build ## Sign binary (requires CERT_ID in config.mk)
+	@echo "⚠ CERT_ID not set in config.mk — skipping code signing"
+	@echo "  Copy config.mk.example to config.mk and fill in your Developer ID"
+
+notarize: sign ## Sign and notarize binary (requires config.mk)
+	@echo "⚠ CERT_ID not set in config.mk — skipping notarization"
+endif
+
+# LaunchAgent label and plist path (uses BUNDLE_ID from config.mk if set, else default)
+LAUNCH_AGENT_LABEL ?= io.goodkind.clotilde.daemon
+LAUNCH_AGENT_PLIST := $(HOME)/Library/LaunchAgents/$(LAUNCH_AGENT_LABEL).plist
+
+install-launch-agent: install ## Install clotilde daemon as a LaunchAgent (pre-warms daemon at login)
+	@echo "Installing LaunchAgent to $(LAUNCH_AGENT_PLIST)..."
+	@mkdir -p "$(HOME)/Library/LaunchAgents"
+	@printf '<?xml version="1.0" encoding="UTF-8"?>\n\
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n\
+<plist version="1.0">\n\
+<dict>\n\
+\t<key>Label</key>\n\
+\t<string>$(LAUNCH_AGENT_LABEL)</string>\n\
+\t<key>ProgramArguments</key>\n\
+\t<array>\n\
+\t\t<string>$(HOME)/.local/bin/clotilde</string>\n\
+\t\t<string>daemon</string>\n\
+\t</array>\n\
+\t<key>RunAtLoad</key>\n\
+\t<true/>\n\
+\t<key>KeepAlive</key>\n\
+\t<false/>\n\
+\t<key>StandardOutPath</key>\n\
+\t<string>$(HOME)/.local/state/clotilde/daemon.log</string>\n\
+\t<key>StandardErrorPath</key>\n\
+\t<string>$(HOME)/.local/state/clotilde/daemon.log</string>\n\
+</dict>\n\
+</plist>\n' > "$(LAUNCH_AGENT_PLIST)"
+	@launchctl bootout gui/$$(id -u) "$(LAUNCH_AGENT_PLIST)" || true
+	@launchctl bootstrap gui/$$(id -u) "$(LAUNCH_AGENT_PLIST)"
+	@echo "✓ LaunchAgent registered: $(LAUNCH_AGENT_LABEL)"
+	@echo "  Daemon will start at login. To remove: make uninstall-launch-agent"
+
+uninstall-launch-agent: ## Remove the clotilde daemon LaunchAgent
+	@launchctl bootout gui/$$(id -u) "$(LAUNCH_AGENT_PLIST)" || true
+	@rm -f "$(LAUNCH_AGENT_PLIST)"
+	@echo "✓ LaunchAgent removed"
