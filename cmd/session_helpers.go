@@ -6,9 +6,13 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/mattn/go-isatty"
+	"github.com/spf13/cobra"
+
 	"github.com/fgrehm/clotilde/internal/claude"
 	"github.com/fgrehm/clotilde/internal/config"
 	"github.com/fgrehm/clotilde/internal/session"
+	"github.com/fgrehm/clotilde/internal/ui"
 	"github.com/google/uuid"
 )
 
@@ -62,6 +66,83 @@ func allTranscriptPaths(sess *session.Session, clotildeRoot, homeDir string) []s
 	}
 
 	return paths
+}
+
+// printResumeInstructions prints how to resume a session after claude exits.
+// Skipped for incognito sessions (they auto-delete).
+func printResumeInstructions(sess *session.Session) {
+	if sess.Metadata.IsIncognito {
+		return
+	}
+	fmt.Println()
+	fmt.Println("Resume this session with:")
+	fmt.Printf("  clotilde resume %s\n", sess.Name)
+	fmt.Printf("  claude --resume %s\n", sess.Metadata.SessionID)
+}
+
+// resolveSessionForResume finds a session by trying multiple lookup strategies:
+// 1. Exact name match
+// 2. UUID match (with auto-adopt)
+// 3. Display name match
+// 4. Substring search → if multiple results, show TUI picker
+// Returns nil session (no error) if nothing found — caller should forward to claude.
+func resolveSessionForResume(cmd *cobra.Command, store *session.FileStore, query string) (*session.Session, error) {
+	// 1. Exact name match
+	if sess, err := store.Get(query); err == nil {
+		return sess, nil
+	}
+
+	// 2. UUID match
+	if looksLikeUUID(query) {
+		resolved, err := findSessionByUUID(store, query)
+		if err == nil {
+			sess, _ := store.Get(resolved)
+			return sess, nil
+		}
+		// Try auto-adopt
+		adoptedName, adoptErr := tryAdoptByUUID(query)
+		if adoptErr == nil {
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Auto-adopted session '%s'\n", adoptedName)
+			sess, _ := store.Get(adoptedName)
+			return sess, nil
+		}
+	}
+
+	// 3. Display name match
+	if sess, err := store.GetByDisplayName(query); err == nil {
+		return sess, nil
+	}
+
+	// 4. Substring search
+	matches, err := store.Search(query)
+	if err != nil || len(matches) == 0 {
+		return nil, nil // not found — caller forwards to claude
+	}
+
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+
+	// Multiple matches — show TUI picker if interactive
+	if !isatty.IsTerminal(os.Stdout.Fd()) {
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Multiple sessions match '%s':\n", query)
+		for _, s := range matches {
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s (%s)\n", s.Name, s.Metadata.SessionID)
+		}
+		return nil, fmt.Errorf("ambiguous session name '%s' — specify the full name", query)
+	}
+
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Multiple sessions match '%s':\n\n", query)
+	sortSessionsByLastAccessed(matches)
+	picker := ui.NewPicker(matches, "Select session to resume").WithPreview()
+	selected, pickerErr := ui.RunPicker(picker)
+	if pickerErr != nil {
+		return nil, fmt.Errorf("picker failed: %w", pickerErr)
+	}
+	if selected == nil {
+		return nil, fmt.Errorf("cancelled")
+	}
+	return selected, nil
 }
 
 // resolveSessionName resolves the session name using a multi-level fallback strategy.

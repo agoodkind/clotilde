@@ -91,20 +91,18 @@ Pass additional flags to Claude Code after '--':
 				name = selected.Name
 			} else {
 				name = args[0]
-				if looksLikeUUID(name) {
-					resolved, resolveErr := findSessionByUUID(store, name)
-					if resolveErr != nil {
-						// Not in global store — try to find and adopt the transcript.
-						adoptedName, adoptErr := tryAdoptByUUID(name)
-						if adoptErr != nil {
-							return fmt.Errorf("no session found with UUID %s", name)
-						}
-						_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Auto-adopted session '%s'\n", adoptedName)
-						name = adoptedName
-					} else {
-						name = resolved
-					}
+
+				// Resolve session: exact name → UUID → display name → fuzzy search → forward to claude
+				sess, resolveErr := resolveSessionForResume(cmd, store, name)
+				if resolveErr != nil {
+					return resolveErr
 				}
+				if sess == nil {
+					// No match in clotilde — forward to claude directly
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Session '%s' not in clotilde, resuming via Claude...\n\n", name)
+					return claude.ResumeByName(name, nil)
+				}
+				name = sess.Name
 			}
 
 			// Merge flags that were collected before name parsing with any remaining
@@ -133,18 +131,10 @@ Pass additional flags to Claude Code after '--':
 				additionalArgs = collectEffortFlag(cmd, additionalArgs)
 			}
 
-			// Load session by name, falling back to display name lookup.
-			// If still not found, let Claude resolve the name directly
-			// (handles sessions started outside clotilde). Daemon wrapping
-			// in invokeInteractive still provides model isolation.
+			// Load session
 			sess, err := store.Get(name)
 			if err != nil {
-				sess, err = store.GetByDisplayName(name)
-				if err != nil {
-					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Session '%s' not in clotilde, resuming via Claude...\n\n", name)
-					return claude.ResumeByName(name, additionalArgs)
-				}
-				name = sess.Name
+				return fmt.Errorf("session '%s' not found", name)
 			}
 
 			// Update context if --context flag provided
@@ -168,10 +158,19 @@ Pass additional flags to Claude Code after '--':
 				settingsFile = settingsPath
 			}
 
+			// Auto add-dir if resuming from a different directory
+			if cwd, cwdErr := os.Getwd(); cwdErr == nil {
+				if sess.Metadata.WorkspaceRoot != "" && cwd != sess.Metadata.WorkspaceRoot {
+					additionalArgs = append(additionalArgs, "--add-dir", cwd)
+				}
+			}
+
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Resuming session '%s' (%s)\n\n", name, sess.Metadata.SessionID)
 
 			// Invoke claude
-			return claude.Resume(clotildeRoot, sess, settingsFile, additionalArgs)
+			err = claude.Resume(clotildeRoot, sess, settingsFile, additionalArgs)
+			printResumeInstructions(sess)
+			return err
 		},
 	}
 	cmd.Flags().String("model", "", "Claude model to use (haiku, sonnet, opus); opus defaults to 1M context")

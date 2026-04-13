@@ -112,7 +112,11 @@ Pass additional flags to Claude Code after '--':
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\nStarting Claude Code...")
 
 			// Invoke claude
-			return claude.Start(result.ClotildeRoot, result.Session, result.SettingsFile, additionalArgs)
+			err = claude.Start(result.ClotildeRoot, result.Session, result.SettingsFile, additionalArgs)
+			if store, storeErr := globalStore(); storeErr == nil && store.Exists(result.Session.Name) {
+				printResumeInstructions(result.Session)
+			}
+			return err
 		},
 	}
 	cmd.Flags().String("model", "", "Claude model to use (haiku, sonnet, opus); opus defaults to 1M context")
@@ -199,6 +203,15 @@ func handleExistingSession(cmd *cobra.Command, name string, store *session.FileS
 		settingsFile = filepath.Join(sessionDir, "settings.json")
 	}
 
+	// Auto add-dir if resuming from a different directory
+	if cwd, cwdErr := os.Getwd(); cwdErr == nil {
+		if sess.Metadata.WorkspaceRoot != "" && cwd != sess.Metadata.WorkspaceRoot {
+			additionalArgs = append(additionalArgs, "--add-dir", cwd)
+		}
+	}
+
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\nResuming session '%s' (%s)\n\n", sess.Name, sess.Metadata.SessionID)
-	return claude.Resume(globalRoot, sess, settingsFile, additionalArgs)
+	resumeErr := claude.Resume(globalRoot, sess, settingsFile, additionalArgs)
+	printResumeInstructions(sess)
+	return resumeErr
 }
