@@ -240,7 +240,9 @@ Pass additional flags to Claude Code after '--':
 			}
 
 			// Invoke claude with fork (pass fork session for cleanup handling)
-			return claude.Fork(clotildeRoot, parentSess, forkName, settingsFile, additionalArgs, fork)
+			err = claude.Fork(clotildeRoot, parentSess, forkName, settingsFile, additionalArgs, fork)
+			printResumeInstructions(fork)
+			return err
 		},
 	}
 	cmd.Flags().Bool("incognito", false, "Create fork as incognito session (auto-deletes on exit)")

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/fgrehm/clotilde/internal/config"
 	"github.com/fgrehm/clotilde/internal/util"
@@ -33,6 +34,10 @@ type Store interface {
 	// GetByDisplayName searches all sessions for one whose DisplayName matches.
 	// Returns nil if no match is found.
 	GetByDisplayName(displayName string) (*Session, error)
+
+	// Search returns sessions matching query against name, display name, UUID,
+	// and context (case-insensitive substring match).
+	Search(query string) ([]*Session, error)
 
 	// Create creates a new session folder structure with metadata
 	Create(session *Session) error
@@ -146,6 +151,26 @@ func (fs *FileStore) Get(name string) (*Session, error) {
 		Name:     name,
 		Metadata: metadata,
 	}, nil
+}
+
+// Search returns sessions matching query against name, display name, UUID,
+// and context (case-insensitive substring match).
+func (fs *FileStore) Search(query string) ([]*Session, error) {
+	sessions, err := fs.List()
+	if err != nil {
+		return nil, err
+	}
+	q := strings.ToLower(query)
+	var matches []*Session
+	for _, sess := range sessions {
+		if strings.Contains(strings.ToLower(sess.Name), q) ||
+			strings.Contains(strings.ToLower(sess.Metadata.DisplayName), q) ||
+			strings.Contains(strings.ToLower(sess.Metadata.SessionID), q) ||
+			strings.Contains(strings.ToLower(sess.Metadata.Context), q) {
+			matches = append(matches, sess)
+		}
+	}
+	return matches, nil
 }
 
 // GetByDisplayName searches all sessions for one whose DisplayName matches.

@@ -400,9 +400,19 @@ func resumeSession(sess *session.Session, _ session.Store) error {
 		settingsFile = settingsPath
 	}
 
+	// Auto add-dir if resuming from a different directory
+	var additionalArgs []string
+	if cwd, cwdErr := os.Getwd(); cwdErr == nil {
+		if sess.Metadata.WorkspaceRoot != "" && cwd != sess.Metadata.WorkspaceRoot {
+			additionalArgs = append(additionalArgs, "--add-dir", cwd)
+		}
+	}
+
 	fmt.Printf("Resuming session '%s' (%s)\n\n", sess.Name, sess.Metadata.SessionID)
 
-	return claude.Resume(globalRoot, sess, settingsFile, nil)
+	err := claude.Resume(globalRoot, sess, settingsFile, additionalArgs)
+	printResumeInstructions(sess)
+	return err
 }
 
 // deleteSession deletes a session (extracted from delete command)
