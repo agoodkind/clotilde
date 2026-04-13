@@ -114,6 +114,7 @@ Pass additional flags to Claude Code after '--':
 			// Invoke claude
 			err = claude.Start(result.ClotildeRoot, result.Session, result.SettingsFile, additionalArgs)
 			if store, storeErr := globalStore(); storeErr == nil && store.Exists(result.Session.Name) {
+				autoUpdateContext(store, result.Session)
 				printResumeInstructions(result.Session)
 			}
 			return err
