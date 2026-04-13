@@ -126,6 +126,7 @@ func handleDashboardAction(selectedAction string, sessions []*session.Session, s
 		}
 
 		picker := ui.NewPicker(sessions, "Select session to resume").WithPreview()
+		picker.PreviewFn = richPreviewFunc(store)
 		selected, err := ui.RunPicker(picker)
 		if err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Picker failed: %v\n", err)
@@ -172,6 +173,7 @@ func handleDashboardAction(selectedAction string, sessions []*session.Session, s
 		}
 
 		picker := ui.NewPicker(forkable, "Select session to fork").WithPreview()
+		picker.PreviewFn = richPreviewFunc(store)
 		parent, err := ui.RunPicker(picker)
 		if err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Picker failed: %v\n", err)

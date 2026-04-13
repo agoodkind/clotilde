@@ -135,6 +135,7 @@ func resolveSessionForResume(cmd *cobra.Command, store *session.FileStore, query
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Multiple sessions match '%s':\n\n", query)
 	sortSessionsByLastAccessed(matches)
 	picker := ui.NewPicker(matches, "Select session to resume").WithPreview()
+	picker.PreviewFn = richPreviewFunc(store)
 	selected, pickerErr := ui.RunPicker(picker)
 	if pickerErr != nil {
 		return nil, fmt.Errorf("picker failed: %w", pickerErr)

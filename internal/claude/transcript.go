@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -99,6 +100,86 @@ func forEachTailLine(transcriptPath string, tailSize int, fn func(line []byte)) 
 			return readErr
 		}
 	}
+}
+
+// RecentMessage holds a single user or assistant message extracted from a transcript.
+type RecentMessage struct {
+	Role string // "user" or "assistant"
+	Text string // truncated content
+}
+
+// ExtractRecentMessages reads the tail of a transcript and returns the last n
+// user/assistant messages with their text content truncated to maxLen chars.
+func ExtractRecentMessages(transcriptPath string, n, maxLen int) []RecentMessage {
+	type msgEntry struct {
+		Type    string `json:"type"`
+		Message struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"message"`
+	}
+
+	var all []RecentMessage
+	_ = forEachTailLine(transcriptPath, 256*1024, func(line []byte) {
+		var e msgEntry
+		if err := json.Unmarshal(line, &e); err != nil {
+			return
+		}
+		if e.Type != "user" && e.Type != "assistant" {
+			return
+		}
+
+		text := extractTextContent(e.Message.Content)
+		if text == "" {
+			return
+		}
+		// Strip system tags from user messages
+		if e.Type == "user" && strings.Contains(text, "<") {
+			if idx := strings.Index(text, "<system-reminder>"); idx >= 0 {
+				text = strings.TrimSpace(text[:idx])
+			}
+			if idx := strings.Index(text, "<local-command"); idx >= 0 {
+				text = strings.TrimSpace(text[:idx])
+			}
+		}
+		if text == "" {
+			return
+		}
+		if len(text) > maxLen {
+			text = text[:maxLen] + "..."
+		}
+		all = append(all, RecentMessage{Role: e.Type, Text: text})
+	})
+
+	if len(all) > n {
+		all = all[len(all)-n:]
+	}
+	return all
+}
+
+// extractTextContent pulls text from a message content field which may be
+// a string or an array of content blocks [{type:"text", text:"..."}].
+func extractTextContent(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	// Try as string first
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return strings.TrimSpace(s)
+	}
+	// Try as array of content blocks
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &blocks); err == nil {
+		for _, b := range blocks {
+			if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
+				return strings.TrimSpace(b.Text)
+			}
+		}
+	}
+	return ""
 }
 
 // ExtractLastModel reads the transcript and returns the last model used.

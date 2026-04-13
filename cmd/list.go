@@ -164,6 +164,86 @@ func formatSessionName(sess *session.Session) string {
 	return name
 }
 
+// richPreviewFunc returns a PreviewFunc that shows full session details
+// including UUID, workspace, context, model, transcript size, and recent messages.
+func richPreviewFunc(store session.Store) ui.PreviewFunc {
+	return func(sess *session.Session) string {
+		var lines []string
+
+		// Name
+		lines = append(lines, sess.Name)
+		lines = append(lines, "")
+
+		// UUID
+		lines = append(lines, fmt.Sprintf("UUID:        %s", sess.Metadata.SessionID))
+
+		// Display name (if different)
+		if sess.Metadata.DisplayName != "" && sess.Metadata.DisplayName != sess.Name {
+			lines = append(lines, fmt.Sprintf("Display:     %s", sess.Metadata.DisplayName))
+		}
+
+		// Workspace + WorkDir
+		lines = append(lines, fmt.Sprintf("Workspace:   %s", shortWorkspacePath(sess.Metadata.WorkspaceRoot)))
+		if sess.Metadata.WorkDir != "" && sess.Metadata.WorkDir != sess.Metadata.WorkspaceRoot {
+			lines = append(lines, fmt.Sprintf("Work dir:    %s", shortWorkspacePath(sess.Metadata.WorkDir)))
+		}
+
+		// Model
+		model, _ := extractModelAndLastUsed(sess, store)
+		lines = append(lines, fmt.Sprintf("Model:       %s", model))
+
+		// Context
+		if sess.Metadata.Context != "" {
+			lines = append(lines, fmt.Sprintf("Context:     %s", sess.Metadata.Context))
+		}
+
+		// Type
+		if sess.Metadata.IsForkedSession {
+			lines = append(lines, fmt.Sprintf("Type:        fork of %s", sess.Metadata.ParentSession))
+		}
+		if sess.Metadata.IsIncognito {
+			lines = append(lines, "Type:        incognito")
+		}
+
+		lines = append(lines, "")
+
+		// Timestamps
+		lines = append(lines, fmt.Sprintf("Created:     %s", sess.Metadata.Created.Format("2006-01-02 15:04")))
+		lines = append(lines, fmt.Sprintf("Last used:   %s", util.FormatRelativeTime(sess.Metadata.LastAccessed)))
+
+		// Transcript size
+		if sess.Metadata.TranscriptPath != "" {
+			if info, err := os.Stat(sess.Metadata.TranscriptPath); err == nil {
+				size := float64(info.Size()) / (1024 * 1024)
+				lines = append(lines, fmt.Sprintf("Transcript:  %.1f MB", size))
+			}
+		}
+
+		// Recent messages
+		if sess.Metadata.TranscriptPath != "" {
+			messages := claude.ExtractRecentMessages(sess.Metadata.TranscriptPath, 3, 120)
+			if len(messages) > 0 {
+				lines = append(lines, "")
+				lines = append(lines, "Recent:")
+				for _, msg := range messages {
+					prefix := "  > "
+					if msg.Role == "assistant" {
+						prefix = "  < "
+					}
+					lines = append(lines, prefix+msg.Text)
+				}
+			}
+		}
+
+		// Resume command
+		lines = append(lines, "")
+		lines = append(lines, "Resume with:")
+		lines = append(lines, fmt.Sprintf("  clotilde resume %s", sess.Name))
+
+		return strings.Join(lines, "\n")
+	}
+}
+
 // shortWorkspacePath abbreviates a workspace root path for display.
 // e.g. /Users/alex/Sites/configs → ~/Sites/configs, /Users/alex → ~
 func shortWorkspacePath(root string) string {

@@ -11,6 +11,10 @@ import (
 	"github.com/fgrehm/clotilde/internal/session"
 )
 
+// PreviewFunc generates preview text for a session in the picker pane.
+// If nil, the default built-in preview is used.
+type PreviewFunc func(sess *session.Session) string
+
 // PickerModel represents the session picker state
 type PickerModel struct {
 	Sessions    []*session.Session
@@ -20,7 +24,8 @@ type PickerModel struct {
 	Title       string
 	FilterText  string
 	Filtering   bool
-	ShowPreview bool // Show preview pane with session metadata
+	ShowPreview bool        // Show preview pane with session metadata
+	PreviewFn   PreviewFunc // Custom preview renderer (optional)
 }
 
 // NewPicker creates a new session picker
@@ -327,8 +332,17 @@ func (m PickerModel) renderListPane(filtered []*session.Session) string {
 	return b.String()
 }
 
-// renderPreviewPane renders the right pane with session metadata
+// renderPreviewPane renders the right pane with session metadata.
+// Uses PreviewFn if set, otherwise falls back to the default preview.
 func (m PickerModel) renderPreviewPane(sess *session.Session) string {
+	if m.PreviewFn != nil {
+		return InfoBoxStyle.Render(m.PreviewFn(sess))
+	}
+	return InfoBoxStyle.Render(defaultPreview(sess))
+}
+
+// defaultPreview renders the built-in preview for a session.
+func defaultPreview(sess *session.Session) string {
 	var lines []string
 
 	// Session name header
@@ -342,28 +356,17 @@ func (m PickerModel) renderPreviewPane(sess *session.Session) string {
 	lines = append(lines, "")
 
 	// Session type
-	typeLabel := "Session type:"
 	if sess.Metadata.IsForkedSession {
-		typeValue := lipgloss.NewStyle().Foreground(ForkColor).Render("Fork")
-		lines = append(lines, DimStyle.Render(typeLabel))
-		lines = append(lines, "  "+typeValue)
-		lines = append(lines, DimStyle.Render("  Parent: "+sess.Metadata.ParentSession))
+		lines = append(lines, DimStyle.Render("Type:")+"  "+lipgloss.NewStyle().Foreground(ForkColor).Render("Fork of "+sess.Metadata.ParentSession))
 	} else if sess.Metadata.IsIncognito {
-		typeValue := lipgloss.NewStyle().Foreground(IncognitoColor).Render("Incognito")
-		lines = append(lines, DimStyle.Render(typeLabel))
-		lines = append(lines, "  "+typeValue)
+		lines = append(lines, DimStyle.Render("Type:")+"  "+lipgloss.NewStyle().Foreground(IncognitoColor).Render("Incognito"))
 	}
-	lines = append(lines, "")
 
 	// Timestamps
-	lines = append(lines, DimStyle.Render("Created:"))
-	lines = append(lines, "  "+sess.Metadata.Created.Format("2006-01-02 15:04"))
-	lines = append(lines, "")
+	lines = append(lines, DimStyle.Render("Created:")+"     "+sess.Metadata.Created.Format("2006-01-02 15:04"))
+	lines = append(lines, DimStyle.Render("Last used:")+"   "+formatTimeAgo(sess.Metadata.LastAccessed))
 
-	lines = append(lines, DimStyle.Render("Last accessed:"))
-	lines = append(lines, "  "+formatTimeAgo(sess.Metadata.LastAccessed))
-
-	return InfoBoxStyle.Render(strings.Join(lines, "\n"))
+	return strings.Join(lines, "\n")
 }
 
 // formatSessionLine formats a single session for display
