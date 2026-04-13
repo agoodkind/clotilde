@@ -1,4 +1,4 @@
-.PHONY: help build test test-watch install clean lint fmt coverage vendor setup-hooks deadcode govulncheck audit sign notarize install-launch-agent
+.PHONY: help build test test-watch install clean lint fmt coverage vendor setup-hooks deadcode govulncheck audit sign notarize uninstall-launch-agent
 
 # Optional local overrides (signing creds, never committed — copy config.mk.example)
 -include config.mk
@@ -45,12 +45,21 @@ test-watch: ## Run tests in watch mode
 	@echo "Starting test watch mode..."
 	@go run github.com/onsi/ginkgo/v2/ginkgo watch -r
 
-install: build ## Install clotilde to ~/.local/bin (symlink)
+LAUNCH_AGENT_LABEL := io.goodkind.clotilde.daemon
+LAUNCH_AGENT_PLIST := $(HOME)/Library/LaunchAgents/$(LAUNCH_AGENT_LABEL).plist
+UID := $(shell id -u)
+
+install: build ## Install clotilde to ~/.local/bin and restart daemon via launchd
 	@mkdir -p "$(HOME)/.local/bin"
 	@ln -sf "$(CURDIR)/dist/clotilde" "$(HOME)/.local/bin/clotilde"
-	@-pkill -f "clotilde daemon" 2>/dev/null; true
-	@echo "✓ Installed to ~/.local/bin/clotilde"
-	@echo "  Daemon killed (restarts on next session; running sessions keep old daemon until resumed)"
+	@if [ -f "$(LAUNCH_AGENT_PLIST)" ]; then \
+		launchctl bootout gui/$(UID)/$(LAUNCH_AGENT_LABEL) 2>/dev/null; true; \
+		launchctl bootstrap gui/$(UID) "$(LAUNCH_AGENT_PLIST)" 2>/dev/null; true; \
+		echo "✓ Installed to ~/.local/bin/clotilde (daemon restarted via launchd)"; \
+	else \
+		-pkill -f "clotilde daemon" 2>/dev/null; true; \
+		echo "✓ Installed to ~/.local/bin/clotilde (run 'clotilde setup' to register LaunchAgent)"; \
+	fi
 
 clean: ## Remove build artifacts
 	@echo "Cleaning..."
@@ -128,40 +137,7 @@ notarize: sign ## Sign and notarize binary (requires config.mk)
 	@echo "⚠ CERT_ID not set in config.mk — skipping notarization"
 endif
 
-# LaunchAgent label and plist path (uses BUNDLE_ID from config.mk if set, else default)
-LAUNCH_AGENT_LABEL ?= io.goodkind.clotilde.daemon
-LAUNCH_AGENT_PLIST := $(HOME)/Library/LaunchAgents/$(LAUNCH_AGENT_LABEL).plist
-
-install-launch-agent: install ## Install clotilde daemon as a LaunchAgent (pre-warms daemon at login)
-	@echo "Installing LaunchAgent to $(LAUNCH_AGENT_PLIST)..."
-	@mkdir -p "$(HOME)/Library/LaunchAgents"
-	@printf '<?xml version="1.0" encoding="UTF-8"?>\n\
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n\
-<plist version="1.0">\n\
-<dict>\n\
-\t<key>Label</key>\n\
-\t<string>$(LAUNCH_AGENT_LABEL)</string>\n\
-\t<key>ProgramArguments</key>\n\
-\t<array>\n\
-\t\t<string>$(HOME)/.local/bin/clotilde</string>\n\
-\t\t<string>daemon</string>\n\
-\t</array>\n\
-\t<key>RunAtLoad</key>\n\
-\t<true/>\n\
-\t<key>KeepAlive</key>\n\
-\t<false/>\n\
-\t<key>StandardOutPath</key>\n\
-\t<string>$(HOME)/.local/state/clotilde/daemon.log</string>\n\
-\t<key>StandardErrorPath</key>\n\
-\t<string>$(HOME)/.local/state/clotilde/daemon.log</string>\n\
-</dict>\n\
-</plist>\n' > "$(LAUNCH_AGENT_PLIST)"
-	@launchctl bootout gui/$$(id -u) "$(LAUNCH_AGENT_PLIST)" || true
-	@launchctl bootstrap gui/$$(id -u) "$(LAUNCH_AGENT_PLIST)"
-	@echo "✓ LaunchAgent registered: $(LAUNCH_AGENT_LABEL)"
-	@echo "  Daemon will start at login. To remove: make uninstall-launch-agent"
-
 uninstall-launch-agent: ## Remove the clotilde daemon LaunchAgent
-	@launchctl bootout gui/$$(id -u) "$(LAUNCH_AGENT_PLIST)" || true
+	@launchctl bootout gui/$(UID)/$(LAUNCH_AGENT_LABEL) 2>/dev/null; true
 	@rm -f "$(LAUNCH_AGENT_PLIST)"
 	@echo "✓ LaunchAgent removed"
