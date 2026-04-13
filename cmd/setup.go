@@ -30,7 +30,6 @@ Use --launch-agent to also register the daemon as a Login Item so it
 pre-starts at login (optional — clotilde also launches it on demand).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			local, _ := cmd.Flags().GetBool("local")
-			withLaunchAgent, _ := cmd.Flags().GetBool("launch-agent")
 
 			if err := claude.IsInstalled(); err != nil {
 				return err
@@ -71,10 +70,10 @@ pre-starts at login (optional — clotilde also launches it on demand).`,
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  Sessions will be created automatically when you run:")
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  clotilde start <session-name>")
 
-			if withLaunchAgent {
-				if err := installLaunchAgent(cmd, clotildeBinary, homeDir); err != nil {
-					return err
-				}
+			// Always install LaunchAgent on macOS
+			if err := installLaunchAgent(cmd, clotildeBinary, homeDir); err != nil {
+				// Non-fatal on non-macOS
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Warning: LaunchAgent setup failed: %v\n", err)
 			}
 
 			return nil
@@ -82,7 +81,6 @@ pre-starts at login (optional — clotilde also launches it on demand).`,
 	}
 
 	cmd.Flags().Bool("local", false, "Install hooks in ~/.claude/settings.local.json instead of settings.json")
-	cmd.Flags().Bool("launch-agent", false, "Also register the daemon as a LaunchAgent (pre-warms at login)")
 
 	return cmd
 }

@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -116,22 +118,10 @@ func ConnectOrStart(ctx context.Context) (*Client, error) {
 	}
 
 	// We hold the lock and daemon is not running. Start it.
-	self, err := os.Executable()
-	if err != nil {
-		return nil, fmt.Errorf("resolve own path: %w", err)
-	}
-
-	daemonCmd := exec.Command(self, "daemon")
-	daemonCmd.Stdout = nil
-	daemonCmd.Stderr = nil
-	// Detach from parent process group so daemon survives our exit.
-	daemonCmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-
-	if err := daemonCmd.Start(); err != nil {
+	// Prefer launchctl on macOS (if the agent is registered), fall back to direct spawn.
+	if err := startDaemon(); err != nil {
 		return nil, fmt.Errorf("start daemon: %w", err)
 	}
-	// Let it run independently.
-	go func() { _ = daemonCmd.Wait() }()
 
 	// Retry with backoff until daemon is ready.
 	delay := 50 * time.Millisecond
@@ -175,4 +165,40 @@ func (c *Client) ReleaseSession(wrapperID string) error {
 		WrapperId: wrapperID,
 	})
 	return err
+}
+
+const launchAgentLabel = "io.goodkind.clotilde.daemon"
+
+// startDaemon starts the daemon process. On macOS, tries launchctl kickstart
+// first (if the LaunchAgent is registered), falling back to direct spawn.
+func startDaemon() error {
+	if runtime.GOOS == "darwin" {
+		uid := strconv.Itoa(os.Getuid())
+		target := "gui/" + uid + "/" + launchAgentLabel
+		if err := exec.Command("launchctl", "kickstart", target).Run(); err == nil {
+			return nil // launchd started it
+		}
+		// launchctl failed (agent not registered) — fall through to direct spawn
+	}
+
+	return spawnDaemonDirect()
+}
+
+// spawnDaemonDirect starts the daemon as a detached child process.
+func spawnDaemonDirect() error {
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve own path: %w", err)
+	}
+
+	daemonCmd := exec.Command(self, "daemon")
+	daemonCmd.Stdout = nil
+	daemonCmd.Stderr = nil
+	daemonCmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+
+	if err := daemonCmd.Start(); err != nil {
+		return err
+	}
+	go func() { _ = daemonCmd.Wait() }()
+	return nil
 }
