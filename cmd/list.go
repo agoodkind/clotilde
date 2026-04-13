@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/olekukonko/tablewriter"
@@ -70,14 +73,14 @@ Use --all to show every session across all workspaces.`,
 // If a session is selected, it returns the session. Otherwise returns nil.
 func showInteractiveTable(sessions []*session.Session, store session.Store) (*session.Session, error) {
 	// Build headers
-	headers := []string{"Name", "Model", "Type", "Last Used"}
+	headers := []string{"Name", "Dir", "Model", "Created", "Last Used"}
 
 	// Build rows (rows will be in same order as sessions array initially)
 	var rows [][]string
 	for _, sess := range sessions {
 		model, lastUsed := extractModelAndLastUsed(sess, store)
-		typeStr := formatSessionType(sess)
-		rows = append(rows, []string{sess.Name, model, typeStr, util.FormatRelativeTime(lastUsed)})
+		nameStr := formatSessionName(sess)
+		rows = append(rows, []string{nameStr, shortWorkspacePath(sess.Metadata.WorkspaceRoot), model, util.FormatRelativeTime(sess.Metadata.Created), util.FormatRelativeTime(lastUsed)})
 	}
 
 	// Create and run interactive table
@@ -109,12 +112,12 @@ func showStaticTable(cmd *cobra.Command, sessions []*session.Session, store sess
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Sessions (%d total):\n", len(sessions))
 
 	table := tablewriter.NewWriter(cmd.OutOrStdout())
-	table.Header("NAME", "MODEL", "TYPE", "LAST USED")
+	table.Header("NAME", "DIR", "MODEL", "CREATED", "LAST USED")
 
 	for _, sess := range sessions {
 		model, lastUsed := extractModelAndLastUsed(sess, store)
-		typeStr := formatSessionType(sess)
-		_ = table.Append(sess.Name, model, typeStr, util.FormatRelativeTime(lastUsed))
+		nameStr := formatSessionName(sess)
+		_ = table.Append(nameStr, shortWorkspacePath(sess.Metadata.WorkspaceRoot), model, util.FormatRelativeTime(sess.Metadata.Created), util.FormatRelativeTime(lastUsed))
 	}
 
 	_ = table.Render()
@@ -149,14 +152,33 @@ func extractModelAndLastUsed(sess *session.Session, store session.Store) (string
 	return model, lastUsed
 }
 
-// formatSessionType formats the session type string (regular, fork, incognito)
-func formatSessionType(sess *session.Session) string {
-	typeStr := "session"
+// formatSessionName formats the session name with type suffix
+func formatSessionName(sess *session.Session) string {
+	name := sess.Name
 	if sess.Metadata.IsForkedSession {
-		typeStr = fmt.Sprintf("fork of %s", sess.Metadata.ParentSession)
+		name += " [fork]"
 	}
 	if sess.Metadata.IsIncognito {
-		typeStr += " 👻"
+		name += " [inc]"
 	}
-	return typeStr
+	return name
+}
+
+// shortWorkspacePath abbreviates a workspace root path for display.
+// e.g. /Users/alex/Sites/configs → ~/Sites/configs, /Users/alex → ~
+func shortWorkspacePath(root string) string {
+	if root == "" {
+		return "-"
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Base(root)
+	}
+	if root == home {
+		return "~"
+	}
+	if strings.HasPrefix(root, home+"/") {
+		return "~/" + root[len(home)+1:]
+	}
+	return root
 }
