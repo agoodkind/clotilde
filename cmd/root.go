@@ -392,7 +392,7 @@ func ForwardToClaude(args []string) int {
 }
 
 // resumeSession resumes a session (extracted from resume command)
-func resumeSession(sess *session.Session, _ session.Store) error {
+func resumeSession(sess *session.Session, store session.Store) error {
 	globalRoot := config.GlobalDataDir()
 	sessionDir := config.GetSessionDir(globalRoot, sess.Name)
 
@@ -413,6 +413,9 @@ func resumeSession(sess *session.Session, _ session.Store) error {
 	fmt.Printf("Resuming session '%s' (%s)\n\n", sess.Name, sess.Metadata.SessionID)
 
 	err := claude.Resume(globalRoot, sess, settingsFile, additionalArgs)
+	if fs, ok := store.(*session.FileStore); ok {
+		autoUpdateContext(fs, sess)
+	}
 	printResumeInstructions(sess)
 	return err
 }

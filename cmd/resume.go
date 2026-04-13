@@ -170,6 +170,7 @@ Pass additional flags to Claude Code after '--':
 
 			// Invoke claude
 			err = claude.Resume(clotildeRoot, sess, settingsFile, additionalArgs)
+			autoUpdateContext(store, sess)
 			printResumeInstructions(sess)
 			return err
 		},

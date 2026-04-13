@@ -241,6 +241,7 @@ Pass additional flags to Claude Code after '--':
 
 			// Invoke claude with fork (pass fork session for cleanup handling)
 			err = claude.Fork(clotildeRoot, parentSess, forkName, settingsFile, additionalArgs, fork)
+			autoUpdateContext(store, fork)
 			printResumeInstructions(fork)
 			return err
 		},
