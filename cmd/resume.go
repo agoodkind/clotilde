@@ -75,8 +75,9 @@ Pass additional flags to Claude Code after '--':
 				// Sort by last accessed (most recent first)
 				sortSessionsByLastAccessed(sessions)
 
-				// Show picker with preview pane
+				// Show picker with rich preview pane
 				picker := ui.NewPicker(sessions, "Select session to resume").WithPreview()
+				picker.PreviewFn = richPreviewFunc(store)
 				selected, err := ui.RunPicker(picker)
 				if err != nil {
 					return fmt.Errorf("picker failed: %w", err)
