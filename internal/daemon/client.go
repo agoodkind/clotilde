@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -163,6 +164,26 @@ func (c *Client) ReleaseSession(wrapperID string) error {
 
 	_, err := c.rpc.ReleaseSession(ctx, &daemonpb.ReleaseSessionRequest{
 		WrapperId: wrapperID,
+	})
+	return err
+}
+
+// UpdateContext asks the daemon to generate a context summary for a session
+// in the background. Fire-and-forget: the caller does not wait for the result.
+// Messages should be pre-extracted by the caller (to avoid import cycles).
+func (c *Client) UpdateContext(sessionName, workspaceRoot string, messages []string) error {
+	payload, _ := json.Marshal(map[string]interface{}{
+		"type":           "update_context",
+		"session_name":   sessionName,
+		"workspace_root": workspaceRoot,
+		"messages":       messages,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := c.rpc.HookEvent(ctx, &daemonpb.HookEventRequest{
+		RawJson: payload,
 	})
 	return err
 }
