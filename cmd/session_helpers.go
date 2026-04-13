@@ -4,20 +4,17 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
-	"strings"
-	"time"
 
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 
 	"github.com/fgrehm/clotilde/internal/claude"
 	"github.com/fgrehm/clotilde/internal/config"
+	"github.com/fgrehm/clotilde/internal/daemon"
 	"github.com/fgrehm/clotilde/internal/session"
 	"github.com/fgrehm/clotilde/internal/ui"
-	"github.com/fgrehm/clotilde/internal/util"
 	"github.com/google/uuid"
 )
 
@@ -85,98 +82,37 @@ func printResumeInstructions(sess *session.Session) {
 	fmt.Printf("  claude --resume %s\n", sess.Metadata.SessionID)
 }
 
-// autoUpdateContext generates a one-sentence context summary for a session
-// using sonnet, reading recent messages and project memories. Non-fatal: silently
-// skips on any error. Called after claude exits.
-func autoUpdateContext(store *session.FileStore, sess *session.Session) {
-	if sess.Metadata.IsIncognito {
-		return
-	}
-	if sess.Metadata.TranscriptPath == "" {
-		return
-	}
-
-	// Read last 5 user messages from transcript
-	messages := claude.ExtractRecentMessages(sess.Metadata.TranscriptPath, 5, 300)
-	if len(messages) == 0 {
+// autoUpdateContext sends a fire-and-forget request to the daemon to generate
+// a context summary for the session. Extracts recent messages here (avoiding
+// import cycles in the daemon package), then sends them via gRPC. The daemon
+// runs the LLM call in the background so the wrapper can exit immediately.
+func autoUpdateContext(_ *session.FileStore, sess *session.Session) {
+	if sess.Metadata.IsIncognito || sess.Metadata.TranscriptPath == "" {
 		return
 	}
 
-	// Build prompt with recent messages
-	var promptParts []string
-	promptParts = append(promptParts, "Based on these recent messages from a coding session, write ONE short sentence (under 15 words) describing what this session is currently working on. Be specific — mention the project, feature, or task name. Output ONLY the sentence, nothing else.")
-	promptParts = append(promptParts, "")
-
-	// Include project memory index if available
-	memoryPath := projectMemoryPath(sess)
-	if memoryPath != "" {
-		memoryContent, err := os.ReadFile(memoryPath)
-		if err == nil && len(memoryContent) > 0 {
-			// Truncate to avoid blowing up the prompt
-			mem := string(memoryContent)
-			if len(mem) > 2000 {
-				mem = mem[:2000]
-			}
-			promptParts = append(promptParts, "Project memory index:")
-			promptParts = append(promptParts, mem)
-			promptParts = append(promptParts, "")
-		}
+	// Extract messages on the client side (claude package can't be imported by daemon)
+	recent := claude.ExtractRecentMessages(sess.Metadata.TranscriptPath, 5, 300)
+	if len(recent) == 0 {
+		return
 	}
-
-	promptParts = append(promptParts, "Recent messages:")
-	for _, msg := range messages {
+	var messages []string
+	for _, msg := range recent {
 		role := "User"
 		if msg.Role == "assistant" {
 			role = "Assistant"
 		}
-		promptParts = append(promptParts, fmt.Sprintf("[%s] %s", role, msg.Text))
+		messages = append(messages, fmt.Sprintf("[%s] %s", role, msg.Text))
 	}
 
-	prompt := strings.Join(promptParts, "\n")
-
-	// Call claude -p --model sonnet with a timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	claudeBin := claude.ClaudeBinaryPathFunc()
-	cmd := exec.CommandContext(ctx, claudeBin, "-p", "--model", "sonnet", prompt)
-	output, err := cmd.Output()
-	if err != nil {
-		return // non-fatal
-	}
-
-	summary := strings.TrimSpace(string(output))
-	if summary == "" || len(summary) > 200 {
-		return
-	}
-
-	// Reload session to avoid overwriting concurrent changes
-	current, err := store.Get(sess.Name)
+	ctx := context.Background()
+	client, err := daemon.ConnectOrStart(ctx)
 	if err != nil {
 		return
 	}
-	current.Metadata.Context = summary
-	_ = store.Update(current)
-}
+	defer client.Close()
 
-// projectMemoryPath returns the path to MEMORY.md for a session's workspace.
-// Returns "" if not found.
-func projectMemoryPath(sess *session.Session) string {
-	root := sess.Metadata.WorkspaceRoot
-	if root == "" {
-		return ""
-	}
-	home, err := util.HomeDir()
-	if err != nil {
-		return ""
-	}
-	projClotildeRoot := filepath.Join(root, ".claude", "clotilde")
-	encodedDir := claude.ProjectDir(projClotildeRoot)
-	memPath := filepath.Join(home, ".claude", "projects", encodedDir, "memory", "MEMORY.md")
-	if util.FileExists(memPath) {
-		return memPath
-	}
-	return ""
+	_ = client.UpdateContext(sess.Name, sess.Metadata.WorkspaceRoot, messages)
 }
 
 // resolveSessionForResume finds a session by trying multiple lookup strategies:

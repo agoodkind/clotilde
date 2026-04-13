@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -223,10 +225,125 @@ func (s *Server) ReleaseSession(ctx context.Context, req *daemonpb.ReleaseSessio
 	return &daemonpb.ReleaseSessionResponse{}, nil
 }
 
+// hookEventPayload is the JSON structure sent via HookEvent RPC.
+type hookEventPayload struct {
+	Type          string   `json:"type"`
+	SessionName   string   `json:"session_name,omitempty"`
+	WorkspaceRoot string   `json:"workspace_root,omitempty"`
+	Messages      []string `json:"messages,omitempty"` // pre-extracted recent messages
+}
+
 // HookEvent processes a Claude Code hook event forwarded from a wrapper process.
 func (s *Server) HookEvent(ctx context.Context, req *daemonpb.HookEventRequest) (*daemonpb.HookEventResponse, error) {
-	// TODO: route to hook handler, handle ConfigChange to update per-session model
+	var payload hookEventPayload
+	if err := json.Unmarshal(req.RawJson, &payload); err != nil {
+		return &daemonpb.HookEventResponse{ExitCode: 0}, nil
+	}
+
+	switch payload.Type {
+	case "update_context":
+		// Fire and forget — run in background goroutine
+		go s.updateSessionContext(payload)
+	}
+
 	return &daemonpb.HookEventResponse{ExitCode: 0}, nil
+}
+
+// updateSessionContext generates a one-sentence context summary via sonnet
+// and stores it in the session metadata. Runs in a background goroutine.
+func (s *Server) updateSessionContext(payload hookEventPayload) {
+	if payload.SessionName == "" || len(payload.Messages) == 0 {
+		return
+	}
+
+	s.log.Info("updating session context", "session", payload.SessionName)
+
+	// Build prompt
+	var promptParts []string
+	promptParts = append(promptParts, "Based on these recent messages from a coding session, write ONE short sentence (under 15 words) describing what this session is currently working on. Be specific — mention the project, feature, or task name. Output ONLY the sentence, nothing else.")
+	promptParts = append(promptParts, "")
+
+	// Include project memory if available
+	if payload.WorkspaceRoot != "" {
+		memPath := projectMemoryPathFromRoot(payload.WorkspaceRoot)
+		if memPath != "" {
+			if content, err := os.ReadFile(memPath); err == nil && len(content) > 0 {
+				mem := string(content)
+				if len(mem) > 2000 {
+					mem = mem[:2000]
+				}
+				promptParts = append(promptParts, "Project memory index:")
+				promptParts = append(promptParts, mem)
+				promptParts = append(promptParts, "")
+			}
+		}
+	}
+
+	promptParts = append(promptParts, "Recent messages:")
+	promptParts = append(promptParts, payload.Messages...)
+
+	prompt := strings.Join(promptParts, "\n")
+
+	// Call claude -p --model sonnet
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	claudeBin, err := findRealClaude()
+	if err != nil {
+		s.log.Warn("context update: claude not found", "err", err)
+		return
+	}
+
+	cmd := exec.CommandContext(ctx, claudeBin, "-p", "--model", "sonnet", prompt)
+	output, err := cmd.Output()
+	if err != nil {
+		s.log.Warn("context update: claude -p failed", "session", payload.SessionName, "err", err)
+		return
+	}
+
+	summary := strings.TrimSpace(string(output))
+	if summary == "" || len(summary) > 200 {
+		s.log.Warn("context update: bad summary", "session", payload.SessionName, "len", len(summary))
+		return
+	}
+
+	// Update session metadata in global store
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		s.log.Warn("context update: store error", "err", err)
+		return
+	}
+	sess, err := store.Get(payload.SessionName)
+	if err != nil {
+		s.log.Warn("context update: session not found", "session", payload.SessionName, "err", err)
+		return
+	}
+	sess.Metadata.Context = summary
+	if err := store.Update(sess); err != nil {
+		s.log.Warn("context update: update failed", "session", payload.SessionName, "err", err)
+		return
+	}
+
+	s.log.Info("context updated", "session", payload.SessionName, "context", summary)
+}
+
+// projectMemoryPathFromRoot returns the path to MEMORY.md for a workspace root.
+func projectMemoryPathFromRoot(workspaceRoot string) string {
+	if workspaceRoot == "" {
+		return ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	// Encode workspace path the same way Claude does: replace / and . with -
+	encoded := strings.ReplaceAll(workspaceRoot, "/", "-")
+	encoded = strings.ReplaceAll(encoded, ".", "-")
+	memPath := filepath.Join(home, ".claude", "projects", encoded, "memory", "MEMORY.md")
+	if _, statErr := os.Stat(memPath); statErr == nil {
+		return memPath
+	}
+	return ""
 }
 
 // writeSettingsJSON writes a per-session settings.json to the runtime dir,
