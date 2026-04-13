@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fgrehm/clotilde/internal/config"
 	"github.com/fgrehm/clotilde/internal/daemon"
 	"github.com/fgrehm/clotilde/internal/session"
 	"github.com/fgrehm/clotilde/internal/ui"
@@ -23,10 +24,16 @@ var VerboseFunc func() bool = func() bool { return false }
 // Can be overridden in tests where the fake claude binary doesn't create transcripts.
 var SessionUsedFunc = DefaultSessionUsed
 
-// appendCommonArgs adds settings flags to the arg list.
+// appendCommonArgs adds settings flags and global defaults to the arg list.
 func appendCommonArgs(args []string, settingsFile string) []string {
 	if settingsFile != "" && util.FileExists(settingsFile) {
 		args = append(args, "--settings", settingsFile)
+	}
+
+	// Apply global defaults from config
+	cfg, err := config.LoadGlobalOrDefault()
+	if err == nil && cfg.Defaults.RemoteControl {
+		args = append(args, "--remote-control")
 	}
 
 	return args
