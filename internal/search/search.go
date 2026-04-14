@@ -89,7 +89,7 @@ func rerankResults(ctx context.Context, client Client, results []Result, query s
 		fmt.Fprintf(&sb, "[%d] %s\n", i, r.Summary)
 	}
 
-	prompt := fmt.Sprintf(`Given this search query and these result summaries, which results are DIRECTLY relevant to the query? Be strict - remove tangential or loosely related results.
+	prompt := fmt.Sprintf(`Given this search query and these result summaries, which results are relevant? Remove only clearly unrelated results.
 
 QUERY: %s
 
@@ -139,7 +139,7 @@ func searchChunk(ctx context.Context, client Client, messages []transcript.Messa
 		fmt.Fprintf(&convText, "[MSG %d][%s] %s:\n%s\n\n", i, ts, role, m.Text)
 	}
 
-	prompt := fmt.Sprintf(`You are searching a conversation transcript for a SPECIFIC topic. Be strict.
+	prompt := fmt.Sprintf(`You are searching a conversation transcript for a specific topic.
 
 QUERY: %s
 
@@ -147,16 +147,14 @@ CONVERSATION:
 %s
 
 INSTRUCTIONS:
-- Only match if the conversation DIRECTLY and SPECIFICALLY discusses the query topic.
-- Do NOT match on tangentially related content, vague keyword overlap, or passing mentions.
-- The query topic must be a substantive part of the discussion, not just a word that appears.
-- If this conversation segment specifically discusses the query topic, respond with the message numbers (MSG N) that are relevant, one per line:
+- Match if the conversation substantively discusses the query topic.
+- Do NOT match on passing mentions or vague keyword overlap.
+- If this conversation segment discusses the query topic, respond with the message numbers (MSG N) that are relevant, one per line:
 MSG 0
 MSG 3
 MSG 4
-- After the message numbers, add a blank line and then a one-sentence summary.
-- If this conversation does NOT specifically discuss the query topic, respond with exactly: NO
-- When in doubt, respond NO.
+- After the message numbers, add a blank line and a one-sentence summary.
+- If this conversation does NOT discuss the query topic, respond with exactly: NO
 
 Respond ONLY with message numbers + summary, or NO. Nothing else.`, query, convText.String())
 
