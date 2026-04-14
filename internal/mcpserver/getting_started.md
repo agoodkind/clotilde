@@ -30,11 +30,19 @@ Get context around a specific message index in a session.
 - before (optional): messages to include before (default 3)
 - after (optional): messages to include after (default 3)
 
+### clotilde_analyze_results
+Run an LLM synthesis pass over the results from a previous search without re-running it.
+- result_id (required): the result_id returned by clotilde_search_conversation
+- prompt (required): what to extract or analyze (e.g. "List every frustration instance with timestamp and verbatim quote")
+
+Results are cached in memory for the lifetime of the MCP server process.
+
 ## Typical workflow
 1. Call clotilde_list_sessions to see what sessions exist
 2. Call clotilde_search_conversation with depth=quick to find a specific discussion
 3. If quick results are insufficient, retry with depth=normal
-4. Call clotilde_get_context to expand around a relevant message index
-5. Call clotilde_get_conversation with last_n to get recent context from another session
+4. Call clotilde_analyze_results with the result_id to synthesize or extract structured data from matches
+5. Call clotilde_get_context to expand around a relevant message index
+6. Call clotilde_get_conversation with last_n to get recent context from another session
 
 This lets you search your own history, cross-reference other sessions, and recall past discussions.

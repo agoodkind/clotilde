@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -21,6 +22,17 @@ import (
 	"github.com/fgrehm/clotilde/internal/transcript"
 	"github.com/fgrehm/clotilde/internal/util"
 )
+
+// resultCache stores search results in memory so callers can reference them by ID
+// for follow-up analysis without re-running the search.
+type cachedResult struct {
+	SessionName string
+	Messages    []transcript.Message // all matched messages, flattened
+	Results     []search.Result      // original results with summaries
+	CreatedAt   time.Time
+}
+
+var resultCache sync.Map // map[string]*cachedResult
 
 //go:embed getting_started.md
 var gettingStartedPrompt string
@@ -86,12 +98,21 @@ func Serve(ctx context.Context) error {
 
 	s.AddTool(
 		mcp.NewTool("clotilde_search_conversation",
-			mcp.WithDescription("Search a session's conversation history for where a topic was discussed. Returns matching messages with context. Always start with 'quick' (embedding only, ~3s). Escalate only when quick results are insufficient."),
+			mcp.WithDescription("Search a session's conversation history for where a topic was discussed. Returns matching messages with context and a result_id for follow-up analysis. Always start with 'quick' (embedding only, ~20s). Escalate only when quick results are insufficient."),
 			mcp.WithString("session_name", mcp.Required(), mcp.Description("Session name to search.")),
 			mcp.WithString("query", mcp.Required(), mcp.Description("What to search for (natural language).")),
 			mcp.WithString("depth", mcp.Description("Search depth: 'quick' (embedding only, ~20s, default), 'normal' (+ LLM sweep, ~4min), 'deep' (+ rerank, ~5min), 'extra-deep' (+ large model, 20min+, warns before running).")),
 		),
 		handleSearchConversation,
+	)
+
+	s.AddTool(
+		mcp.NewTool("clotilde_analyze_results",
+			mcp.WithDescription("Run an LLM analysis pass over the results from a previous clotilde_search_conversation call. Use the result_id returned by search. The LLM will synthesize, extract, or summarize based on your prompt. Avoids re-running the search."),
+			mcp.WithString("result_id", mcp.Required(), mcp.Description("The result_id returned by clotilde_search_conversation.")),
+			mcp.WithString("prompt", mcp.Required(), mcp.Description("What to extract or analyze from the search results (e.g. 'List every frustration instance with timestamp and verbatim quote').")),
+		),
+		handleAnalyzeResults,
 	)
 
 	return server.ServeStdio(s)
@@ -271,7 +292,20 @@ func handleSearchConversation(ctx context.Context, req mcp.CallToolRequest) (*mc
 		return mcp.NewToolResultText("No matching messages found."), nil
 	}
 
-	// Build a UUID-to-index map so we can show global message indices
+	// Store matched messages in cache so the caller can run follow-up analysis.
+	resultID := util.GenerateUUID()
+	var flatMessages []transcript.Message
+	for _, r := range results {
+		flatMessages = append(flatMessages, r.Messages...)
+	}
+	resultCache.Store(resultID, &cachedResult{
+		SessionName: name,
+		Messages:    flatMessages,
+		Results:     results,
+		CreatedAt:   time.Now(),
+	})
+
+	// Build a UUID-to-index map so we can show global message indices.
 	idxMap := make(map[string]int, len(messages))
 	for i, m := range messages {
 		if m.UUID != "" {
@@ -280,6 +314,7 @@ func handleSearchConversation(ctx context.Context, req mcp.CallToolRequest) (*mc
 	}
 
 	var sb strings.Builder
+	fmt.Fprintf(&sb, "result_id: %s (pass to clotilde_analyze_results for follow-up analysis)\n\n", resultID)
 	sb.WriteString(fmt.Sprintf("Use clotilde_get_context with session_name=%q and message_index=N to expand around any result.\n\n", name))
 	for _, r := range results {
 		if r.Summary != "" {
@@ -312,6 +347,63 @@ func handleSearchConversation(ctx context.Context, req mcp.CallToolRequest) (*mc
 		sb.WriteString("---\n\n")
 	}
 	return mcp.NewToolResultText(sb.String()), nil
+}
+
+func handleAnalyzeResults(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	resultID := req.GetString("result_id", "")
+	prompt := req.GetString("prompt", "")
+	if resultID == "" || prompt == "" {
+		return mcp.NewToolResultText("result_id and prompt are required"), nil
+	}
+
+	val, ok := resultCache.Load(resultID)
+	if !ok {
+		return mcp.NewToolResultText(fmt.Sprintf("result_id %q not found. Results are cached for the lifetime of this MCP server process only.", resultID)), nil
+	}
+	cached := val.(*cachedResult)
+
+	if len(cached.Messages) == 0 {
+		return mcp.NewToolResultText("Cached result has no messages."), nil
+	}
+
+	// Build conversation text from all cached messages.
+	var convText strings.Builder
+	for _, m := range cached.Messages {
+		ts := m.Timestamp.Format("2006-01-02 15:04")
+		role := "User"
+		if m.Role == "assistant" {
+			role = "Assistant"
+		}
+		fmt.Fprintf(&convText, "[%s] %s:\n%s\n\n", ts, role, m.Text)
+	}
+
+	fullPrompt := fmt.Sprintf("%s\n\nCONVERSATION EXCERPTS from session %q:\n\n%s",
+		prompt, cached.SessionName, convText.String())
+
+	cfg, _ := config.LoadGlobalOrDefault()
+	pipeline := cfg.Search.Local.Pipeline
+	model := cfg.Search.Local.Model
+	if len(pipeline) > 0 {
+		model = pipeline[0].Model
+	}
+	if model == "" {
+		model = "qwen2.5-coder-32b"
+	}
+
+	client := search.NewClientForModel(cfg.Search, model)
+	resp, err := client.Complete(ctx, fullPrompt)
+	if err != nil {
+		return mcp.NewToolResultText(fmt.Sprintf("Analysis failed: %v", err)), nil
+	}
+
+	slog.Info("analyze_results complete",
+		"result_id", resultID,
+		"session", cached.SessionName,
+		"cached_messages", len(cached.Messages),
+		"response_chars", len(resp),
+	)
+
+	return mcp.NewToolResultText(resp), nil
 }
 
 // loadMessages loads all parsed messages for a session by name.
