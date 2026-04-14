@@ -371,7 +371,7 @@ func defaultPreview(sess *session.Session) string {
 
 // formatSessionLine formats a single session for display
 func (m PickerModel) formatSessionLine(sess *session.Session) string {
-	name := sess.Name
+	name := sess.DisplayName()
 
 	// Add type indicator
 	typeIndicator := ""
@@ -396,7 +396,8 @@ func (m PickerModel) filteredSessions() []*session.Session {
 	lowerFilter := strings.ToLower(m.FilterText)
 
 	for _, sess := range m.Sessions {
-		if strings.Contains(strings.ToLower(sess.Name), lowerFilter) {
+		if strings.Contains(strings.ToLower(sess.Name), lowerFilter) ||
+			strings.Contains(strings.ToLower(sess.Metadata.DisplayName), lowerFilter) {
 			filtered = append(filtered, sess)
 		}
 	}
@@ -413,7 +414,7 @@ func (m PickerModel) highlightMatch(text, filter string) string {
 
 // formatSessionLineWithTime formats a session line with "last used" time
 func (m PickerModel) formatSessionLineWithTime(sess *session.Session) string {
-	name := sess.Name
+	name := sess.DisplayName()
 
 	// Add type indicator
 	if sess.Metadata.IsForkedSession {

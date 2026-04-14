@@ -154,7 +154,7 @@ func extractModelAndLastUsed(sess *session.Session, store session.Store) (string
 
 // formatSessionName formats the session name with type suffix
 func formatSessionName(sess *session.Session) string {
-	name := sess.Name
+	name := sess.DisplayName()
 	if sess.Metadata.IsForkedSession {
 		name += " [fork]"
 	}
@@ -171,8 +171,13 @@ func richPreviewFunc(store session.Store) ui.PreviewFunc {
 		var lines []string
 		sep := "────────────────────────────"
 
-		// Header: name + context summary
-		lines = append(lines, sess.Name)
+		// Header: display name (or raw name) + context summary
+		if sess.Metadata.DisplayName != "" {
+			lines = append(lines, sess.Metadata.DisplayName)
+			lines = append(lines, fmt.Sprintf("ID:        %s", sess.Name))
+		} else {
+			lines = append(lines, sess.Name)
+		}
 		if sess.Metadata.Context != "" {
 			lines = append(lines, sess.Metadata.Context)
 		}
