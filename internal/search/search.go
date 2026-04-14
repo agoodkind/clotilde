@@ -72,7 +72,57 @@ func Search(ctx context.Context, messages []transcript.Message, query string, cf
 			matched = append(matched, *r.result)
 		}
 	}
+
+	// Re-rank: ask the LLM which results are actually relevant
+	if len(matched) > 1 {
+		matched = rerankResults(ctx, client, matched, query)
+	}
+
 	return matched, nil
+}
+
+// rerankResults sends all result summaries to the LLM and asks which are
+// genuinely relevant, filtering out false positives from the initial search.
+func rerankResults(ctx context.Context, client Client, results []Result, query string) []Result {
+	var sb strings.Builder
+	for i, r := range results {
+		fmt.Fprintf(&sb, "[%d] %s\n", i, r.Summary)
+	}
+
+	prompt := fmt.Sprintf(`Given this search query and these result summaries, which results are DIRECTLY relevant to the query? Be strict - remove tangential or loosely related results.
+
+QUERY: %s
+
+RESULTS:
+%s
+Return ONLY the numbers of relevant results, one per line. If none are relevant, respond with NONE.`, query, sb.String())
+
+	resp, err := client.Complete(ctx, prompt)
+	if err != nil {
+		return results // on error, return unfiltered
+	}
+
+	resp = strings.TrimSpace(resp)
+	if resp == "NONE" || resp == "none" {
+		return nil
+	}
+
+	var filtered []Result
+	for _, line := range strings.Split(resp, "\n") {
+		line = strings.TrimSpace(line)
+		// Parse bare number or [N] format
+		var idx int
+		if _, err := fmt.Sscanf(line, "[%d]", &idx); err != nil {
+			_, _ = fmt.Sscanf(line, "%d", &idx)
+		}
+		if idx >= 0 && idx < len(results) {
+			filtered = append(filtered, results[idx])
+		}
+	}
+	if len(filtered) == 0 {
+		return results // parsing failed, return unfiltered
+	}
+	return filtered
 }
 
 // searchChunk asks the LLM whether a conversation chunk discusses the query.
@@ -89,7 +139,7 @@ func searchChunk(ctx context.Context, client Client, messages []transcript.Messa
 		fmt.Fprintf(&convText, "[MSG %d][%s] %s:\n%s\n\n", i, ts, role, m.Text)
 	}
 
-	prompt := fmt.Sprintf(`You are searching a conversation transcript for a specific topic.
+	prompt := fmt.Sprintf(`You are searching a conversation transcript for a SPECIFIC topic. Be strict.
 
 QUERY: %s
 
@@ -97,12 +147,16 @@ CONVERSATION:
 %s
 
 INSTRUCTIONS:
-- If this conversation segment discusses the query topic, respond with the message numbers (MSG N) that are relevant, one per line, like:
+- Only match if the conversation DIRECTLY and SPECIFICALLY discusses the query topic.
+- Do NOT match on tangentially related content, vague keyword overlap, or passing mentions.
+- The query topic must be a substantive part of the discussion, not just a word that appears.
+- If this conversation segment specifically discusses the query topic, respond with the message numbers (MSG N) that are relevant, one per line:
 MSG 0
 MSG 3
 MSG 4
-- After the message numbers, add a blank line and then a one-sentence summary of what was discussed.
-- If this conversation does NOT discuss the query topic at all, respond with exactly: NO
+- After the message numbers, add a blank line and then a one-sentence summary.
+- If this conversation does NOT specifically discuss the query topic, respond with exactly: NO
+- When in doubt, respond NO.
 
 Respond ONLY with message numbers + summary, or NO. Nothing else.`, query, convText.String())
 
