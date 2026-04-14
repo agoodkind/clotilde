@@ -31,6 +31,7 @@ func Search(ctx context.Context, messages []transcript.Message, query string, cf
 	}
 
 	client := NewClient(cfg)
+	rerankClient := NewRerankClient(cfg)
 	chunks := chunkMessages(messages, maxChunkChars)
 
 	// Search all chunks in parallel
@@ -73,9 +74,9 @@ func Search(ctx context.Context, messages []transcript.Message, query string, cf
 		}
 	}
 
-	// Re-rank: ask the LLM which results are actually relevant
+	// Re-rank with the stronger model to filter false positives
 	if len(matched) > 1 {
-		matched = rerankResults(ctx, client, matched, query)
+		matched = rerankResults(ctx, rerankClient, matched, query)
 	}
 
 	return matched, nil
