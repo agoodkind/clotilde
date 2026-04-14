@@ -12,13 +12,29 @@ Get the plain text conversation from any session (user + assistant messages, no 
 - last_n (optional): only get the last N messages
 
 ### clotilde_search_conversation
-Search a session's conversation history using an LLM to find where a topic was discussed.
+Search a session's conversation history for where a topic was discussed.
 - session_name (required): which session to search
 - query (required): natural language description of what to find
+- depth (optional): controls speed vs accuracy
+
+**Search depth levels (always start at quick, escalate only if needed):**
+- `quick` (default, ~3s): embedding similarity only, no LLM. Use this first.
+- `normal` (~60s): embedding filter + LLM sweep. Use when quick results are vague or missing.
+- `deep` (~3min): adds a reranker pass for better precision. Use for important lookups.
+- `extra-deep` (10min+): adds large model verification. Slow. Only use when explicitly asked.
+
+### clotilde_get_context
+Get context around a specific message index in a session.
+- session_name (required): which session to read
+- index (required): message index to center on
+- before (optional): messages to include before (default 3)
+- after (optional): messages to include after (default 3)
 
 ## Typical workflow
 1. Call clotilde_list_sessions to see what sessions exist
-2. Call clotilde_search_conversation to find a specific discussion
-3. Call clotilde_get_conversation with last_n to get recent context from another session
+2. Call clotilde_search_conversation with depth=quick to find a specific discussion
+3. If quick results are insufficient, retry with depth=normal
+4. Call clotilde_get_context to expand around a relevant message index
+5. Call clotilde_get_conversation with last_n to get recent context from another session
 
 This lets you search your own history, cross-reference other sessions, and recall past discussions.

@@ -26,8 +26,9 @@ type Result struct {
 }
 
 // Search finds conversation messages matching a query using the configured LLM backend.
+// Uses "quick" (embedding-only) depth by default for fast results.
 func Search(ctx context.Context, messages []transcript.Message, query string, cfg config.SearchConfig) ([]Result, error) {
-	return SearchWithDepth(ctx, messages, query, cfg, "normal")
+	return SearchWithDepth(ctx, messages, query, cfg, "quick")
 }
 
 // SearchWithLog is like SearchWithDepth but accepts an explicit logger.
@@ -43,6 +44,27 @@ func SearchWithDepth(ctx context.Context, messages []transcript.Message, query s
 func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript.Message, query string, cfg config.SearchConfig, depth string) ([]Result, error) {
 	if len(messages) == 0 {
 		return nil, nil
+	}
+
+	// "quick" is embedding-only: no LLM involved.
+	if depth == "quick" {
+		log.Info("search starting (embedding only)",
+			"query", query,
+			"messages", len(messages),
+			"depth", depth,
+		)
+		start := time.Now()
+		results, err := embeddingOnlySearch(ctx, log, messages, query, cfg)
+		log.Info("search complete",
+			"total_matches", len(results),
+			"total_duration", time.Since(start).Round(time.Millisecond),
+		)
+		return results, err
+	}
+
+	// "extra-deep" runs the full pipeline and warns about runtime.
+	if depth == "extra-deep" {
+		log.Warn("extra-deep search uses the full pipeline including large model verification; this may take 10+ minutes")
 	}
 
 	pipeline := cfg.Local.ResolvePipeline(depth)
@@ -127,6 +149,92 @@ func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript
 		"total_duration", time.Since(searchStart).Round(time.Millisecond),
 	)
 	return matched, nil
+}
+
+// embeddingOnlySearch ranks chunks by cosine similarity and returns the top
+// matches without any LLM call. Results include a similarity score in the summary.
+func embeddingOnlySearch(ctx context.Context, log *slog.Logger, messages []transcript.Message, query string, cfg config.SearchConfig) ([]Result, error) {
+	chunkSize := cfg.Local.ChunkSize
+	if chunkSize <= 0 {
+		chunkSize = defaultChunkChars
+	}
+	chunks := chunkMessages(messages, chunkSize)
+	log.Info("quick search: chunked messages", "chunks", len(chunks), "messages", len(messages))
+
+	if cfg.Backend != "local" {
+		return nil, fmt.Errorf("quick depth requires local backend with embedding model")
+	}
+
+	if err := ensureModelLoaded(ctx, defaultEmbeddingModel, 0, cfg.Local.MaxMemoryGB); err != nil {
+		return nil, fmt.Errorf("failed to load embedding model: %w", err)
+	}
+
+	filter := newEmbeddingFilter(cfg.Local)
+
+	// Build chunk texts
+	chunkTexts := make([]string, len(chunks))
+	for i, chunk := range chunks {
+		var text string
+		for _, m := range chunk {
+			text += m.Text + "\n"
+			if len(text) > 2000 {
+				text = text[:2000]
+				break
+			}
+		}
+		chunkTexts[i] = text
+	}
+
+	// Embed query and all chunks
+	queryEmb, err := filter.embed(ctx, []string{query})
+	if err != nil {
+		return nil, fmt.Errorf("embedding query failed: %w", err)
+	}
+	chunkEmbs, err := filter.embed(ctx, chunkTexts)
+	if err != nil {
+		return nil, fmt.Errorf("embedding chunks failed: %w", err)
+	}
+	if len(queryEmb) == 0 || len(chunkEmbs) != len(chunks) {
+		return nil, fmt.Errorf("unexpected embedding response lengths")
+	}
+
+	// Score and collect above-threshold chunks
+	type scored struct {
+		chunk []transcript.Message
+		score float64
+	}
+	queryVec := queryEmb[0]
+	var hits []scored
+	for i, chunkVec := range chunkEmbs {
+		sim := cosineSimilarity(queryVec, chunkVec)
+		if sim >= filter.threshold {
+			hits = append(hits, scored{chunk: chunks[i], score: sim})
+		}
+	}
+
+	// Sort by score descending
+	for i := 0; i < len(hits); i++ {
+		for j := i + 1; j < len(hits); j++ {
+			if hits[j].score > hits[i].score {
+				hits[i], hits[j] = hits[j], hits[i]
+			}
+		}
+	}
+
+	log.Info("quick search: embedding scored",
+		"total_chunks", len(chunks),
+		"hits", len(hits),
+		"threshold", filter.threshold,
+	)
+
+	results := make([]Result, len(hits))
+	for i, h := range hits {
+		results[i] = Result{
+			Messages: h.chunk,
+			Summary:  fmt.Sprintf("Embedding similarity: %.2f", h.score),
+		}
+	}
+	return results, nil
 }
 
 // sweepChunks runs the initial parallel chunk search.
@@ -275,15 +383,23 @@ Return ONLY the numbers of relevant results, one per line. If none are relevant,
 		return nil
 	}
 
+	// Normalize: models sometimes return comma-separated on one line instead of newline-separated
+	normalized := strings.NewReplacer(",", "\n").Replace(resp)
+
 	var filtered []Result
-	for _, line := range strings.Split(resp, "\n") {
+	seen := make(map[int]bool)
+	for _, line := range strings.Split(normalized, "\n") {
 		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
 		// Parse bare number or [N] format
 		var idx int
 		if _, err := fmt.Sscanf(line, "[%d]", &idx); err != nil {
 			_, _ = fmt.Sscanf(line, "%d", &idx)
 		}
-		if idx >= 0 && idx < len(results) {
+		if idx >= 0 && idx < len(results) && !seen[idx] {
+			seen[idx] = true
 			filtered = append(filtered, results[idx])
 		}
 	}

@@ -29,10 +29,11 @@ type SearchLocal struct {
 	Temperature      float64       `json:"temperature" toml:"temperature"`
 	TopP             float64       `json:"topP" toml:"top_p"`
 	FrequencyPenalty float64       `json:"frequencyPenalty" toml:"frequency_penalty"`
-	MaxConcurrent    int           `json:"maxConcurrent,omitempty" toml:"max_concurrent,omitempty"`
-	ChunkSize        int           `json:"chunkSize,omitempty" toml:"chunk_size,omitempty"`
-	MaxMemoryGB      int           `json:"maxMemoryGB,omitempty" toml:"max_memory_gb,omitempty"`
-	ContextLength    int           `json:"contextLength,omitempty" toml:"context_length,omitempty"`
+	MaxConcurrent         int           `json:"maxConcurrent,omitempty" toml:"max_concurrent,omitempty"`
+	ChunkSize             int           `json:"chunkSize,omitempty" toml:"chunk_size,omitempty"`
+	MaxMemoryGB           int           `json:"maxMemoryGB,omitempty" toml:"max_memory_gb,omitempty"`
+	ContextLength         int           `json:"contextLength,omitempty" toml:"context_length,omitempty"`
+	EmbeddingThreshold    float64       `json:"embeddingThreshold,omitempty" toml:"embedding_threshold,omitempty"`
 }
 
 // SearchLayer defines one stage of the search pipeline.
@@ -41,28 +42,38 @@ type SearchLayer struct {
 	Model string `json:"model" toml:"model"` // model to use for this layer
 }
 
-// ResolvePipeline returns the search pipeline for a given depth.
-// Depth levels: "quick" (sweep only), "normal" (sweep + rerank), "deep" (all layers).
+// ResolvePipeline returns the LLM pipeline layers for a given depth.
+//
+// Depth levels:
+//   - "quick"      -- embedding similarity only, no LLM (returns nil)
+//   - "normal"     -- embedding filter + LLM sweep (1 layer)
+//   - "deep"       -- embedding filter + sweep + rerank (2 layers)
+//   - "extra-deep" -- full pipeline including deep analysis (all layers)
 func (s SearchLocal) ResolvePipeline(depth string) []SearchLayer {
-	// If explicit pipeline is configured, use it up to the requested depth
+	// "quick" skips LLM entirely, handled by the embedding-only path in searchInternal.
+	if depth == "quick" {
+		return nil
+	}
+
+	// If explicit pipeline is configured, slice it to the requested depth.
 	if len(s.Pipeline) > 0 {
 		switch depth {
-		case "quick":
+		case "normal":
 			if len(s.Pipeline) >= 1 {
 				return s.Pipeline[:1]
 			}
 		case "deep":
-			return s.Pipeline
-		default: // "normal"
 			if len(s.Pipeline) >= 2 {
 				return s.Pipeline[:2]
 			}
+			return s.Pipeline
+		default: // "extra-deep" and anything else: full pipeline
 			return s.Pipeline
 		}
 		return s.Pipeline
 	}
 
-	// Fall back to individual model fields
+	// Fall back to individual model fields.
 	var layers []SearchLayer
 	model := s.Model
 	if model == "" {
@@ -70,7 +81,7 @@ func (s SearchLocal) ResolvePipeline(depth string) []SearchLayer {
 	}
 	layers = append(layers, SearchLayer{Name: "sweep", Model: model})
 
-	if depth == "quick" {
+	if depth == "normal" {
 		return layers
 	}
 
@@ -78,7 +89,7 @@ func (s SearchLocal) ResolvePipeline(depth string) []SearchLayer {
 		layers = append(layers, SearchLayer{Name: "rerank", Model: s.RerankModel})
 	}
 
-	if depth == "deep" && s.DeepModel != "" {
+	if depth == "extra-deep" && s.DeepModel != "" {
 		layers = append(layers, SearchLayer{Name: "deep", Model: s.DeepModel})
 	}
 
