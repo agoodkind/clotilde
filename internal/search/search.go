@@ -43,25 +43,47 @@ func SearchWithDepth(ctx context.Context, messages []transcript.Message, query s
 		return nil, fmt.Errorf("no search pipeline configured")
 	}
 
+	// Track current model so we only swap when needed
+	currentModel := ""
+
 	// Layer 1: sweep with fast model
 	sweepLayer := pipeline[0]
+	if cfg.Backend == "local" {
+		if err := ensureModelLoaded(ctx, sweepLayer.Model); err != nil {
+			return nil, fmt.Errorf("failed to load model %s: %w", sweepLayer.Model, err)
+		}
+		currentModel = sweepLayer.Model
+	}
 	sweepClient := newClientForModel(cfg, sweepLayer.Model)
 	matched := sweepChunks(ctx, sweepClient, messages, query, cfg)
 
 	// Layer 2+: rerank/deep passes with progressively smarter models
 	for i := 1; i < len(pipeline); i++ {
-		if len(matched) <= 1 {
+		if len(matched) == 0 {
 			break
 		}
 		layer := pipeline[i]
+
+		// Skip rerank if only 1 result (nothing to filter), but still run deep
+		if len(matched) <= 1 && layer.Name != "deep" {
+			continue
+		}
+
+		// Swap model if this layer uses a different one
+		if cfg.Backend == "local" && layer.Model != currentModel {
+			if err := ensureModelLoaded(ctx, layer.Model); err != nil {
+				// Non-fatal: skip this layer if model can't load
+				continue
+			}
+			currentModel = layer.Model
+		}
+
 		layerClient := newClientForModel(cfg, layer.Model)
 
 		switch layer.Name {
 		case "deep":
-			// Deep pass: re-evaluate each result with the big model for precision
 			matched = deepAnalysis(ctx, layerClient, matched, query)
 		default:
-			// Rerank: filter false positives
 			matched = rerankResults(ctx, layerClient, matched, query)
 		}
 	}
