@@ -10,6 +10,7 @@ import (
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/packages/param"
 
 	"github.com/fgrehm/clotilde/internal/config"
 )
@@ -67,6 +68,9 @@ func (c *localClient) Complete(ctx context.Context, prompt string) (string, erro
 		Messages: []openai.ChatCompletionMessageParamUnion{
 			openai.UserMessage(prompt),
 		},
+		Temperature:      param.NewOpt(0.0),
+		TopP:             param.NewOpt(1.0),
+		FrequencyPenalty: param.NewOpt(2.0),
 	})
 	if err != nil {
 		return "", fmt.Errorf("local LLM request failed: %w", err)
