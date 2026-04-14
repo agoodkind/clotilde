@@ -621,4 +621,64 @@
     if (filename === "makefile" || filename === "gnumakefile") return "makefile";
     return map[ext] || null;
   }
+  // ── Search and Toggle Controls ──────────────────────────────────────────
+  var toolsHidden = false;
+  var thinkingHidden = false;
+
+  window.toggleTools = function () {
+    toolsHidden = !toolsHidden;
+    var btn = document.getElementById("toggle-tools");
+    btn.textContent = toolsHidden ? "Show Tool Calls" : "Hide Tool Calls";
+    btn.classList.toggle("active", toolsHidden);
+    document.querySelectorAll(".tool-call").forEach(function (el) {
+      el.style.display = toolsHidden ? "none" : "";
+    });
+  };
+
+  window.toggleThinking = function () {
+    thinkingHidden = !thinkingHidden;
+    var btn = document.getElementById("toggle-thinking");
+    btn.textContent = thinkingHidden ? "Show Thinking" : "Hide Thinking";
+    btn.classList.toggle("active", thinkingHidden);
+    document.querySelectorAll(".thinking-block").forEach(function (el) {
+      el.style.display = thinkingHidden ? "none" : "";
+    });
+  };
+
+  window.conversationOnly = function () {
+    if (!toolsHidden) window.toggleTools();
+    if (!thinkingHidden) window.toggleThinking();
+  };
+
+  // Search
+  var searchBox = document.getElementById("search-box");
+  if (searchBox) {
+    var debounceTimer;
+    searchBox.addEventListener("input", function () {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(function () {
+        var query = searchBox.value.trim().toLowerCase();
+        var messageEls = document.querySelectorAll(".message");
+
+        messageEls.forEach(function (el) {
+          // Remove previous highlights
+          el.querySelectorAll(".search-highlight").forEach(function (h) {
+            h.outerHTML = h.textContent;
+          });
+
+          if (!query) {
+            el.classList.remove("search-hidden");
+            return;
+          }
+
+          var text = el.textContent.toLowerCase();
+          if (text.indexOf(query) === -1) {
+            el.classList.add("search-hidden");
+          } else {
+            el.classList.remove("search-hidden");
+          }
+        });
+      }, 200);
+    });
+  }
 })();

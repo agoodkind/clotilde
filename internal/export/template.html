@@ -8,6 +8,12 @@
 </head>
 <body>
   <div id="header-container"></div>
+  <div id="controls">
+    <input type="text" id="search-box" placeholder="Search conversation..." />
+    <button id="toggle-tools" onclick="toggleTools()">Hide Tool Calls</button>
+    <button id="toggle-thinking" onclick="toggleThinking()">Hide Thinking</button>
+    <button id="convo-only" onclick="conversationOnly()">Conversation Only</button>
+  </div>
   <div id="messages"></div>
 
   <script id="session-data" type="application/json">{{SESSION_DATA}}</script>
