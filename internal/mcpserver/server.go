@@ -4,6 +4,7 @@ package mcpserver
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"os"
 	"strings"
@@ -18,9 +19,34 @@ import (
 	"github.com/fgrehm/clotilde/internal/util"
 )
 
+//go:embed getting_started.md
+var gettingStartedPrompt string
+
 // Serve starts the MCP stdio server and blocks until the client disconnects.
 func Serve(ctx context.Context) error {
 	s := server.NewMCPServer("clotilde", "0.13.0-dev")
+
+	// --- Prompts (slash commands) ---
+
+	s.AddPrompt(
+		mcp.Prompt{
+			Name:        "clotilde",
+			Description: "Get started with clotilde session management. Lists available tools and explains how to use them.",
+		},
+		func(ctx context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+			return &mcp.GetPromptResult{
+				Description: "clotilde session management",
+				Messages: []mcp.PromptMessage{
+					{
+						Role:    mcp.RoleUser,
+						Content: mcp.NewTextContent(gettingStartedPrompt),
+					},
+				},
+			}, nil
+		},
+	)
+
+	// --- Tools ---
 
 	s.AddTool(
 		mcp.NewTool("clotilde_list_sessions",
