@@ -6,6 +6,28 @@ type Config struct {
 	Defaults Defaults `json:"defaults,omitempty" toml:"defaults,omitempty"`
 	// Profiles is a map of named session profiles
 	Profiles map[string]Profile `json:"profiles,omitempty" toml:"profiles,omitempty"`
+	// Search configures the conversation search LLM backend
+	Search SearchConfig `json:"search,omitempty" toml:"search,omitempty"`
+}
+
+// SearchConfig configures the LLM backend for conversation search.
+type SearchConfig struct {
+	// Backend is "claude" (default) or "local"
+	Backend string       `json:"backend,omitempty" toml:"backend,omitempty"`
+	Local   SearchLocal  `json:"local,omitempty" toml:"local,omitempty"`
+	Claude  SearchClaude `json:"claude,omitempty" toml:"claude,omitempty"`
+}
+
+// SearchLocal configures a local OpenAI-compatible LLM endpoint.
+type SearchLocal struct {
+	URL   string `json:"url,omitempty" toml:"url,omitempty"`
+	Token string `json:"token,omitempty" toml:"token,omitempty"`
+	Model string `json:"model,omitempty" toml:"model,omitempty"`
+}
+
+// SearchClaude configures the Claude backend for search.
+type SearchClaude struct {
+	Model string `json:"model,omitempty" toml:"model,omitempty"`
 }
 
 // Defaults are session defaults applied to all sessions.

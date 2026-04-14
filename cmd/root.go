@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,6 +14,7 @@ import (
 	"github.com/fgrehm/clotilde/internal/claude"
 	"github.com/fgrehm/clotilde/internal/config"
 	"github.com/fgrehm/clotilde/internal/outputstyle"
+	"github.com/fgrehm/clotilde/internal/search"
 	"github.com/fgrehm/clotilde/internal/session"
 	"github.com/fgrehm/clotilde/internal/transcript"
 	"github.com/fgrehm/clotilde/internal/ui"
@@ -589,16 +591,50 @@ func searchConversation(sessions []*session.Session, store session.Store) {
 		return
 	}
 
-	// TODO: implement LLM search (Task 19)
-	// For now, show the conversation viewer as a placeholder
-	fmt.Println("Search not yet implemented — showing full conversation instead.")
+	// Get search query from user
+	query, err := ui.RunInput(ui.NewInput("What are you looking for?"))
+	if err != nil || query == "" {
+		return
+	}
+
 	messages, loadErr := loadSessionMessages(selected)
 	if loadErr != nil {
 		fmt.Printf("Failed to load conversation: %v\n", loadErr)
 		return
 	}
-	text := transcript.RenderPlainText(messages)
-	viewer := ui.NewViewer(fmt.Sprintf("Conversation: %s", selected.Name), text)
+	if len(messages) == 0 {
+		fmt.Println("No conversation messages found.")
+		return
+	}
+
+	// Load search config
+	cfg, _ := config.LoadGlobalOrDefault()
+
+	fmt.Printf("Searching %d messages for: %s\n", len(messages), query)
+
+	ctx := context.Background()
+	results, searchErr := search.Search(ctx, messages, query, cfg.Search)
+	if searchErr != nil {
+		fmt.Printf("Search failed: %v\n", searchErr)
+		return
+	}
+
+	if len(results) == 0 {
+		fmt.Println("No matching messages found.")
+		return
+	}
+
+	// Combine all matching messages into a single view
+	var allMatched []transcript.Message
+	for _, r := range results {
+		if r.Summary != "" {
+			fmt.Printf("  Found: %s\n", r.Summary)
+		}
+		allMatched = append(allMatched, r.Messages...)
+	}
+
+	text := transcript.RenderPlainText(allMatched)
+	viewer := ui.NewViewer(fmt.Sprintf("Search results: %q in %s", query, selected.Name), text)
 	_ = ui.RunViewer(viewer)
 }
 
