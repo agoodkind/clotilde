@@ -80,9 +80,10 @@ func Serve(ctx context.Context) error {
 
 	s.AddTool(
 		mcp.NewTool("clotilde_search_conversation",
-			mcp.WithDescription("Search a session's conversation history using an LLM to find where a topic was discussed. Returns matching messages."),
+			mcp.WithDescription("Search a session's conversation history using an LLM to find where a topic was discussed. Returns matching messages. Use depth to control speed vs accuracy: 'quick' (fast model only), 'normal' (fast + rerank), 'deep' (full pipeline with large model verification)."),
 			mcp.WithString("session_name", mcp.Required(), mcp.Description("Session name to search.")),
 			mcp.WithString("query", mcp.Required(), mcp.Description("What to search for (natural language).")),
+			mcp.WithString("depth", mcp.Description("Search depth: 'quick', 'normal' (default), or 'deep'. Quick is fastest, deep is most accurate.")),
 		),
 		handleSearchConversation,
 	)
@@ -253,8 +254,9 @@ func handleSearchConversation(ctx context.Context, req mcp.CallToolRequest) (*mc
 		return mcp.NewToolResultText("No conversation messages found."), nil
 	}
 
+	depth := req.GetString("depth", "normal")
 	cfg, _ := config.LoadGlobalOrDefault()
-	results, err := search.Search(ctx, messages, query, cfg.Search)
+	results, err := search.SearchWithDepth(ctx, messages, query, cfg.Search, depth)
 	if err != nil {
 		return mcp.NewToolResultText(fmt.Sprintf("Search failed: %v", err)), nil
 	}

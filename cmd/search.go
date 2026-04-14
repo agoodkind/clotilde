@@ -73,8 +73,12 @@ Configure the search backend in ~/.config/clotilde/config.toml:
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Searching %d messages for: %s\n", len(messages), query)
 
 			// Search
+			depth, _ := cmd.Flags().GetString("depth")
+			if depth == "" {
+				depth = "normal"
+			}
 			cfg, _ := config.LoadGlobalOrDefault()
-			results, searchErr := search.Search(context.Background(), messages, query, cfg.Search)
+			results, searchErr := search.SearchWithDepth(context.Background(), messages, query, cfg.Search, depth)
 			if searchErr != nil {
 				return fmt.Errorf("search failed: %w", searchErr)
 			}
@@ -105,5 +109,6 @@ Configure the search backend in ~/.config/clotilde/config.toml:
 			return nil
 		},
 	}
+	cmd.Flags().String("depth", "normal", "Search depth: quick, normal, or deep")
 	return cmd
 }
