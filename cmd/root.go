@@ -353,6 +353,7 @@ func registerSubcommands(root *cobra.Command) {
 	root.AddCommand(versionCmd)
 	root.AddCommand(newCompletionCmd())
 	root.AddCommand(newDaemonCmd())
+	root.AddCommand(newMCPCmd())
 	root.AddCommand(newExecCmd())
 
 	root.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")

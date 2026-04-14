@@ -31,6 +31,7 @@ var clotildeSubcommands = map[string]bool{
 	"delete":     true,
 	"export":     true,
 	"search":     true,
+	"mcp":        true,
 	"adopt":      true,
 	"setup":      true,
 	"init":       true,

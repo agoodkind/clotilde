@@ -13,8 +13,8 @@ import (
 const (
 	// maxChunkChars is the target size for each conversation chunk sent to the LLM.
 	maxChunkChars = 50_000
-	// maxConcurrent is the maximum number of parallel LLM requests.
-	maxConcurrent = 5
+	// defaultMaxConcurrent is the default number of parallel LLM requests.
+	defaultMaxConcurrent = 4
 )
 
 // Result holds matching messages from a search.
@@ -40,8 +40,13 @@ func Search(ctx context.Context, messages []transcript.Message, query string, cf
 		err     error
 	}
 
+	maxConc := cfg.Local.MaxConcurrent
+	if maxConc <= 0 {
+		maxConc = defaultMaxConcurrent
+	}
+
 	results := make([]chunkResult, len(chunks))
-	sem := make(chan struct{}, maxConcurrent)
+	sem := make(chan struct{}, maxConc)
 	var wg sync.WaitGroup
 
 	for i, chunk := range chunks {
