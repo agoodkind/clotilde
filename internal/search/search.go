@@ -138,6 +138,18 @@ func sweepChunks(ctx context.Context, log *slog.Logger, client Client, messages 
 	chunks := chunkMessages(messages, chunkSize)
 	log.Info("sweep: chunked messages", "chunks", len(chunks), "messages", len(messages), "chunk_size", chunkSize)
 
+	// Pre-filter with embeddings if available (local backend only).
+	// The embedding model is tiny (~0.1 GB) and can coexist with inference models.
+	if cfg.Backend == "local" {
+		// Ensure embedding model is loaded (won't evict large models due to tiny size)
+		_ = ensureModelLoaded(ctx, defaultEmbeddingModel, 0, cfg.Local.MaxMemoryGB)
+		filter := newEmbeddingFilter(cfg.Local)
+		filtered, filterErr := filter.filterChunks(ctx, query, chunks)
+		if filterErr == nil {
+			chunks = filtered
+		}
+	}
+
 	type chunkResult struct {
 		idx    int
 		result *Result
