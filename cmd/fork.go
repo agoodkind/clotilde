@@ -243,7 +243,7 @@ Pass additional flags to Claude Code after '--':
 			err = claude.Fork(clotildeRoot, parentSess, forkName, settingsFile, additionalArgs, fork)
 			autoUpdateContext(store, fork)
 			printResumeInstructions(fork)
-			returnToDashboard(cmd)
+			returnToDashboard(fork)
 			return err
 		},
 	}

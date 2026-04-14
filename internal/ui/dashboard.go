@@ -31,20 +31,40 @@ type MenuItem struct {
 
 // NewDashboard creates a new dashboard model
 func NewDashboard(sessions []*session.Session) DashboardModel {
+	return newDashboard(sessions, nil)
+}
+
+// NewDashboardPostSession creates a dashboard with "Return to session" and "Exit"
+// at the top, shown after a session exits.
+func NewDashboardPostSession(sessions []*session.Session, lastSession *session.Session) DashboardModel {
+	return newDashboard(sessions, lastSession)
+}
+
+func newDashboard(sessions []*session.Session, lastSession *session.Session) DashboardModel {
+	var items []MenuItem
+
+	if lastSession != nil {
+		items = append(items,
+			MenuItem{ID: "return", Label: "Return to " + lastSession.Name, Description: "Resume the session you just left"},
+		)
+	}
+
+	items = append(items,
+		MenuItem{ID: "start", Label: "Start new session", Description: "Create a new conversation"},
+		MenuItem{ID: "resume", Label: "Resume session", Description: "Continue an existing session"},
+		MenuItem{ID: "view", Label: "View conversation", Description: "Read a session's conversation text"},
+		MenuItem{ID: "search", Label: "Search conversation", Description: "Find where something was discussed"},
+		MenuItem{ID: "fork", Label: "Fork session", Description: "Branch from an existing session"},
+		MenuItem{ID: "list", Label: "List all sessions", Description: "View all sessions in a table"},
+		MenuItem{ID: "delete", Label: "Delete session", Description: "Remove a session"},
+		MenuItem{ID: "quit", Label: "Quit", Description: "Exit dashboard"},
+	)
+
 	return DashboardModel{
 		Sessions:    sessions,
 		Cursor:      0,
 		recentLimit: 5,
-		menuItems: []MenuItem{
-			{ID: "start", Label: "Start new session", Description: "Create a new conversation"},
-			{ID: "resume", Label: "Resume session", Description: "Continue an existing session"},
-			{ID: "view", Label: "View conversation", Description: "Read a session's conversation text"},
-			{ID: "search", Label: "Search conversation", Description: "Find where something was discussed"},
-			{ID: "fork", Label: "Fork session", Description: "Branch from an existing session"},
-			{ID: "list", Label: "List all sessions", Description: "View all sessions in a table"},
-			{ID: "delete", Label: "Delete session", Description: "Remove a session"},
-			{ID: "quit", Label: "Quit", Description: "Exit dashboard"},
-		},
+		menuItems:   items,
 	}
 }
 

@@ -165,80 +165,70 @@ func formatSessionName(sess *session.Session) string {
 }
 
 // richPreviewFunc returns a PreviewFunc that shows full session details
-// including UUID, workspace, context, model, transcript size, and recent messages.
+// with clear section separation and stats.
 func richPreviewFunc(store session.Store) ui.PreviewFunc {
 	return func(sess *session.Session) string {
 		var lines []string
+		sep := "────────────────────────────"
 
-		// Name
+		// Header: name + context summary
 		lines = append(lines, sess.Name)
-		lines = append(lines, "")
-
-		// UUID
-		lines = append(lines, fmt.Sprintf("UUID:        %s", sess.Metadata.SessionID))
-
-		// Display name (if different)
-		if sess.Metadata.DisplayName != "" && sess.Metadata.DisplayName != sess.Name {
-			lines = append(lines, fmt.Sprintf("Display:     %s", sess.Metadata.DisplayName))
-		}
-
-		// Workspace + WorkDir
-		lines = append(lines, fmt.Sprintf("Workspace:   %s", shortWorkspacePath(sess.Metadata.WorkspaceRoot)))
-		if sess.Metadata.WorkDir != "" && sess.Metadata.WorkDir != sess.Metadata.WorkspaceRoot {
-			lines = append(lines, fmt.Sprintf("Work dir:    %s", shortWorkspacePath(sess.Metadata.WorkDir)))
-		}
-
-		// Model
-		model, _ := extractModelAndLastUsed(sess, store)
-		lines = append(lines, fmt.Sprintf("Model:       %s", model))
-
-		// Context
 		if sess.Metadata.Context != "" {
-			lines = append(lines, fmt.Sprintf("Context:     %s", sess.Metadata.Context))
+			lines = append(lines, sess.Metadata.Context)
 		}
 
-		// Type
+		// Session info
+		lines = append(lines, sep)
+		model, _ := extractModelAndLastUsed(sess, store)
+		lines = append(lines, fmt.Sprintf("Model:     %s", model))
+		lines = append(lines, fmt.Sprintf("Workspace: %s", shortWorkspacePath(sess.Metadata.WorkspaceRoot)))
 		if sess.Metadata.IsForkedSession {
-			lines = append(lines, fmt.Sprintf("Type:        fork of %s", sess.Metadata.ParentSession))
-		}
-		if sess.Metadata.IsIncognito {
-			lines = append(lines, "Type:        incognito")
+			lines = append(lines, fmt.Sprintf("Type:      fork of %s", sess.Metadata.ParentSession))
 		}
 
-		lines = append(lines, "")
-
-		// Timestamps
-		lines = append(lines, fmt.Sprintf("Created:     %s", sess.Metadata.Created.Format("2006-01-02 15:04")))
-		lines = append(lines, fmt.Sprintf("Last used:   %s", util.FormatRelativeTime(sess.Metadata.LastAccessed)))
-
-		// Transcript size
+		// Stats
+		lines = append(lines, sep)
+		lines = append(lines, fmt.Sprintf("Created:   %s", sess.Metadata.Created.Format("2006-01-02 15:04")))
+		lines = append(lines, fmt.Sprintf("Last used: %s", util.FormatRelativeTime(sess.Metadata.LastAccessed)))
 		if sess.Metadata.TranscriptPath != "" {
 			if info, err := os.Stat(sess.Metadata.TranscriptPath); err == nil {
-				size := float64(info.Size()) / (1024 * 1024)
-				lines = append(lines, fmt.Sprintf("Transcript:  %.1f MB", size))
+				sizeMB := float64(info.Size()) / (1024 * 1024)
+				lines = append(lines, fmt.Sprintf("Transcript: %.1f MB", sizeMB))
 			}
 		}
-
-		// Recent messages
+		// Message count from transcript
 		if sess.Metadata.TranscriptPath != "" {
-			messages := claude.ExtractRecentMessages(sess.Metadata.TranscriptPath, 3, 120)
+			messages := claude.ExtractRecentMessages(sess.Metadata.TranscriptPath, 3, 100)
+			// Count user messages for "turns"
+			userCount := 0
+			for _, m := range messages {
+				if m.Role == "user" {
+					userCount++
+				}
+			}
+
+			// Last exchange
 			if len(messages) > 0 {
-				lines = append(lines, "")
-				lines = append(lines, "Recent:")
+				lines = append(lines, sep)
+				lines = append(lines, "Last exchange:")
 				for _, msg := range messages {
-					prefix := "  > "
+					role := "You"
 					if msg.Role == "assistant" {
-						prefix = "  < "
+						role = "Claude"
 					}
-					lines = append(lines, prefix+msg.Text)
+					text := msg.Text
+					if len(text) > 80 {
+						text = text[:80] + "..."
+					}
+					lines = append(lines, fmt.Sprintf("  %s: %s", role, text))
 				}
 			}
 		}
 
-		// Resume command
-		lines = append(lines, "")
-		lines = append(lines, "Resume with:")
-		lines = append(lines, fmt.Sprintf("  clotilde resume %s", sess.Name))
+		// UUID + resume
+		lines = append(lines, sep)
+		lines = append(lines, fmt.Sprintf("UUID: %s", sess.Metadata.SessionID))
+		lines = append(lines, fmt.Sprintf("clotilde resume %s", sess.Name))
 
 		return strings.Join(lines, "\n")
 	}

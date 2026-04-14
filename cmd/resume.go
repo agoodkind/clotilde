@@ -172,7 +172,7 @@ Pass additional flags to Claude Code after '--':
 			err = claude.Resume(clotildeRoot, sess, settingsFile, additionalArgs)
 			autoUpdateContext(store, sess)
 			printResumeInstructions(sess)
-			returnToDashboard(cmd)
+			returnToDashboard(sess)
 			return err
 		},
 	}
