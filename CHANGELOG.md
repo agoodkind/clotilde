@@ -9,30 +9,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Session display names**: Sessions now support a `displayName` metadata field shown in the TUI instead of the raw session ID (e.g. `opnsense-bgp-cutover` instead of `configs-6d383f1d`). The original name is unchanged and still used for `resume`, `fork`, `delete`, etc.
+**Session management**
+
+- **Session display names**: Sessions now support a `displayName` metadata field shown in the TUI instead of the raw session ID (e.g. `opnsense-bgp-cutover` instead of `configs-6d383f1d`). The original name is unchanged and still used for `resume`, `fork`, `delete`, etc. Dashboard, picker, list table, and inspect all show the display name; picker filter matches both raw name and display name.
 - **`clotilde auto-name`**: Generates human-readable kebab-case display names for sessions via `claude haiku` using conversation content. Supports `--all` (batch all unnamed), `--force` (regenerate existing), `--dry-run` (preview without saving), and `--model` flags.
-- **Dashboard: Auto-name sessions action**: New "Auto-name sessions" entry in the dashboard Quick Actions menu. Shows a confirmation dialog then generates display names for all unnamed sessions in the current workspace.
-- **Search form TUI**: The "Search conversation" dashboard action now opens a full-screen form with three fields: session (picker), query (text input), and depth selector (quick / normal / deep / extra-deep navigated with left/right arrows). Replaces the previous sequential picker-then-input flow.
-- **MCP `clotilde_analyze_results` tool**: Runs an LLM synthesis pass over the result set from a previous `clotilde_search_conversation` call without re-running the search. Results are identified by a `result_id` returned by the search tool and cached both in memory and on disk at `~/.cache/clotilde/search-results/`.
-- **Search result cache persistence**: `clotilde_search_conversation` result sets are now written to `$XDG_CACHE_HOME/clotilde/search-results/<id>.json` so `result_id` values survive MCP server restarts.
-- **4-tier search depth**: `clotilde search` and the search TUI now expose four depth levels: `quick` (embedding similarity only, ~20s), `normal` (embedding + LLM sweep, ~4min), `deep` (embedding + LLM + reranker, ~5min), `extra-deep` (adds large model verification, 20min+). Default is `quick`.
-- **Embedding pre-filter threshold**: `search.local.embedding_threshold` config option (default 0.5) controls the cosine similarity cutoff for the embedding pre-filter stage, replacing the previous hardcoded 0.3.
-- **`clotilde inspect` shows display name**: `clotilde inspect <session>` now prints the `Display Name` field when one is set.
+- **`clotilde adopt`**: Imports sessions from legacy per-project `.claude/clotilde/` stores into the global store. Also scans for any untracked session UUIDs and creates metadata for them. Running `clotilde resume <uuid>` auto-adopts sessions not yet registered.
+- **`clotilde exec`**: Runs a bare `claude` invocation with model isolation via the daemon, without session tracking overhead.
+- **Smart resume lookup**: `clotilde resume` tries four strategies in order: exact name match, UUID match (with auto-adopt), display name match, and substring fuzzy search. If multiple sessions match a substring, a TUI picker is shown.
+- **Fall-through for unknown session names**: When `clotilde resume <name>` finds no matching session, it forwards the arguments to `claude` directly, making clotilde a drop-in wrapper for any claude invocation.
+- **CWD restore on resume**: Sessions remember the working directory where they were created. `clotilde resume <name>` restores Claude to the original directory regardless of where the resume command is run from. Applies to `start`, `fork`, and `incognito` sessions.
+- **`--add-dir` injection**: `clotilde resume` automatically adds the session's workspace root via `--add-dir` so Claude can read files there even when resumed from a different directory.
+- **Centralized global session storage**: Session metadata is now stored in a single global directory (`$XDG_DATA_HOME/clotilde/sessions/`, defaulting to `~/.local/share/clotilde/sessions/`) instead of per-project `.claude/clotilde/` directories. Sessions track their originating workspace via a `workspaceRoot` metadata field.
+- **Exit instructions**: After a session exits, clotilde prints a short resume hint (`clotilde resume <name>`) so the session name is visible in the terminal buffer.
 
-### Changed
+**Context and LLM**
 
-- **CWD restore on resume**: Sessions now remember the working directory where they were created. `clotilde resume <name>` restores Claude to the original directory regardless of where the resume command is run from. Applies to `start`, `fork`, and `incognito` sessions.
-- **Centralized global session storage**: Session metadata is now stored in a single global directory (`$XDG_DATA_HOME/clotilde/sessions/`, defaulting to `~/.local/share/clotilde/sessions/`) instead of per-project `.claude/clotilde/` directories. Sessions track their originating workspace via a `workspaceRoot` metadata field. `clotilde list` shows only sessions for the current workspace by default; use `--all` to see all sessions across all workspaces. `clotilde adopt` now imports untracked sessions directly into the global store.
-- **Per-session model isolation via daemon**: A background daemon (lazily started, exits after 5 min idle) writes per-session `settings.json` files so `/model` changes in one Claude session do not affect others.
-- **Flock-based daemon launch**: Multiple concurrent `clotilde` invocations use `flock(2)` to serialise daemon startup, eliminating the race where two processes could both spawn the daemon.
-- **Idle timeout**: The daemon shuts down gracefully after 5 minutes with no active sessions, keeping the system clean.
-- **`clotilde setup --launch-agent`**: Optionally register the daemon as a macOS LaunchAgent so it pre-warms at login. The daemon still launches on demand without this flag.
-- **`make sign` / `make notarize`**: Code signing (Developer ID) and notarization targets, configured via a local `config.mk` (see `config.mk.example`). Pattern mirrors `macos-smc-fan`.
-- **`make install-launch-agent`**: Installs and bootstraps the LaunchAgent from the Makefile.
+- **Auto-populate session context via LLM**: When a session exits, clotilde fires a background gRPC call to the daemon. The daemon extracts the 5 most recent messages from the transcript and asks `claude sonnet` for a one-sentence summary (under 15 words), which is stored in `metadata.context` and shown in the list preview and TUI.
+- **TOML config support**: `~/.config/clotilde/config.toml` (respects `$XDG_CONFIG_HOME`) replaces the JSON config format. Supports a `[defaults]` section for global flag defaults (e.g. `remote-control = true`).
+
+**TUI and display**
+
+- **Rich preview pane in `clotilde list`**: The interactive list shows a right-hand preview panel with UUID, workspace, model, transcript size, message count, and the most recent user message for any selected session.
+- **Richer list table**: `clotilde list` now shows `DIR` (shortened workspace path) and `CREATED` columns alongside `NAME`, `MODEL`, and `LAST USED`.
+- **TUI conversation viewer**: Dashboard "View conversation" action opens a scrollable BubbleTea viewport with the full session transcript rendered as plain text (user + assistant messages, no tool call noise).
+- **Search form TUI**: Dashboard "Search conversation" opens a full-screen form with three fields: session (picker), query (text input), and depth selector (quick / normal / deep / extra-deep, navigated with left/right arrows). Replaces the previous sequential picker-then-input flow.
+- **Return to dashboard after session exit**: When a session exits (`/exit`, Ctrl+D), clotilde returns to the TUI dashboard instead of dropping to the shell. A "Return to session" action at the top lets the user resume immediately.
+- **Dashboard "Auto-name sessions" action**: Shows a confirmation dialog then generates display names for all unnamed sessions in the workspace via `claude haiku`.
+- **`clotilde inspect` shows display name**: `clotilde inspect <session>` prints the `Display Name` field when one is set, and shows it above the raw session ID in the rich list preview.
+
+**Search pipeline**
+
+- **`clotilde search <name> <query>`**: CLI command to search a session's conversation history. Uses the configured LLM backend to find where a topic was discussed and returns the matching messages.
+- **Local LLM support**: Search uses an OpenAI-compatible endpoint (LM Studio, Ollama, etc.) when `search.backend = "local"` in config. Configurable URL, model, and sampling parameters.
+- **4-tier search depth**: `--depth quick` (embedding similarity only, ~20s), `--depth normal` (embedding + LLM chunk sweep, ~4min), `--depth deep` (adds LLM reranker pass, ~5min), `--depth extra-deep` (adds large model verification, 20min+). Default is `quick`.
+- **Embedding pre-filter**: Before LLM search, chunks are pre-filtered by cosine similarity against the query embedding (using `nomic-embed-text`). Threshold configurable via `search.local.embedding_threshold` (default 0.5).
+- **LLM reranker pass**: At `deep` depth, a second LLM pass scores candidate chunks by relevance and de-duplicates, improving precision over the initial sweep.
+- **Memory-aware model management**: The search pipeline calls the `lms` CLI to explicitly load and unload models around each pipeline phase, avoiding LM Studio's memory eviction from evicting the embedding model mid-search.
+- **Auto model swap between pipeline layers**: Each depth tier uses a different model appropriate to the task. The pipeline swaps models via `lms load`/`lms unload` between phases.
+- **Configurable chunk size and concurrency**: `search.local.chunk_size` (default 4000 chars) and `search.max_concurrency` (default 5) are tunable via TOML.
+- **Per-phase timing instrumentation**: Each phase of the search pipeline logs start and end times via `slog`, making it easy to identify bottlenecks. Audit logs are written to `~/.local/share/clotilde/audit/`.
+- **Configurable LLM sampling params**: `temperature`, `top_p`, and `frequency_penalty` are configurable per backend in `config.toml`.
+
+**MCP server**
+
+- **`clotilde mcp`**: Starts a Model Context Protocol server exposing session tools to any MCP-capable client (Claude Code, Cursor, etc.). Tools: `clotilde_list_sessions`, `clotilde_get_conversation`, `clotilde_search_conversation`, `clotilde_get_context`, `clotilde_analyze_results`.
+- **`clotilde_search_conversation`**: Searches a session's conversation history from inside another Claude session. Returns a `result_id` along with matching messages. Supports the same depth tiers as `clotilde search`.
+- **`clotilde_analyze_results`**: Runs an LLM synthesis pass over the result set from a previous `clotilde_search_conversation` call without re-running the search. Useful for extracting structured data or summaries from a large result set.
+- **`clotilde_get_context`**: Returns messages before and after a specific message index in a session, useful for expanding context around a search result.
+- **Search result cache persistence**: MCP search results are cached both in memory and at `$XDG_CACHE_HOME/clotilde/search-results/<id>.json`, so `result_id` values survive MCP server restarts.
+- **`clotilde_getting_started` prompt**: Auto-registered system prompt describing all available MCP tools and a recommended workflow.
+- **Auto-register MCP in setup**: `clotilde setup` now registers the MCP server in `~/.claude.json` so it is available in all Claude Code sessions.
+
+**Export**
+
+- **HTML export search box**: The generated HTML includes a search box that filters messages in real time by text content.
+- **Tool call and thinking block toggles**: "Show/Hide Tool Calls" and "Conversation Only" buttons in the HTML export header hide tool call divs and thinking blocks for cleaner reading.
+- **Shared transcript parsing pipeline**: `internal/transcript` package provides a structured `Message` type and `Parse()` function used by both HTML export and the plain-text conversation viewer, avoiding duplicated client-side parsing logic.
+
+**Daemon infrastructure**
+
+- **Per-session model isolation via daemon**: A background gRPC daemon writes per-session `settings.json` files so `/model` changes in one Claude session do not bleed into others.
+- **Flock-based daemon launch**: Concurrent `clotilde` invocations use `flock(2)` to serialise daemon startup, eliminating the race where two processes could both spawn the daemon.
+- **Daemon monitor goroutine**: The daemon watches its own binary mtime and exits when a new build is installed, so `make install` takes effect immediately for the next session without a manual restart.
+- **macOS LaunchAgent**: The daemon is registered as a launchd agent by default so it pre-warms at login. `clotilde setup --launch-agent` and `make install-launch-agent` manage registration.
+- **Idle auto-exit**: The daemon shuts down gracefully after 5 minutes with no active sessions.
+- **Code signing and notarization**: `make sign` and `make notarize` targets for Developer ID signing and Apple notarization, configured via `config.mk`.
+- **`make install-launch-agent`**: Installs and bootstraps the LaunchAgent plist from the Makefile.
 
 ### Changed
 
 - **`clotilde list` is workspace-scoped by default**: Shows only sessions whose `workspaceRoot` matches the current directory's project root. Pass `--all` to list every session regardless of workspace.
+- **Dashboard "Search conversation"**: Now opens the unified search form TUI (session + query + depth) instead of a sequential picker-then-input flow.
+- **Daemon installed as launchd agent by default**: The daemon previously required `--launch-agent` to register; it now registers at login automatically via `clotilde setup`.
+
+### Fixed
+
+- **Post-session dashboard layout**: Fixed alignment and rendering artefacts in the "Return to session" dashboard shown after a session exits.
+- **Daemon binary not updated until next login**: `make install` now signals the running daemon to exit so the new binary is picked up immediately.
 
 ## [0.12.0] - 2026-04-08
 
