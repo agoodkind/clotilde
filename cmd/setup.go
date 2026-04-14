@@ -70,6 +70,11 @@ pre-starts at login (optional — clotilde also launches it on demand).`,
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  Sessions will be created automatically when you run:")
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  clotilde start <session-name>")
 
+			// Register MCP server in ~/.claude.json
+			if err := registerMCPServer(cmd, clotildeBinary, homeDir); err != nil {
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Warning: MCP registration failed: %v\n", err)
+			}
+
 			// Always install LaunchAgent on macOS
 			if err := installLaunchAgent(cmd, clotildeBinary, homeDir); err != nil {
 				// Non-fatal on non-macOS
@@ -141,6 +146,53 @@ func installLaunchAgent(cmd *cobra.Command, clotildeBinary, homeDir string) erro
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), ui.Success("LaunchAgent registered: "+launchAgentLabel))
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  Daemon will pre-start at login.")
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  Plist: "+plistPath)
+
+	return nil
+}
+
+// registerMCPServer adds the clotilde MCP server to ~/.claude.json so it's
+// available in all Claude Code sessions automatically.
+func registerMCPServer(cmd *cobra.Command, clotildeBinary, homeDir string) error {
+	claudeJSONPath := filepath.Join(homeDir, ".claude.json")
+
+	// Read existing config
+	var cfg map[string]any
+	data, err := os.ReadFile(claudeJSONPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			cfg = make(map[string]any)
+		} else {
+			return fmt.Errorf("failed to read ~/.claude.json: %w", err)
+		}
+	} else {
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			return fmt.Errorf("failed to parse ~/.claude.json: %w", err)
+		}
+	}
+
+	// Add/update mcpServers.clotilde
+	servers, ok := cfg["mcpServers"].(map[string]any)
+	if !ok {
+		servers = make(map[string]any)
+	}
+	servers["clotilde"] = map[string]any{
+		"type":    "stdio",
+		"command": clotildeBinary,
+		"args":    []string{"mcp"},
+	}
+	cfg["mcpServers"] = servers
+
+	// Write back
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal ~/.claude.json: %w", err)
+	}
+	if err := os.WriteFile(claudeJSONPath, out, 0o644); err != nil {
+		return fmt.Errorf("failed to write ~/.claude.json: %w", err)
+	}
+
+	_, _ = fmt.Fprintln(cmd.OutOrStdout(), ui.Success("MCP server registered in ~/.claude.json"))
+	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  Tools: clotilde_list_sessions, clotilde_get_conversation, clotilde_search_conversation")
 
 	return nil
 }
