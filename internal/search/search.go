@@ -3,8 +3,10 @@ package search
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/fgrehm/clotilde/internal/config"
 	"github.com/fgrehm/clotilde/internal/transcript"
@@ -43,57 +45,91 @@ func SearchWithDepth(ctx context.Context, messages []transcript.Message, query s
 		return nil, fmt.Errorf("no search pipeline configured")
 	}
 
+	log := slog.Default()
+	log.Info("search starting",
+		"query", query,
+		"messages", len(messages),
+		"depth", depth,
+		"layers", len(pipeline),
+	)
+	searchStart := time.Now()
+
 	// Track current model so we only swap when needed
 	currentModel := ""
 
 	// Layer 1: sweep with fast model
 	sweepLayer := pipeline[0]
 	if cfg.Backend == "local" {
+		log.Info("loading sweep model", "model", sweepLayer.Model)
 		if err := ensureModelLoaded(ctx, sweepLayer.Model); err != nil {
 			return nil, fmt.Errorf("failed to load model %s: %w", sweepLayer.Model, err)
 		}
 		currentModel = sweepLayer.Model
 	}
+	sweepStart := time.Now()
 	sweepClient := newClientForModel(cfg, sweepLayer.Model)
 	matched := sweepChunks(ctx, sweepClient, messages, query, cfg)
+	log.Info("sweep complete",
+		"model", sweepLayer.Model,
+		"matches", len(matched),
+		"duration", time.Since(sweepStart).Round(time.Millisecond),
+	)
 
 	// Layer 2+: rerank/deep passes with progressively smarter models
 	for i := 1; i < len(pipeline); i++ {
 		if len(matched) == 0 {
+			log.Info("no matches, skipping remaining layers")
 			break
 		}
 		layer := pipeline[i]
 
 		// Skip rerank if only 1 result (nothing to filter), but still run deep
 		if len(matched) <= 1 && layer.Name != "deep" {
+			log.Info("skipping rerank layer (single result)", "layer", layer.Name)
 			continue
 		}
 
 		// Swap model if this layer uses a different one
 		if cfg.Backend == "local" && layer.Model != currentModel {
+			log.Info("swapping model", "from", currentModel, "to", layer.Model, "layer", layer.Name)
 			if err := ensureModelLoaded(ctx, layer.Model); err != nil {
-				// Non-fatal: skip this layer if model can't load
+				log.Warn("model load failed, skipping layer", "model", layer.Model, "err", err)
 				continue
 			}
 			currentModel = layer.Model
 		}
 
+		layerStart := time.Now()
 		layerClient := newClientForModel(cfg, layer.Model)
 
+		beforeCount := len(matched)
 		switch layer.Name {
 		case "deep":
 			matched = deepAnalysis(ctx, layerClient, matched, query)
 		default:
 			matched = rerankResults(ctx, layerClient, matched, query)
 		}
+		log.Info("layer complete",
+			"layer", layer.Name,
+			"model", layer.Model,
+			"before", beforeCount,
+			"after", len(matched),
+			"duration", time.Since(layerStart).Round(time.Millisecond),
+		)
 	}
 
+	log.Info("search complete",
+		"total_matches", len(matched),
+		"total_duration", time.Since(searchStart).Round(time.Millisecond),
+	)
 	return matched, nil
 }
 
 // sweepChunks runs the initial parallel chunk search.
 func sweepChunks(ctx context.Context, client Client, messages []transcript.Message, query string, cfg config.SearchConfig) []Result {
+	log := slog.Default()
 	chunks := chunkMessages(messages, maxChunkChars)
+	log.Info("sweep: chunked messages", "chunks", len(chunks), "messages", len(messages))
 
 	type chunkResult struct {
 		idx    int
@@ -117,8 +153,16 @@ func sweepChunks(ctx context.Context, client Client, messages []transcript.Messa
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
+			chunkStart := time.Now()
 			res, err := searchChunk(ctx, client, msgs, query)
 			results[idx] = chunkResult{idx: idx, result: res, err: err}
+			hit := res != nil && len(res.Messages) > 0
+			log.Debug("sweep: chunk done",
+				"chunk", idx,
+				"messages", len(msgs),
+				"hit", hit,
+				"duration", time.Since(chunkStart).Round(time.Millisecond),
+			)
 		}(i, chunk)
 	}
 	wg.Wait()
