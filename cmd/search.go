@@ -116,6 +116,6 @@ Configure the search backend in ~/.config/clotilde/config.toml:
 			return nil
 		},
 	}
-	cmd.Flags().String("depth", "quick", "Search depth: quick (embedding only, ~3s), normal (+ LLM sweep, ~60s), deep (+ rerank, ~3min), extra-deep (+ large model, 10min+)")
+	cmd.Flags().String("depth", "quick", "Search depth: quick (embedding only, ~20s), normal (+ LLM sweep, ~4min), deep (+ rerank, ~5min), extra-deep (+ large model, 20min+)")
 	return cmd
 }

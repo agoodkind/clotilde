@@ -18,10 +18,10 @@ Search a session's conversation history for where a topic was discussed.
 - depth (optional): controls speed vs accuracy
 
 **Search depth levels (always start at quick, escalate only if needed):**
-- `quick` (default, ~3s): embedding similarity only, no LLM. Use this first.
-- `normal` (~60s): embedding filter + LLM sweep. Use when quick results are vague or missing.
-- `deep` (~3min): adds a reranker pass for better precision. Use for important lookups.
-- `extra-deep` (10min+): adds large model verification. Slow. Only use when explicitly asked.
+- `quick` (default, ~20s): embedding similarity only, no LLM. Use this first.
+- `normal` (~4min): embedding filter + LLM sweep. Use when quick results are vague or missing.
+- `deep` (~5min): adds a reranker pass for better precision. Use for important lookups.
+- `extra-deep` (20min+): adds large model verification. Only use when explicitly asked.
 
 ### clotilde_get_context
 Get context around a specific message index in a session.

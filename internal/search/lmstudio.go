@@ -92,12 +92,13 @@ func ensureModelLoaded(ctx context.Context, model string, contextLen int, maxMem
 	if contextLen > 0 {
 		args = []string{"load", model, "-c", fmt.Sprintf("%d", contextLen), "-y"}
 	}
+	loadStart := time.Now()
 	cmd := exec.CommandContext(loadCtx, lms, args...)
 	if output, loadErr := cmd.CombinedOutput(); loadErr != nil {
 		return fmt.Errorf("lms load %s: %w\n%s", model, loadErr, output)
 	}
 
-	log.Info("model loaded", "model", model)
+	log.Info("model loaded", "model", model, "load_duration", time.Since(loadStart).Round(time.Millisecond))
 	return nil
 }
 

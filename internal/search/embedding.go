@@ -71,18 +71,22 @@ func (e *embeddingFilter) filterChunks(ctx context.Context, query string, chunks
 	}
 
 	// Embed query
+	queryEmbStart := time.Now()
 	queryEmb, err := e.embed(ctx, []string{query})
 	if err != nil {
 		log.Warn("embedding query failed, skipping pre-filter", "err", err)
 		return chunks, nil // fall back to no filtering
 	}
+	log.Debug("embedding: query embedded", "duration", time.Since(queryEmbStart).Round(time.Millisecond))
 
 	// Embed all chunks in one batch
+	chunksEmbStart := time.Now()
 	chunkEmbs, err := e.embed(ctx, chunkTexts)
 	if err != nil {
 		log.Warn("embedding chunks failed, skipping pre-filter", "err", err)
 		return chunks, nil
 	}
+	log.Debug("embedding: chunks embedded", "chunks", len(chunkTexts), "duration", time.Since(chunksEmbStart).Round(time.Millisecond))
 
 	if len(queryEmb) == 0 || len(chunkEmbs) != len(chunks) {
 		return chunks, nil
@@ -104,7 +108,9 @@ func (e *embeddingFilter) filterChunks(ctx context.Context, query string, chunks
 		"passed", len(filtered),
 		"filtered_out", len(chunks)-len(filtered),
 		"threshold", e.threshold,
-		"duration", time.Since(start).Round(time.Millisecond),
+		"query_embed_duration", time.Since(queryEmbStart).Round(time.Millisecond),
+		"chunks_embed_duration", time.Since(chunksEmbStart).Round(time.Millisecond),
+		"total_duration", time.Since(start).Round(time.Millisecond),
 	)
 
 	if len(filtered) == 0 {
