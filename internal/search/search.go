@@ -24,21 +24,59 @@ type Result struct {
 }
 
 // Search finds conversation messages matching a query using the configured LLM backend.
-// Returns matching messages grouped by relevance.
+// Depth controls how many pipeline layers to use: "quick", "normal" (default), "deep".
 func Search(ctx context.Context, messages []transcript.Message, query string, cfg config.SearchConfig) ([]Result, error) {
+	return SearchWithDepth(ctx, messages, query, cfg, "normal")
+}
+
+// SearchWithDepth finds conversation messages with a configurable search depth.
+// "quick": fast model sweep only
+// "normal": fast sweep + rerank with medium model
+// "deep": fast sweep + rerank + deep analysis with largest model
+func SearchWithDepth(ctx context.Context, messages []transcript.Message, query string, cfg config.SearchConfig, depth string) ([]Result, error) {
 	if len(messages) == 0 {
 		return nil, nil
 	}
 
-	client := NewClient(cfg)
-	rerankClient := NewRerankClient(cfg)
+	pipeline := cfg.Local.ResolvePipeline(depth)
+	if len(pipeline) == 0 {
+		return nil, fmt.Errorf("no search pipeline configured")
+	}
+
+	// Layer 1: sweep with fast model
+	sweepLayer := pipeline[0]
+	sweepClient := newClientForModel(cfg, sweepLayer.Model)
+	matched := sweepChunks(ctx, sweepClient, messages, query, cfg)
+
+	// Layer 2+: rerank/deep passes with progressively smarter models
+	for i := 1; i < len(pipeline); i++ {
+		if len(matched) <= 1 {
+			break
+		}
+		layer := pipeline[i]
+		layerClient := newClientForModel(cfg, layer.Model)
+
+		switch layer.Name {
+		case "deep":
+			// Deep pass: re-evaluate each result with the big model for precision
+			matched = deepAnalysis(ctx, layerClient, matched, query)
+		default:
+			// Rerank: filter false positives
+			matched = rerankResults(ctx, layerClient, matched, query)
+		}
+	}
+
+	return matched, nil
+}
+
+// sweepChunks runs the initial parallel chunk search.
+func sweepChunks(ctx context.Context, client Client, messages []transcript.Message, query string, cfg config.SearchConfig) []Result {
 	chunks := chunkMessages(messages, maxChunkChars)
 
-	// Search all chunks in parallel
 	type chunkResult struct {
-		idx     int
-		result  *Result
-		err     error
+		idx    int
+		result *Result
+		err    error
 	}
 
 	maxConc := cfg.Local.MaxConcurrent
@@ -63,23 +101,67 @@ func Search(ctx context.Context, messages []transcript.Message, query string, cf
 	}
 	wg.Wait()
 
-	// Collect matches in order
 	var matched []Result
 	for _, r := range results {
 		if r.err != nil {
-			continue // skip failed chunks
+			continue
 		}
 		if r.result != nil && len(r.result.Messages) > 0 {
 			matched = append(matched, *r.result)
 		}
 	}
+	return matched
+}
 
-	// Re-rank with the stronger model to filter false positives
-	if len(matched) > 1 {
-		matched = rerankResults(ctx, rerankClient, matched, query)
+// deepAnalysis re-evaluates each result with a large model, asking it to
+// verify relevance and provide a more detailed summary.
+func deepAnalysis(ctx context.Context, client Client, results []Result, query string) []Result {
+	var kept []Result
+	for _, r := range results {
+		// Build the conversation text from matched messages
+		var convText strings.Builder
+		for _, m := range r.Messages {
+			ts := m.Timestamp.Format("2006-01-02 15:04")
+			role := "User"
+			if m.Role == "assistant" {
+				role = "Assistant"
+			}
+			fmt.Fprintf(&convText, "[%s] %s:\n%s\n\n", ts, role, m.Text)
+		}
+
+		prompt := fmt.Sprintf(`You are verifying whether a conversation excerpt is relevant to a search query.
+
+QUERY: %s
+
+CONVERSATION EXCERPT:
+%s
+
+Is this conversation excerpt specifically relevant to the query?
+If YES: respond with "YES" followed by a detailed 2-3 sentence summary of what was discussed and decided.
+If NO: respond with exactly "NO".`, query, convText.String())
+
+		resp, err := client.Complete(ctx, prompt)
+		if err != nil {
+			kept = append(kept, r) // on error, keep the result
+			continue
+		}
+
+		resp = strings.TrimSpace(resp)
+		if strings.HasPrefix(strings.ToUpper(resp), "NO") {
+			continue
+		}
+
+		// Extract summary (everything after "YES" or "YES:")
+		summary := resp
+		if strings.HasPrefix(strings.ToUpper(summary), "YES") {
+			summary = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(summary, "YES"), ":"))
+		}
+		if summary != "" {
+			r.Summary = summary
+		}
+		kept = append(kept, r)
 	}
-
-	return matched, nil
+	return kept
 }
 
 // rerankResults sends all result summaries to the LLM and asks which are

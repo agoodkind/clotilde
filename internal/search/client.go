@@ -30,16 +30,17 @@ func NewClient(cfg config.SearchConfig) Client {
 	}
 }
 
-// NewRerankClient creates a client for the reranking pass. Uses rerank_model
-// if configured (typically a larger, smarter model), otherwise falls back to
-// the same client as the chunk search.
-func NewRerankClient(cfg config.SearchConfig) Client {
-	if cfg.Backend == "local" && cfg.Local.RerankModel != "" {
-		rerankCfg := cfg.Local
-		rerankCfg.Model = rerankCfg.RerankModel
-		return newLocalClient(rerankCfg)
+// newClientForModel creates a client using a specific model, inheriting
+// all other settings (URL, token, sampling params) from the local config.
+func newClientForModel(cfg config.SearchConfig, model string) Client {
+	if cfg.Backend == "local" {
+		localCfg := cfg.Local
+		localCfg.Model = model
+		return newLocalClient(localCfg)
 	}
-	return NewClient(cfg)
+	claudeCfg := cfg.Claude
+	claudeCfg.Model = model
+	return newClaudeClient(claudeCfg)
 }
 
 // localClient uses an OpenAI-compatible endpoint (LM Studio, Ollama, etc.)

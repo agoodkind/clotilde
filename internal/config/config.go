@@ -20,14 +20,66 @@ type SearchConfig struct {
 
 // SearchLocal configures a local OpenAI-compatible LLM endpoint.
 type SearchLocal struct {
-	URL              string  `json:"url,omitempty" toml:"url,omitempty"`
-	Token            string  `json:"token,omitempty" toml:"token,omitempty"`
-	Model            string  `json:"model,omitempty" toml:"model,omitempty"`
-	RerankModel      string  `json:"rerankModel,omitempty" toml:"rerank_model,omitempty"`
-	Temperature      float64 `json:"temperature" toml:"temperature"`
-	TopP             float64 `json:"topP" toml:"top_p"`
-	FrequencyPenalty float64 `json:"frequencyPenalty" toml:"frequency_penalty"`
-	MaxConcurrent    int     `json:"maxConcurrent,omitempty" toml:"max_concurrent,omitempty"`
+	URL              string        `json:"url,omitempty" toml:"url,omitempty"`
+	Token            string        `json:"token,omitempty" toml:"token,omitempty"`
+	Model            string        `json:"model,omitempty" toml:"model,omitempty"`
+	RerankModel      string        `json:"rerankModel,omitempty" toml:"rerank_model,omitempty"`
+	DeepModel        string        `json:"deepModel,omitempty" toml:"deep_model,omitempty"`
+	Pipeline         []SearchLayer `json:"pipeline,omitempty" toml:"pipeline,omitempty"`
+	Temperature      float64       `json:"temperature" toml:"temperature"`
+	TopP             float64       `json:"topP" toml:"top_p"`
+	FrequencyPenalty float64       `json:"frequencyPenalty" toml:"frequency_penalty"`
+	MaxConcurrent    int           `json:"maxConcurrent,omitempty" toml:"max_concurrent,omitempty"`
+}
+
+// SearchLayer defines one stage of the search pipeline.
+type SearchLayer struct {
+	Name  string `json:"name" toml:"name"`   // "sweep", "rerank", "deep"
+	Model string `json:"model" toml:"model"` // model to use for this layer
+}
+
+// ResolvePipeline returns the search pipeline for a given depth.
+// Depth levels: "quick" (sweep only), "normal" (sweep + rerank), "deep" (all layers).
+func (s SearchLocal) ResolvePipeline(depth string) []SearchLayer {
+	// If explicit pipeline is configured, use it up to the requested depth
+	if len(s.Pipeline) > 0 {
+		switch depth {
+		case "quick":
+			if len(s.Pipeline) >= 1 {
+				return s.Pipeline[:1]
+			}
+		case "deep":
+			return s.Pipeline
+		default: // "normal"
+			if len(s.Pipeline) >= 2 {
+				return s.Pipeline[:2]
+			}
+			return s.Pipeline
+		}
+		return s.Pipeline
+	}
+
+	// Fall back to individual model fields
+	var layers []SearchLayer
+	model := s.Model
+	if model == "" {
+		model = "qwen2.5-coder-32b"
+	}
+	layers = append(layers, SearchLayer{Name: "sweep", Model: model})
+
+	if depth == "quick" {
+		return layers
+	}
+
+	if s.RerankModel != "" {
+		layers = append(layers, SearchLayer{Name: "rerank", Model: s.RerankModel})
+	}
+
+	if depth == "deep" && s.DeepModel != "" {
+		layers = append(layers, SearchLayer{Name: "deep", Model: s.DeepModel})
+	}
+
+	return layers
 }
 
 // SearchClaude configures the Claude backend for search.
