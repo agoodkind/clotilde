@@ -86,6 +86,7 @@ func (c *localClient) Complete(ctx context.Context, prompt string) (string, erro
 		Temperature:      param.NewOpt(c.cfg.Temperature),
 		TopP:             param.NewOpt(c.cfg.TopP),
 		FrequencyPenalty: param.NewOpt(c.cfg.FrequencyPenalty),
+		MaxTokens:        param.NewOpt(int64(512)),
 	})
 	if err != nil {
 		return "", fmt.Errorf("local LLM request failed: %w", err)
