@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Session display names**: Sessions now support a `displayName` metadata field shown in the TUI instead of the raw session ID (e.g. `opnsense-bgp-cutover` instead of `configs-6d383f1d`). The original name is unchanged and still used for `resume`, `fork`, `delete`, etc.
+- **`clotilde auto-name`**: Generates human-readable kebab-case display names for sessions via `claude haiku` using conversation content. Supports `--all` (batch all unnamed), `--force` (regenerate existing), `--dry-run` (preview without saving), and `--model` flags.
+- **Dashboard: Auto-name sessions action**: New "Auto-name sessions" entry in the dashboard Quick Actions menu. Shows a confirmation dialog then generates display names for all unnamed sessions in the current workspace.
+- **Search form TUI**: The "Search conversation" dashboard action now opens a full-screen form with three fields: session (picker), query (text input), and depth selector (quick / normal / deep / extra-deep navigated with left/right arrows). Replaces the previous sequential picker-then-input flow.
+- **MCP `clotilde_analyze_results` tool**: Runs an LLM synthesis pass over the result set from a previous `clotilde_search_conversation` call without re-running the search. Results are identified by a `result_id` returned by the search tool and cached both in memory and on disk at `~/.cache/clotilde/search-results/`.
+- **Search result cache persistence**: `clotilde_search_conversation` result sets are now written to `$XDG_CACHE_HOME/clotilde/search-results/<id>.json` so `result_id` values survive MCP server restarts.
+- **4-tier search depth**: `clotilde search` and the search TUI now expose four depth levels: `quick` (embedding similarity only, ~20s), `normal` (embedding + LLM sweep, ~4min), `deep` (embedding + LLM + reranker, ~5min), `extra-deep` (adds large model verification, 20min+). Default is `quick`.
+- **Embedding pre-filter threshold**: `search.local.embedding_threshold` config option (default 0.5) controls the cosine similarity cutoff for the embedding pre-filter stage, replacing the previous hardcoded 0.3.
+- **`clotilde inspect` shows display name**: `clotilde inspect <session>` now prints the `Display Name` field when one is set.
+
+### Changed
+
 - **CWD restore on resume**: Sessions now remember the working directory where they were created. `clotilde resume <name>` restores Claude to the original directory regardless of where the resume command is run from. Applies to `start`, `fork`, and `incognito` sessions.
 - **Centralized global session storage**: Session metadata is now stored in a single global directory (`$XDG_DATA_HOME/clotilde/sessions/`, defaulting to `~/.local/share/clotilde/sessions/`) instead of per-project `.claude/clotilde/` directories. Sessions track their originating workspace via a `workspaceRoot` metadata field. `clotilde list` shows only sessions for the current workspace by default; use `--all` to see all sessions across all workspaces. `clotilde adopt` now imports untracked sessions directly into the global store.
 - **Per-session model isolation via daemon**: A background daemon (lazily started, exits after 5 min idle) writes per-session `settings.json` files so `/model` changes in one Claude session do not affect others.

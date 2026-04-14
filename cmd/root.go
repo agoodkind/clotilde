@@ -228,7 +228,11 @@ func handleDashboardAction(selectedAction string, sessions []*session.Session, s
 			fmt.Println("No sessions available to search.")
 			return false
 		}
-		searchConversation(sessions, store)
+		searchConversationForm(sessions, store)
+		return false
+
+	case "auto-name":
+		autoNameSessions(sessions, store)
 		return false
 
 	case "fork":
@@ -403,6 +407,7 @@ func registerSubcommands(root *cobra.Command) {
 	root.AddCommand(newInspectCmd())
 	root.AddCommand(newForkCmd())
 	root.AddCommand(newRenameCmd())
+	root.AddCommand(newAutoNameCmd())
 	root.AddCommand(newDeleteCmd())
 	root.AddCommand(newExportCmd())
 	root.AddCommand(newSearchCmd())
@@ -642,21 +647,19 @@ func viewConversation(sessions []*session.Session, store session.Store) {
 	}
 }
 
-// searchConversation shows a session picker, asks for a query, then searches with an LLM.
-func searchConversation(sessions []*session.Session, store session.Store) {
-	picker := ui.NewPicker(sessions, "Select session to search").WithPreview()
-	picker.PreviewFn = richPreviewFunc(store)
-	selected, err := ui.RunPicker(picker)
-	if err != nil || selected == nil {
+// searchConversationForm shows the unified search form (session + query + depth),
+// then runs the search and displays results in the viewer.
+func searchConversationForm(sessions []*session.Session, store session.Store) {
+	result, err := ui.RunSearchForm(sessions, nil, richPreviewFunc(store))
+	if err != nil || result == nil || result.Cancelled {
 		return
 	}
 
-	// Get search query from user
-	query, err := ui.RunInput(ui.NewInput("What are you looking for?"))
-	if err != nil || query == "" {
-		return
-	}
+	runSearchAndView(result.Session, result.Query, result.Depth, store)
+}
 
+// runSearchAndView runs a search and shows results in the viewer.
+func runSearchAndView(selected *session.Session, query, depth string, store session.Store) {
 	messages, loadErr := loadSessionMessages(selected)
 	if loadErr != nil {
 		fmt.Printf("Failed to load conversation: %v\n", loadErr)
@@ -667,13 +670,15 @@ func searchConversation(sessions []*session.Session, store session.Store) {
 		return
 	}
 
-	// Load search config
 	cfg, _ := config.LoadGlobalOrDefault()
+	if depth == "" {
+		depth = "quick"
+	}
 
-	fmt.Printf("Searching %d messages for: %s\n", len(messages), query)
+	fmt.Printf("Searching %d messages (%s depth) for: %s\n", len(messages), depth, query)
 
 	ctx := context.Background()
-	results, searchErr := search.Search(ctx, messages, query, cfg.Search)
+	results, searchErr := search.SearchWithDepth(ctx, messages, query, cfg.Search, depth)
 	if searchErr != nil {
 		fmt.Printf("Search failed: %v\n", searchErr)
 		return
@@ -684,7 +689,6 @@ func searchConversation(sessions []*session.Session, store session.Store) {
 		return
 	}
 
-	// Combine all matching messages into a single view
 	var allMatched []transcript.Message
 	for _, r := range results {
 		if r.Summary != "" {
@@ -694,8 +698,56 @@ func searchConversation(sessions []*session.Session, store session.Store) {
 	}
 
 	text := transcript.RenderPlainText(allMatched)
-	viewer := ui.NewViewer(fmt.Sprintf("Search results: %q in %s", query, selected.Name), text)
+	viewer := ui.NewViewer(fmt.Sprintf("Search results: %q in %s", query, selected.DisplayName()), text)
 	_ = ui.RunViewer(viewer)
+}
+
+// autoNameSessions generates display names for all unnamed sessions via LLM.
+func autoNameSessions(sessions []*session.Session, store session.Store) {
+	// Count unnamed sessions
+	unnamed := 0
+	for _, s := range sessions {
+		if !s.Metadata.IsIncognito && s.Metadata.DisplayName == "" {
+			unnamed++
+		}
+	}
+
+	if unnamed == 0 {
+		fmt.Println("All sessions already have display names. Use 'clotilde auto-name --all --force' to regenerate.")
+		return
+	}
+
+	confirmModel := ui.NewConfirm(
+		fmt.Sprintf("Auto-name %d session(s)?", unnamed),
+		fmt.Sprintf("Generate display names for %d unnamed session(s) using claude haiku.", unnamed),
+	)
+	confirmed, err := ui.RunConfirm(confirmModel)
+	if err != nil || !confirmed {
+		return
+	}
+
+	fmt.Printf("\nGenerating display names for %d session(s)...\n", unnamed)
+
+	succeeded := 0
+	for _, sess := range sessions {
+		if sess.Metadata.IsIncognito || sess.Metadata.DisplayName != "" {
+			continue
+		}
+		name, genErr := generateDisplayName(nil, sess, "", nil, "haiku")
+		if genErr != nil {
+			fmt.Printf("  SKIP %s: %v\n", sess.Name, genErr)
+			continue
+		}
+		sess.Metadata.DisplayName = name
+		if updateErr := store.Update(sess); updateErr != nil {
+			fmt.Printf("  FAIL %s: %v\n", sess.Name, updateErr)
+			continue
+		}
+		fmt.Printf("  OK   %s  =>  %s\n", sess.Name, name)
+		succeeded++
+	}
+
+	fmt.Printf("\nDone. %d/%d sessions named.\n", succeeded, unnamed)
 }
 
 // loadSessionMessages loads parsed messages from all transcripts for a session.
