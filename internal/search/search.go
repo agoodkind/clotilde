@@ -65,7 +65,7 @@ func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript
 	sweepLayer := pipeline[0]
 	if cfg.Backend == "local" {
 		log.Info("loading sweep model", "model", sweepLayer.Model)
-		if err := ensureModelLoaded(ctx, sweepLayer.Model); err != nil {
+		if err := ensureModelLoaded(ctx, sweepLayer.Model, cfg.Local.ContextLength, cfg.Local.MaxMemoryGB); err != nil {
 			return nil, fmt.Errorf("failed to load model %s: %w", sweepLayer.Model, err)
 		}
 		currentModel = sweepLayer.Model
@@ -96,7 +96,7 @@ func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript
 		// Swap model if this layer uses a different one
 		if cfg.Backend == "local" && layer.Model != currentModel {
 			log.Info("swapping model", "from", currentModel, "to", layer.Model, "layer", layer.Name)
-			if err := ensureModelLoaded(ctx, layer.Model); err != nil {
+			if err := ensureModelLoaded(ctx, layer.Model, cfg.Local.ContextLength, cfg.Local.MaxMemoryGB); err != nil {
 				log.Warn("model load failed, skipping layer", "model", layer.Model, "err", err)
 				continue
 			}

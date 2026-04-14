@@ -31,6 +31,8 @@ type SearchLocal struct {
 	FrequencyPenalty float64       `json:"frequencyPenalty" toml:"frequency_penalty"`
 	MaxConcurrent    int           `json:"maxConcurrent,omitempty" toml:"max_concurrent,omitempty"`
 	ChunkSize        int           `json:"chunkSize,omitempty" toml:"chunk_size,omitempty"`
+	MaxMemoryGB      int           `json:"maxMemoryGB,omitempty" toml:"max_memory_gb,omitempty"`
+	ContextLength    int           `json:"contextLength,omitempty" toml:"context_length,omitempty"`
 }
 
 // SearchLayer defines one stage of the search pipeline.
