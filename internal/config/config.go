@@ -20,9 +20,12 @@ type SearchConfig struct {
 
 // SearchLocal configures a local OpenAI-compatible LLM endpoint.
 type SearchLocal struct {
-	URL   string `json:"url,omitempty" toml:"url,omitempty"`
-	Token string `json:"token,omitempty" toml:"token,omitempty"`
-	Model string `json:"model,omitempty" toml:"model,omitempty"`
+	URL              string  `json:"url,omitempty" toml:"url,omitempty"`
+	Token            string  `json:"token,omitempty" toml:"token,omitempty"`
+	Model            string  `json:"model,omitempty" toml:"model,omitempty"`
+	Temperature      float64 `json:"temperature" toml:"temperature"`
+	TopP             float64 `json:"topP" toml:"top_p"`
+	FrequencyPenalty float64 `json:"frequencyPenalty" toml:"frequency_penalty"`
 }
 
 // SearchClaude configures the Claude backend for search.

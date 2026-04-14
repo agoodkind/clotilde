@@ -34,6 +34,7 @@ func NewClient(cfg config.SearchConfig) Client {
 type localClient struct {
 	client *openai.Client
 	model  string
+	cfg    config.SearchLocal
 }
 
 func newLocalClient(cfg config.SearchLocal) *localClient {
@@ -59,6 +60,7 @@ func newLocalClient(cfg config.SearchLocal) *localClient {
 	return &localClient{
 		client: &c,
 		model:  model,
+		cfg:    cfg,
 	}
 }
 
@@ -68,9 +70,9 @@ func (c *localClient) Complete(ctx context.Context, prompt string) (string, erro
 		Messages: []openai.ChatCompletionMessageParamUnion{
 			openai.UserMessage(prompt),
 		},
-		Temperature:      param.NewOpt(0.0),
-		TopP:             param.NewOpt(1.0),
-		FrequencyPenalty: param.NewOpt(2.0),
+		Temperature:      param.NewOpt(c.cfg.Temperature),
+		TopP:             param.NewOpt(c.cfg.TopP),
+		FrequencyPenalty: param.NewOpt(c.cfg.FrequencyPenalty),
 	})
 	if err != nil {
 		return "", fmt.Errorf("local LLM request failed: %w", err)
