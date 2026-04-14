@@ -173,6 +173,27 @@ func FindOrCreateClotildeRoot() (string, error) {
 	return clotildeRoot, nil
 }
 
+// GlobalCacheDir returns the global cache directory for clotilde.
+// Respects $XDG_CACHE_HOME if set, otherwise uses ~/.cache/clotilde.
+func GlobalCacheDir() string {
+	cacheHome := os.Getenv("XDG_CACHE_HOME")
+	if cacheHome == "" {
+		home, _ := os.UserHomeDir()
+		cacheHome = filepath.Join(home, ".cache")
+	}
+	return filepath.Join(cacheHome, "clotilde")
+}
+
+// SearchResultCacheDir returns the directory where search result caches are stored.
+func SearchResultCacheDir() string {
+	return filepath.Join(GlobalCacheDir(), "search-results")
+}
+
+// EnsureSearchResultCacheDir creates the search result cache directory if it does not exist.
+func EnsureSearchResultCacheDir() error {
+	return os.MkdirAll(SearchResultCacheDir(), 0o755)
+}
+
 // GlobalDataDir returns the global data directory for clotilde.
 // Respects $XDG_DATA_HOME if set, otherwise uses ~/.local/share/clotilde.
 func GlobalDataDir() string {
