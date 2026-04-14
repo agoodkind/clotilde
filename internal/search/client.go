@@ -31,6 +31,11 @@ func NewClient(cfg config.SearchConfig) Client {
 	}
 }
 
+// NewClientForModel is the exported form of newClientForModel for use outside this package.
+func NewClientForModel(cfg config.SearchConfig, model string) Client {
+	return newClientForModel(cfg, model)
+}
+
 // newClientForModel creates a client using a specific model, inheriting
 // all other settings (URL, token, sampling params) from the local config.
 func newClientForModel(cfg config.SearchConfig, model string) Client {
