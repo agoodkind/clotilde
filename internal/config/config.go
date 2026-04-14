@@ -26,6 +26,7 @@ type SearchLocal struct {
 	Temperature      float64 `json:"temperature" toml:"temperature"`
 	TopP             float64 `json:"topP" toml:"top_p"`
 	FrequencyPenalty float64 `json:"frequencyPenalty" toml:"frequency_penalty"`
+	MaxConcurrent    int     `json:"maxConcurrent,omitempty" toml:"max_concurrent,omitempty"`
 }
 
 // SearchClaude configures the Claude backend for search.
