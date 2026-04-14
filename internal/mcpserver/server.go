@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -66,6 +67,18 @@ func Serve(ctx context.Context) error {
 	)
 
 	s.AddTool(
+		mcp.NewTool("clotilde_get_context",
+			mcp.WithDescription("Get messages around a specific point in a session's conversation. Use after search to expand context around a match. Provide either a timestamp or message_index to center on."),
+			mcp.WithString("session_name", mcp.Required(), mcp.Description("Session name.")),
+			mcp.WithString("timestamp", mcp.Description("ISO timestamp to center on (e.g. '2026-04-12 15:04'). Finds nearest message.")),
+			mcp.WithNumber("message_index", mcp.Description("0-based message index to center on.")),
+			mcp.WithNumber("before", mcp.Description("Number of messages to include before the center (default: 5).")),
+			mcp.WithNumber("after", mcp.Description("Number of messages to include after the center (default: 5).")),
+		),
+		handleGetContext,
+	)
+
+	s.AddTool(
 		mcp.NewTool("clotilde_search_conversation",
 			mcp.WithDescription("Search a session's conversation history using an LLM to find where a topic was discussed. Returns matching messages."),
 			mcp.WithString("session_name", mcp.Required(), mcp.Description("Session name to search.")),
@@ -119,6 +132,88 @@ func handleListSessions(ctx context.Context, req mcp.CallToolRequest) (*mcp.Call
 	return mcp.NewToolResultText(sb.String()), nil
 }
 
+func handleGetContext(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name := req.GetString("session_name", "")
+	if name == "" {
+		return mcp.NewToolResultText("session_name is required"), nil
+	}
+
+	messages, err := loadMessages(name)
+	if err != nil {
+		return mcp.NewToolResultText(fmt.Sprintf("Failed to load conversation: %v", err)), nil
+	}
+	if len(messages) == 0 {
+		return mcp.NewToolResultText("No conversation messages found."), nil
+	}
+
+	before := int(req.GetFloat("before", 5))
+	after := int(req.GetFloat("after", 5))
+
+	// Find center point: by timestamp or by index
+	center := -1
+	if ts := req.GetString("timestamp", ""); ts != "" {
+		center = findNearestMessage(messages, ts)
+	}
+	if center < 0 {
+		idx := int(req.GetFloat("message_index", -1))
+		if idx >= 0 && idx < len(messages) {
+			center = idx
+		}
+	}
+	if center < 0 {
+		return mcp.NewToolResultText("Provide either timestamp or message_index to center on."), nil
+	}
+
+	// Extract window
+	start := center - before
+	if start < 0 {
+		start = 0
+	}
+	end := center + after + 1
+	if end > len(messages) {
+		end = len(messages)
+	}
+
+	window := messages[start:end]
+	text := fmt.Sprintf("Messages %d-%d of %d (centered on %d):\n\n%s",
+		start, end-1, len(messages), center, transcript.RenderPlainText(window))
+	return mcp.NewToolResultText(text), nil
+}
+
+// findNearestMessage finds the message closest to the given timestamp string.
+func findNearestMessage(messages []transcript.Message, ts string) int {
+	// Try common formats
+	var target time.Time
+	for _, layout := range []string{
+		"2006-01-02 15:04",
+		"2006-01-02T15:04:05Z",
+		"2006-01-02T15:04",
+		"2006-01-02 15:04:05",
+	} {
+		if t, err := time.Parse(layout, ts); err == nil {
+			target = t
+			break
+		}
+	}
+	if target.IsZero() {
+		return -1
+	}
+
+	best := -1
+	bestDiff := time.Duration(1<<63 - 1)
+	for i, m := range messages {
+		diff := m.Timestamp.Sub(target)
+		if diff < 0 {
+			diff = -diff
+		}
+		if diff < bestDiff {
+			bestDiff = diff
+			best = i
+		}
+	}
+	return best
+}
+
 func handleGetConversation(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	name := req.GetString("session_name", "")
 	if name == "" {
@@ -168,12 +263,44 @@ func handleSearchConversation(ctx context.Context, req mcp.CallToolRequest) (*mc
 		return mcp.NewToolResultText("No matching messages found."), nil
 	}
 
+	// Build a UUID-to-index map so we can show global message indices
+	idxMap := make(map[string]int, len(messages))
+	for i, m := range messages {
+		if m.UUID != "" {
+			idxMap[m.UUID] = i
+		}
+	}
+
 	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Use clotilde_get_context with session_name=%q and message_index=N to expand around any result.\n\n", name))
 	for _, r := range results {
 		if r.Summary != "" {
 			fmt.Fprintf(&sb, "**Found:** %s\n\n", r.Summary)
 		}
-		sb.WriteString(transcript.RenderPlainText(r.Messages))
+		for _, m := range r.Messages {
+			idx, ok := idxMap[m.UUID]
+			if !ok {
+				idx = -1
+			}
+			ts := m.Timestamp.Format("2006-01-02 15:04")
+			role := "User"
+			if m.Role == "assistant" {
+				role = "Assistant"
+			}
+			if idx >= 0 {
+				fmt.Fprintf(&sb, "[#%d][%s] %s:\n", idx, ts, role)
+			} else {
+				fmt.Fprintf(&sb, "[%s] %s:\n", ts, role)
+			}
+			if m.Text != "" {
+				sb.WriteString(m.Text)
+				sb.WriteString("\n")
+			}
+			if m.HasTools {
+				fmt.Fprintf(&sb, "  [used: %s]\n", strings.Join(m.ToolNames(), ", "))
+			}
+			sb.WriteString("\n")
+		}
 		sb.WriteString("---\n\n")
 	}
 	return mcp.NewToolResultText(sb.String()), nil
