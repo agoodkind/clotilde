@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	// maxChunkChars is the target size for each conversation chunk sent to the LLM.
-	maxChunkChars = 50_000
+	// defaultChunkChars is the default target size for each conversation chunk.
+	defaultChunkChars = 50_000
 	// defaultMaxConcurrent is the default number of parallel LLM requests.
 	defaultMaxConcurrent = 4
 )
@@ -26,16 +26,21 @@ type Result struct {
 }
 
 // Search finds conversation messages matching a query using the configured LLM backend.
-// Depth controls how many pipeline layers to use: "quick", "normal" (default), "deep".
 func Search(ctx context.Context, messages []transcript.Message, query string, cfg config.SearchConfig) ([]Result, error) {
 	return SearchWithDepth(ctx, messages, query, cfg, "normal")
 }
 
+// SearchWithLog is like SearchWithDepth but accepts an explicit logger.
+func SearchWithLog(ctx context.Context, log *slog.Logger, messages []transcript.Message, query string, cfg config.SearchConfig, depth string) ([]Result, error) {
+	return searchInternal(ctx, log, messages, query, cfg, depth)
+}
+
 // SearchWithDepth finds conversation messages with a configurable search depth.
-// "quick": fast model sweep only
-// "normal": fast sweep + rerank with medium model
-// "deep": fast sweep + rerank + deep analysis with largest model
 func SearchWithDepth(ctx context.Context, messages []transcript.Message, query string, cfg config.SearchConfig, depth string) ([]Result, error) {
+	return searchInternal(ctx, slog.Default(), messages, query, cfg, depth)
+}
+
+func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript.Message, query string, cfg config.SearchConfig, depth string) ([]Result, error) {
 	if len(messages) == 0 {
 		return nil, nil
 	}
@@ -45,7 +50,6 @@ func SearchWithDepth(ctx context.Context, messages []transcript.Message, query s
 		return nil, fmt.Errorf("no search pipeline configured")
 	}
 
-	log := slog.Default()
 	log.Info("search starting",
 		"query", query,
 		"messages", len(messages),
@@ -68,7 +72,7 @@ func SearchWithDepth(ctx context.Context, messages []transcript.Message, query s
 	}
 	sweepStart := time.Now()
 	sweepClient := newClientForModel(cfg, sweepLayer.Model)
-	matched := sweepChunks(ctx, sweepClient, messages, query, cfg)
+	matched := sweepChunks(ctx, log, sweepClient, messages, query, cfg)
 	log.Info("sweep complete",
 		"model", sweepLayer.Model,
 		"matches", len(matched),
@@ -126,10 +130,13 @@ func SearchWithDepth(ctx context.Context, messages []transcript.Message, query s
 }
 
 // sweepChunks runs the initial parallel chunk search.
-func sweepChunks(ctx context.Context, client Client, messages []transcript.Message, query string, cfg config.SearchConfig) []Result {
-	log := slog.Default()
-	chunks := chunkMessages(messages, maxChunkChars)
-	log.Info("sweep: chunked messages", "chunks", len(chunks), "messages", len(messages))
+func sweepChunks(ctx context.Context, log *slog.Logger, client Client, messages []transcript.Message, query string, cfg config.SearchConfig) []Result {
+	chunkSize := cfg.Local.ChunkSize
+	if chunkSize <= 0 {
+		chunkSize = defaultChunkChars
+	}
+	chunks := chunkMessages(messages, chunkSize)
+	log.Info("sweep: chunked messages", "chunks", len(chunks), "messages", len(messages), "chunk_size", chunkSize)
 
 	type chunkResult struct {
 		idx    int

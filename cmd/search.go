@@ -3,11 +3,13 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 
+	"github.com/fgrehm/clotilde/internal/audit"
 	"github.com/fgrehm/clotilde/internal/config"
 	"github.com/fgrehm/clotilde/internal/search"
 	"github.com/fgrehm/clotilde/internal/transcript"
@@ -72,13 +74,18 @@ Configure the search backend in ~/.config/clotilde/config.toml:
 
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Searching %d messages for: %s\n", len(messages), query)
 
+			// Initialize audit logger
+			log, cleanup := audit.NewLogger("search")
+			defer cleanup()
+			slog.SetDefault(log)
+
 			// Search
 			depth, _ := cmd.Flags().GetString("depth")
 			if depth == "" {
 				depth = "normal"
 			}
 			cfg, _ := config.LoadGlobalOrDefault()
-			results, searchErr := search.SearchWithDepth(context.Background(), messages, query, cfg.Search, depth)
+			results, searchErr := search.SearchWithLog(context.Background(), log, messages, query, cfg.Search, depth)
 			if searchErr != nil {
 				return fmt.Errorf("search failed: %w", searchErr)
 			}

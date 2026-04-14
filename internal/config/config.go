@@ -30,6 +30,7 @@ type SearchLocal struct {
 	TopP             float64       `json:"topP" toml:"top_p"`
 	FrequencyPenalty float64       `json:"frequencyPenalty" toml:"frequency_penalty"`
 	MaxConcurrent    int           `json:"maxConcurrent,omitempty" toml:"max_concurrent,omitempty"`
+	ChunkSize        int           `json:"chunkSize,omitempty" toml:"chunk_size,omitempty"`
 }
 
 // SearchLayer defines one stage of the search pipeline.
