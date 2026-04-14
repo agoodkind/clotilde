@@ -14,15 +14,16 @@ import (
 )
 
 const (
-	defaultEmbeddingModel     = "text-embedding-nomic-embed-text-v1.5"
-	defaultSimilarityThreshold = 0.3
+	defaultEmbeddingModel      = "text-embedding-nomic-embed-text-v1.5"
+	defaultSimilarityThreshold = 0.5
 )
 
 // embeddingFilter uses a local embedding model to pre-filter chunks,
 // skipping those with low cosine similarity to the query.
 type embeddingFilter struct {
-	client *openai.Client
-	model  string
+	client    *openai.Client
+	model     string
+	threshold float64
 }
 
 func newEmbeddingFilter(cfg config.SearchLocal) *embeddingFilter {
@@ -40,10 +41,13 @@ func newEmbeddingFilter(cfg config.SearchLocal) *embeddingFilter {
 		opts = append(opts, option.WithAPIKey("not-needed"))
 	}
 
-	model := defaultEmbeddingModel
+	threshold := cfg.EmbeddingThreshold
+	if threshold <= 0 {
+		threshold = defaultSimilarityThreshold
+	}
 
 	c := openai.NewClient(opts...)
-	return &embeddingFilter{client: &c, model: model}
+	return &embeddingFilter{client: &c, model: defaultEmbeddingModel, threshold: threshold}
 }
 
 // filterChunks embeds the query and each chunk, returning only chunks whose
@@ -89,7 +93,7 @@ func (e *embeddingFilter) filterChunks(ctx context.Context, query string, chunks
 	var filtered [][]transcript.Message
 	for i, chunkVec := range chunkEmbs {
 		sim := cosineSimilarity(queryVec, chunkVec)
-		if sim >= defaultSimilarityThreshold {
+		if sim >= e.threshold {
 			filtered = append(filtered, chunks[i])
 		}
 	}
@@ -99,7 +103,7 @@ func (e *embeddingFilter) filterChunks(ctx context.Context, query string, chunks
 		"total_chunks", len(chunks),
 		"passed", len(filtered),
 		"filtered_out", len(chunks)-len(filtered),
-		"threshold", defaultSimilarityThreshold,
+		"threshold", e.threshold,
 		"duration", time.Since(start).Round(time.Millisecond),
 	)
 

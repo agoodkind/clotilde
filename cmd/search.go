@@ -82,7 +82,7 @@ Configure the search backend in ~/.config/clotilde/config.toml:
 			// Search
 			depth, _ := cmd.Flags().GetString("depth")
 			if depth == "" {
-				depth = "normal"
+				depth = "quick"
 			}
 			cfg, _ := config.LoadGlobalOrDefault()
 			results, searchErr := search.SearchWithLog(context.Background(), log, messages, query, cfg.Search, depth)
@@ -116,6 +116,6 @@ Configure the search backend in ~/.config/clotilde/config.toml:
 			return nil
 		},
 	}
-	cmd.Flags().String("depth", "normal", "Search depth: quick, normal, or deep")
+	cmd.Flags().String("depth", "quick", "Search depth: quick (embedding only, ~3s), normal (+ LLM sweep, ~60s), deep (+ rerank, ~3min), extra-deep (+ large model, 10min+)")
 	return cmd
 }
