@@ -46,6 +46,8 @@ func newDashboard(sessions []*session.Session, lastSession *session.Session) Das
 	if lastSession != nil {
 		items = append(items,
 			MenuItem{ID: "return", Label: "Return to " + lastSession.Name, Description: "Resume the session you just left"},
+			MenuItem{ID: "quit", Label: "Quit", Description: "Exit clotilde"},
+			MenuItem{ID: "", Label: "", Description: ""}, // separator
 		)
 	}
 
@@ -57,8 +59,11 @@ func newDashboard(sessions []*session.Session, lastSession *session.Session) Das
 		MenuItem{ID: "fork", Label: "Fork session", Description: "Branch from an existing session"},
 		MenuItem{ID: "list", Label: "List all sessions", Description: "View all sessions in a table"},
 		MenuItem{ID: "delete", Label: "Delete session", Description: "Remove a session"},
-		MenuItem{ID: "quit", Label: "Quit", Description: "Exit dashboard"},
 	)
+
+	if lastSession == nil {
+		items = append(items, MenuItem{ID: "quit", Label: "Quit", Description: "Exit clotilde"})
+	}
 
 	return DashboardModel{
 		Sessions:    sessions,
@@ -88,20 +93,27 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "enter", " ":
-			if m.Cursor < len(m.menuItems) {
+			if m.Cursor < len(m.menuItems) && m.menuItems[m.Cursor].ID != "" {
 				m.Selected = m.menuItems[m.Cursor].ID
+				return m, tea.Quit
 			}
-			return m, tea.Quit
+			return m, nil
 
 		case "up", "k":
-			if m.Cursor > 0 {
-				m.Cursor--
+			for next := m.Cursor - 1; next >= 0; next-- {
+				if m.menuItems[next].ID != "" {
+					m.Cursor = next
+					break
+				}
 			}
 			return m, nil
 
 		case "down", "j":
-			if m.Cursor < len(m.menuItems)-1 {
-				m.Cursor++
+			for next := m.Cursor + 1; next < len(m.menuItems); next++ {
+				if m.menuItems[next].ID != "" {
+					m.Cursor = next
+					break
+				}
 			}
 			return m, nil
 
@@ -191,6 +203,12 @@ func (m DashboardModel) renderMenu() string {
 	b.WriteString("\n\n")
 
 	for i, item := range m.menuItems {
+		// Separator: render as blank line
+		if item.ID == "" {
+			b.WriteString("\n")
+			continue
+		}
+
 		cursor := " "
 		if m.Cursor == i {
 			cursor = ">"
