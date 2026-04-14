@@ -23,6 +23,7 @@ type SearchLocal struct {
 	URL              string  `json:"url,omitempty" toml:"url,omitempty"`
 	Token            string  `json:"token,omitempty" toml:"token,omitempty"`
 	Model            string  `json:"model,omitempty" toml:"model,omitempty"`
+	RerankModel      string  `json:"rerankModel,omitempty" toml:"rerank_model,omitempty"`
 	Temperature      float64 `json:"temperature" toml:"temperature"`
 	TopP             float64 `json:"topP" toml:"top_p"`
 	FrequencyPenalty float64 `json:"frequencyPenalty" toml:"frequency_penalty"`

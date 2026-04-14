@@ -20,7 +20,7 @@ type Client interface {
 	Complete(ctx context.Context, prompt string) (string, error)
 }
 
-// NewClient creates a search client from config.
+// NewClient creates a search client from config (used for chunk search).
 func NewClient(cfg config.SearchConfig) Client {
 	switch cfg.Backend {
 	case "local":
@@ -28,6 +28,18 @@ func NewClient(cfg config.SearchConfig) Client {
 	default:
 		return newClaudeClient(cfg.Claude)
 	}
+}
+
+// NewRerankClient creates a client for the reranking pass. Uses rerank_model
+// if configured (typically a larger, smarter model), otherwise falls back to
+// the same client as the chunk search.
+func NewRerankClient(cfg config.SearchConfig) Client {
+	if cfg.Backend == "local" && cfg.Local.RerankModel != "" {
+		rerankCfg := cfg.Local
+		rerankCfg.Model = rerankCfg.RerankModel
+		return newLocalClient(rerankCfg)
+	}
+	return NewClient(cfg)
 }
 
 // localClient uses an OpenAI-compatible endpoint (LM Studio, Ollama, etc.)
