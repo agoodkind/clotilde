@@ -14,6 +14,7 @@ import (
 	"github.com/fgrehm/clotilde/internal/config"
 	"github.com/fgrehm/clotilde/internal/outputstyle"
 	"github.com/fgrehm/clotilde/internal/session"
+	"github.com/fgrehm/clotilde/internal/transcript"
 	"github.com/fgrehm/clotilde/internal/ui"
 	"github.com/fgrehm/clotilde/internal/util"
 )
@@ -153,6 +154,22 @@ func handleDashboardAction(selectedAction string, sessions []*session.Session, s
 
 		// After resuming (launching Claude), exit dashboard
 		return true
+
+	case "view":
+		if len(sessions) == 0 {
+			fmt.Println("No sessions available to view.")
+			return false
+		}
+		viewConversation(sessions, store)
+		return false
+
+	case "search":
+		if len(sessions) == 0 {
+			fmt.Println("No sessions available to search.")
+			return false
+		}
+		searchConversation(sessions, store)
+		return false
 
 	case "fork":
 		if len(sessions) == 0 {
@@ -535,4 +552,78 @@ func forkFromDashboard(parent *session.Session, sessions []*session.Session, sto
 	}
 
 	return claude.Fork(globalRoot, parent, forkName, settingsFile, nil, fork)
+}
+
+// viewConversation shows a session picker, then displays the conversation in a scrollable viewer.
+func viewConversation(sessions []*session.Session, store session.Store) {
+	picker := ui.NewPicker(sessions, "Select session to view").WithPreview()
+	picker.PreviewFn = richPreviewFunc(store)
+	selected, err := ui.RunPicker(picker)
+	if err != nil || selected == nil {
+		return
+	}
+
+	messages, loadErr := loadSessionMessages(selected)
+	if loadErr != nil {
+		fmt.Printf("Failed to load conversation: %v\n", loadErr)
+		return
+	}
+	if len(messages) == 0 {
+		fmt.Println("No conversation messages found.")
+		return
+	}
+
+	text := transcript.RenderPlainText(messages)
+	viewer := ui.NewViewer(fmt.Sprintf("Conversation: %s", selected.Name), text)
+	if err := ui.RunViewer(viewer); err != nil {
+		fmt.Printf("Viewer error: %v\n", err)
+	}
+}
+
+// searchConversation shows a session picker, asks for a query, then searches with an LLM.
+func searchConversation(sessions []*session.Session, store session.Store) {
+	picker := ui.NewPicker(sessions, "Select session to search").WithPreview()
+	picker.PreviewFn = richPreviewFunc(store)
+	selected, err := ui.RunPicker(picker)
+	if err != nil || selected == nil {
+		return
+	}
+
+	// TODO: implement LLM search (Task 19)
+	// For now, show the conversation viewer as a placeholder
+	fmt.Println("Search not yet implemented — showing full conversation instead.")
+	messages, loadErr := loadSessionMessages(selected)
+	if loadErr != nil {
+		fmt.Printf("Failed to load conversation: %v\n", loadErr)
+		return
+	}
+	text := transcript.RenderPlainText(messages)
+	viewer := ui.NewViewer(fmt.Sprintf("Conversation: %s", selected.Name), text)
+	_ = ui.RunViewer(viewer)
+}
+
+// loadSessionMessages loads parsed messages from all transcripts for a session.
+func loadSessionMessages(sess *session.Session) ([]transcript.Message, error) {
+	homeDir, err := util.HomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("could not determine home directory: %w", err)
+	}
+
+	clotildeRoot := projectClotildeRootForSession(sess)
+	paths := allTranscriptPaths(sess, clotildeRoot, homeDir)
+
+	var allMessages []transcript.Message
+	for _, path := range paths {
+		f, openErr := os.Open(path)
+		if openErr != nil {
+			continue
+		}
+		messages, parseErr := transcript.Parse(f)
+		_ = f.Close()
+		if parseErr != nil {
+			continue
+		}
+		allMessages = append(allMessages, messages...)
+	}
+	return allMessages, nil
 }
