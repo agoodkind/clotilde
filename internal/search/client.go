@@ -4,6 +4,7 @@ package search
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"strings"
 	"time"
@@ -78,6 +79,16 @@ func newLocalClient(cfg config.SearchLocal) *localClient {
 }
 
 func (c *localClient) Complete(ctx context.Context, prompt string) (string, error) {
+	log := slog.Default()
+	promptLen := len(prompt)
+	start := time.Now()
+
+	log.Debug("llm request",
+		"model", c.model,
+		"prompt_chars", promptLen,
+		"prompt_preview", truncate(prompt, 200),
+	)
+
 	resp, err := c.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
 		Model: c.model,
 		Messages: []openai.ChatCompletionMessageParamUnion{
@@ -88,13 +99,37 @@ func (c *localClient) Complete(ctx context.Context, prompt string) (string, erro
 		FrequencyPenalty: param.NewOpt(c.cfg.FrequencyPenalty),
 		MaxTokens:        param.NewOpt(int64(512)),
 	})
+	elapsed := time.Since(start)
+
 	if err != nil {
+		log.Error("llm request failed",
+			"model", c.model,
+			"duration", elapsed.Round(time.Millisecond),
+			"err", err,
+		)
 		return "", fmt.Errorf("local LLM request failed: %w", err)
 	}
 	if len(resp.Choices) == 0 {
+		log.Warn("llm returned no choices", "model", c.model, "duration", elapsed.Round(time.Millisecond))
 		return "", fmt.Errorf("local LLM returned no choices")
 	}
-	return resp.Choices[0].Message.Content, nil
+
+	result := resp.Choices[0].Message.Content
+	log.Info("llm response",
+		"model", c.model,
+		"prompt_chars", promptLen,
+		"response_chars", len(result),
+		"response_preview", truncate(result, 200),
+		"duration", elapsed.Round(time.Millisecond),
+	)
+	return result, nil
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }
 
 // claudeClient shells out to `claude -p` for search.

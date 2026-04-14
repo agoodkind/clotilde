@@ -6,6 +6,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"github.com/fgrehm/clotilde/internal/audit"
 	"github.com/fgrehm/clotilde/internal/config"
 	"github.com/fgrehm/clotilde/internal/search"
 	"github.com/fgrehm/clotilde/internal/session"
@@ -25,6 +27,10 @@ var gettingStartedPrompt string
 
 // Serve starts the MCP stdio server and blocks until the client disconnects.
 func Serve(ctx context.Context) error {
+	log, cleanup := audit.NewLogger("mcp")
+	defer cleanup()
+	slog.SetDefault(log)
+
 	s := server.NewMCPServer("clotilde", "0.13.0-dev")
 
 	// --- Prompts (slash commands) ---
