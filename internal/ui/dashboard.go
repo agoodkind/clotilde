@@ -38,6 +38,8 @@ func NewDashboard(sessions []*session.Session) DashboardModel {
 		menuItems: []MenuItem{
 			{ID: "start", Label: "Start new session", Description: "Create a new conversation"},
 			{ID: "resume", Label: "Resume session", Description: "Continue an existing session"},
+			{ID: "view", Label: "View conversation", Description: "Read a session's conversation text"},
+			{ID: "search", Label: "Search conversation", Description: "Find where something was discussed"},
 			{ID: "fork", Label: "Fork session", Description: "Branch from an existing session"},
 			{ID: "list", Label: "List all sessions", Description: "View all sessions in a table"},
 			{ID: "delete", Label: "Delete session", Description: "Remove a session"},
