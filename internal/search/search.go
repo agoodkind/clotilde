@@ -185,15 +185,22 @@ func embeddingOnlySearch(ctx context.Context, log *slog.Logger, messages []trans
 		chunkTexts[i] = text
 	}
 
-	// Embed query and all chunks
+	// Embed query
+	queryEmbStart := time.Now()
 	queryEmb, err := filter.embed(ctx, []string{query})
 	if err != nil {
 		return nil, fmt.Errorf("embedding query failed: %w", err)
 	}
+	log.Debug("quick search: query embedded", "duration", time.Since(queryEmbStart).Round(time.Millisecond))
+
+	// Embed all chunks in one batch
+	chunksEmbStart := time.Now()
 	chunkEmbs, err := filter.embed(ctx, chunkTexts)
 	if err != nil {
 		return nil, fmt.Errorf("embedding chunks failed: %w", err)
 	}
+	log.Debug("quick search: chunks embedded", "chunks", len(chunkTexts), "duration", time.Since(chunksEmbStart).Round(time.Millisecond))
+
 	if len(queryEmb) == 0 || len(chunkEmbs) != len(chunks) {
 		return nil, fmt.Errorf("unexpected embedding response lengths")
 	}
@@ -225,6 +232,8 @@ func embeddingOnlySearch(ctx context.Context, log *slog.Logger, messages []trans
 		"total_chunks", len(chunks),
 		"hits", len(hits),
 		"threshold", filter.threshold,
+		"query_embed_duration", time.Since(queryEmbStart).Round(time.Millisecond),
+		"chunks_embed_duration", time.Since(chunksEmbStart).Round(time.Millisecond),
 	)
 
 	results := make([]Result, len(hits))

@@ -89,7 +89,7 @@ func Serve(ctx context.Context) error {
 			mcp.WithDescription("Search a session's conversation history for where a topic was discussed. Returns matching messages with context. Always start with 'quick' (embedding only, ~3s). Escalate only when quick results are insufficient."),
 			mcp.WithString("session_name", mcp.Required(), mcp.Description("Session name to search.")),
 			mcp.WithString("query", mcp.Required(), mcp.Description("What to search for (natural language).")),
-			mcp.WithString("depth", mcp.Description("Search depth: 'quick' (embedding only, ~3s, default), 'normal' (+ LLM sweep, ~60s), 'deep' (+ rerank, ~3min), 'extra-deep' (+ large model, 10min+, warns before running).")),
+			mcp.WithString("depth", mcp.Description("Search depth: 'quick' (embedding only, ~20s, default), 'normal' (+ LLM sweep, ~4min), 'deep' (+ rerank, ~5min), 'extra-deep' (+ large model, 20min+, warns before running).")),
 		),
 		handleSearchConversation,
 	)
