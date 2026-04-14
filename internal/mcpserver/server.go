@@ -5,9 +5,11 @@ package mcpserver
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +35,38 @@ type cachedResult struct {
 }
 
 var resultCache sync.Map // map[string]*cachedResult
+
+// storeResult saves a result to the in-memory cache and persists it to XDG cache dir.
+func storeResult(resultID string, cached *cachedResult) {
+	resultCache.Store(resultID, cached)
+	if err := config.EnsureSearchResultCacheDir(); err != nil {
+		return
+	}
+	path := filepath.Join(config.SearchResultCacheDir(), resultID+".json")
+	data, err := json.Marshal(cached)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(path, data, 0o644)
+}
+
+// loadResult retrieves a result from memory or disk cache.
+func loadResult(resultID string) (*cachedResult, bool) {
+	if val, ok := resultCache.Load(resultID); ok {
+		return val.(*cachedResult), true
+	}
+	path := filepath.Join(config.SearchResultCacheDir(), resultID+".json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	var cached cachedResult
+	if err := json.Unmarshal(data, &cached); err != nil {
+		return nil, false
+	}
+	resultCache.Store(resultID, &cached)
+	return &cached, true
+}
 
 //go:embed getting_started.md
 var gettingStartedPrompt string
@@ -298,7 +332,7 @@ func handleSearchConversation(ctx context.Context, req mcp.CallToolRequest) (*mc
 	for _, r := range results {
 		flatMessages = append(flatMessages, r.Messages...)
 	}
-	resultCache.Store(resultID, &cachedResult{
+	storeResult(resultID, &cachedResult{
 		SessionName: name,
 		Messages:    flatMessages,
 		Results:     results,
@@ -356,11 +390,10 @@ func handleAnalyzeResults(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 		return mcp.NewToolResultText("result_id and prompt are required"), nil
 	}
 
-	val, ok := resultCache.Load(resultID)
+	cached, ok := loadResult(resultID)
 	if !ok {
-		return mcp.NewToolResultText(fmt.Sprintf("result_id %q not found. Results are cached for the lifetime of this MCP server process only.", resultID)), nil
+		return mcp.NewToolResultText(fmt.Sprintf("result_id %q not found. It may have been from a different session or the cache file may have been deleted.", resultID)), nil
 	}
-	cached := val.(*cachedResult)
 
 	if len(cached.Messages) == 0 {
 		return mcp.NewToolResultText("Cached result has no messages."), nil
