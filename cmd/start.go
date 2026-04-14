@@ -117,7 +117,7 @@ Pass additional flags to Claude Code after '--':
 				autoUpdateContext(store, result.Session)
 				printResumeInstructions(result.Session)
 			}
-			returnToDashboard(cmd)
+			returnToDashboard(result.Session)
 			return err
 		},
 	}

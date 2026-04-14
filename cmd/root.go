@@ -95,6 +95,64 @@ func runDashboard(cmd *cobra.Command, args []string) {
 	}
 }
 
+// runPostSessionDashboard shows the dashboard with "Return to <session>" at the top.
+func runPostSessionDashboard(lastSession *session.Session) {
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Failed to initialize session storage: %v\n", err)
+		return
+	}
+
+	workspaceRoot, _ := config.FindProjectRoot()
+
+	for {
+		var sessions []*session.Session
+		var loadErr error
+		if workspaceRoot != "" {
+			sessions, loadErr = store.ListForWorkspace(workspaceRoot)
+		} else {
+			sessions, loadErr = store.List()
+		}
+		if loadErr != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Failed to load sessions: %v\n", loadErr)
+			return
+		}
+		sortSessionsByLastAccessed(sessions)
+
+		dashboard := ui.NewDashboardPostSession(sessions, lastSession)
+		selectedAction, dashErr := ui.RunDashboard(dashboard)
+		if dashErr != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Dashboard error: %v\n", dashErr)
+			return
+		}
+
+		if selectedAction == "" {
+			return
+		}
+
+		if selectedAction == "return" {
+			// Reload session metadata (may have been updated by auto-context)
+			updated, getErr := store.Get(lastSession.Name)
+			if getErr == nil {
+				lastSession = updated
+			}
+			lastSession.UpdateLastAccessed()
+			_ = store.Update(lastSession)
+			if err := resumeSession(lastSession, store); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "Failed to resume: %v\n", err)
+			}
+			// After returning from session, show this dashboard again
+			continue
+		}
+
+		shouldReturn := handleDashboardAction(selectedAction, sessions, store)
+		if shouldReturn {
+			return
+		}
+	}
+}
+
+
 // handleDashboardAction handles a dashboard action and returns true if we should exit
 func handleDashboardAction(selectedAction string, sessions []*session.Session, store session.Store) bool {
 	switch selectedAction {

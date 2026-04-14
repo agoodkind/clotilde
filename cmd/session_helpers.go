@@ -82,15 +82,17 @@ func printResumeInstructions(sess *session.Session) {
 	fmt.Printf("  claude --resume %s\n", sess.Metadata.SessionID)
 }
 
-// returnToDashboard drops back into the dashboard TUI after a session exits,
-// so the user can immediately resume another session, search, etc.
-// Skipped in non-TTY environments (scripts/pipes).
-func returnToDashboard(_ *cobra.Command) {
+// returnToDashboard shows the dashboard TUI after a session exits,
+// with "Return to <session>" at the top. Skipped in non-TTY environments.
+func returnToDashboard(sess *session.Session) {
 	if !isatty.IsTerminal(os.Stdout.Fd()) {
 		return
 	}
+	if sess == nil || sess.Metadata.IsIncognito {
+		return
+	}
 	fmt.Println()
-	runDashboard(rootCmd, nil)
+	runPostSessionDashboard(sess)
 }
 
 // autoUpdateContext sends a fire-and-forget request to the daemon to generate
