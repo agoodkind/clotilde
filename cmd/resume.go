@@ -29,7 +29,7 @@ Pass additional flags to Claude Code after '--':
   clotilde resume my-session -- --debug api,hooks`,
 		Args:               maxPositionalArgs(1),
 		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
-		ValidArgsFunction: sessionNameCompletion,
+		ValidArgsFunction:  sessionNameCompletion,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Use global session store
 			store, err := globalStore()

@@ -31,8 +31,8 @@ const idleTimeout = 5 * time.Minute
 type Server struct {
 	daemonpb.UnimplementedAgentGateDServer
 
-	log     *slog.Logger
-	mu      sync.RWMutex
+	log      *slog.Logger
+	mu       sync.RWMutex
 	sessions map[string]*wrapperSession // keyed by wrapper_id
 
 	watcher        *fsnotify.Watcher

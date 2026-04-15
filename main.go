@@ -16,7 +16,7 @@ func main() {
 			os.Exit(cmd.ForwardToClaude(os.Args[1:]))
 		case cmd.ModeResumeFlag:
 			os.Args = append(os.Args[:1], rewritten...)
-		// ModeClotilde: fall through — cobra handles it
+			// ModeClotilde: fall through — cobra handles it
 		}
 	}
 

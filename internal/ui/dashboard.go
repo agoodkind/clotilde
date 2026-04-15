@@ -53,11 +53,10 @@ func newDashboard(sessions []*session.Session, lastSession *session.Session) Das
 
 	items = append(items,
 		MenuItem{ID: "start", Label: "Start new session", Description: "Create a new conversation"},
-		MenuItem{ID: "resume", Label: "Resume session", Description: "Continue an existing session"},
+		MenuItem{ID: "resume", Label: "Browse sessions", Description: "Browse and resume an existing session"},
 		MenuItem{ID: "view", Label: "View conversation", Description: "Read a session's conversation text"},
 		MenuItem{ID: "search", Label: "Search conversation", Description: "Find where something was discussed (quick + depth options)"},
 		MenuItem{ID: "fork", Label: "Fork session", Description: "Branch from an existing session"},
-		MenuItem{ID: "list", Label: "List all sessions", Description: "View all sessions in a table"},
 		MenuItem{ID: "auto-name", Label: "Auto-name sessions", Description: "Generate human-readable display names via LLM"},
 		MenuItem{ID: "delete", Label: "Delete session", Description: "Remove a session"},
 	)
@@ -246,7 +245,7 @@ func (m DashboardModel) renderRecentSessions() string {
 		sess := m.Sessions[i]
 
 		// Format session line
-		name := sess.DisplayName()
+		name := sess.Name
 		typeIndicator := ""
 		if sess.Metadata.IsForkedSession {
 			typeStyle := lipgloss.NewStyle().Foreground(ForkColor)

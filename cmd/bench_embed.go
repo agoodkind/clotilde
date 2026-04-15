@@ -103,7 +103,7 @@ Example:
 
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "Benchmarking embedding models\n")
-			fmt.Fprintf(out, "Session: %s (%d messages, %d chunks)\n", sess.DisplayName(), len(messages), len(chunks))
+			fmt.Fprintf(out, "Session: %s (%d messages, %d chunks)\n", sess.Name, len(messages), len(chunks))
 			fmt.Fprintf(out, "Query:   %s\n\n", query)
 
 			lmsPath, _ := exec.LookPath("lms")

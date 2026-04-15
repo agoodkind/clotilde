@@ -31,23 +31,23 @@ const (
 var depthOptions = []string{"quick", "normal", "deep", "extra-deep"}
 
 var depthDescriptions = map[string]string{
-	"quick":       "embedding only, ~20s",
-	"normal":      "embedding + LLM sweep, ~4min",
-	"deep":        "embedding + LLM + rerank, ~5min",
-	"extra-deep":  "adds large model verification, 20min+",
+	"quick":      "embedding only, ~20s",
+	"normal":     "embedding + LLM sweep, ~4min",
+	"deep":       "embedding + LLM + rerank, ~5min",
+	"extra-deep": "adds large model verification, 20min+",
 }
 
 // SearchFormModel is a BubbleTea model for the search parameter form.
 // It collects session, query, and depth then quits with the result.
 type SearchFormModel struct {
-	Sessions  []*session.Session
-	selected  *session.Session
-	query     textinput.Model
-	depthIdx  int
-	focus     searchField
-	result    SearchFormResult
-	done      bool
-	width     int
+	Sessions []*session.Session
+	selected *session.Session
+	query    textinput.Model
+	depthIdx int
+	focus    searchField
+	result   SearchFormResult
+	done     bool
+	width    int
 
 	// set by RunSearchForm to signal that picker should run
 	needPicker bool
@@ -189,7 +189,7 @@ func (m SearchFormModel) View() string {
 	b.WriteString(m.renderFieldLabel("Session", m.focus == fieldSession))
 	sessionName := "(none)"
 	if m.selected != nil {
-		sessionName = m.selected.DisplayName()
+		sessionName = m.selected.Name
 	}
 	sessionVal := lipgloss.NewStyle().Foreground(InfoColor).Render(sessionName)
 	hint := DimStyle.Render("  [enter to change]")

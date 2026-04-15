@@ -36,8 +36,8 @@ Pass additional flags to Claude Code after '--':
   clotilde start my-session -- --debug api,hooks
   clotilde start test --model haiku -- --verbose
   clotilde start                       # auto-generated name`,
-		Args:                  maxPositionalArgs(1),
-		FParseErrWhitelist:    cobra.FParseErrWhitelist{UnknownFlags: true},
+		Args:               maxPositionalArgs(1),
+		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			args, additionalArgs := splitArgs(cmd, args)
 

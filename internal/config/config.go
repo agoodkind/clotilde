@@ -20,21 +20,21 @@ type SearchConfig struct {
 
 // SearchLocal configures a local OpenAI-compatible LLM endpoint.
 type SearchLocal struct {
-	URL              string        `json:"url,omitempty" toml:"url,omitempty"`
-	Token            string        `json:"token,omitempty" toml:"token,omitempty"`
-	Model            string        `json:"model,omitempty" toml:"model,omitempty"`
-	RerankModel      string        `json:"rerankModel,omitempty" toml:"rerank_model,omitempty"`
-	DeepModel        string        `json:"deepModel,omitempty" toml:"deep_model,omitempty"`
-	Pipeline         []SearchLayer `json:"pipeline,omitempty" toml:"pipeline,omitempty"`
-	Temperature      float64       `json:"temperature" toml:"temperature"`
-	TopP             float64       `json:"topP" toml:"top_p"`
-	FrequencyPenalty float64       `json:"frequencyPenalty" toml:"frequency_penalty"`
-	MaxConcurrent         int           `json:"maxConcurrent,omitempty" toml:"max_concurrent,omitempty"`
-	ChunkSize             int           `json:"chunkSize,omitempty" toml:"chunk_size,omitempty"`
-	MaxMemoryGB           int           `json:"maxMemoryGB,omitempty" toml:"max_memory_gb,omitempty"`
-	ContextLength         int           `json:"contextLength,omitempty" toml:"context_length,omitempty"`
-	EmbeddingThreshold    float64       `json:"embeddingThreshold,omitempty" toml:"embedding_threshold,omitempty"`
-	EmbeddingModel        string        `json:"embeddingModel,omitempty" toml:"embedding_model,omitempty"`
+	URL                string        `json:"url,omitempty" toml:"url,omitempty"`
+	Token              string        `json:"token,omitempty" toml:"token,omitempty"`
+	Model              string        `json:"model,omitempty" toml:"model,omitempty"`
+	RerankModel        string        `json:"rerankModel,omitempty" toml:"rerank_model,omitempty"`
+	DeepModel          string        `json:"deepModel,omitempty" toml:"deep_model,omitempty"`
+	Pipeline           []SearchLayer `json:"pipeline,omitempty" toml:"pipeline,omitempty"`
+	Temperature        float64       `json:"temperature" toml:"temperature"`
+	TopP               float64       `json:"topP" toml:"top_p"`
+	FrequencyPenalty   float64       `json:"frequencyPenalty" toml:"frequency_penalty"`
+	MaxConcurrent      int           `json:"maxConcurrent,omitempty" toml:"max_concurrent,omitempty"`
+	ChunkSize          int           `json:"chunkSize,omitempty" toml:"chunk_size,omitempty"`
+	MaxMemoryGB        int           `json:"maxMemoryGB,omitempty" toml:"max_memory_gb,omitempty"`
+	ContextLength      int           `json:"contextLength,omitempty" toml:"context_length,omitempty"`
+	EmbeddingThreshold float64       `json:"embeddingThreshold,omitempty" toml:"embedding_threshold,omitempty"`
+	EmbeddingModel     string        `json:"embeddingModel,omitempty" toml:"embedding_model,omitempty"`
 }
 
 // SearchLayer defines one stage of the search pipeline.

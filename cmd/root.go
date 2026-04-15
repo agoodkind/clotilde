@@ -136,7 +136,6 @@ func runPostSessionDashboard(lastSession *session.Session) {
 	}
 }
 
-
 // handleDashboardAction handles a dashboard action and returns true if we should exit
 func handleDashboardAction(selectedAction string, sessions []*session.Session, store session.Store) bool {
 	switch selectedAction {
@@ -252,35 +251,6 @@ func handleDashboardAction(selectedAction string, sessions []*session.Session, s
 			_, _ = fmt.Fprintf(os.Stderr, "Failed to fork session: %v\n", err)
 			os.Exit(1)
 		}
-		return true
-
-	case "list":
-		// Show interactive table
-		selected, err := showInteractiveTable(sessions, store)
-		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Failed to show table: %v\n", err)
-			os.Exit(1)
-		}
-
-		// If no session selected (cancelled), go back to dashboard
-		if selected == nil {
-			return false
-		}
-
-		// Update last accessed
-		selected.UpdateLastAccessed()
-		if err := store.Update(selected); err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Failed to update session: %v\n", err)
-			os.Exit(1)
-		}
-
-		// Resume the selected session
-		if err := resumeSession(selected, store); err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Failed to resume session: %v\n", err)
-			os.Exit(1)
-		}
-
-		// After resuming (launching Claude), exit dashboard
 		return true
 
 	case "delete":
@@ -684,56 +654,55 @@ func runSearchAndView(selected *session.Session, query, depth string, store sess
 	}
 
 	text := transcript.RenderPlainText(allMatched)
-	viewer := ui.NewViewer(fmt.Sprintf("Search results: %q in %s", query, selected.DisplayName()), text)
+	viewer := ui.NewViewer(fmt.Sprintf("Search results: %q in %s", query, selected.Name), text)
 	_ = ui.RunViewer(viewer)
 }
 
-// autoNameSessions generates display names for all unnamed sessions via LLM.
+// autoNameSessions generates names for sessions via LLM and renames them.
 func autoNameSessions(sessions []*session.Session, store session.Store) {
-	// Count unnamed sessions
-	unnamed := 0
+	// Count nameable sessions (non-incognito)
+	nameable := 0
 	for _, s := range sessions {
-		if !s.Metadata.IsIncognito && s.Metadata.DisplayName == "" {
-			unnamed++
+		if !s.Metadata.IsIncognito {
+			nameable++
 		}
 	}
 
-	if unnamed == 0 {
-		fmt.Println("All sessions already have display names. Use 'clotilde auto-name --all --force' to regenerate.")
+	if nameable == 0 {
+		fmt.Println("No sessions to rename.")
 		return
 	}
 
 	confirmModel := ui.NewConfirm(
-		fmt.Sprintf("Auto-name %d session(s)?", unnamed),
-		fmt.Sprintf("Generate display names for %d unnamed session(s) using claude haiku.", unnamed),
+		fmt.Sprintf("Auto-name %d session(s)?", nameable),
+		fmt.Sprintf("Generate names for %d session(s) using claude haiku and rename them.", nameable),
 	)
 	confirmed, err := ui.RunConfirm(confirmModel)
 	if err != nil || !confirmed {
 		return
 	}
 
-	fmt.Printf("\nGenerating display names for %d session(s)...\n", unnamed)
+	fmt.Printf("\nGenerating names for %d session(s)...\n", nameable)
 
 	succeeded := 0
 	for _, sess := range sessions {
-		if sess.Metadata.IsIncognito || sess.Metadata.DisplayName != "" {
+		if sess.Metadata.IsIncognito {
 			continue
 		}
-		name, genErr := generateDisplayName(nil, sess, "", nil, "haiku")
+		name, genErr := generateName(nil, sess, "", nil, "haiku")
 		if genErr != nil {
 			fmt.Printf("  SKIP %s: %v\n", sess.Name, genErr)
 			continue
 		}
-		sess.Metadata.DisplayName = name
-		if updateErr := store.Update(sess); updateErr != nil {
-			fmt.Printf("  FAIL %s: %v\n", sess.Name, updateErr)
+		if renameErr := store.Rename(sess.Name, name); renameErr != nil {
+			fmt.Printf("  FAIL %s: %v\n", sess.Name, renameErr)
 			continue
 		}
 		fmt.Printf("  OK   %s  =>  %s\n", sess.Name, name)
 		succeeded++
 	}
 
-	fmt.Printf("\nDone. %d/%d sessions named.\n", succeeded, unnamed)
+	fmt.Printf("\nDone. %d/%d sessions renamed.\n", succeeded, nameable)
 }
 
 // loadSessionMessages loads parsed messages from all transcripts for a session.

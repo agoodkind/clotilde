@@ -42,9 +42,6 @@ files present, settings, context sources, and Claude Code data status.`,
 
 			// Print metadata
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Session: %s\n", sess.Name)
-			if sess.Metadata.DisplayName != "" {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Display Name: %s\n", sess.Metadata.DisplayName)
-			}
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "UUID: %s\n", sess.Metadata.SessionID)
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Created: %s\n", sess.Metadata.Created.Format(time.RFC3339))
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Last Accessed: %s\n", sess.Metadata.LastAccessed.Format(time.RFC3339))

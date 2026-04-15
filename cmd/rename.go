@@ -15,9 +15,9 @@ import (
 
 func newRenameCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:               "rename <old-name> <new-name>",
-		Aliases:           []string{"mv"},
-		Short:             "Rename a session",
+		Use:     "rename <old-name> <new-name>",
+		Aliases: []string{"mv"},
+		Short:   "Rename a session",
 		Long: `Rename an existing session to a new name.
 
 The session directory, metadata, and any custom output style are all updated.
