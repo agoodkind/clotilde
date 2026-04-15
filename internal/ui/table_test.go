@@ -21,8 +21,8 @@ func TestNewTable(t *testing.T) {
 	if len(model.Rows) != 2 {
 		t.Errorf("Expected 2 rows, got %d", len(model.Rows))
 	}
-	if model.Cursor != 0 {
-		t.Errorf("Expected cursor at 0, got %d", model.Cursor)
+	if model.Nav.Cursor != 0 {
+		t.Errorf("Expected cursor at 0, got %d", model.Nav.Cursor)
 	}
 	if model.Selected != -1 {
 		t.Errorf("Expected Selected to be -1, got %d", model.Selected)
@@ -38,36 +38,36 @@ func TestTableUpdate_Navigation(t *testing.T) {
 	model := NewTable([]string{"Col1", "Col2"}, rows)
 
 	// Start at 0
-	if model.Cursor != 0 {
-		t.Errorf("Expected cursor at 0, got %d", model.Cursor)
+	if model.Nav.Cursor != 0 {
+		t.Errorf("Expected cursor at 0, got %d", model.Nav.Cursor)
 	}
 
 	// Move down
 	updatedModel, _ := model.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m := updatedModel.(TableModel)
-	if m.Cursor != 1 {
-		t.Errorf("Expected cursor at 1 after down, got %d", m.Cursor)
+	if m.Nav.Cursor != 1 {
+		t.Errorf("Expected cursor at 1 after down, got %d", m.Nav.Cursor)
 	}
 
 	// Move down again
 	updatedModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updatedModel.(TableModel)
-	if m.Cursor != 2 {
-		t.Errorf("Expected cursor at 2 after down, got %d", m.Cursor)
+	if m.Nav.Cursor != 2 {
+		t.Errorf("Expected cursor at 2 after down, got %d", m.Nav.Cursor)
 	}
 
 	// Try to move down beyond end (should stay at 2)
 	updatedModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updatedModel.(TableModel)
-	if m.Cursor != 2 {
-		t.Errorf("Expected cursor to stay at 2, got %d", m.Cursor)
+	if m.Nav.Cursor != 2 {
+		t.Errorf("Expected cursor to stay at 2, got %d", m.Nav.Cursor)
 	}
 
 	// Move up
 	updatedModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
 	m = updatedModel.(TableModel)
-	if m.Cursor != 1 {
-		t.Errorf("Expected cursor at 1 after up, got %d", m.Cursor)
+	if m.Nav.Cursor != 1 {
+		t.Errorf("Expected cursor at 1 after up, got %d", m.Nav.Cursor)
 	}
 }
 
@@ -81,15 +81,15 @@ func TestTableUpdate_VimNavigation(t *testing.T) {
 	// j to move down
 	updatedModel, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	m := updatedModel.(TableModel)
-	if m.Cursor != 1 {
-		t.Errorf("Expected cursor at 1 after 'j', got %d", m.Cursor)
+	if m.Nav.Cursor != 1 {
+		t.Errorf("Expected cursor at 1 after 'j', got %d", m.Nav.Cursor)
 	}
 
 	// k to move up
 	updatedModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
 	m = updatedModel.(TableModel)
-	if m.Cursor != 0 {
-		t.Errorf("Expected cursor at 0 after 'k', got %d", m.Cursor)
+	if m.Nav.Cursor != 0 {
+		t.Errorf("Expected cursor at 0 after 'k', got %d", m.Nav.Cursor)
 	}
 }
 
@@ -100,20 +100,20 @@ func TestTableUpdate_HomeEnd(t *testing.T) {
 		{"row3", "data3"},
 	}
 	model := NewTable([]string{"Col1", "Col2"}, rows)
-	model.Cursor = 1 // Start in middle
+	model.Nav.Cursor = 1 // Start in middle
 
 	// G (shift+g) to go to end
 	updatedModel, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
 	m := updatedModel.(TableModel)
-	if m.Cursor != 2 {
-		t.Errorf("Expected cursor at end (2) after 'G', got %d", m.Cursor)
+	if m.Nav.Cursor != 2 {
+		t.Errorf("Expected cursor at end (2) after 'G', got %d", m.Nav.Cursor)
 	}
 
 	// g to go to home
 	updatedModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
 	m = updatedModel.(TableModel)
-	if m.Cursor != 0 {
-		t.Errorf("Expected cursor at home (0) after 'g', got %d", m.Cursor)
+	if m.Nav.Cursor != 0 {
+		t.Errorf("Expected cursor at home (0) after 'g', got %d", m.Nav.Cursor)
 	}
 }
 
@@ -123,7 +123,7 @@ func TestTableUpdate_EnterSelects(t *testing.T) {
 		{"row2", "data2"},
 	}
 	model := NewTable([]string{"Col1", "Col2"}, rows)
-	model.Cursor = 1
+	model.Nav.Cursor = 1
 
 	updatedModel, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m := updatedModel.(TableModel)
@@ -380,7 +380,7 @@ func TestTableFiltering_EnterFilterMode(t *testing.T) {
 	updatedModel, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	m := updatedModel.(TableModel)
 
-	if !m.Filtering {
+	if !m.Filter.Active {
 		t.Error("Expected Filtering to be true after pressing '/'")
 	}
 }
@@ -405,8 +405,8 @@ func TestTableFiltering_TypeAndFilter(t *testing.T) {
 	updatedModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
 	m = updatedModel.(TableModel)
 
-	if m.FilterText != "bet" {
-		t.Errorf("Expected FilterText to be 'bet', got '%s'", m.FilterText)
+	if m.Filter.Text != "bet" {
+		t.Errorf("Expected FilterText to be 'bet', got '%s'", m.Filter.Text)
 	}
 
 	// Check filtered rows
@@ -433,16 +433,16 @@ func TestTableFiltering_Backspace(t *testing.T) {
 	updatedModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
 	m = updatedModel.(TableModel)
 
-	if m.FilterText != "ab" {
-		t.Errorf("Expected FilterText to be 'ab', got '%s'", m.FilterText)
+	if m.Filter.Text != "ab" {
+		t.Errorf("Expected FilterText to be 'ab', got '%s'", m.Filter.Text)
 	}
 
 	// Press backspace
 	updatedModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
 	m = updatedModel.(TableModel)
 
-	if m.FilterText != "a" {
-		t.Errorf("Expected FilterText to be 'a' after backspace, got '%s'", m.FilterText)
+	if m.Filter.Text != "a" {
+		t.Errorf("Expected FilterText to be 'a' after backspace, got '%s'", m.Filter.Text)
 	}
 }
 
@@ -462,11 +462,11 @@ func TestTableFiltering_ExitWithEsc(t *testing.T) {
 	updatedModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = updatedModel.(TableModel)
 
-	if m.Filtering {
+	if m.Filter.Active {
 		t.Error("Expected Filtering to be false after Esc")
 	}
-	if m.FilterText != "" {
-		t.Errorf("Expected FilterText to be empty after Esc, got '%s'", m.FilterText)
+	if m.Filter.Text != "" {
+		t.Errorf("Expected FilterText to be empty after Esc, got '%s'", m.Filter.Text)
 	}
 }
 
@@ -486,11 +486,11 @@ func TestTableFiltering_ExitWithEnter(t *testing.T) {
 	updatedModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updatedModel.(TableModel)
 
-	if m.Filtering {
+	if m.Filter.Active {
 		t.Error("Expected Filtering to be false after Enter")
 	}
-	if m.FilterText != "a" {
-		t.Errorf("Expected FilterText to be 'a' after Enter, got '%s'", m.FilterText)
+	if m.Filter.Text != "a" {
+		t.Errorf("Expected FilterText to be 'a' after Enter, got '%s'", m.Filter.Text)
 	}
 }
 
@@ -500,7 +500,7 @@ func TestTableFiltering_NoMatches(t *testing.T) {
 		{"beta", "test2"},
 	}
 	model := NewTable([]string{"Name", "Value"}, rows)
-	model.FilterText = "xyz"
+	model.Filter.Text = "xyz"
 
 	filtered := model.filteredRows()
 	if len(filtered) != 0 {
@@ -514,7 +514,7 @@ func TestTableFiltering_CaseInsensitive(t *testing.T) {
 		{"beta", "test2"},
 	}
 	model := NewTable([]string{"Name", "Value"}, rows)
-	model.FilterText = "alpha"
+	model.Filter.Text = "alpha"
 
 	filtered := model.filteredRows()
 	if len(filtered) != 1 {
@@ -531,7 +531,7 @@ func TestTableView_WithFilter(t *testing.T) {
 		{"beta", "2"},
 	}
 	model := NewTable([]string{"Name", "Value"}, rows)
-	model.FilterText = "alpha"
+	model.Filter.Text = "alpha"
 
 	view := model.View()
 
