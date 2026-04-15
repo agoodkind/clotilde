@@ -139,15 +139,36 @@ func parseLine(line []byte) (Message, bool) {
 }
 
 // extractUserText gets the text from a user message's content field.
-// User messages have content as a string (text prompt) or an array (tool results).
-// We only want string content (actual user messages).
+// User messages have content as a string (older format) or an array of blocks (newer format).
+// Array content may contain text blocks (user-authored) or tool_result blocks (skip those).
 func extractUserText(raw json.RawMessage) string {
+	// Try string content first (older Claude Code format)
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
 		return strings.TrimSpace(s)
 	}
-	// Array content = tool results, skip
-	return ""
+	// Try array content: extract text blocks, ignore tool_result blocks
+	var blocks []contentBlock
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return ""
+	}
+	hasText := false
+	var parts []string
+	for _, b := range blocks {
+		switch b.Type {
+		case "text":
+			if t := strings.TrimSpace(b.Text); t != "" {
+				parts = append(parts, t)
+				hasText = true
+			}
+		case "tool_result":
+			// tool results are not user-authored text, skip
+		}
+	}
+	if !hasText {
+		return "" // only tool results, skip the entry
+	}
+	return strings.Join(parts, "\n")
 }
 
 // parseAssistantBlocks extracts text, thinking, and tool calls from an assistant message.
