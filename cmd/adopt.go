@@ -127,73 +127,11 @@ func runAdopt(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-// runAdoptRefresh re-scans transcripts for already-adopted sessions and backfills
-// DisplayName from the "Session name: ..." hook output in the transcript.
-func runAdoptRefresh(cmd *cobra.Command, projectsDir string) error {
-	store, err := session.NewGlobalFileStore()
-	if err != nil {
-		return fmt.Errorf("opening global store: %w", err)
-	}
-
-	sessions, err := store.List()
-	if err != nil {
-		return fmt.Errorf("listing sessions: %w", err)
-	}
-
-	// Build UUID→session index (current + previous IDs)
-	uuidToSession := make(map[string]*session.Session)
-	for _, sess := range sessions {
-		uuidToSession[sess.Metadata.SessionID] = sess
-		for _, prev := range sess.Metadata.PreviousSessionIDs {
-			if prev != "" {
-				uuidToSession[prev] = sess
-			}
-		}
-	}
-
-	// Scan all transcripts
-	entries, err := os.ReadDir(projectsDir)
-	if err != nil {
-		return fmt.Errorf("reading projects dir: %w", err)
-	}
-
-	updated := 0
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		projDir := filepath.Join(projectsDir, entry.Name())
-		files, readErr := os.ReadDir(projDir)
-		if readErr != nil {
-			continue
-		}
-
-		for _, f := range files {
-			if f.IsDir() || strings.HasPrefix(f.Name(), "agent-") || !strings.HasSuffix(f.Name(), ".jsonl") {
-				continue
-			}
-
-			info, extractErr := adoptExtractInfo(filepath.Join(projDir, f.Name()), entry.Name())
-			if extractErr != nil || info.SessionID == "" || info.ExtractedName == "" {
-				continue
-			}
-
-			sess, ok := uuidToSession[info.SessionID]
-			if !ok || sess.Metadata.DisplayName == info.ExtractedName {
-				continue
-			}
-
-			sess.Metadata.DisplayName = info.ExtractedName
-			if err := store.Update(sess); err != nil {
-				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "  failed to update '%s': %v\n", sess.Name, err)
-				continue
-			}
-			updated++
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  updated '%s' → display name '%s'\n", sess.Name, info.ExtractedName)
-		}
-	}
-
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\nRefreshed %d session(s).\n", updated)
+// runAdoptRefresh re-scans transcripts for already-adopted sessions.
+// This is now a no-op since DisplayName has been removed; kept for CLI compatibility.
+func runAdoptRefresh(cmd *cobra.Command, _ string) error {
+	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Refresh is no longer needed: DisplayName has been removed.")
+	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Use 'clotilde auto-name --all' to rename sessions based on transcript content.")
 	return nil
 }
 
@@ -422,7 +360,6 @@ func adoptOne(t *adoptTranscriptInfo) (string, error) {
 			TranscriptPath: t.TranscriptPath,
 			WorkDir:        t.CWD,
 			WorkspaceRoot:  workspaceRoot,
-			DisplayName:    t.ExtractedName,
 			Created:        created,
 			LastAccessed:   t.LastAccessed,
 		},
