@@ -26,6 +26,8 @@ type PickerModel struct {
 	Filtering   bool
 	ShowPreview bool        // Show preview pane with session metadata
 	PreviewFn   PreviewFunc // Custom preview renderer (optional)
+	width       int         // terminal width (updated on resize)
+	height      int         // terminal height (updated on resize)
 }
 
 // NewPicker creates a new session picker
@@ -48,9 +50,14 @@ func (m PickerModel) Init() tea.Cmd {
 	return nil
 }
 
-// Update handles keyboard input
+// Update handles keyboard input and window resize
 func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, nil
+
 	case tea.KeyMsg:
 		// Handle filter mode separately
 		if m.Filtering {
@@ -233,17 +240,46 @@ func (m PickerModel) viewSimple() string {
 	return b.String()
 }
 
-// viewWithPreview renders the picker with a preview pane (split view)
+// viewWithPreview renders the picker with a preview pane (split view).
+// Hides the preview pane when the terminal is too narrow (< 80 columns).
 func (m PickerModel) viewWithPreview() string {
 	filtered := m.filteredSessions()
+
+	// Hide preview on narrow terminals
+	if m.width > 0 && m.width < 80 {
+		return m.viewSimple()
+	}
 
 	// Build list pane
 	listPane := m.renderListPane(filtered)
 
-	// Build preview pane
+	// Build preview pane with width cap
 	var previewPane string
 	if len(filtered) > 0 {
-		previewPane = m.renderPreviewPane(filtered[m.Cursor])
+		previewContent := m.getPreviewContent(filtered[m.Cursor])
+		// Cap preview width to half the terminal (or 50 chars minimum)
+		previewWidth := 50
+		if m.width > 0 {
+			previewWidth = m.width/2 - 4
+			if previewWidth < 40 {
+				previewWidth = 40
+			}
+		}
+		// Truncate lines to fit width and cap height
+		lines := strings.Split(previewContent, "\n")
+		maxLines := 20
+		if m.height > 0 {
+			maxLines = m.height - 6
+		}
+		if len(lines) > maxLines {
+			lines = lines[:maxLines]
+		}
+		for i, line := range lines {
+			if len(line) > previewWidth-4 {
+				lines[i] = line[:previewWidth-7] + "..."
+			}
+		}
+		previewPane = InfoBoxStyle.Width(previewWidth).Render(strings.Join(lines, "\n"))
 	} else {
 		previewPane = DimStyle.Italic(true).Render("No session selected")
 	}
@@ -252,9 +288,34 @@ func (m PickerModel) viewWithPreview() string {
 	return lipgloss.JoinHorizontal(
 		lipgloss.Top,
 		listPane,
-		"  ", // Spacer
+		"  ",
 		previewPane,
 	)
+}
+
+// getPreviewContent returns the raw preview text (without box styling)
+func (m PickerModel) getPreviewContent(sess *session.Session) string {
+	if m.PreviewFn != nil {
+		return m.PreviewFn(sess)
+	}
+	return defaultPreviewText(sess)
+}
+
+// defaultPreviewText returns the default preview text for a session
+func defaultPreviewText(sess *session.Session) string {
+	var lines []string
+	lines = append(lines, sess.Name)
+	lines = append(lines, "")
+	if sess.Metadata.IsForkedSession {
+		lines = append(lines, "Type:      Fork of "+sess.Metadata.ParentSession)
+	}
+	lines = append(lines, "Created:   "+sess.Metadata.Created.Format("2006-01-02 15:04"))
+	lines = append(lines, "Last used: "+formatTimeAgo(sess.Metadata.LastAccessed))
+	if sess.Metadata.Context != "" {
+		lines = append(lines, "")
+		lines = append(lines, sess.Metadata.Context)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // renderListPane renders the left pane with session list
@@ -295,7 +356,10 @@ func (m PickerModel) renderListPane(filtered []*session.Session) string {
 	}
 
 	// Session list (limit to visible area)
-	const maxVisible = 10
+	maxVisible := 10
+	if m.height > 12 {
+		maxVisible = m.height - 8 // leave room for title, filter, help
+	}
 	start := max(m.Cursor-maxVisible/2, 0)
 	end := start + maxVisible
 	if end > len(filtered) {
@@ -332,16 +396,7 @@ func (m PickerModel) renderListPane(filtered []*session.Session) string {
 	return b.String()
 }
 
-// renderPreviewPane renders the right pane with session metadata.
-// Uses PreviewFn if set, otherwise falls back to the default preview.
-func (m PickerModel) renderPreviewPane(sess *session.Session) string {
-	if m.PreviewFn != nil {
-		return InfoBoxStyle.Render(m.PreviewFn(sess))
-	}
-	return InfoBoxStyle.Render(defaultPreview(sess))
-}
-
-// defaultPreview renders the built-in preview for a session.
+// defaultPreview renders the built-in preview for a session (with box styling).
 func defaultPreview(sess *session.Session) string {
 	var lines []string
 
