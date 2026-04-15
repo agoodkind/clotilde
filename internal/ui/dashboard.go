@@ -16,8 +16,7 @@ type DashboardModel struct {
 	Cursor      int
 	Selected    string // Selected action ID
 	Cancelled   bool
-	Width       int
-	Height      int
+	Term        TermSize
 	recentLimit int // How many recent sessions to show
 	menuItems   []MenuItem
 }
@@ -82,8 +81,7 @@ func (m DashboardModel) Init() tea.Cmd {
 func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.Width = msg.Width
-		m.Height = msg.Height
+		m.Term.HandleResize(msg)
 		return m, nil
 
 	case tea.KeyMsg:
@@ -155,8 +153,7 @@ func (m DashboardModel) View() string {
 	b.WriteString("\n\n")
 
 	// Help text
-	helpStyle := DimStyle.Italic(true)
-	b.WriteString(helpStyle.Render("(↑/↓ or j/k to navigate, enter to select, q to quit)"))
+	b.WriteString(RenderHelpBar("(↑/↓ or j/k to navigate, enter to select, q to quit)"))
 
 	return b.String()
 }
@@ -209,18 +206,9 @@ func (m DashboardModel) renderMenu() string {
 			continue
 		}
 
-		cursor := " "
-		if m.Cursor == i {
-			cursor = ">"
-		}
-
-		itemStyle := lipgloss.NewStyle()
-		if m.Cursor == i {
-			itemStyle = itemStyle.Foreground(SuccessColor).Bold(true)
-		}
-
 		line := fmt.Sprintf("%s  %s", item.Label, DimStyle.Render("- "+item.Description))
-		fmt.Fprintf(&b, "%s %s\n", cursor, itemStyle.Render(line))
+		b.WriteString(RenderCursorLine(i, m.Cursor, line))
+		b.WriteString("\n")
 	}
 
 	return b.String()

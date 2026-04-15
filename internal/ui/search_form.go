@@ -48,7 +48,7 @@ type SearchFormModel struct {
 	focus    searchField
 	result   SearchFormResult
 	done     bool
-	width    int
+	term     TermSize
 
 	// set by RunSearchForm to signal that picker should run
 	needPicker bool
@@ -88,9 +88,9 @@ func (m SearchFormModel) Init() tea.Cmd {
 func (m SearchFormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		if m.width > 10 {
-			m.query.Width = min(70, m.width-10)
+		m.term.HandleResize(msg)
+		if m.term.Width > 10 {
+			m.query.Width = min(70, m.term.Width-10)
 		}
 		return m, nil
 
@@ -202,8 +202,8 @@ func (m *SearchFormModel) syncFocus() {
 // sectionWidth returns the inner width for section boxes.
 func (m SearchFormModel) sectionWidth() int {
 	w := 78
-	if m.width > 10 {
-		w = min(78, m.width-4)
+	if m.term.Width > 10 {
+		w = min(78, m.term.Width-4)
 	}
 	return w
 }
