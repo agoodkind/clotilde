@@ -10,6 +10,7 @@ import (
 
 	"github.com/fgrehm/clotilde/internal/config"
 	"github.com/fgrehm/clotilde/internal/transcript"
+	"goodkind.io/lmctl"
 )
 
 const (
@@ -87,7 +88,11 @@ func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript
 	sweepLayer := pipeline[0]
 	if cfg.Backend == "local" {
 		log.Info("loading sweep model", "model", sweepLayer.Model)
-		if err := ensureModelLoaded(ctx, sweepLayer.Model, cfg.Local.ContextLength, cfg.Local.MaxMemoryGB); err != nil {
+		if err := lmctl.EnsureLoaded(ctx, sweepLayer.Model,
+			lmctl.WithContextLength(cfg.Local.ContextLength),
+			lmctl.WithMaxMemoryGB(cfg.Local.MaxMemoryGB),
+			lmctl.WithWarmup(cfg.Local.URL, cfg.Local.Token),
+		); err != nil {
 			return nil, fmt.Errorf("failed to load model %s: %w", sweepLayer.Model, err)
 		}
 		currentModel = sweepLayer.Model
@@ -118,7 +123,11 @@ func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript
 		// Swap model if this layer uses a different one
 		if cfg.Backend == "local" && layer.Model != currentModel {
 			log.Info("swapping model", "from", currentModel, "to", layer.Model, "layer", layer.Name)
-			if err := ensureModelLoaded(ctx, layer.Model, cfg.Local.ContextLength, cfg.Local.MaxMemoryGB); err != nil {
+			if err := lmctl.EnsureLoaded(ctx, layer.Model,
+				lmctl.WithContextLength(cfg.Local.ContextLength),
+				lmctl.WithMaxMemoryGB(cfg.Local.MaxMemoryGB),
+				lmctl.WithWarmup(cfg.Local.URL, cfg.Local.Token),
+			); err != nil {
 				log.Warn("model load failed, skipping layer", "model", layer.Model, "err", err)
 				continue
 			}
@@ -165,7 +174,11 @@ func embeddingOnlySearch(ctx context.Context, log *slog.Logger, messages []trans
 		return nil, fmt.Errorf("quick depth requires local backend with embedding model")
 	}
 
-	if err := ensureModelLoaded(ctx, defaultEmbeddingModel, 0, cfg.Local.MaxMemoryGB); err != nil {
+	embModel := cfg.Local.EmbeddingModel
+	if embModel == "" {
+		embModel = defaultEmbeddingModel
+	}
+	if err := lmctl.EnsureLoaded(ctx, embModel, lmctl.WithMaxMemoryGB(cfg.Local.MaxMemoryGB)); err != nil {
 		return nil, fmt.Errorf("failed to load embedding model: %w", err)
 	}
 
@@ -259,7 +272,11 @@ func sweepChunks(ctx context.Context, log *slog.Logger, client Client, messages 
 	// The embedding model is tiny (~0.1 GB) and can coexist with inference models.
 	if cfg.Backend == "local" {
 		// Ensure embedding model is loaded (won't evict large models due to tiny size)
-		_ = ensureModelLoaded(ctx, defaultEmbeddingModel, 0, cfg.Local.MaxMemoryGB)
+		sweepEmbModel := cfg.Local.EmbeddingModel
+		if sweepEmbModel == "" {
+			sweepEmbModel = defaultEmbeddingModel
+		}
+		_ = lmctl.EnsureLoaded(ctx, sweepEmbModel, lmctl.WithMaxMemoryGB(cfg.Local.MaxMemoryGB))
 		filter := newEmbeddingFilter(cfg.Local)
 		filtered, filterErr := filter.filterChunks(ctx, query, chunks)
 		if filterErr == nil {

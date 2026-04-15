@@ -34,6 +34,7 @@ type SearchLocal struct {
 	MaxMemoryGB           int           `json:"maxMemoryGB,omitempty" toml:"max_memory_gb,omitempty"`
 	ContextLength         int           `json:"contextLength,omitempty" toml:"context_length,omitempty"`
 	EmbeddingThreshold    float64       `json:"embeddingThreshold,omitempty" toml:"embedding_threshold,omitempty"`
+	EmbeddingModel        string        `json:"embeddingModel,omitempty" toml:"embedding_model,omitempty"`
 }
 
 // SearchLayer defines one stage of the search pipeline.

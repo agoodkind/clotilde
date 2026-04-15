@@ -46,8 +46,13 @@ func newEmbeddingFilter(cfg config.SearchLocal) *embeddingFilter {
 		threshold = defaultSimilarityThreshold
 	}
 
+	model := cfg.EmbeddingModel
+	if model == "" {
+		model = defaultEmbeddingModel
+	}
+
 	c := openai.NewClient(opts...)
-	return &embeddingFilter{client: &c, model: defaultEmbeddingModel, threshold: threshold}
+	return &embeddingFilter{client: &c, model: model, threshold: threshold}
 }
 
 // filterChunks embeds the query and each chunk, returning only chunks whose
@@ -121,6 +126,23 @@ func (e *embeddingFilter) filterChunks(ctx context.Context, query string, chunks
 
 	return filtered, nil
 }
+
+// EmbedTexts embeds a slice of texts using the given model against the given
+// OpenAI-compatible base URL. Used by the bench-embed command.
+func EmbedTexts(ctx context.Context, baseURL, token, model string, texts []string) ([][]float64, error) {
+	opts := []option.RequestOption{option.WithBaseURL(baseURL + "/v1")}
+	if token != "" {
+		opts = append(opts, option.WithAPIKey(token))
+	} else {
+		opts = append(opts, option.WithAPIKey("not-needed"))
+	}
+	c := openai.NewClient(opts...)
+	f := &embeddingFilter{client: &c, model: model}
+	return f.embed(ctx, texts)
+}
+
+// CosineSimilarity is the exported form of cosineSimilarity.
+func CosineSimilarity(a, b []float64) float64 { return cosineSimilarity(a, b) }
 
 // embed returns embeddings for the given texts.
 func (e *embeddingFilter) embed(ctx context.Context, texts []string) ([][]float64, error) {
