@@ -6,9 +6,11 @@ import (
 	"os"
 	"time"
 
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 
 	"github.com/fgrehm/clotilde/internal/transcript"
+	"github.com/fgrehm/clotilde/internal/ui"
 )
 
 func newCompactCmd() *cobra.Command {
@@ -75,6 +77,28 @@ Examples:
 			chainLines, _, allLines, err := transcript.WalkChain(path)
 			if err != nil {
 				return fmt.Errorf("walking chain: %w", err)
+			}
+
+			// When no action flags are set and stdout is a TTY, launch the interactive UI.
+			noActionFlags := !dryRun && !stripResults && stripLarge == 0 && keepLast == 0 &&
+				stripBeforeStr == "" && moveBoundary == 0 && !removeLast
+			if noActionFlags && isatty.IsTerminal(os.Stdout.Fd()) {
+				choices, tuiErr := ui.RunCompactUI(sess.Name, path, chainLines, allLines)
+				if tuiErr != nil {
+					return fmt.Errorf("compact UI: %w", tuiErr)
+				}
+				if choices.Cancelled || (!choices.Applied && !choices.DryRun) {
+					fmt.Fprintln(cmd.OutOrStdout(), "Cancelled.")
+					return nil
+				}
+
+				// Map TUI choices back to flag variables so the rest of the function applies them.
+				moveBoundary = choices.BoundaryPercent
+				stripResults = choices.StripToolResults
+				if choices.StripLargeInputs {
+					stripLarge = 1024
+				}
+				dryRun = choices.DryRun
 			}
 
 			boundaries := transcript.FindBoundaries(allLines)
