@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -21,6 +22,8 @@ type DashboardModel struct {
 	Term        TermSize
 	recentLimit int // How many recent sessions to show
 	menuItems   []MenuItem
+	vp          viewport.Model
+	vpReady     bool
 }
 
 // MenuItem represents a menu action
@@ -84,31 +87,33 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.Term.HandleResize(msg)
+		if !m.vpReady {
+			m.vp = viewport.New(msg.Width, msg.Height)
+			m.vpReady = true
+		} else {
+			m.vp.Width = msg.Width
+			m.vp.Height = msg.Height
+		}
+		m.vp.SetContent(m.renderContent())
 		return m, nil
 
 	case tea.MouseMsg:
 		switch msg.Type {
 		case tea.MouseWheelUp:
-			for next := m.Cursor - 1; next >= 0; next-- {
-				if m.menuItems[next].ID != "" {
-					m.Cursor = next
-					break
-				}
+			if m.vpReady {
+				m.vp.LineUp(3)
 			}
 			return m, nil
 		case tea.MouseWheelDown:
-			for next := m.Cursor + 1; next < len(m.menuItems); next++ {
-				if m.menuItems[next].ID != "" {
-					m.Cursor = next
-					break
-				}
+			if m.vpReady {
+				m.vp.LineDown(3)
 			}
 			return m, nil
 		case tea.MouseLeft:
-			// Click on menu item
 			for i, item := range m.menuItems {
-				if item.ID != "" && msg.Y >= 5+i && msg.Y < 6+i {
+				if item.ID != "" {
 					m.Cursor = i
+					m.vp.SetContent(m.renderContent())
 					return m, nil
 				}
 			}
@@ -160,54 +165,26 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// View renders the dashboard, adapting to terminal height.
-// Priority: header + menu always visible; recent sessions shrink or hide when short.
+// View renders the dashboard inside a scrollable viewport.
 func (m DashboardModel) View() string {
+	if m.vpReady {
+		m.vp.SetContent(m.renderContent())
+		return m.vp.View()
+	}
+	return m.renderContent()
+}
+
+// renderContent builds the full dashboard content string.
+func (m DashboardModel) renderContent() string {
 	var b strings.Builder
 
-	// Header bar
-	header := m.renderHeader()
-	b.WriteString(header)
+	b.WriteString(m.renderHeader())
 	b.WriteString("\n\n")
-
-	// Quick actions menu
-	menu := m.renderMenu()
-	b.WriteString(menu)
+	b.WriteString(m.renderMenu())
 	b.WriteString("\n\n")
-
-	// Help text (always at bottom)
-	help := RenderHelpBar("↑↓ navigate · enter select · q quit")
-
-	// Calculate how much space is left for recent sessions
-	// Menu height: count newlines + border (2 lines)
-	menuLines := strings.Count(menu, "\n") + 3
-	headerLines := 3 // header + blank
-	helpLines := 2   // help + blank
-	overhead := headerLines + menuLines + helpLines
-
-	availableForRecent := 0
-	if m.Term.Height > 0 {
-		availableForRecent = m.Term.Height - overhead
-	} else {
-		availableForRecent = 15 // default when height unknown
-	}
-
-	// Show recent sessions only if we have room (at least 4 lines: header + 1 session + more + blank)
-	if availableForRecent >= 4 && len(m.Sessions) > 0 {
-		// Dynamically set recent limit based on available space
-		// Each session is 1 line, plus header (2 lines) and "more" (2 lines)
-		maxSessions := availableForRecent - 4
-		if maxSessions < 1 {
-			maxSessions = 1
-		}
-		if maxSessions > m.recentLimit {
-			maxSessions = m.recentLimit
-		}
-		b.WriteString(m.renderRecentSessionsN(maxSessions))
-		b.WriteString("\n\n")
-	}
-
-	b.WriteString(help)
+	b.WriteString(m.renderRecentSessions())
+	b.WriteString("\n\n")
+	b.WriteString(RenderHelpBar("↑↓ navigate · scroll viewport · enter select · q quit"))
 
 	return b.String()
 }
