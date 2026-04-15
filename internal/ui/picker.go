@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -14,6 +15,15 @@ import (
 // PreviewFunc generates preview text for a session in the picker pane.
 // If nil, the default built-in preview is used.
 type PreviewFunc func(sess *session.Session) string
+
+// SortMode controls how sessions are sorted in the picker.
+type SortMode int
+
+const (
+	SortByLastUsed SortMode = iota
+	SortByCreated
+	SortByName
+)
 
 // PickerModel represents the session picker state
 type PickerModel struct {
@@ -26,6 +36,13 @@ type PickerModel struct {
 	Nav         ListNav
 	Filter      FilterState
 	Term        TermSize
+	Sort        SortMode // current sort (default: last used)
+
+	// Preview viewport for scrollable preview pane
+	previewVP      viewport.Model
+	previewReady   bool
+	previewFocused bool // true when tab switches focus to preview
+	lastPreviewIdx int  // track cursor changes to refresh viewport content
 }
 
 // NewPicker creates a new session picker
@@ -52,6 +69,24 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.Term.HandleResize(msg)
+		// Initialize or resize preview viewport
+		if m.ShowPreview {
+			previewH := m.Term.Height - 6
+			if previewH < 5 {
+				previewH = 5
+			}
+			previewW := m.Term.Width/2 - 6
+			if previewW < 30 {
+				previewW = 30
+			}
+			if !m.previewReady {
+				m.previewVP = viewport.New(previewW, previewH)
+				m.previewReady = true
+			} else {
+				m.previewVP.Width = previewW
+				m.previewVP.Height = previewH
+			}
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -60,12 +95,53 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Handle filter mode separately
 		if m.Filter.Active {
 			if m.Filter.HandleFilterKey(key, msg.Runes) {
-				m.Nav.Cursor = 0 // Reset cursor when filter changes
+				m.Nav.Cursor = 0
 			}
 			return m, nil
 		}
 
-		// Quit keys
+		// Tab toggles focus between list and preview
+		if key == "tab" && m.ShowPreview && m.previewReady {
+			m.previewFocused = !m.previewFocused
+			return m, nil
+		}
+
+		// When preview is focused, forward scroll keys to viewport
+		if m.previewFocused && m.previewReady {
+			switch key {
+			case "up", "k":
+				m.previewVP.LineUp(1)
+				return m, nil
+			case "down", "j":
+				m.previewVP.LineDown(1)
+				return m, nil
+			case "pgup":
+				m.previewVP.HalfViewUp()
+				return m, nil
+			case "pgdown":
+				m.previewVP.HalfViewDown()
+				return m, nil
+			case "enter", " ":
+				// Enter still selects even from preview focus
+				filtered := m.filteredSessions()
+				if len(filtered) > 0 {
+					m.Selected = filtered[m.Nav.Cursor]
+				}
+				return m, tea.Quit
+			}
+			// Quit keys still work from preview
+			if quit, clearFilter := HandleQuitKeys(key, m.Filter.Active, m.Filter.Text); quit {
+				m.Cancelled = true
+				return m, tea.Quit
+			} else if clearFilter {
+				m.Filter.Text = ""
+				m.Nav.Cursor = 0
+				return m, nil
+			}
+			return m, nil
+		}
+
+		// Quit keys (list focused)
 		if quit, clearFilter := HandleQuitKeys(key, m.Filter.Active, m.Filter.Text); quit {
 			m.Cancelled = true
 			return m, tea.Quit
@@ -146,51 +222,94 @@ func (m PickerModel) viewSimple() string {
 	return b.String()
 }
 
-// viewWithPreview renders the picker with a preview pane (split view).
-// Hides the preview pane when the terminal is too narrow (< 80 columns).
+// viewWithPreview renders the picker with a preview pane.
+// Layout adapts to terminal width:
+//   - Wide (>= 100): side-by-side (list | preview)
+//   - Medium (60-99): stacked vertically (list above, preview below)
+//   - Narrow (< 60): list only, no preview
 func (m PickerModel) viewWithPreview() string {
 	filtered := m.filteredSessions()
 
-	// Hide preview on narrow terminals
-	if m.Term.Width > 0 && m.Term.Width < 80 {
+	// Narrow: list only
+	if m.Term.Width > 0 && m.Term.Width < 60 {
 		return m.viewSimple()
 	}
 
-	// Build list pane
 	listPane := m.renderListPane(filtered)
 
-	// Build preview pane with width cap
-	var previewPane string
-	if len(filtered) > 0 {
-		previewContent := m.getPreviewContent(filtered[m.Nav.Cursor])
-		// Cap preview width to half the terminal (or 50 chars minimum)
-		previewWidth := 50
-		if m.Term.Width > 0 {
-			previewWidth = m.Term.Width/2 - 4
-			if previewWidth < 40 {
-				previewWidth = 40
-			}
-		}
-		// Truncate lines to fit width and cap height
-		lines := strings.Split(previewContent, "\n")
-		maxLines := 20
-		if m.Term.Height > 0 {
-			maxLines = m.Term.Height - 6
-		}
-		if len(lines) > maxLines {
-			lines = lines[:maxLines]
-		}
-		for i, line := range lines {
-			if len(line) > previewWidth-4 {
-				lines[i] = line[:previewWidth-7] + "..."
-			}
-		}
-		previewPane = InfoBoxStyle.Width(previewWidth).Render(strings.Join(lines, "\n"))
-	} else {
-		previewPane = DimStyle.Italic(true).Render("No session selected")
+	// No preview content if nothing selected
+	if len(filtered) == 0 {
+		return listPane
 	}
 
-	// Join panes side by side
+	previewContent := m.getPreviewContent(filtered[m.Nav.Cursor])
+
+	// Medium: stack vertically
+	if m.Term.Width > 0 && m.Term.Width < 100 {
+		previewLines := strings.Split(previewContent, "\n")
+		maxPreviewLines := 8
+		if m.Term.Height > 20 {
+			maxPreviewLines = m.Term.Height / 3
+		}
+		if len(previewLines) > maxPreviewLines {
+			previewLines = previewLines[:maxPreviewLines]
+		}
+		previewWidth := m.Term.Width - 4
+		if previewWidth < 30 {
+			previewWidth = 30
+		}
+		for i, line := range previewLines {
+			if len(line) > previewWidth-4 {
+				previewLines[i] = line[:previewWidth-7] + "..."
+			}
+		}
+		preview := InfoBoxStyle.Width(previewWidth).Render(strings.Join(previewLines, "\n"))
+		return lipgloss.JoinVertical(lipgloss.Left, listPane, "", preview)
+	}
+
+	// Wide: side-by-side with scrollable preview viewport
+	previewWidth := m.Term.Width/2 - 4
+	if previewWidth < 40 {
+		previewWidth = 40
+	}
+
+	// Update viewport content when cursor changes
+	if m.previewReady {
+		m.previewVP.Width = previewWidth - 4 // account for border
+		if m.Nav.Cursor != m.lastPreviewIdx {
+			m.previewVP.SetContent(previewContent)
+			m.previewVP.GotoTop()
+			m.lastPreviewIdx = m.Nav.Cursor
+		} else if m.previewVP.TotalLineCount() == 0 {
+			m.previewVP.SetContent(previewContent)
+		}
+	}
+
+	// Render preview with border, highlight if focused
+	var previewPane string
+	if m.previewReady {
+		borderStyle := InfoBoxStyle.Width(previewWidth)
+		if m.previewFocused {
+			borderStyle = borderStyle.BorderForeground(SuccessColor)
+		}
+
+		// Scroll indicator
+		scrollInfo := ""
+		if m.previewVP.TotalLineCount() > m.previewVP.Height {
+			pct := m.previewVP.ScrollPercent() * 100
+			scrollInfo = fmt.Sprintf(" %.0f%%", pct)
+		}
+
+		header := ""
+		if m.previewFocused {
+			header = DimStyle.Render("Preview (scrollable)") + scrollInfo + "\n"
+		}
+
+		previewPane = borderStyle.Render(header + m.previewVP.View())
+	} else {
+		previewPane = InfoBoxStyle.Width(previewWidth).Render(previewContent)
+	}
+
 	return lipgloss.JoinHorizontal(
 		lipgloss.Top,
 		listPane,
