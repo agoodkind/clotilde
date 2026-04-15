@@ -2,6 +2,9 @@ package ui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -89,6 +92,9 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
+
 	case tea.KeyMsg:
 		key := msg.String()
 
@@ -97,6 +103,22 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.Filter.HandleFilterKey(key, msg.Runes) {
 				m.Nav.Cursor = 0
 			}
+			return m, nil
+		}
+
+		// Sort keys (only when not filtering)
+		switch key {
+		case "1":
+			m.Sort = SortByName
+			m.Nav.Cursor = 0
+			return m, nil
+		case "2":
+			m.Sort = SortByCreated
+			m.Nav.Cursor = 0
+			return m, nil
+		case "3":
+			m.Sort = SortByLastUsed
+			m.Nav.Cursor = 0
 			return m, nil
 		}
 
@@ -123,7 +145,7 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "enter", " ":
 				// Enter still selects even from preview focus
-				filtered := m.filteredSessions()
+				filtered := m.sortedFilteredSessions()
 				if len(filtered) > 0 {
 					m.Selected = filtered[m.Nav.Cursor]
 				}
@@ -157,7 +179,7 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "enter", " ":
-			filtered := m.filteredSessions()
+			filtered := m.sortedFilteredSessions()
 			if len(filtered) > 0 {
 				m.Selected = filtered[m.Nav.Cursor]
 			}
@@ -165,13 +187,77 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Navigation
-		m.Nav.Total = len(m.filteredSessions())
+		m.Nav.Total = len(m.sortedFilteredSessions())
 		if m.Nav.HandleKey(key) {
 			return m, nil
 		}
 	}
 
 	return m, nil
+}
+
+// handleMouse processes mouse events for the picker
+func (m PickerModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	filtered := m.sortedFilteredSessions()
+	if len(filtered) == 0 {
+		return m, nil
+	}
+
+	switch msg.Type {
+	case tea.MouseLeft:
+		// Determine which session line was clicked
+		clickedIdx := m.mouseYToIndex(msg.Y, len(filtered))
+		if clickedIdx >= 0 {
+			m.Nav.Cursor = clickedIdx
+		}
+		return m, nil
+
+	case tea.MouseWheelUp:
+		if m.Nav.Cursor > 0 {
+			m.Nav.Cursor--
+		}
+		return m, nil
+
+	case tea.MouseWheelDown:
+		if m.Nav.Cursor < len(filtered)-1 {
+			m.Nav.Cursor++
+		}
+		return m, nil
+	}
+
+	return m, nil
+}
+
+// mouseYToIndex maps a mouse Y coordinate to a session index in the filtered list.
+// Returns -1 if the click is outside the visible session lines.
+func (m PickerModel) mouseYToIndex(y int, totalFiltered int) int {
+	// Compute the Y offset where session lines start:
+	// Title line + blank line = 2
+	yOffset := 2
+	// Filter input adds 2 lines (text + blank) when active or has text
+	if m.Filter.Active || m.Filter.Text != "" {
+		yOffset += 2
+	}
+
+	// Compute visible window (same logic as renderListPane)
+	maxVisible := m.Term.VisibleLines(8)
+	start := max(m.Nav.Cursor-maxVisible/2, 0)
+	end := start + maxVisible
+	if end > totalFiltered {
+		end = totalFiltered
+		start = max(end-maxVisible, 0)
+	}
+
+	relY := y - yOffset
+	if relY < 0 {
+		return -1
+	}
+
+	idx := start + relY
+	if idx < 0 || idx >= totalFiltered {
+		return -1
+	}
+	return idx
 }
 
 // View renders the session picker
@@ -193,8 +279,8 @@ func (m PickerModel) viewSimple() string {
 	// Filter input
 	b.WriteString(m.Filter.RenderFilterInput())
 
-	// Get filtered sessions
-	filtered := m.filteredSessions()
+	// Get filtered+sorted sessions
+	filtered := m.sortedFilteredSessions()
 
 	// No sessions
 	if len(filtered) == 0 {
@@ -214,9 +300,9 @@ func (m PickerModel) viewSimple() string {
 	// Help text
 	b.WriteString("\n")
 	if m.Filter.Text != "" {
-		b.WriteString(RenderHelpBar("(Esc to clear filter, / to edit, ↑/↓ to navigate, enter to select)"))
+		b.WriteString(RenderHelpBar("Esc clear filter · ↑↓ navigate · enter select"))
 	} else {
-		b.WriteString(RenderHelpBar("(/ to filter, ↑/↓ or j/k to navigate, enter to select, q to quit)"))
+		b.WriteString(RenderHelpBar("↑↓ navigate · 1/2/3 sort · / filter · enter select · q quit"))
 	}
 
 	return b.String()
@@ -228,7 +314,7 @@ func (m PickerModel) viewSimple() string {
 //   - Medium (60-99): stacked vertically (list above, preview below)
 //   - Narrow (< 60): list only, no preview
 func (m PickerModel) viewWithPreview() string {
-	filtered := m.filteredSessions()
+	filtered := m.sortedFilteredSessions()
 
 	// Narrow: list only
 	if m.Term.Width > 0 && m.Term.Width < 60 {
@@ -381,7 +467,11 @@ func (m PickerModel) renderListPane(filtered []*session.Session) string {
 
 	// Help text
 	b.WriteString("\n")
-	b.WriteString(RenderHelpBar("↑/↓ navigate · / filter · enter select · q quit"))
+	if m.previewFocused {
+		b.WriteString(RenderHelpBar("↑↓ scroll · tab list · enter select · q quit"))
+	} else {
+		b.WriteString(RenderHelpBar("↑↓ navigate · 1/2/3 sort · tab preview · / filter · enter select · q quit"))
+	}
 
 	return b.String()
 }
@@ -403,10 +493,20 @@ func (m PickerModel) formatSessionLine(sess *session.Session) string {
 	return name + typeIndicator
 }
 
+// sortedFilteredSessions returns sessions that match the current filter, sorted by current sort mode.
+func (m PickerModel) sortedFilteredSessions() []*session.Session {
+	filtered := m.filteredSessions()
+	m.sortSessions(filtered)
+	return filtered
+}
+
 // filteredSessions returns sessions that match the current filter
 func (m PickerModel) filteredSessions() []*session.Session {
 	if m.Filter.Text == "" {
-		return m.Sessions
+		// Return a copy so sorting doesn't mutate the original
+		result := make([]*session.Session, len(m.Sessions))
+		copy(result, m.Sessions)
+		return result
 	}
 
 	var filtered []*session.Session
@@ -421,11 +521,34 @@ func (m PickerModel) filteredSessions() []*session.Session {
 	return filtered
 }
 
-// formatSessionLineWithTime formats a session line with "last used" time
-func (m PickerModel) formatSessionLineWithTime(sess *session.Session) string {
-	name := sess.Name
+// sortSessions sorts the given session slice in place according to the current sort mode.
+func (m PickerModel) sortSessions(sessions []*session.Session) {
+	switch m.Sort {
+	case SortByName:
+		sort.Slice(sessions, func(i, j int) bool {
+			return strings.ToLower(sessions[i].Name) < strings.ToLower(sessions[j].Name)
+		})
+	case SortByCreated:
+		sort.Slice(sessions, func(i, j int) bool {
+			return sessions[i].Metadata.Created.After(sessions[j].Metadata.Created)
+		})
+	case SortByLastUsed:
+		sort.Slice(sessions, func(i, j int) bool {
+			return sessions[i].Metadata.LastAccessed.After(sessions[j].Metadata.LastAccessed)
+		})
+	}
+}
 
-	// Add type indicator
+// formatSessionLineWithTime formats a session line with aligned columns:
+// NAME (left, max 35) | DIR (left, max 20) | LAST USED (right, max 15)
+func (m PickerModel) formatSessionLineWithTime(sess *session.Session) string {
+	// Name column (max 35 chars)
+	name := sess.Name
+	if len(name) > 35 {
+		name = name[:32] + "..."
+	}
+
+	// Add type indicator suffix (counted separately from truncation)
 	if sess.Metadata.IsForkedSession {
 		typeStyle := lipgloss.NewStyle().Foreground(ForkColor)
 		name += typeStyle.Render(" [fork]")
@@ -434,10 +557,54 @@ func (m PickerModel) formatSessionLineWithTime(sess *session.Session) string {
 		name += typeStyle.Render(" [inc]")
 	}
 
-	// Add time ago
-	timeAgo := DimStyle.Render(" · " + formatTimeAgo(sess.Metadata.LastAccessed))
+	// Dir column (max 20 chars)
+	dir := pickerShortPath(sess.Metadata.WorkspaceRoot)
+	if len(dir) > 20 {
+		dir = dir[len(dir)-17:]
+		dir = "..." + dir
+	}
 
-	return name + timeAgo
+	// Time column
+	timeAgo := formatTimeAgo(sess.Metadata.LastAccessed)
+
+	// Pad the plain name for alignment (use raw name length, not styled)
+	plainName := sess.Name
+	if len(plainName) > 35 {
+		plainName = plainName[:32] + "..."
+	}
+	// Calculate padding needed after styled name
+	namePad := 35 - len(plainName)
+	if namePad < 0 {
+		namePad = 0
+	}
+
+	dirStyle := DimStyle
+	timeStyle := DimStyle
+
+	return fmt.Sprintf("%s%s  %s  %s",
+		name,
+		strings.Repeat(" ", namePad),
+		dirStyle.Render(fmt.Sprintf("%-20s", dir)),
+		timeStyle.Render(timeAgo),
+	)
+}
+
+// pickerShortPath abbreviates a workspace root path for display.
+func pickerShortPath(root string) string {
+	if root == "" {
+		return "-"
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Base(root)
+	}
+	if root == home {
+		return "~"
+	}
+	if strings.HasPrefix(root, home+"/") {
+		return "~/" + root[len(home)+1:]
+	}
+	return root
 }
 
 // formatTimeAgo formats a time as "X ago" (e.g., "2 hours ago", "just now")
@@ -464,7 +631,7 @@ func formatTimeAgo(t time.Time) string {
 
 // RunPicker runs the session picker and returns the selected session
 func RunPicker(model PickerModel) (*session.Session, error) {
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	m, err := p.Run()
 	if err != nil {
 		return nil, fmt.Errorf("failed to run picker: %w", err)

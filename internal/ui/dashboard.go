@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -132,38 +134,38 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m DashboardModel) View() string {
 	var b strings.Builder
 
-	// Title
-	titleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(SuccessColor).
-		Padding(1, 0)
-	b.WriteString(titleStyle.Render("Clotilde Dashboard"))
+	// Header bar
+	b.WriteString(m.renderHeader())
 	b.WriteString("\n\n")
 
-	// Stats summary placeholder
-	b.WriteString(m.renderStats())
-	b.WriteString("\n\n")
-
-	// Quick actions menu
+	// Quick actions menu in a bordered box
 	b.WriteString(m.renderMenu())
 	b.WriteString("\n\n")
 
-	// Recent sessions placeholder
+	// Recent sessions as mini table
 	b.WriteString(m.renderRecentSessions())
 	b.WriteString("\n\n")
 
 	// Help text
-	b.WriteString(RenderHelpBar("(↑/↓ or j/k to navigate, enter to select, q to quit)"))
+	b.WriteString(RenderHelpBar("↑↓ navigate · enter select · q quit"))
 
 	return b.String()
 }
 
-// renderStats renders the stats summary section
-func (m DashboardModel) renderStats() string {
+// renderHeader renders the styled header bar with name and session count
+func (m DashboardModel) renderHeader() string {
+	headerStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#00D7D7")). // Cyan
+		Padding(0, 1)
+
+	countStyle := lipgloss.NewStyle().
+		Foreground(InfoColor).
+		Bold(true)
+
 	total := len(m.Sessions)
 	forks := 0
 	incognito := 0
-
 	for _, sess := range m.Sessions {
 		if sess.Metadata.IsForkedSession {
 			forks++
@@ -173,12 +175,8 @@ func (m DashboardModel) renderStats() string {
 		}
 	}
 
-	statsStyle := lipgloss.NewStyle().
-		Foreground(InfoColor).
-		Bold(true)
-
 	var stats []string
-	stats = append(stats, statsStyle.Render(fmt.Sprintf("%d total", total)))
+	stats = append(stats, countStyle.Render(fmt.Sprintf("%d sessions", total)))
 	if forks > 0 {
 		forkStyle := lipgloss.NewStyle().Foreground(ForkColor)
 		stats = append(stats, forkStyle.Render(fmt.Sprintf("%d forks", forks)))
@@ -188,62 +186,97 @@ func (m DashboardModel) renderStats() string {
 		stats = append(stats, incognitoStyle.Render(fmt.Sprintf("%d incognito", incognito)))
 	}
 
-	return "Sessions: " + strings.Join(stats, " · ")
+	title := headerStyle.Render("clotilde")
+	separator := DimStyle.Render(" | ")
+	return title + separator + strings.Join(stats, DimStyle.Render(" · "))
 }
 
-// renderMenu renders the quick actions menu
+// renderMenu renders the quick actions menu inside a bordered box
 func (m DashboardModel) renderMenu() string {
-	var b strings.Builder
-
-	headerStyle := BoldStyle
-	b.WriteString(headerStyle.Render("Quick Actions"))
-	b.WriteString("\n\n")
+	var lines []string
 
 	for i, item := range m.menuItems {
 		// Separator: render as blank line
 		if item.ID == "" {
-			b.WriteString("\n")
+			lines = append(lines, "")
 			continue
 		}
 
 		line := fmt.Sprintf("%s  %s", item.Label, DimStyle.Render("- "+item.Description))
-		b.WriteString(RenderCursorLine(i, m.Cursor, line))
-		b.WriteString("\n")
+		lines = append(lines, RenderCursorLine(i, m.Cursor, line))
 	}
 
-	return b.String()
+	content := strings.Join(lines, "\n")
+
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(MutedColor).
+		Padding(0, 1)
+
+	if m.Term.Width > 0 {
+		boxStyle = boxStyle.Width(m.Term.Width - 4)
+	}
+
+	return boxStyle.Render(content)
 }
 
-// renderRecentSessions renders the recent sessions list
+// renderRecentSessions renders the recent sessions as a mini table
 func (m DashboardModel) renderRecentSessions() string {
 	if len(m.Sessions) == 0 {
 		return DimStyle.Italic(true).Render("No sessions yet. Start one to get going!")
 	}
 
-	var b strings.Builder
-
 	headerStyle := BoldStyle
+	var b strings.Builder
 	b.WriteString(headerStyle.Render("Recent Sessions"))
 	b.WriteString("\n\n")
 
 	// Show up to recentLimit sessions
 	limit := min(len(m.Sessions), m.recentLimit)
 
+	narrow := m.Term.Width > 0 && m.Term.Width < 60
+
+	// Column header
+	dimBold := lipgloss.NewStyle().Foreground(MutedColor).Bold(true)
+	if narrow {
+		b.WriteString(fmt.Sprintf("  %s  %s\n", dimBold.Render(fmt.Sprintf("%-30s", "NAME")), dimBold.Render("LAST USED")))
+	} else {
+		b.WriteString(fmt.Sprintf("  %s  %s  %s\n", dimBold.Render(fmt.Sprintf("%-30s", "NAME")), dimBold.Render(fmt.Sprintf("%-20s", "WORKSPACE")), dimBold.Render("LAST USED")))
+	}
+
 	for i := range limit {
 		sess := m.Sessions[i]
 
-		// Format session line
 		name := sess.Name
-		typeIndicator := ""
+		// Type indicator suffix
 		if sess.Metadata.IsForkedSession {
 			typeStyle := lipgloss.NewStyle().Foreground(ForkColor)
-			typeIndicator = typeStyle.Render(" [fork]")
+			name += typeStyle.Render(" [fork]")
 		} else if sess.Metadata.IsIncognito {
 			typeStyle := lipgloss.NewStyle().Foreground(IncognitoColor)
-			typeIndicator = typeStyle.Render(" [incognito]")
+			name += typeStyle.Render(" [inc]")
 		}
 
-		fmt.Fprintf(&b, "  • %s%s\n", name, typeIndicator)
+		// Truncate name for alignment
+		displayName := sess.Name
+		if len(displayName) > 28 {
+			displayName = displayName[:25] + "..."
+		}
+
+		timeAgo := formatTimeAgo(sess.Metadata.LastAccessed)
+		workspace := dashboardShortPath(sess.Metadata.WorkspaceRoot)
+
+		dimLine := lipgloss.NewStyle().Foreground(MutedColor)
+		if narrow {
+			b.WriteString(fmt.Sprintf("  %s  %s\n", fmt.Sprintf("%-30s", displayName), dimLine.Render(timeAgo)))
+		} else {
+			ws := workspace
+			if len(ws) > 20 {
+				ws = ws[len(ws)-17:]
+				ws = "..." + ws
+			}
+			b.WriteString(fmt.Sprintf("  %s  %s  %s\n", fmt.Sprintf("%-30s", displayName), dimLine.Render(fmt.Sprintf("%-20s", ws)), dimLine.Render(timeAgo)))
+		}
 	}
 
 	if len(m.Sessions) > limit {
@@ -252,6 +285,24 @@ func (m DashboardModel) renderRecentSessions() string {
 	}
 
 	return b.String()
+}
+
+// dashboardShortPath abbreviates a workspace root path for display.
+func dashboardShortPath(root string) string {
+	if root == "" {
+		return "-"
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Base(root)
+	}
+	if root == home {
+		return "~"
+	}
+	if strings.HasPrefix(root, home+"/") {
+		return "~/" + root[len(home)+1:]
+	}
+	return root
 }
 
 // RunDashboard runs the dashboard and returns the selected action
