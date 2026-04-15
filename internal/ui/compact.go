@@ -67,8 +67,7 @@ type CompactModel struct {
 	cancelled bool
 
 	// terminal size
-	width  int
-	height int
+	term TermSize
 
 	// error message to display
 	errMsg string
@@ -147,8 +146,7 @@ func (m CompactModel) Init() tea.Cmd {
 func (m CompactModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
+		m.term.HandleResize(msg)
 		return m, nil
 
 	case tea.KeyMsg:
