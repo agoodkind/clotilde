@@ -130,24 +130,54 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// View renders the dashboard
+// View renders the dashboard, adapting to terminal height.
+// Priority: header + menu always visible; recent sessions shrink or hide when short.
 func (m DashboardModel) View() string {
 	var b strings.Builder
 
 	// Header bar
-	b.WriteString(m.renderHeader())
+	header := m.renderHeader()
+	b.WriteString(header)
 	b.WriteString("\n\n")
 
-	// Quick actions menu in a bordered box
-	b.WriteString(m.renderMenu())
+	// Quick actions menu
+	menu := m.renderMenu()
+	b.WriteString(menu)
 	b.WriteString("\n\n")
 
-	// Recent sessions as mini table
-	b.WriteString(m.renderRecentSessions())
-	b.WriteString("\n\n")
+	// Help text (always at bottom)
+	help := RenderHelpBar("↑↓ navigate · enter select · q quit")
 
-	// Help text
-	b.WriteString(RenderHelpBar("↑↓ navigate · enter select · q quit"))
+	// Calculate how much space is left for recent sessions
+	// Menu height: count newlines + border (2 lines)
+	menuLines := strings.Count(menu, "\n") + 3
+	headerLines := 3 // header + blank
+	helpLines := 2   // help + blank
+	overhead := headerLines + menuLines + helpLines
+
+	availableForRecent := 0
+	if m.Term.Height > 0 {
+		availableForRecent = m.Term.Height - overhead
+	} else {
+		availableForRecent = 15 // default when height unknown
+	}
+
+	// Show recent sessions only if we have room (at least 4 lines: header + 1 session + more + blank)
+	if availableForRecent >= 4 && len(m.Sessions) > 0 {
+		// Dynamically set recent limit based on available space
+		// Each session is 1 line, plus header (2 lines) and "more" (2 lines)
+		maxSessions := availableForRecent - 4
+		if maxSessions < 1 {
+			maxSessions = 1
+		}
+		if maxSessions > m.recentLimit {
+			maxSessions = m.recentLimit
+		}
+		b.WriteString(m.renderRecentSessionsN(maxSessions))
+		b.WriteString("\n\n")
+	}
+
+	b.WriteString(help)
 
 	return b.String()
 }
@@ -220,8 +250,13 @@ func (m DashboardModel) renderMenu() string {
 	return boxStyle.Render(content)
 }
 
-// renderRecentSessions renders the recent sessions as a mini table
+// renderRecentSessions renders with the default limit.
 func (m DashboardModel) renderRecentSessions() string {
+	return m.renderRecentSessionsN(m.recentLimit)
+}
+
+// renderRecentSessionsN renders the recent sessions as a mini table with up to n entries.
+func (m DashboardModel) renderRecentSessionsN(n int) string {
 	if len(m.Sessions) == 0 {
 		return DimStyle.Italic(true).Render("No sessions yet. Start one to get going!")
 	}
@@ -231,8 +266,7 @@ func (m DashboardModel) renderRecentSessions() string {
 	b.WriteString(headerStyle.Render("Recent Sessions"))
 	b.WriteString("\n\n")
 
-	// Show up to recentLimit sessions
-	limit := min(len(m.Sessions), m.recentLimit)
+	limit := min(len(m.Sessions), n)
 
 	narrow := m.Term.Width > 0 && m.Term.Width < 60
 
