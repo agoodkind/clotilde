@@ -32,7 +32,7 @@ Pass additional flags to Claude Code after '--':
   clotilde fork my-session --incognito  # Random name like "happy-fox"`,
 		Args:               rangePositionalArgs(1, 2),
 		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
-		ValidArgsFunction: sessionNameCompletion,
+		ValidArgsFunction:  sessionNameCompletion,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			parentName := args[0]
 

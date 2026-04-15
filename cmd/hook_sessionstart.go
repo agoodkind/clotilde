@@ -114,7 +114,6 @@ func handleStartupOrResume(hookData hookInput, store session.Store) error {
 func autoAdoptSession(store session.Store, name string, hookData hookInput) {
 	sess := session.NewSession(name, hookData.SessionID)
 	sess.Metadata.TranscriptPath = hookData.TranscriptPath
-	sess.Metadata.DisplayName = name
 
 	if wd, err := os.Getwd(); err == nil {
 		sess.Metadata.WorkDir = wd

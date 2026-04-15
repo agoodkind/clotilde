@@ -21,24 +21,20 @@ var kebabRe = regexp.MustCompile(`^[a-z][a-z0-9-]{1,48}[a-z0-9]$`)
 func newAutoNameCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "auto-name [<session>...]",
-		Short: "Generate human-readable display names for sessions using LLM",
+		Short: "Generate human-readable names for sessions using LLM and rename them",
 		Long: `auto-name uses a fast LLM (claude haiku) to generate a short kebab-case
-display name for one or more sessions based on the conversation content.
-The display name is stored in session metadata and shown in the TUI instead
-of the raw session ID (e.g. "opnsense-bgp-cutover" instead of "configs-6d383f1d").
-
-The original session name (used for resume, fork, etc.) is not changed.
+name for one or more sessions based on the conversation content.
+The session directory is renamed to the new name (e.g. "opnsense-bgp-cutover"
+instead of "configs-6d383f1d").
 
 Examples:
-  clotilde auto-name configs-6d383f1d       # name one session
-  clotilde auto-name --all                  # name all sessions without a display name
-  clotilde auto-name --all --force          # regenerate all display names
+  clotilde auto-name configs-6d383f1d       # rename one session
+  clotilde auto-name --all                  # rename all sessions
   clotilde auto-name --all --dry-run        # preview without saving`,
 		Args:              cobra.ArbitraryArgs,
 		ValidArgsFunction: sessionNameCompletion,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			all, _ := cmd.Flags().GetBool("all")
-			force, _ := cmd.Flags().GetBool("force")
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			model, _ := cmd.Flags().GetString("model")
 			if model == "" {
@@ -61,9 +57,6 @@ Examples:
 					if s.Metadata.IsIncognito {
 						continue
 					}
-					if !force && s.Metadata.DisplayName != "" {
-						continue
-					}
 					targets = append(targets, s)
 				}
 			} else {
@@ -84,11 +77,11 @@ Examples:
 				return nil
 			}
 
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Generating display names for %d session(s)...\n", len(targets))
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Generating names for %d session(s)...\n", len(targets))
 
 			succeeded := 0
 			for _, sess := range targets {
-				name, genErr := generateDisplayName(nil, sess, "", nil, model)
+				name, genErr := generateName(nil, sess, "", nil, model)
 				if genErr != nil {
 					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  SKIP %s: %v\n", sess.Name, genErr)
 					continue
@@ -99,9 +92,8 @@ Examples:
 					continue
 				}
 
-				sess.Metadata.DisplayName = name
-				if updateErr := store.Update(sess); updateErr != nil {
-					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  FAIL %s: %v\n", sess.Name, updateErr)
+				if renameErr := store.Rename(sess.Name, name); renameErr != nil {
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  FAIL %s: %v\n", sess.Name, renameErr)
 					continue
 				}
 
@@ -110,23 +102,22 @@ Examples:
 			}
 
 			if !dryRun {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\nDone. %d/%d sessions named.\n", succeeded, len(targets))
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\nDone. %d/%d sessions renamed.\n", succeeded, len(targets))
 			}
 			return nil
 		},
 	}
 
-	cmd.Flags().Bool("all", false, "Process all sessions (skips those already named unless --force)")
-	cmd.Flags().Bool("force", false, "Regenerate display names even if already set")
+	cmd.Flags().Bool("all", false, "Process all sessions")
 	cmd.Flags().Bool("dry-run", false, "Print generated names without saving")
 	cmd.Flags().String("model", "haiku", "Claude model for name generation")
 	return cmd
 }
 
-// generateDisplayName loads the session transcript and calls claude to produce a
-// short kebab-case display name. Returns an error if transcript is missing or LLM fails.
+// generateName loads the session transcript and calls claude to produce a
+// short kebab-case name. Returns an error if transcript is missing or LLM fails.
 // homeDir and clotildeRootCache are unused but kept for future extension.
-func generateDisplayName(
+func generateName(
 	_ interface{},
 	sess *session.Session,
 	_ string,
@@ -192,7 +183,7 @@ Messages:
 	generated := strings.TrimSpace(string(output))
 	generated = strings.ToLower(generated)
 	// Strip any surrounding quotes or punctuation the model might add.
-	generated = strings.Trim(generated, `"'` + "`.,;:!?")
+	generated = strings.Trim(generated, `"'`+"`.,;:!?")
 	// Collapse spaces to hyphens in case model adds them.
 	generated = strings.ReplaceAll(generated, " ", "-")
 

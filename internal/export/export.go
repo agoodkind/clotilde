@@ -19,11 +19,11 @@ var templateFS embed.FS
 
 // ExportMessage is the structured format serialized to JSON for the HTML template.
 type ExportMessage struct {
-	Role      string             `json:"role"`
-	Timestamp string             `json:"timestamp"`
-	Text      string             `json:"text"`
-	Thinking  string             `json:"thinking,omitempty"`
-	Tools     []ExportToolCall   `json:"tools,omitempty"`
+	Role      string           `json:"role"`
+	Timestamp string           `json:"timestamp"`
+	Text      string           `json:"text"`
+	Thinking  string           `json:"thinking,omitempty"`
+	Tools     []ExportToolCall `json:"tools,omitempty"`
 }
 
 // ExportToolCall is a tool call serialized for the HTML template.

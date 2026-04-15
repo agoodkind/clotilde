@@ -34,11 +34,11 @@ type Store interface {
 	// Get retrieves a session by name
 	Get(name string) (*Session, error)
 
-	// GetByDisplayName searches all sessions for one whose DisplayName matches.
-	// Returns nil if no match is found.
-	GetByDisplayName(displayName string) (*Session, error)
+	// Rename renames a session: moves the directory, updates metadata Name field,
+	// and updates any child sessions whose ParentSession matches oldName.
+	Rename(oldName, newName string) error
 
-	// Search returns sessions matching query against name, display name, UUID,
+	// Search returns sessions matching query against name, UUID,
 	// and context (case-insensitive substring match).
 	Search(query string) ([]*Session, error)
 
@@ -54,8 +54,7 @@ type Store interface {
 	// Resolve finds a session using a multi-tier lookup:
 	// 1. Exact name match
 	// 2. UUID match (checks SessionID and PreviousSessionIDs)
-	// 3. Display name match
-	// 4. Substring search (returns single match only)
+	// 3. Substring search (returns single match only)
 	// Returns (nil, nil) if no match is found.
 	Resolve(query string) (*Session, error)
 
@@ -164,7 +163,7 @@ func (fs *FileStore) Get(name string) (*Session, error) {
 	}, nil
 }
 
-// Search returns sessions matching query against name, display name, UUID,
+// Search returns sessions matching query against name, UUID,
 // and context (case-insensitive substring match).
 func (fs *FileStore) Search(query string) ([]*Session, error) {
 	sessions, err := fs.List()
@@ -175,27 +174,12 @@ func (fs *FileStore) Search(query string) ([]*Session, error) {
 	var matches []*Session
 	for _, sess := range sessions {
 		if strings.Contains(strings.ToLower(sess.Name), q) ||
-			strings.Contains(strings.ToLower(sess.Metadata.DisplayName), q) ||
 			strings.Contains(strings.ToLower(sess.Metadata.SessionID), q) ||
 			strings.Contains(strings.ToLower(sess.Metadata.Context), q) {
 			matches = append(matches, sess)
 		}
 	}
 	return matches, nil
-}
-
-// GetByDisplayName searches all sessions for one whose DisplayName matches.
-func (fs *FileStore) GetByDisplayName(displayName string) (*Session, error) {
-	sessions, err := fs.List()
-	if err != nil {
-		return nil, err
-	}
-	for _, sess := range sessions {
-		if sess.Metadata.DisplayName == displayName {
-			return sess, nil
-		}
-	}
-	return nil, fmt.Errorf("no session found with display name %q", displayName)
 }
 
 // Resolve finds a session using a multi-tier lookup strategy.
@@ -221,12 +205,7 @@ func (fs *FileStore) Resolve(query string) (*Session, error) {
 		}
 	}
 
-	// Tier 3: display name match
-	if sess, err := fs.GetByDisplayName(query); err == nil {
-		return sess, nil
-	}
-
-	// Tier 4: substring search (single match only)
+	// Tier 3: substring search (single match only)
 	matches, err := fs.Search(query)
 	if err != nil || len(matches) == 0 {
 		return nil, nil
@@ -237,6 +216,54 @@ func (fs *FileStore) Resolve(query string) (*Session, error) {
 
 	// Multiple matches: return nil so caller can show picker or error
 	return nil, nil
+}
+
+// Rename renames a session: moves the directory, updates metadata Name field,
+// and updates any child sessions whose ParentSession matches oldName.
+func (fs *FileStore) Rename(oldName, newName string) error {
+	if err := ValidateName(oldName); err != nil {
+		return fmt.Errorf("invalid old name: %w", err)
+	}
+	if err := ValidateName(newName); err != nil {
+		return fmt.Errorf("invalid new name: %w", err)
+	}
+	if !fs.Exists(oldName) {
+		return fmt.Errorf("session '%s' not found", oldName)
+	}
+	if fs.Exists(newName) {
+		return fmt.Errorf("session '%s' already exists", newName)
+	}
+
+	oldDir := config.GetSessionDir(fs.clotildeRoot, oldName)
+	newDir := config.GetSessionDir(fs.clotildeRoot, newName)
+	if err := os.Rename(oldDir, newDir); err != nil {
+		return fmt.Errorf("rename session directory: %w", err)
+	}
+
+	// Update metadata Name field in the new location
+	sess, err := fs.Get(newName)
+	if err != nil {
+		return fmt.Errorf("failed to read renamed session: %w", err)
+	}
+	sess.Name = newName
+	sess.Metadata.Name = newName
+	if err := fs.Update(sess); err != nil {
+		return fmt.Errorf("failed to update session metadata: %w", err)
+	}
+
+	// Update any child sessions that reference oldName as their parent
+	sessions, err := fs.List()
+	if err != nil {
+		return nil // non-fatal: rename succeeded, parent references not updated
+	}
+	for _, child := range sessions {
+		if child.Metadata.ParentSession == oldName {
+			child.Metadata.ParentSession = newName
+			_ = fs.Update(child) // best-effort
+		}
+	}
+
+	return nil
 }
 
 // Create creates a new session folder structure with metadata.
