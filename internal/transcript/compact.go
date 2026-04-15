@@ -44,23 +44,6 @@ type CompactResult struct {
 	EstimatedTokens int
 }
 
-// rawCompactEntry is the full JSON structure of a transcript entry for compaction.
-type rawCompactEntry struct {
-	ParentUUID      string          `json:"parentUuid"`
-	IsSidechain     bool            `json:"isSidechain"`
-	Type            string          `json:"type"`
-	Subtype         string          `json:"subtype,omitempty"`
-	UUID            string          `json:"uuid"`
-	Timestamp       string          `json:"timestamp,omitempty"`
-	SessionID       string          `json:"sessionId,omitempty"`
-	Message         json.RawMessage `json:"message,omitempty"`
-	IsCompact       bool            `json:"isCompactSummary,omitempty"`
-	VisibleOnly     bool            `json:"isVisibleInTranscriptOnly,omitempty"`
-	CompactMetadata json.RawMessage `json:"compactMetadata,omitempty"`
-	// Preserve all other fields
-	Extra map[string]json.RawMessage `json:"-"`
-}
-
 // WalkChain walks the parentUuid chain from the last entry in a JSONL file,
 // returning the chain entries in order (oldest first) and the line numbers.
 func WalkChain(path string) (chainLines []int, uuidToLine map[string]int, allLines []string, err error) {
