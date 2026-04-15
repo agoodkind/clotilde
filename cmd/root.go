@@ -51,17 +51,9 @@ func runDashboard(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Scope dashboard to current workspace
-	workspaceRoot, _ := config.FindProjectRoot()
-
+	// Load all sessions globally (not workspace-scoped)
 	loadSessions := func() []*session.Session {
-		var sessions []*session.Session
-		var loadErr error
-		if workspaceRoot != "" {
-			sessions, loadErr = store.ListForWorkspace(workspaceRoot)
-		} else {
-			sessions, loadErr = store.List()
-		}
+		sessions, loadErr := store.List()
 		if loadErr != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Failed to load sessions: %v\n", loadErr)
 			os.Exit(1)
@@ -103,16 +95,8 @@ func runPostSessionDashboard(lastSession *session.Session) {
 		return
 	}
 
-	workspaceRoot, _ := config.FindProjectRoot()
-
 	for {
-		var sessions []*session.Session
-		var loadErr error
-		if workspaceRoot != "" {
-			sessions, loadErr = store.ListForWorkspace(workspaceRoot)
-		} else {
-			sessions, loadErr = store.List()
-		}
+		sessions, loadErr := store.List()
 		if loadErr != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Failed to load sessions: %v\n", loadErr)
 			return
@@ -408,6 +392,8 @@ func registerSubcommands(root *cobra.Command) {
 	root.AddCommand(newForkCmd())
 	root.AddCommand(newRenameCmd())
 	root.AddCommand(newAutoNameCmd())
+	root.AddCommand(newBenchEmbedCmd())
+	root.AddCommand(newCompactCmd())
 	root.AddCommand(newDeleteCmd())
 	root.AddCommand(newExportCmd())
 	root.AddCommand(newSearchCmd())

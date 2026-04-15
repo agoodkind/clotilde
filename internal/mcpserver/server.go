@@ -158,19 +158,8 @@ func handleListSessions(ctx context.Context, req mcp.CallToolRequest) (*mcp.Call
 		return mcp.NewToolResultText(fmt.Sprintf("Failed to open session store: %v", err)), nil
 	}
 
-	showAll := req.GetBool("all", false)
-
-	var sessions []*session.Session
-	if showAll {
-		sessions, err = store.List()
-	} else {
-		workspaceRoot, _ := config.FindProjectRoot()
-		if workspaceRoot != "" {
-			sessions, err = store.ListForWorkspace(workspaceRoot)
-		} else {
-			sessions, err = store.List()
-		}
-	}
+	// Always list all sessions globally
+	sessions, err := store.List()
 	if err != nil {
 		return mcp.NewToolResultText(fmt.Sprintf("Failed to list sessions: %v", err)), nil
 	}
@@ -445,8 +434,11 @@ func loadMessages(name string) ([]transcript.Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	sess, err := store.Get(name)
+	sess, err := store.Resolve(name)
 	if err != nil {
+		return nil, fmt.Errorf("session resolution error: %v", err)
+	}
+	if sess == nil {
 		return nil, fmt.Errorf("session '%s' not found", name)
 	}
 

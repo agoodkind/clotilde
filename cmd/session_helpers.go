@@ -128,26 +128,19 @@ func autoUpdateContext(_ *session.FileStore, sess *session.Session) {
 	_ = client.UpdateContext(sess.Name, sess.Metadata.WorkspaceRoot, messages)
 }
 
-// resolveSessionForResume finds a session by trying multiple lookup strategies:
-// 1. Exact name match
-// 2. UUID match (with auto-adopt)
-// 3. Display name match
-// 4. Substring search → if multiple results, show TUI picker
-// Returns nil session (no error) if nothing found — caller should forward to claude.
+// resolveSessionForResume finds a session using the store's unified resolution,
+// with CLI-specific additions: auto-adopt for UUIDs and TUI picker for ambiguous matches.
+// Returns nil session (no error) if nothing found. The caller should forward to claude.
 func resolveSessionForResume(cmd *cobra.Command, store *session.FileStore, query string) (*session.Session, error) {
-	// 1. Exact name match
-	if sess, err := store.Get(query); err == nil {
+	// Try unified 4-tier resolution (name, UUID, display name, single substring match)
+	if sess, err := store.Resolve(query); err != nil {
+		return nil, err
+	} else if sess != nil {
 		return sess, nil
 	}
 
-	// 2. UUID match
+	// CLI-specific: try auto-adopt for UUID queries
 	if looksLikeUUID(query) {
-		resolved, err := findSessionByUUID(store, query)
-		if err == nil {
-			sess, _ := store.Get(resolved)
-			return sess, nil
-		}
-		// Try auto-adopt
 		adoptedName, adoptErr := tryAdoptByUUID(query)
 		if adoptErr == nil {
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Auto-adopted session '%s'\n", adoptedName)
@@ -156,28 +149,18 @@ func resolveSessionForResume(cmd *cobra.Command, store *session.FileStore, query
 		}
 	}
 
-	// 3. Display name match
-	if sess, err := store.GetByDisplayName(query); err == nil {
-		return sess, nil
-	}
-
-	// 4. Substring search
+	// CLI-specific: if multiple substring matches, show picker
 	matches, err := store.Search(query)
-	if err != nil || len(matches) == 0 {
-		return nil, nil // not found — caller forwards to claude
+	if err != nil || len(matches) <= 1 {
+		return nil, nil // not found or single match already handled by Resolve
 	}
 
-	if len(matches) == 1 {
-		return matches[0], nil
-	}
-
-	// Multiple matches — show TUI picker if interactive
 	if !isatty.IsTerminal(os.Stdout.Fd()) {
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Multiple sessions match '%s':\n", query)
 		for _, s := range matches {
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s (%s)\n", s.Name, s.Metadata.SessionID)
 		}
-		return nil, fmt.Errorf("ambiguous session name '%s' — specify the full name", query)
+		return nil, fmt.Errorf("ambiguous session name '%s'; specify the full name", query)
 	}
 
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Multiple sessions match '%s':\n\n", query)
