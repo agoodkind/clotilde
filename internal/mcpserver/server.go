@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
@@ -52,6 +53,9 @@ func storeResult(resultID string, cached *cachedResult) {
 
 // loadResult retrieves a result from memory or disk cache.
 func loadResult(resultID string) (*cachedResult, bool) {
+	if _, err := uuid.Parse(resultID); err != nil {
+		return nil, false
+	}
 	if val, ok := resultCache.Load(resultID); ok {
 		return val.(*cachedResult), true
 	}

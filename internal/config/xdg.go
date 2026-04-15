@@ -34,7 +34,7 @@ func RuntimeDir() string {
 		return filepath.Join(base, appName)
 	}
 	if base := os.Getenv("TMPDIR"); base != "" {
-		return filepath.Join(base, appName)
+		return filepath.Join(base, fmt.Sprintf("%s-%d", appName, uid))
 	}
 	return filepath.Join(os.TempDir(), fmt.Sprintf("%s-%d", appName, uid))
 }
