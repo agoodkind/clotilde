@@ -43,33 +43,23 @@ Pass additional flags to Claude Code after '--':
 			// Determine session name
 			var name string
 			if len(args) == 0 {
-				// No session name — show workspace-scoped picker in TTY or list in non-interactive mode.
-				workspaceRoot, _ := config.FindProjectRoot()
-
-				loadSessions := func() ([]*session.Session, error) {
-					if workspaceRoot != "" {
-						return store.ListForWorkspace(workspaceRoot)
-					}
-					return store.List()
-				}
-
+				// No session name: show all sessions in picker (TTY) or static table (pipe).
 				isTTY := isatty.IsTerminal(os.Stdout.Fd())
 				if !isTTY {
-					sessions, listErr := loadSessions()
+					sessions, listErr := store.List()
 					if listErr != nil {
 						return fmt.Errorf("failed to list sessions: %w", listErr)
 					}
 					return showStaticTable(cmd, sessions, store)
 				}
 
-				// Load workspace-scoped sessions
-				sessions, err := loadSessions()
+				sessions, err := store.List()
 				if err != nil {
 					return fmt.Errorf("failed to list sessions: %w", err)
 				}
 
 				if len(sessions) == 0 {
-					return fmt.Errorf("no sessions available (use 'clotilde list --all' to see all workspaces)")
+					return fmt.Errorf("no sessions available")
 				}
 
 				// Sort by last accessed (most recent first)

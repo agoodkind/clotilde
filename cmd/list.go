@@ -22,11 +22,11 @@ func newListCmd() *cobra.Command {
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List sessions",
-		Long: `List clotilde sessions, filtered to the current workspace by default.
+		Long: `List all clotilde sessions, grouped by workspace.
 
-Use --all to show every session across all workspaces.`,
+Use --workspace to show only sessions for the current workspace.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			showAll, _ := cmd.Flags().GetBool("all")
+			wsOnly, _ := cmd.Flags().GetBool("workspace")
 
 			store, err := globalStore()
 			if err != nil {
@@ -34,29 +34,24 @@ Use --all to show every session across all workspaces.`,
 			}
 
 			var sessions []*session.Session
-			if showAll {
-				sessions, err = store.List()
-			} else {
+			if wsOnly {
 				workspaceRoot, wsErr := config.FindProjectRoot()
 				if wsErr != nil {
-					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No sessions found.")
+					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No sessions for this workspace.")
 					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\nCreate a session with:")
 					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  clotilde start <session-name>")
 					return nil
 				}
 				sessions, err = store.ListForWorkspace(workspaceRoot)
+			} else {
+				sessions, err = store.List()
 			}
 			if err != nil {
 				return fmt.Errorf("failed to list sessions: %w", err)
 			}
 
 			if len(sessions) == 0 {
-				if showAll {
-					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No sessions found.")
-				} else {
-					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No sessions for this workspace.")
-					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Use --all to see every session, or:")
-				}
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No sessions found.")
 				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\nCreate a session with:")
 				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  clotilde start <session-name>")
 				return nil
@@ -65,7 +60,9 @@ Use --all to show every session across all workspaces.`,
 			return showStaticTable(cmd, sessions, store)
 		},
 	}
-	cmd.Flags().Bool("all", false, "Show sessions from all workspaces")
+	cmd.Flags().BoolP("workspace", "w", false, "Show only current workspace sessions")
+	cmd.Flags().Bool("all", false, "Show sessions from all workspaces (now the default)")
+	_ = cmd.Flags().MarkHidden("all")
 	return cmd
 }
 

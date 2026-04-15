@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/fgrehm/clotilde/internal/config"
 	"github.com/fgrehm/clotilde/internal/util"
@@ -47,6 +50,14 @@ type Store interface {
 
 	// Delete removes a session folder and all its contents
 	Delete(name string) error
+
+	// Resolve finds a session using a multi-tier lookup:
+	// 1. Exact name match
+	// 2. UUID match (checks SessionID and PreviousSessionIDs)
+	// 3. Display name match
+	// 4. Substring search (returns single match only)
+	// Returns (nil, nil) if no match is found.
+	Resolve(query string) (*Session, error)
 
 	// Exists checks if a session exists
 	Exists(name string) bool
@@ -185,6 +196,47 @@ func (fs *FileStore) GetByDisplayName(displayName string) (*Session, error) {
 		}
 	}
 	return nil, fmt.Errorf("no session found with display name %q", displayName)
+}
+
+// Resolve finds a session using a multi-tier lookup strategy.
+// Returns (nil, nil) if no match is found (not an error, caller decides behavior).
+func (fs *FileStore) Resolve(query string) (*Session, error) {
+	// Tier 1: exact name match
+	if sess, err := fs.Get(query); err == nil {
+		return sess, nil
+	}
+
+	// Tier 2: UUID match
+	if _, parseErr := uuid.Parse(query); parseErr == nil {
+		sessions, listErr := fs.List()
+		if listErr == nil {
+			for _, sess := range sessions {
+				if sess.Metadata.SessionID == query {
+					return sess, nil
+				}
+				if slices.Contains(sess.Metadata.PreviousSessionIDs, query) {
+					return sess, nil
+				}
+			}
+		}
+	}
+
+	// Tier 3: display name match
+	if sess, err := fs.GetByDisplayName(query); err == nil {
+		return sess, nil
+	}
+
+	// Tier 4: substring search (single match only)
+	matches, err := fs.Search(query)
+	if err != nil || len(matches) == 0 {
+		return nil, nil
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+
+	// Multiple matches: return nil so caller can show picker or error
+	return nil, nil
 }
 
 // Create creates a new session folder structure with metadata.
