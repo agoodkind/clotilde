@@ -26,7 +26,6 @@ type Metadata struct {
 	Context              string    `json:"context,omitempty"`
 	HasCustomOutputStyle bool      `json:"hasCustomOutputStyle,omitempty"`
 	WorkspaceRoot        string    `json:"workspaceRoot,omitempty"`
-	DisplayName          string    `json:"displayName,omitempty"`
 }
 
 // Settings represents Claude Code session-specific settings stored in settings.json.
@@ -72,16 +71,6 @@ func NewIncognitoSession(name, sessionID string) *Session {
 // UpdateLastAccessed updates the lastAccessed timestamp to now.
 func (s *Session) UpdateLastAccessed() {
 	s.Metadata.LastAccessed = time.Now()
-}
-
-// DisplayName returns the human-readable display name for the session.
-// If a DisplayName has been set (e.g. via auto-name), it is returned.
-// Otherwise the raw session Name (e.g. configs-6d383f1d) is returned.
-func (s *Session) DisplayName() string {
-	if s.Metadata.DisplayName != "" {
-		return s.Metadata.DisplayName
-	}
-	return s.Name
 }
 
 // AddPreviousSessionID appends the current session ID to the history and updates to the new ID.

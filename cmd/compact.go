@@ -95,6 +95,9 @@ Examples:
 				// Map TUI choices back to flag variables so the rest of the function applies them.
 				moveBoundary = choices.BoundaryPercent
 				stripResults = choices.StripToolResults
+				if choices.StripThinking {
+					stripResults = true
+				}
 				if choices.StripLargeInputs {
 					stripLarge = 1024
 				}
@@ -267,16 +270,26 @@ Examples:
 }
 
 func writeLines(path string, lines []string) error {
-	f, err := os.Create(path)
+	tmp := path + ".tmp"
+	f, err := os.Create(tmp)
 	if err != nil {
-		return fmt.Errorf("creating file: %w", err)
+		return fmt.Errorf("creating temp file: %w", err)
 	}
-	defer f.Close()
-
 	for _, line := range lines {
 		if _, err := f.WriteString(line + "\n"); err != nil {
+			f.Close()
+			os.Remove(tmp)
 			return fmt.Errorf("writing line: %w", err)
 		}
 	}
-	return nil
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("syncing file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("closing file: %w", err)
+	}
+	return os.Rename(tmp, path)
 }

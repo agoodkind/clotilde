@@ -131,9 +131,6 @@ func (m PickerModel) viewSimple() string {
 	// Session list
 	for i, sess := range filtered {
 		sessionLine := m.formatSessionLine(sess)
-		if m.Filter.Text != "" {
-			sessionLine = m.highlightMatch(sessionLine, m.Filter.Text)
-		}
 		b.WriteString(RenderCursorLine(i, m.Nav.Cursor, sessionLine))
 		b.WriteString("\n")
 	}
@@ -303,13 +300,6 @@ func (m PickerModel) filteredSessions() []*session.Session {
 	}
 
 	return filtered
-}
-
-// highlightMatch highlights the matching part of the text (simple version)
-func (m PickerModel) highlightMatch(text, filter string) string {
-	// For now, just return the text as-is
-	// A full implementation would highlight the matching substring
-	return text
 }
 
 // formatSessionLineWithTime formats a session line with "last used" time
