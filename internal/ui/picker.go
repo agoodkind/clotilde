@@ -270,34 +270,6 @@ func (m PickerModel) renderListPane(filtered []*session.Session) string {
 	return b.String()
 }
 
-// defaultPreview renders the built-in preview for a session (with box styling).
-func defaultPreview(sess *session.Session) string {
-	var lines []string
-
-	// Session name header
-	nameStyle := BoldStyle
-	if sess.Metadata.IsForkedSession {
-		nameStyle = lipgloss.NewStyle().Foreground(ForkColor).Bold(true)
-	} else if sess.Metadata.IsIncognito {
-		nameStyle = lipgloss.NewStyle().Foreground(IncognitoColor).Bold(true)
-	}
-	lines = append(lines, nameStyle.Render(sess.Name))
-	lines = append(lines, "")
-
-	// Session type
-	if sess.Metadata.IsForkedSession {
-		lines = append(lines, DimStyle.Render("Type:")+"  "+lipgloss.NewStyle().Foreground(ForkColor).Render("Fork of "+sess.Metadata.ParentSession))
-	} else if sess.Metadata.IsIncognito {
-		lines = append(lines, DimStyle.Render("Type:")+"  "+lipgloss.NewStyle().Foreground(IncognitoColor).Render("Incognito"))
-	}
-
-	// Timestamps
-	lines = append(lines, DimStyle.Render("Created:")+"     "+sess.Metadata.Created.Format("2006-01-02 15:04"))
-	lines = append(lines, DimStyle.Render("Last used:")+"   "+formatTimeAgo(sess.Metadata.LastAccessed))
-
-	return strings.Join(lines, "\n")
-}
-
 // formatSessionLine formats a single session for display
 func (m PickerModel) formatSessionLine(sess *session.Session) string {
 	name := sess.Name
