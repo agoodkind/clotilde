@@ -86,6 +86,36 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Term.HandleResize(msg)
 		return m, nil
 
+	case tea.MouseMsg:
+		switch msg.Type {
+		case tea.MouseWheelUp:
+			for next := m.Cursor - 1; next >= 0; next-- {
+				if m.menuItems[next].ID != "" {
+					m.Cursor = next
+					break
+				}
+			}
+			return m, nil
+		case tea.MouseWheelDown:
+			for next := m.Cursor + 1; next < len(m.menuItems); next++ {
+				if m.menuItems[next].ID != "" {
+					m.Cursor = next
+					break
+				}
+			}
+			return m, nil
+		case tea.MouseLeft:
+			// Click on menu item
+			for i, item := range m.menuItems {
+				if item.ID != "" && msg.Y >= 5+i && msg.Y < 6+i {
+					m.Cursor = i
+					return m, nil
+				}
+			}
+			return m, nil
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q", "esc":
@@ -341,7 +371,7 @@ func dashboardShortPath(root string) string {
 
 // RunDashboard runs the dashboard and returns the selected action
 func RunDashboard(model DashboardModel) (string, error) {
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	m, err := p.Run()
 	if err != nil {
 		return "", fmt.Errorf("failed to run dashboard: %w", err)

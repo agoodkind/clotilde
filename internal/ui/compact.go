@@ -378,7 +378,7 @@ func (m CompactModel) Choices() CompactChoices {
 // chainLines and allLines should be pre-loaded via transcript.WalkChain.
 func RunCompactUI(sessionName, transcriptPath string, chainLines []int, allLines []string) (CompactChoices, error) {
 	model := NewCompactModel(sessionName, transcriptPath, chainLines, allLines)
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	result, err := p.Run()
 	if err != nil {
 		return CompactChoices{}, fmt.Errorf("running compact UI: %w", err)
