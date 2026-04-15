@@ -30,11 +30,12 @@ const (
 
 var depthOptions = []string{"quick", "normal", "deep", "extra-deep"}
 
+// depthDescriptions holds a short inline description for each depth level.
 var depthDescriptions = map[string]string{
-	"quick":      "embedding only, ~20s",
-	"normal":     "embedding + LLM sweep, ~4min",
-	"deep":       "embedding + LLM + rerank, ~5min",
-	"extra-deep": "adds large model verification, 20min+",
+	"quick":      "embedding similarity only (fastest, ~2 seconds)",
+	"normal":     "embedding filter + LLM sweep (moderate, ~30 seconds)",
+	"deep":       "embedding + sweep + rerank + deep analysis (thorough, ~2-5 minutes)",
+	"extra-deep": "full pipeline with largest model (~10+ minutes)",
 }
 
 // SearchFormModel is a BubbleTea model for the search parameter form.
@@ -59,7 +60,7 @@ func NewSearchForm(sessions []*session.Session, initial *session.Session) Search
 	ti := textinput.New()
 	ti.Placeholder = "What are you looking for?"
 	ti.CharLimit = 512
-	ti.Width = 60
+	ti.Width = 70
 
 	m := SearchFormModel{
 		Sessions: sessions,
@@ -89,7 +90,7 @@ func (m SearchFormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		if m.width > 10 {
-			m.query.Width = min(60, m.width-20)
+			m.query.Width = min(70, m.width-10)
 		}
 		return m, nil
 
@@ -100,22 +101,61 @@ func (m SearchFormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.done = true
 			return m, tea.Quit
 
-		case "tab", "down":
+		case "tab":
 			m = m.nextField()
 			return m, nil
 
-		case "shift+tab", "up":
+		case "shift+tab":
 			m = m.prevField()
 			return m, nil
 
-		case "enter":
+		case "down":
+			if m.focus == fieldDepth {
+				if m.depthIdx < len(depthOptions)-1 {
+					m.depthIdx++
+				}
+				return m, nil
+			}
+			m = m.nextField()
+			return m, nil
+
+		case "up":
+			if m.focus == fieldDepth {
+				if m.depthIdx > 0 {
+					m.depthIdx--
+				}
+				return m, nil
+			}
+			m = m.prevField()
+			return m, nil
+
+		case "enter", " ":
 			switch m.focus {
 			case fieldSession:
 				// Signal caller to run the session picker
 				m.needPicker = true
 				m.done = true
 				return m, tea.Quit
-			case fieldQuery, fieldDepth:
+			case fieldDepth:
+				// space/enter on depth just moves to next field
+				if msg.String() == "enter" {
+					if m.selected == nil || strings.TrimSpace(m.query.Value()) == "" {
+						return m, nil
+					}
+					m.result = SearchFormResult{
+						Session: m.selected,
+						Query:   strings.TrimSpace(m.query.Value()),
+						Depth:   depthOptions[m.depthIdx],
+					}
+					m.done = true
+					return m, tea.Quit
+				}
+				return m, nil
+			case fieldQuery:
+				if msg.String() == " " {
+					// pass space through to text input
+					break
+				}
 				if m.selected == nil || strings.TrimSpace(m.query.Value()) == "" {
 					return m, nil
 				}
@@ -126,22 +166,6 @@ func (m SearchFormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.done = true
 				return m, tea.Quit
-			}
-
-		case "left", "h":
-			if m.focus == fieldDepth {
-				if m.depthIdx > 0 {
-					m.depthIdx--
-				}
-				return m, nil
-			}
-
-		case "right", "l":
-			if m.focus == fieldDepth {
-				if m.depthIdx < len(depthOptions)-1 {
-					m.depthIdx++
-				}
-				return m, nil
 			}
 		}
 	}
@@ -175,82 +199,132 @@ func (m *SearchFormModel) syncFocus() {
 	}
 }
 
+// sectionWidth returns the inner width for section boxes.
+func (m SearchFormModel) sectionWidth() int {
+	w := 78
+	if m.width > 10 {
+		w = min(78, m.width-4)
+	}
+	return w
+}
+
+// renderSection wraps content in a rounded border with an optional active highlight.
+func (m SearchFormModel) renderSection(label, content string, focused bool) string {
+	borderColor := MutedColor
+	labelStyle := DimStyle.Bold(false)
+	if focused {
+		borderColor = SuccessColor
+		labelStyle = lipgloss.NewStyle().Bold(true).Foreground(SuccessColor)
+	}
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Padding(0, 1).
+		Width(m.sectionWidth())
+
+	header := labelStyle.Render(label)
+	inner := lipgloss.JoinVertical(lipgloss.Left, header, content)
+	return box.Render(inner)
+}
+
 func (m SearchFormModel) View() string {
 	var b strings.Builder
 
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(SuccessColor).Padding(1, 0)
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(SuccessColor).MarginBottom(1)
 	b.WriteString(titleStyle.Render("Search Conversation"))
+	b.WriteString("\n\n")
+
+	// --- Session section ---
+	var sessionContent string
+	if m.selected != nil {
+		sessionContent = lipgloss.NewStyle().Bold(true).Foreground(InfoColor).Render(m.selected.Name)
+		if m.focus == fieldSession {
+			sessionContent += DimStyle.Render("  (press Enter to change)")
+		}
+	} else {
+		sessionContent = DimStyle.Italic(true).Render("Press Enter to pick a session...")
+	}
+	b.WriteString(m.renderSection("Session", sessionContent, m.focus == fieldSession))
 	b.WriteString("\n")
 
-	sep := DimStyle.Render(strings.Repeat("─", 50))
-	b.WriteString(sep + "\n\n")
+	// --- Query section ---
+	queryContent := m.query.View()
+	b.WriteString(m.renderSection("Query", queryContent, m.focus == fieldQuery))
+	b.WriteString("\n")
 
-	// Field: Session
-	b.WriteString(m.renderFieldLabel("Session", m.focus == fieldSession))
-	sessionName := "(none)"
-	if m.selected != nil {
-		sessionName = m.selected.Name
-	}
-	sessionVal := lipgloss.NewStyle().Foreground(InfoColor).Render(sessionName)
-	hint := DimStyle.Render("  [enter to change]")
-	if m.focus == fieldSession {
-		hint = lipgloss.NewStyle().Foreground(SuccessColor).Render("  [enter to pick session]")
-	}
-	b.WriteString(fmt.Sprintf("  %s%s\n\n", sessionVal, hint))
+	// --- Depth section ---
+	depthContent := m.renderDepthRadio()
+	b.WriteString(m.renderSection("Search Depth", depthContent, m.focus == fieldDepth))
+	b.WriteString("\n")
 
-	// Field: Query
-	b.WriteString(m.renderFieldLabel("Query", m.focus == fieldQuery))
-	b.WriteString("  " + m.query.View() + "\n\n")
-
-	// Field: Depth
-	b.WriteString(m.renderFieldLabel("Depth", m.focus == fieldDepth))
-	b.WriteString("  " + m.renderDepthSelector() + "\n")
-	desc := depthDescriptions[depthOptions[m.depthIdx]]
-	b.WriteString("  " + DimStyle.Render(desc) + "\n\n")
-
-	b.WriteString(sep + "\n")
-
-	// Footer hints
-	var hints []string
-	hints = append(hints, "tab/shift-tab to move")
-	if m.focus == fieldDepth {
-		hints = append(hints, "left/right to change depth")
-	}
-	if m.focus == fieldSession {
-		hints = append(hints, "enter to pick session")
-	} else {
-		hints = append(hints, "enter to search")
-	}
-	hints = append(hints, "esc to cancel")
-	b.WriteString(DimStyle.Italic(true).Render(strings.Join(hints, " · ")))
+	// --- Status bar ---
+	statusBar := m.renderStatusBar()
+	b.WriteString(statusBar)
 
 	return b.String()
 }
 
-func (m SearchFormModel) renderFieldLabel(label string, focused bool) string {
-	style := DimStyle
-	prefix := "  "
-	if focused {
-		style = lipgloss.NewStyle().Bold(true).Foreground(SuccessColor)
-		prefix = "> "
+func (m SearchFormModel) renderDepthRadio() string {
+	var rows []string
+	for i, d := range depthOptions {
+		selected := i == m.depthIdx
+		focused := m.focus == fieldDepth
+
+		radio := "○"
+		if selected {
+			radio = "●"
+		}
+
+		var nameStyle lipgloss.Style
+		var descStyle lipgloss.Style
+
+		switch {
+		case selected && focused:
+			nameStyle = lipgloss.NewStyle().Bold(true).Foreground(SuccessColor)
+			descStyle = lipgloss.NewStyle().Foreground(SuccessColor)
+			radio = lipgloss.NewStyle().Foreground(SuccessColor).Bold(true).Render(radio)
+		case selected:
+			nameStyle = lipgloss.NewStyle().Bold(true).Foreground(InfoColor)
+			descStyle = lipgloss.NewStyle().Foreground(InfoColor)
+			radio = lipgloss.NewStyle().Foreground(InfoColor).Bold(true).Render(radio)
+		case focused:
+			nameStyle = DimStyle
+			descStyle = DimStyle
+			radio = DimStyle.Render(radio)
+		default:
+			nameStyle = DimStyle
+			descStyle = DimStyle
+			radio = DimStyle.Render(radio)
+		}
+
+		desc := depthDescriptions[d]
+		row := fmt.Sprintf("%s %s  %s", radio, nameStyle.Render(d), descStyle.Render(desc))
+		rows = append(rows, row)
 	}
-	return prefix + style.Render(label+":") + "\n"
+	return strings.Join(rows, "\n")
 }
 
-func (m SearchFormModel) renderDepthSelector() string {
+func (m SearchFormModel) renderStatusBar() string {
 	var parts []string
-	for i, d := range depthOptions {
-		if i == m.depthIdx {
-			if m.focus == fieldDepth {
-				parts = append(parts, lipgloss.NewStyle().Bold(true).Foreground(SuccessColor).Render("["+d+"]"))
-			} else {
-				parts = append(parts, lipgloss.NewStyle().Bold(true).Foreground(InfoColor).Render("["+d+"]"))
-			}
-		} else {
-			parts = append(parts, DimStyle.Render(d))
-		}
+
+	parts = append(parts, lipgloss.NewStyle().Foreground(InfoColor).Render("Tab")+" next field")
+	parts = append(parts, lipgloss.NewStyle().Foreground(InfoColor).Render("Shift+Tab")+" prev field")
+
+	if m.focus == fieldDepth {
+		parts = append(parts, lipgloss.NewStyle().Foreground(InfoColor).Render("↑↓")+" select depth")
 	}
-	return strings.Join(parts, "  ")
+
+	if m.focus == fieldSession {
+		parts = append(parts, lipgloss.NewStyle().Foreground(InfoColor).Render("Enter")+" pick session")
+	} else {
+		parts = append(parts, lipgloss.NewStyle().Foreground(InfoColor).Render("Enter")+" submit")
+	}
+
+	parts = append(parts, lipgloss.NewStyle().Foreground(InfoColor).Render("Esc")+" cancel")
+
+	bar := strings.Join(parts, DimStyle.Render(" · "))
+	return DimStyle.Render(bar)
 }
 
 // RunSearchForm runs the search parameter form.
