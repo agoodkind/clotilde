@@ -91,7 +91,10 @@ Examples:
 			// Remove last boundary
 			if removeLast && len(boundaries) >= 2 {
 				lastBoundary := boundaries[len(boundaries)-1]
+				beforeTokens, _ := transcript.EstimateTokens(allLines, chainLines)
 				fmt.Fprintf(cmd.OutOrStdout(), "Removing boundary at line %d...\n", lastBoundary)
+				fmt.Fprintf(cmd.OutOrStdout(), "Before: %d chain entries, ~%dk tokens\n", len(chainLines), beforeTokens/1000)
+
 				if dryRun {
 					fmt.Fprintln(cmd.OutOrStdout(), "[dry-run] Would remove boundary and reconnect chain")
 					return nil
@@ -103,7 +106,19 @@ Examples:
 				if writeErr := writeLines(path, newLines); writeErr != nil {
 					return writeErr
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Removed. New effective boundary: line %d\n", boundaries[len(boundaries)-2])
+
+				// Show after stats
+				afterChain, _, afterLines, _ := transcript.WalkChain(path)
+				afterTokens, _ := transcript.EstimateTokens(afterLines, afterChain)
+				fmt.Fprintf(cmd.OutOrStdout(), "After:  %d chain entries, ~%dk tokens\n", len(afterChain), afterTokens/1000)
+
+				preview := transcript.PreviewMessages(afterLines, afterChain, 0, 5)
+				fmt.Fprintln(cmd.OutOrStdout(), "\nFirst 5 user messages after new boundary:")
+				for i, msg := range preview {
+					fmt.Fprintf(cmd.OutOrStdout(), "  %d. %s\n", i+1, msg)
+				}
+
+				fmt.Fprintf(cmd.OutOrStdout(), "\nRemoved. New effective boundary: line %d\n", boundaries[len(boundaries)-2])
 				return nil
 			}
 
@@ -184,8 +199,22 @@ Examples:
 				visibleCount := len(chainLines) - targetStep
 				fmt.Fprintf(cmd.OutOrStdout(), "Moving boundary to %d%% visible (%d entries)...\n", moveBoundary, visibleCount)
 
+				// Show before/after stats
+				beforeTokens, _ := transcript.EstimateTokens(allLines, chainLines)
+				afterChain := chainLines[targetStep:]
+				afterTokens, _ := transcript.EstimateTokens(allLines, afterChain)
+
+				fmt.Fprintf(cmd.OutOrStdout(), "\nBefore: %d chain entries, ~%dk tokens\n", len(chainLines), beforeTokens/1000)
+				fmt.Fprintf(cmd.OutOrStdout(), "After:  %d chain entries, ~%dk tokens\n", visibleCount, afterTokens/1000)
+				fmt.Fprintf(cmd.OutOrStdout(), "\nFirst 5 user messages after new boundary:\n")
+				preview := transcript.PreviewMessages(allLines, chainLines, targetStep, 5)
+				for i, msg := range preview {
+					fmt.Fprintf(cmd.OutOrStdout(), "  %d. %s\n", i+1, msg)
+				}
+				fmt.Fprintln(cmd.OutOrStdout())
+
 				if dryRun {
-					fmt.Fprintf(cmd.OutOrStdout(), "[dry-run] Would insert boundary at chain step %d\n", targetStep)
+					fmt.Fprintln(cmd.OutOrStdout(), "[dry-run] No changes written.")
 					return nil
 				}
 				newLines, insertErr := transcript.InsertBoundary(allLines, chainLines, targetStep, summaryText)
