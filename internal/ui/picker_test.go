@@ -22,8 +22,8 @@ func TestNewPicker(t *testing.T) {
 	if len(model.Sessions) != 2 {
 		t.Errorf("Expected 2 sessions, got %d", len(model.Sessions))
 	}
-	if model.Cursor != 0 {
-		t.Errorf("Expected cursor at 0, got %d", model.Cursor)
+	if model.Nav.Cursor != 0 {
+		t.Errorf("Expected cursor at 0, got %d", model.Nav.Cursor)
 	}
 }
 
@@ -36,36 +36,36 @@ func TestPickerUpdate_Navigation(t *testing.T) {
 	model := NewPicker(sessions, "Select")
 
 	// Start at 0
-	if model.Cursor != 0 {
-		t.Errorf("Expected cursor at 0, got %d", model.Cursor)
+	if model.Nav.Cursor != 0 {
+		t.Errorf("Expected cursor at 0, got %d", model.Nav.Cursor)
 	}
 
 	// Move down
 	updatedModel, _ := model.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m := updatedModel.(PickerModel)
-	if m.Cursor != 1 {
-		t.Errorf("Expected cursor at 1 after down, got %d", m.Cursor)
+	if m.Nav.Cursor != 1 {
+		t.Errorf("Expected cursor at 1 after down, got %d", m.Nav.Cursor)
 	}
 
 	// Move down again
 	updatedModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updatedModel.(PickerModel)
-	if m.Cursor != 2 {
-		t.Errorf("Expected cursor at 2 after down, got %d", m.Cursor)
+	if m.Nav.Cursor != 2 {
+		t.Errorf("Expected cursor at 2 after down, got %d", m.Nav.Cursor)
 	}
 
 	// Try to move down beyond end (should stay at 2)
 	updatedModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updatedModel.(PickerModel)
-	if m.Cursor != 2 {
-		t.Errorf("Expected cursor to stay at 2, got %d", m.Cursor)
+	if m.Nav.Cursor != 2 {
+		t.Errorf("Expected cursor to stay at 2, got %d", m.Nav.Cursor)
 	}
 
 	// Move up
 	updatedModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
 	m = updatedModel.(PickerModel)
-	if m.Cursor != 1 {
-		t.Errorf("Expected cursor at 1 after up, got %d", m.Cursor)
+	if m.Nav.Cursor != 1 {
+		t.Errorf("Expected cursor at 1 after up, got %d", m.Nav.Cursor)
 	}
 }
 
@@ -79,15 +79,15 @@ func TestPickerUpdate_VimNavigation(t *testing.T) {
 	// j to move down
 	updatedModel, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	m := updatedModel.(PickerModel)
-	if m.Cursor != 1 {
-		t.Errorf("Expected cursor at 1 after 'j', got %d", m.Cursor)
+	if m.Nav.Cursor != 1 {
+		t.Errorf("Expected cursor at 1 after 'j', got %d", m.Nav.Cursor)
 	}
 
 	// k to move up
 	updatedModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
 	m = updatedModel.(PickerModel)
-	if m.Cursor != 0 {
-		t.Errorf("Expected cursor at 0 after 'k', got %d", m.Cursor)
+	if m.Nav.Cursor != 0 {
+		t.Errorf("Expected cursor at 0 after 'k', got %d", m.Nav.Cursor)
 	}
 }
 
@@ -98,20 +98,20 @@ func TestPickerUpdate_HomeEnd(t *testing.T) {
 		session.NewSession("test3", "uuid-3"),
 	}
 	model := NewPicker(sessions, "Select")
-	model.Cursor = 1 // Start in middle
+	model.Nav.Cursor = 1 // Start in middle
 
 	// G (shift+g) to go to end
 	updatedModel, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
 	m := updatedModel.(PickerModel)
-	if m.Cursor != 2 {
-		t.Errorf("Expected cursor at end (2) after 'G', got %d", m.Cursor)
+	if m.Nav.Cursor != 2 {
+		t.Errorf("Expected cursor at end (2) after 'G', got %d", m.Nav.Cursor)
 	}
 
 	// g to go to home
 	updatedModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
 	m = updatedModel.(PickerModel)
-	if m.Cursor != 0 {
-		t.Errorf("Expected cursor at home (0) after 'g', got %d", m.Cursor)
+	if m.Nav.Cursor != 0 {
+		t.Errorf("Expected cursor at home (0) after 'g', got %d", m.Nav.Cursor)
 	}
 }
 
@@ -121,7 +121,7 @@ func TestPickerUpdate_EnterSelects(t *testing.T) {
 		session.NewSession("test2", "uuid-2"),
 	}
 	model := NewPicker(sessions, "Select")
-	model.Cursor = 1
+	model.Nav.Cursor = 1
 
 	updatedModel, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m := updatedModel.(PickerModel)

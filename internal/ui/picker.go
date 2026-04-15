@@ -18,16 +18,14 @@ type PreviewFunc func(sess *session.Session) string
 // PickerModel represents the session picker state
 type PickerModel struct {
 	Sessions    []*session.Session
-	Cursor      int
 	Selected    *session.Session
 	Cancelled   bool
 	Title       string
-	FilterText  string
-	Filtering   bool
 	ShowPreview bool        // Show preview pane with session metadata
 	PreviewFn   PreviewFunc // Custom preview renderer (optional)
-	width       int         // terminal width (updated on resize)
-	height      int         // terminal height (updated on resize)
+	Nav         ListNav
+	Filter      FilterState
+	Term        TermSize
 }
 
 // NewPicker creates a new session picker
@@ -35,7 +33,6 @@ func NewPicker(sessions []*session.Session, title string) PickerModel {
 	return PickerModel{
 		Sessions: sessions,
 		Title:    title,
-		Cursor:   0,
 	}
 }
 
@@ -54,99 +51,46 @@ func (m PickerModel) Init() tea.Cmd {
 func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
+		m.Term.HandleResize(msg)
 		return m, nil
 
 	case tea.KeyMsg:
+		key := msg.String()
+
 		// Handle filter mode separately
-		if m.Filtering {
-			switch msg.String() {
-			case "esc":
-				// Exit filter mode, clear filter
-				m.Filtering = false
-				m.FilterText = ""
-				m.Cursor = 0
-				return m, nil
-
-			case "enter":
-				// Exit filter mode, keep filter
-				m.Filtering = false
-				return m, nil
-
-			case "backspace":
-				if len(m.FilterText) > 0 {
-					m.FilterText = m.FilterText[:len(m.FilterText)-1]
-					m.Cursor = 0 // Reset cursor when filter changes
-				}
-				return m, nil
-
-			default:
-				// Add character to filter
-				if len(msg.Runes) == 1 {
-					m.FilterText += string(msg.Runes[0])
-					m.Cursor = 0 // Reset cursor when filter changes
-				}
-				return m, nil
+		if m.Filter.Active {
+			if m.Filter.HandleFilterKey(key, msg.Runes) {
+				m.Nav.Cursor = 0 // Reset cursor when filter changes
 			}
+			return m, nil
 		}
 
-		// Normal mode (not filtering)
-		switch msg.String() {
-		case "ctrl+c":
+		// Quit keys
+		if quit, clearFilter := HandleQuitKeys(key, m.Filter.Active, m.Filter.Text); quit {
 			m.Cancelled = true
 			return m, tea.Quit
+		} else if clearFilter {
+			m.Filter.Text = ""
+			m.Nav.Cursor = 0
+			return m, nil
+		}
 
-		case "q":
-			if !m.Filtering {
-				m.Cancelled = true
-				return m, tea.Quit
-			}
-
-		case "esc":
-			if m.FilterText != "" {
-				// Clear existing filter
-				m.FilterText = ""
-				m.Cursor = 0
-				return m, nil
-			}
-			m.Cancelled = true
-			return m, tea.Quit
-
+		switch key {
 		case "/":
-			// Enter filter mode
-			m.Filtering = true
+			m.Filter.Active = true
 			return m, nil
 
 		case "enter", " ":
 			filtered := m.filteredSessions()
 			if len(filtered) > 0 {
-				m.Selected = filtered[m.Cursor]
+				m.Selected = filtered[m.Nav.Cursor]
 			}
 			return m, tea.Quit
+		}
 
-		case "up", "k":
-			if m.Cursor > 0 {
-				m.Cursor--
-			}
-			return m, nil
-
-		case "down", "j":
-			filtered := m.filteredSessions()
-			if m.Cursor < len(filtered)-1 {
-				m.Cursor++
-			}
-			return m, nil
-
-		case "home", "g":
-			m.Cursor = 0
-			return m, nil
-
-		case "end", "G":
-			filtered := m.filteredSessions()
-			if len(filtered) > 0 {
-				m.Cursor = len(filtered) - 1
-			}
+		// Navigation
+		m.Nav.Total = len(m.filteredSessions())
+		if m.Nav.HandleKey(key) {
 			return m, nil
 		}
 	}
@@ -167,36 +111,18 @@ func (m PickerModel) viewSimple() string {
 	var b strings.Builder
 
 	// Title
-	titleStyle := BoldStyle
-	b.WriteString(titleStyle.Render(m.Title))
+	b.WriteString(BoldStyle.Render(m.Title))
 	b.WriteString("\n\n")
 
-	// Filter input (if active or has text)
-	if m.Filtering || m.FilterText != "" {
-		filterPrefix := "Filter: "
-		if m.Filtering {
-			filterPrefix = "Filter (type to search): "
-		}
-		filterStyle := InfoStyle
-		b.WriteString(filterStyle.Render(filterPrefix))
-		b.WriteString(m.FilterText)
-		if m.Filtering {
-			b.WriteString("█") // Cursor
-		}
-		b.WriteString("\n\n")
-	}
+	// Filter input
+	b.WriteString(m.Filter.RenderFilterInput())
 
 	// Get filtered sessions
 	filtered := m.filteredSessions()
 
 	// No sessions
 	if len(filtered) == 0 {
-		emptyStyle := DimStyle.Italic(true)
-		if m.FilterText != "" {
-			b.WriteString(emptyStyle.Render(fmt.Sprintf("No sessions matching '%s'", m.FilterText)))
-		} else {
-			b.WriteString(emptyStyle.Render("No sessions available"))
-		}
+		b.WriteString(RenderEmptyState(m.Filter.Text, "sessions"))
 		b.WriteString("\n\n")
 		b.WriteString(DimStyle.Render("Press / to filter, q or Esc to cancel"))
 		return b.String()
@@ -204,37 +130,20 @@ func (m PickerModel) viewSimple() string {
 
 	// Session list
 	for i, sess := range filtered {
-		cursor := " "
-		if m.Cursor == i {
-			cursor = ">"
-		}
-
-		// Build session line
 		sessionLine := m.formatSessionLine(sess)
-
-		// Highlight matching text
-		if m.FilterText != "" {
-			sessionLine = m.highlightMatch(sessionLine, m.FilterText)
+		if m.Filter.Text != "" {
+			sessionLine = m.highlightMatch(sessionLine, m.Filter.Text)
 		}
-
-		// Highlight selected
-		if m.Cursor == i {
-			sessionLine = lipgloss.NewStyle().
-				Foreground(SuccessColor).
-				Bold(true).
-				Render(sessionLine)
-		}
-
-		fmt.Fprintf(&b, "%s %s\n", cursor, sessionLine)
+		b.WriteString(RenderCursorLine(i, m.Nav.Cursor, sessionLine))
+		b.WriteString("\n")
 	}
 
 	// Help text
 	b.WriteString("\n")
-	helpStyle := DimStyle.Italic(true)
-	if m.FilterText != "" {
-		b.WriteString(helpStyle.Render("(Esc to clear filter, / to edit, ↑/↓ to navigate, enter to select)"))
+	if m.Filter.Text != "" {
+		b.WriteString(RenderHelpBar("(Esc to clear filter, / to edit, ↑/↓ to navigate, enter to select)"))
 	} else {
-		b.WriteString(helpStyle.Render("(/ to filter, ↑/↓ or j/k to navigate, enter to select, q to quit)"))
+		b.WriteString(RenderHelpBar("(/ to filter, ↑/↓ or j/k to navigate, enter to select, q to quit)"))
 	}
 
 	return b.String()
@@ -246,7 +155,7 @@ func (m PickerModel) viewWithPreview() string {
 	filtered := m.filteredSessions()
 
 	// Hide preview on narrow terminals
-	if m.width > 0 && m.width < 80 {
+	if m.Term.Width > 0 && m.Term.Width < 80 {
 		return m.viewSimple()
 	}
 
@@ -256,11 +165,11 @@ func (m PickerModel) viewWithPreview() string {
 	// Build preview pane with width cap
 	var previewPane string
 	if len(filtered) > 0 {
-		previewContent := m.getPreviewContent(filtered[m.Cursor])
+		previewContent := m.getPreviewContent(filtered[m.Nav.Cursor])
 		// Cap preview width to half the terminal (or 50 chars minimum)
 		previewWidth := 50
-		if m.width > 0 {
-			previewWidth = m.width/2 - 4
+		if m.Term.Width > 0 {
+			previewWidth = m.Term.Width/2 - 4
 			if previewWidth < 40 {
 				previewWidth = 40
 			}
@@ -268,8 +177,8 @@ func (m PickerModel) viewWithPreview() string {
 		// Truncate lines to fit width and cap height
 		lines := strings.Split(previewContent, "\n")
 		maxLines := 20
-		if m.height > 0 {
-			maxLines = m.height - 6
+		if m.Term.Height > 0 {
+			maxLines = m.Term.Height - 6
 		}
 		if len(lines) > maxLines {
 			lines = lines[:maxLines]
@@ -323,44 +232,24 @@ func (m PickerModel) renderListPane(filtered []*session.Session) string {
 	var b strings.Builder
 
 	// Title
-	titleStyle := BoldStyle
-	b.WriteString(titleStyle.Render(m.Title))
+	b.WriteString(BoldStyle.Render(m.Title))
 	b.WriteString("\n\n")
 
-	// Filter input (if active or has text)
-	if m.Filtering || m.FilterText != "" {
-		filterPrefix := "Filter: "
-		if m.Filtering {
-			filterPrefix = "Filter: "
-		}
-		filterStyle := InfoStyle
-		b.WriteString(filterStyle.Render(filterPrefix))
-		b.WriteString(m.FilterText)
-		if m.Filtering {
-			b.WriteString("█")
-		}
-		b.WriteString("\n\n")
-	}
+	// Filter input
+	b.WriteString(m.Filter.RenderFilterInput())
 
 	// No sessions
 	if len(filtered) == 0 {
-		emptyStyle := DimStyle.Italic(true)
-		if m.FilterText != "" {
-			b.WriteString(emptyStyle.Render(fmt.Sprintf("No matches for '%s'", m.FilterText)))
-		} else {
-			b.WriteString(emptyStyle.Render("No sessions"))
-		}
+		b.WriteString(RenderEmptyState(m.Filter.Text, "sessions"))
 		b.WriteString("\n\n")
 		b.WriteString(DimStyle.Render("/ filter, q quit"))
 		return b.String()
 	}
 
 	// Session list (limit to visible area)
-	maxVisible := 10
-	if m.height > 12 {
-		maxVisible = m.height - 8 // leave room for title, filter, help
-	}
-	start := max(m.Cursor-maxVisible/2, 0)
+	maxVisible := m.Term.VisibleLines(8)
+
+	start := max(m.Nav.Cursor-maxVisible/2, 0)
 	end := start + maxVisible
 	if end > len(filtered) {
 		end = len(filtered)
@@ -369,29 +258,14 @@ func (m PickerModel) renderListPane(filtered []*session.Session) string {
 
 	for i := start; i < end; i++ {
 		sess := filtered[i]
-		cursor := " "
-		if m.Cursor == i {
-			cursor = ">"
-		}
-
-		// Build session line with "last used" info
 		sessionLine := m.formatSessionLineWithTime(sess)
-
-		// Highlight selected
-		if m.Cursor == i {
-			sessionLine = lipgloss.NewStyle().
-				Foreground(SuccessColor).
-				Bold(true).
-				Render(sessionLine)
-		}
-
-		fmt.Fprintf(&b, "%s %s\n", cursor, sessionLine)
+		b.WriteString(RenderCursorLine(i, m.Nav.Cursor, sessionLine))
+		b.WriteString("\n")
 	}
 
 	// Help text
 	b.WriteString("\n")
-	helpStyle := DimStyle.Italic(true)
-	b.WriteString(helpStyle.Render("↑/↓ navigate · / filter · enter select · q quit"))
+	b.WriteString(RenderHelpBar("↑/↓ navigate · / filter · enter select · q quit"))
 
 	return b.String()
 }
@@ -443,12 +317,12 @@ func (m PickerModel) formatSessionLine(sess *session.Session) string {
 
 // filteredSessions returns sessions that match the current filter
 func (m PickerModel) filteredSessions() []*session.Session {
-	if m.FilterText == "" {
+	if m.Filter.Text == "" {
 		return m.Sessions
 	}
 
 	var filtered []*session.Session
-	lowerFilter := strings.ToLower(m.FilterText)
+	lowerFilter := strings.ToLower(m.Filter.Text)
 
 	for _, sess := range m.Sessions {
 		if strings.Contains(strings.ToLower(sess.Name), lowerFilter) {
@@ -515,7 +389,7 @@ func RunPicker(model PickerModel) (*session.Session, error) {
 		return nil, fmt.Errorf("failed to run picker: %w", err)
 	}
 
-	finalModel := m.(PickerModel)
+	finalModel, _ := m.(PickerModel)
 	if finalModel.Cancelled {
 		return nil, nil
 	}

@@ -5,22 +5,20 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // TableModel represents a table with headers, rows, and cursor navigation
 type TableModel struct {
 	Headers        []string
 	Rows           [][]string
-	Cursor         int
 	Selected       int      // -1 if cancelled
 	SelectedRow    []string // actual selected row data
 	Cancelled      bool
-	SortColumn     int    // -1 for no sort, 0+ for column index
-	SortAscending  bool   // true for ascending, false for descending
-	FilterText     string // current filter text
-	Filtering      bool   // whether in filter mode
-	sortingEnabled bool   // whether sorting is enabled
+	SortColumn     int  // -1 for no sort, 0+ for column index
+	SortAscending  bool // true for ascending, false for descending
+	Nav            ListNav
+	Filter         FilterState
+	sortingEnabled bool // whether sorting is enabled
 }
 
 // NewTable creates a new table model
@@ -28,7 +26,6 @@ func NewTable(headers []string, rows [][]string) TableModel {
 	return TableModel{
 		Headers:    headers,
 		Rows:       rows,
-		Cursor:     0,
 		Selected:   -1,
 		SortColumn: -1, // No sorting by default
 	}
@@ -49,116 +46,62 @@ func (m TableModel) Init() tea.Cmd {
 func (m TableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		key := msg.String()
+
 		// Handle filter mode separately
-		if m.Filtering {
-			switch msg.String() {
-			case "esc":
-				// Exit filter mode, clear filter
-				m.Filtering = false
-				m.FilterText = ""
-				m.Cursor = 0
-				return m, nil
-
-			case "enter":
-				// Exit filter mode, keep filter
-				m.Filtering = false
-				return m, nil
-
-			case "backspace":
-				if len(m.FilterText) > 0 {
-					m.FilterText = m.FilterText[:len(m.FilterText)-1]
-					m.Cursor = 0 // Reset cursor when filter changes
-				}
-				return m, nil
-
-			default:
-				// Add character to filter
-				if len(msg.Runes) == 1 {
-					m.FilterText += string(msg.Runes[0])
-					m.Cursor = 0 // Reset cursor when filter changes
-				}
-				return m, nil
+		if m.Filter.Active {
+			if m.Filter.HandleFilterKey(key, msg.Runes) {
+				m.Nav.Cursor = 0 // Reset cursor when filter changes
 			}
+			return m, nil
 		}
 
-		// Normal mode (not filtering)
-		switch msg.String() {
-		case "ctrl+c":
+		// Quit keys
+		if quit, clearFilter := HandleQuitKeys(key, m.Filter.Active, m.Filter.Text); quit {
 			m.Cancelled = true
 			return m, tea.Quit
+		} else if clearFilter {
+			m.Filter.Text = ""
+			m.Nav.Cursor = 0
+			return m, nil
+		}
 
-		case "q":
-			if !m.Filtering {
-				m.Cancelled = true
-				return m, tea.Quit
-			}
-
-		case "esc":
-			if m.FilterText != "" {
-				// Clear existing filter
-				m.FilterText = ""
-				m.Cursor = 0
-				return m, nil
-			}
-			m.Cancelled = true
-			return m, tea.Quit
-
+		switch key {
 		case "/":
-			// Enter filter mode
-			m.Filtering = true
+			m.Filter.Active = true
 			return m, nil
 
 		case "enter", " ":
 			filtered := m.filteredRows()
-			if len(filtered) > 0 && m.Cursor < len(filtered) {
-				m.Selected = m.Cursor
-				m.SelectedRow = filtered[m.Cursor] // Store the actual row data
+			if len(filtered) > 0 && m.Nav.Cursor < len(filtered) {
+				m.Selected = m.Nav.Cursor
+				m.SelectedRow = filtered[m.Nav.Cursor]
 			}
 			return m, tea.Quit
+		}
 
-		case "up", "k":
-			if m.Cursor > 0 {
-				m.Cursor--
-			}
+		// Navigation
+		m.Nav.Total = len(m.filteredRows())
+		if m.Nav.HandleKey(key) {
 			return m, nil
+		}
 
-		case "down", "j":
-			filtered := m.filteredRows()
-			if m.Cursor < len(filtered)-1 {
-				m.Cursor++
-			}
-			return m, nil
-
-		case "home", "g":
-			m.Cursor = 0
-			return m, nil
-
-		case "end", "G":
-			filtered := m.filteredRows()
-			if len(filtered) > 0 {
-				m.Cursor = len(filtered) - 1
-			}
-			return m, nil
-
-		default:
-			// Handle number keys for sorting (1, 2, 3... for columns)
-			if m.sortingEnabled && len(msg.Runes) == 1 {
-				r := msg.Runes[0]
-				if r >= '1' && r <= '9' {
-					colIndex := int(r - '1')
-					if colIndex < len(m.Headers) {
-						// Toggle sort direction if same column, otherwise set ascending
-						if m.SortColumn == colIndex {
-							m.SortAscending = !m.SortAscending
-						} else {
-							m.SortColumn = colIndex
-							m.SortAscending = true
-						}
-						m.sortRows()
-						m.Cursor = 0 // Reset cursor after sort
+		// Handle number keys for sorting (1, 2, 3... for columns)
+		if m.sortingEnabled && len(msg.Runes) == 1 {
+			r := msg.Runes[0]
+			if r >= '1' && r <= '9' {
+				colIndex := int(r - '1')
+				if colIndex < len(m.Headers) {
+					if m.SortColumn == colIndex {
+						m.SortAscending = !m.SortAscending
+					} else {
+						m.SortColumn = colIndex
+						m.SortAscending = true
 					}
-					return m, nil
+					m.sortRows()
+					m.Nav.Cursor = 0
 				}
+				return m, nil
 			}
 		}
 	}
@@ -169,32 +112,15 @@ func (m TableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m TableModel) View() string {
 	var b strings.Builder
 
-	// Filter input (if active or has text)
-	if m.Filtering || m.FilterText != "" {
-		filterPrefix := "Filter: "
-		if m.Filtering {
-			filterPrefix = "Filter (type to search): "
-		}
-		filterStyle := InfoStyle
-		b.WriteString(filterStyle.Render(filterPrefix))
-		b.WriteString(m.FilterText)
-		if m.Filtering {
-			b.WriteString("█") // Cursor
-		}
-		b.WriteString("\n\n")
-	}
+	// Filter input
+	b.WriteString(m.Filter.RenderFilterInput())
 
 	// Get filtered rows
 	filtered := m.filteredRows()
 
 	// No rows (after filtering)
 	if len(filtered) == 0 {
-		emptyStyle := DimStyle.Italic(true)
-		if m.FilterText != "" {
-			b.WriteString(emptyStyle.Render(fmt.Sprintf("No rows matching '%s'", m.FilterText)))
-		} else {
-			b.WriteString(emptyStyle.Render("No data available"))
-		}
+		b.WriteString(RenderEmptyState(m.Filter.Text, "data"))
 		b.WriteString("\n\n")
 		b.WriteString(DimStyle.Render("Press / to filter, q to quit"))
 		return b.String()
@@ -204,43 +130,27 @@ func (m TableModel) View() string {
 	widths := m.calculateColumnWidths()
 
 	// Render header
-	headerRow := m.renderHeaderRow(widths)
-	b.WriteString(headerRow)
+	b.WriteString(m.renderHeaderRow(widths))
 	b.WriteString("\n")
-
-	// Render separator
-	separator := m.renderSeparator(widths)
-	b.WriteString(separator)
+	b.WriteString(m.renderSeparator(widths))
 	b.WriteString("\n")
 
 	// Render rows
 	for i, row := range filtered {
-		cursor := " "
-		if m.Cursor == i {
-			cursor = ">"
-		}
-
 		rowStr := m.renderRow(row, widths)
-		if m.Cursor == i {
-			rowStr = lipgloss.NewStyle().
-				Foreground(SuccessColor).
-				Bold(true).
-				Render(rowStr)
-		}
-
-		fmt.Fprintf(&b, "%s %s\n", cursor, rowStr)
+		b.WriteString(RenderCursorLine(i, m.Nav.Cursor, rowStr))
+		b.WriteString("\n")
 	}
 
 	// Help text
 	b.WriteString("\n")
-	helpStyle := DimStyle.Italic(true)
 	switch {
-	case m.FilterText != "":
-		b.WriteString(helpStyle.Render("(Esc to clear filter, / to edit, ↑/↓ to navigate, enter to select)"))
+	case m.Filter.Text != "":
+		b.WriteString(RenderHelpBar("(Esc to clear filter, / to edit, ↑/↓ to navigate, enter to select)"))
 	case m.sortingEnabled:
-		b.WriteString(helpStyle.Render("(↑/↓ or j/k to navigate, / to filter, 1-9 to sort, enter to select, q to quit)"))
+		b.WriteString(RenderHelpBar("(↑/↓ or j/k to navigate, / to filter, 1-9 to sort, enter to select, q to quit)"))
 	default:
-		b.WriteString(helpStyle.Render("(↑/↓ or j/k to navigate, / to filter, enter to select, q to quit)"))
+		b.WriteString(RenderHelpBar("(↑/↓ or j/k to navigate, / to filter, enter to select, q to quit)"))
 	}
 
 	return b.String()
@@ -333,19 +243,18 @@ func (m TableModel) renderRow(row []string, widths []int) string {
 
 // filteredRows returns rows that match the current filter
 func (m TableModel) filteredRows() [][]string {
-	if m.FilterText == "" {
+	if m.Filter.Text == "" {
 		return m.Rows
 	}
 
 	var filtered [][]string
-	lowerFilter := strings.ToLower(m.FilterText)
+	lowerFilter := strings.ToLower(m.Filter.Text)
 
 	for _, row := range m.Rows {
-		// Check if any cell in the row matches the filter
 		for _, cell := range row {
 			if strings.Contains(strings.ToLower(cell), lowerFilter) {
 				filtered = append(filtered, row)
-				break // Only add row once even if multiple cells match
+				break
 			}
 		}
 	}
