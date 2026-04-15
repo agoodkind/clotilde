@@ -9,7 +9,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	tiktoken "github.com/pkoukk/tiktoken-go"
 )
+
+const tokenMultiplier = 1.15 // cl100k undercounts Claude tokens by ~15%
 
 // CompactOptions controls what the compactor strips and where it places the boundary.
 type CompactOptions struct {
@@ -253,7 +256,7 @@ func InsertBoundary(allLines []string, chainLines []int, targetStep int, summary
 		"content":         "Conversation compacted",
 		"isMeta":          false,
 		"level":           "info",
-		"compactMetadata":  map[string]interface{}{"trigger": "manual", "preTokens": 500000},
+		"compactMetadata": map[string]interface{}{"trigger": "manual", "preTokens": 500000},
 		"uuid":            boundaryUUID,
 		"timestamp":       targetMeta.Timestamp,
 		"sessionId":       targetMeta.SessionID,
@@ -261,16 +264,16 @@ func InsertBoundary(allLines []string, chainLines []int, targetStep int, summary
 
 	summaryEntry := map[string]interface{}{
 		"parentUuid":                boundaryUUID,
-		"isSidechain":              false,
-		"promptId":                 uuid.New().String(),
-		"type":                     "user",
-		"message":                  map[string]interface{}{"role": "user", "content": summaryText},
+		"isSidechain":               false,
+		"promptId":                  uuid.New().String(),
+		"type":                      "user",
+		"message":                   map[string]interface{}{"role": "user", "content": summaryText},
 		"isVisibleInTranscriptOnly": true,
 		"isCompactSummary":          true,
-		"uuid":                     summaryUUID,
-		"timestamp":                targetMeta.Timestamp,
-		"userType":                 "external",
-		"sessionId":                targetMeta.SessionID,
+		"uuid":                      summaryUUID,
+		"timestamp":                 targetMeta.Timestamp,
+		"userType":                  "external",
+		"sessionId":                 targetMeta.SessionID,
 	}
 
 	// Update target entry's parentUuid
@@ -447,4 +450,128 @@ func StripContent(allLines []string, chainLines []int, opts CompactOptions) ([]s
 	}
 
 	return result, stripped
+}
+
+// EstimateTokens estimates the token count for a set of chain entries using
+// tiktoken cl100k_base encoding with a 1.15x multiplier to approximate Claude's tokenizer.
+func EstimateTokens(allLines []string, chainLines []int) (int, error) {
+	enc, err := tiktoken.GetEncoding("cl100k_base")
+	if err != nil {
+		return 0, fmt.Errorf("loading cl100k_base encoding: %w", err)
+	}
+
+	// Extract just the message content text (not JSON metadata)
+	var totalTokens int
+	for _, ln := range chainLines {
+		if ln < 0 || ln >= len(allLines) {
+			continue
+		}
+		var entry struct {
+			Type    string `json:"type"`
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal([]byte(allLines[ln]), &entry) != nil {
+			continue
+		}
+		if entry.Type != "user" && entry.Type != "assistant" {
+			continue
+		}
+
+		// Extract text from content
+		var text string
+		var s string
+		if json.Unmarshal(entry.Message.Content, &s) == nil {
+			text = s
+		} else {
+			var blocks []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			}
+			if json.Unmarshal(entry.Message.Content, &blocks) == nil {
+				var parts []string
+				for _, b := range blocks {
+					if b.Type == "text" && b.Text != "" {
+						parts = append(parts, b.Text)
+					}
+				}
+				text = strings.Join(parts, "\n")
+			}
+		}
+
+		if text != "" {
+			totalTokens += len(enc.Encode(text, nil, nil))
+		}
+	}
+
+	// Apply multiplier to approximate Claude's tokenizer
+	return int(float64(totalTokens) * tokenMultiplier), nil
+}
+
+// PreviewMessages returns the first N user messages with text content
+// from a set of chain entries (after a given start step).
+func PreviewMessages(allLines []string, chainLines []int, startStep, count int) []string {
+	var messages []string
+	for i := startStep; i < len(chainLines) && len(messages) < count; i++ {
+		ln := chainLines[i]
+		if ln < 0 || ln >= len(allLines) {
+			continue
+		}
+		var entry struct {
+			Type    string `json:"type"`
+			Message struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal([]byte(allLines[ln]), &entry) != nil {
+			continue
+		}
+		if entry.Type != "user" || entry.Message.Role != "user" {
+			continue
+		}
+
+		// Extract text
+		var text string
+		var s string
+		if json.Unmarshal(entry.Message.Content, &s) == nil {
+			text = s
+		} else {
+			var blocks []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			}
+			if json.Unmarshal(entry.Message.Content, &blocks) == nil {
+				for _, b := range blocks {
+					if b.Type == "text" && b.Text != "" {
+						text = b.Text
+						break
+					}
+				}
+			}
+		}
+
+		// Skip system-reminder-only entries
+		text = strings.TrimSpace(text)
+		if text == "" || strings.HasPrefix(text, "<system-reminder") || strings.HasPrefix(text, "<local-command") || strings.HasPrefix(text, "<command-name") {
+			continue
+		}
+
+		if len(text) > 120 {
+			text = text[:120] + "..."
+		}
+		messages = append(messages, text)
+	}
+	return messages
+}
+
+// CompactStats returns before/after statistics for a compaction operation.
+type CompactStats struct {
+	BeforeChainLen int
+	AfterChainLen  int
+	BeforeTokens   int
+	AfterTokens    int
+	BoundaryStep   int
+	FirstMessages  []string // first 5 user messages after boundary
 }
