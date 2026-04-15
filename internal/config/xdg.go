@@ -30,9 +30,9 @@ func DefaultStateDir() string {
 //
 // Resolution:
 //
-//	$XDG_RUNTIME_DIR/clotilde   (if $XDG_RUNTIME_DIR is set)
-//	$TMPDIR/clotilde             (macOS fallback)
-//	/tmp/clotilde                (final fallback)
+//	$XDG_RUNTIME_DIR/clotilde               (if $XDG_RUNTIME_DIR is set)
+//	$TMPDIR/clotilde                         (macOS fallback, user-scoped)
+//	/tmp/clotilde-<uid>                      (final fallback, user-scoped)
 func RuntimeDir() string {
 	if base := os.Getenv("XDG_RUNTIME_DIR"); base != "" {
 		return filepath.Join(base, appName)
@@ -40,7 +40,8 @@ func RuntimeDir() string {
 	if base := os.Getenv("TMPDIR"); base != "" {
 		return filepath.Join(base, appName)
 	}
-	return filepath.Join("/tmp", appName)
+	// Scope to current user to prevent socket hijacking on shared /tmp
+	return filepath.Join("/tmp", fmt.Sprintf("%s-%d", appName, os.Getuid()))
 }
 
 // DaemonSocketPath returns the Unix socket path for the clotilde daemon.
