@@ -21,6 +21,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`--add-dir` injection**: `clotilde resume` automatically adds the session's workspace root via `--add-dir` so Claude can read files there even when resumed from a different directory.
 - **Centralized global session storage**: Session metadata is now stored in a single global directory (`$XDG_DATA_HOME/clotilde/sessions/`, defaulting to `~/.local/share/clotilde/sessions/`) instead of per-project `.claude/clotilde/` directories. Sessions track their originating workspace via a `workspaceRoot` metadata field.
 - **Exit instructions**: After a session exits, clotilde prints a short resume hint (`clotilde resume <name>`) so the session name is visible in the terminal buffer.
+- **`clotilde compact` command**: Manipulates session transcript boundaries with `--move-boundary`, `--remove-last-boundary`, `--strip-tool-results`, `--strip-large`, `--keep-last`, and `--dry-run` flags for fine-grained transcript cleanup.
+- **Token estimation in compact**: Uses tiktoken cl100k_base with 1.15x multiplier to estimate token usage before and after compaction.
+- **Before/after preview in compact**: Shows entry counts, token estimates, and first 5 user messages to help validate compaction changes.
+- **`store.Resolve()` method**: Unified 4-tier session lookup (exact name, UUID, display name, substring) used across commands and MCP tools.
+- **`store.Rename()` method**: Renames sessions by moving directory, updating metadata, and updating fork parent references.
+- **`bench-embed` command**: Compares embedding model performance across different embedding backends.
+
+**Transcript parsing**
+
+- **Array-format user content blocks**: Transcript parser now supports user content blocks in array format, recovering 31.6% of previously invisible messages.
+- **Unit tests for transcript parser**: Tests cover string, array, tool_result, mixed, and system tag stripping cases.
+
+**Embedding models**
+
+- **Snowflake Arctic Embed L**: Added as configurable embedding model option with better score separation than nomic-embed-text.
 
 **Context and LLM**
 
@@ -78,12 +93,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Session listing defaults to global**: `clotilde list`, dashboard, and resume picker now show all sessions globally instead of workspace-filtered. Pass `--workspace` / `-w` flag to filter to current workspace.
+- **MCP server list/search/get tools**: Use `store.Resolve()` for unified session lookup instead of exact name matching.
+- **Dashboard menu simplification**: Removed redundant "List all sessions" action, renamed "Resume session" to "Browse sessions".
+- **Embedding model configurable**: Changed from hardcoded nomic-embed-text to configurable via `embedding_model` field in `search.local` config.
+- **bench-embed model unloading**: Auto-unloads each model after benchmark completes to prevent LM Studio memory buildup.
 - **`clotilde list` is workspace-scoped by default**: Shows only sessions whose `workspaceRoot` matches the current directory's project root. Pass `--all` to list every session regardless of workspace.
 - **Dashboard "Search conversation"**: Now opens the unified search form TUI (session + query + depth) instead of a sequential picker-then-input flow.
 - **Daemon installed as launchd agent by default**: The daemon previously required `--launch-agent` to register; it now registers at login automatically via `clotilde setup`.
 
+### Removed
+
+- **DisplayName field from session metadata**: Replaced by `store.Rename()` method for canonical naming. Sessions no longer store separate `displayName` fields.
+- **GetByDisplayName store method**: `store.Resolve()` now handles all lookup strategies including display name matching.
+- **Workspace-scoped session filtering as default**: Sessions now list globally by default; use `--workspace` flag to filter by workspace.
+
 ### Fixed
 
+- **Transcript parser dropping 31.6% of user messages**: Fixed handling of array-format user content blocks that were previously invisible to parsing logic.
+- **MCP search resolving wrong session**: Fixed edge case where multiple sessions with similar names would resolve to incorrect session due to exact name matching.
+- **bench-embed memory accumulation**: Fixed multiple model instances loading without unloading, causing memory buildup.
+- **Embedding model config not being read**: Fixed hardcoded nomic-embed-text backend; now respects `search.local.embedding_model` configuration.
 - **Post-session dashboard layout**: Fixed alignment and rendering artefacts in the "Return to session" dashboard shown after a session exits.
 - **Daemon binary not updated until next login**: `make install` now signals the running daemon to exit so the new binary is picked up immediately.
 
