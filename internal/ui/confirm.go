@@ -171,7 +171,7 @@ func (m ConfirmModel) renderButtons() string {
 
 // RunConfirm runs the confirmation dialog and returns true if confirmed
 func RunConfirm(model ConfirmModel) (bool, error) {
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	m, err := p.Run()
 	if err != nil {
 		return false, fmt.Errorf("failed to run confirmation dialog: %w", err)

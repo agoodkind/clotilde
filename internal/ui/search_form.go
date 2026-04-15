@@ -338,7 +338,7 @@ func RunSearchForm(sessions []*session.Session, initial *session.Session, previe
 
 	for {
 		model := NewSearchForm(sessions, selected)
-		p := tea.NewProgram(model, tea.WithAltScreen())
+		p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 		raw, err := p.Run()
 		if err != nil {
 			return nil, fmt.Errorf("search form: %w", err)

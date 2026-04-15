@@ -306,7 +306,7 @@ func padRight(s string, width int) string {
 
 // RunTable runs the table and returns the selected row data (or nil if cancelled)
 func RunTable(model TableModel) ([]string, error) {
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	m, err := p.Run()
 	if err != nil {
 		return nil, fmt.Errorf("failed to run table: %w", err)

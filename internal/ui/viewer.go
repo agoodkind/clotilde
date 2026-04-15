@@ -68,7 +68,7 @@ func (m ViewerModel) View() string {
 
 // RunViewer runs the scrollable text viewer.
 func RunViewer(model ViewerModel) error {
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	return err
 }
