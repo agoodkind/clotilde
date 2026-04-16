@@ -50,7 +50,9 @@ func CountTokensForText(apiKey, text string) (int, error) {
 // CountTokensBestEffort computes tokens using BOTH tiktoken and Claude API (when key available).
 // Returns the best available count and whether it's exact (API) or estimated (tiktoken).
 // Both results are logged to slog for accuracy tracking.
-func CountTokensBestEffort(apiKey, text string) (tokens int, exact bool) {
+// CountTokensBestEffort computes tokens using BOTH tiktoken and Claude API (when key available).
+// transcriptPath is logged for traceability (can be empty if not from a transcript).
+func CountTokensBestEffort(apiKey, text string, transcriptPath ...string) (tokens int, exact bool) {
 	textLen := len(text)
 
 	// Always compute tiktoken estimate
@@ -82,10 +84,16 @@ func CountTokensBestEffort(apiKey, text string) (tokens int, exact bool) {
 	hash := sha256.Sum256([]byte(text))
 	hashHex := hex.EncodeToString(hash[:8]) // first 8 bytes = 16 hex chars
 
+	tp := ""
+	if len(transcriptPath) > 0 {
+		tp = transcriptPath[0]
+	}
+
 	slog.Debug("token count computed",
 		"text_len", textLen,
 		"text_hash", hashHex,
 		"text_preview", preview,
+		"transcript_path", tp,
 		"tiktoken", tiktokenCount,
 		"api", apiCount,
 		"api_error", apiErr,
