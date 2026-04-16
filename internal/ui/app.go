@@ -466,9 +466,14 @@ func (a *App) updateStatus() {
 	}
 
 	row, _ := a.table.GetSelection()
-	pos := ""
-	if row > 0 {
-		pos = fmtNumber(row) + "/" + fmtNumber(len(a.sessions))
+	total := len(a.sessions)
+	pos := fmt.Sprintf("%d sessions", total)
+	if a.tableActive && row > 0 {
+		pct := 0
+		if total > 0 {
+			pct = row * 100 / total
+		}
+		pos = fmt.Sprintf("%d/%d  %d%%", row, total, pct)
 	}
 
 	fmt.Fprint(a.status, badge+"  "+pos)
