@@ -226,7 +226,7 @@ func (t *SessionTable) render() {
 	t.Table.Clear()
 
 	// Header row with background
-	headerBg := tcell.ColorDarkSlateGray
+	headerBg := ColorHeaderBg
 	for col, h := range t.headers {
 		indicator := ""
 		if SortColumn(col) == t.sortCol {
@@ -238,7 +238,7 @@ func (t *SessionTable) render() {
 		}
 		cell := tview.NewTableCell(" " + h + indicator + " ").
 			SetSelectable(false).
-			SetTextColor(tcell.ColorWhite).
+			SetTextColor(ColorText).
 			SetBackgroundColor(headerBg).
 			SetAttributes(tcell.AttrBold).
 			SetExpansion(1)
@@ -246,8 +246,8 @@ func (t *SessionTable) render() {
 	}
 
 	// Data rows with alternating background
-	evenBg := tcell.ColorDefault
-	oddBg := tcell.NewRGBColor(30, 30, 40) // subtle dark alternate
+	evenBg := ColorRowEven
+	oddBg := ColorRowOdd
 
 	for i, sess := range t.filtered {
 		row := i + 1
@@ -261,11 +261,11 @@ func (t *SessionTable) render() {
 		if len(name) > 35 {
 			name = name[:32] + "..."
 		}
-		nameColor := tcell.ColorWhite
+		nameColor := ColorText
 		if sess.Metadata.IsForkedSession {
-			nameColor = tcell.ColorYellow
+			nameColor = ColorFork
 		} else if sess.Metadata.IsIncognito {
-			nameColor = tcell.ColorPurple
+			nameColor = ColorIncognito
 		}
 		nameCell := tview.NewTableCell(name).
 			SetTextColor(nameColor).
@@ -278,23 +278,28 @@ func (t *SessionTable) render() {
 			ws = "..." + ws[len(ws)-19:]
 		}
 		wsCell := tview.NewTableCell(ws).
-			SetTextColor(tcell.Color246).
+			SetTextColor(ColorSubtext).
 			SetBackgroundColor(bg).
 			SetExpansion(1)
 
 		// Model from cache
-		model := "-"
-		if m, ok := t.ModelCache[sess.Name]; ok && m != "" {
+		model := ""
+		if m, ok := t.ModelCache[sess.Name]; ok && m != "" && m != "-" {
 			model = m
 		}
-		modelColor := tcell.Color246
+		if model == "<synthetic>" {
+			model = "synthetic"
+		}
+		modelColor := ColorMuted
 		switch {
 		case strings.Contains(model, "opus"):
-			modelColor = tcell.ColorGold
+			modelColor = ColorModelOpus
 		case strings.Contains(model, "sonnet"):
-			modelColor = tcell.ColorCornflowerBlue
+			modelColor = ColorModelSonnet
 		case strings.Contains(model, "haiku"):
-			modelColor = tcell.ColorLightGreen
+			modelColor = ColorModelHaiku
+		case model == "synthetic":
+			modelColor = ColorMuted
 		}
 		modelCell := tview.NewTableCell(model).
 			SetTextColor(modelColor).
@@ -304,14 +309,14 @@ func (t *SessionTable) render() {
 		// Created
 		created := sess.Metadata.Created.Format("Jan 02")
 		createdCell := tview.NewTableCell(created).
-			SetTextColor(tcell.Color246).
+			SetTextColor(ColorSubtext).
 			SetBackgroundColor(bg).
 			SetExpansion(1)
 
 		// Last used
 		lastUsed := util.FormatRelativeTime(sess.Metadata.LastAccessed)
 		usedCell := tview.NewTableCell(lastUsed).
-			SetTextColor(tcell.Color246).
+			SetTextColor(ColorSubtext).
 			SetBackgroundColor(bg).
 			SetExpansion(1)
 

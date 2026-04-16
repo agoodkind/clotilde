@@ -132,6 +132,13 @@ func (a *App) selectSession(sess *session.Session) {
 	a.root.ResizeItem(a.details, 12, 0)
 	a.status.SetMode(ModeDetail)
 	a.updateHeader()
+
+	// Ensure the selected row is visible after the table shrinks
+	row, _ := a.table.Table.GetSelection()
+	a.table.Table.ScrollToBeginning()
+	if row > 0 {
+		a.table.Table.Select(row, 0)
+	}
 }
 
 // deselectSession closes the details pane and removes the highlight.
