@@ -19,28 +19,20 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AgentGateD_AcquireSession_FullMethodName = "/agentgate.AgentGateD/AcquireSession"
-	AgentGateD_ReleaseSession_FullMethodName = "/agentgate.AgentGateD/ReleaseSession"
-	AgentGateD_HookEvent_FullMethodName      = "/agentgate.AgentGateD/HookEvent"
+	AgentGateD_AcquireSession_FullMethodName     = "/agentgate.AgentGateD/AcquireSession"
+	AgentGateD_ReleaseSession_FullMethodName     = "/agentgate.AgentGateD/ReleaseSession"
+	AgentGateD_HookEvent_FullMethodName          = "/agentgate.AgentGateD/HookEvent"
+	AgentGateD_ListActiveSessions_FullMethodName = "/agentgate.AgentGateD/ListActiveSessions"
 )
 
 // AgentGateDClient is the client API for AgentGateD service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-//
-// AgentGateD is the agent-gate daemon service.
-// The claude wrapper and all hook processes connect here.
 type AgentGateDClient interface {
-	// AcquireSession is called by the claude wrapper before launching claude.
-	// The daemon creates a fake HOME in XDG_RUNTIME_DIR, populates settings.json
-	// with the session model injected, and returns the path.
 	AcquireSession(ctx context.Context, in *AcquireSessionRequest, opts ...grpc.CallOption) (*AcquireSessionResponse, error)
-	// ReleaseSession is called by the claude wrapper after claude exits.
-	// The daemon cleans up the fake HOME and any associated runtime state.
 	ReleaseSession(ctx context.Context, in *ReleaseSessionRequest, opts ...grpc.CallOption) (*ReleaseSessionResponse, error)
-	// HookEvent forwards a Claude Code hook event to the daemon for processing.
-	// Replaces direct stdin-based hook handling for wrapper-launched sessions.
 	HookEvent(ctx context.Context, in *HookEventRequest, opts ...grpc.CallOption) (*HookEventResponse, error)
+	ListActiveSessions(ctx context.Context, in *ListActiveSessionsRequest, opts ...grpc.CallOption) (*ListActiveSessionsResponse, error)
 }
 
 type agentGateDClient struct {
@@ -81,23 +73,24 @@ func (c *agentGateDClient) HookEvent(ctx context.Context, in *HookEventRequest, 
 	return out, nil
 }
 
+func (c *agentGateDClient) ListActiveSessions(ctx context.Context, in *ListActiveSessionsRequest, opts ...grpc.CallOption) (*ListActiveSessionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListActiveSessionsResponse)
+	err := c.cc.Invoke(ctx, AgentGateD_ListActiveSessions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentGateDServer is the server API for AgentGateD service.
 // All implementations must embed UnimplementedAgentGateDServer
 // for forward compatibility.
-//
-// AgentGateD is the agent-gate daemon service.
-// The claude wrapper and all hook processes connect here.
 type AgentGateDServer interface {
-	// AcquireSession is called by the claude wrapper before launching claude.
-	// The daemon creates a fake HOME in XDG_RUNTIME_DIR, populates settings.json
-	// with the session model injected, and returns the path.
 	AcquireSession(context.Context, *AcquireSessionRequest) (*AcquireSessionResponse, error)
-	// ReleaseSession is called by the claude wrapper after claude exits.
-	// The daemon cleans up the fake HOME and any associated runtime state.
 	ReleaseSession(context.Context, *ReleaseSessionRequest) (*ReleaseSessionResponse, error)
-	// HookEvent forwards a Claude Code hook event to the daemon for processing.
-	// Replaces direct stdin-based hook handling for wrapper-launched sessions.
 	HookEvent(context.Context, *HookEventRequest) (*HookEventResponse, error)
+	ListActiveSessions(context.Context, *ListActiveSessionsRequest) (*ListActiveSessionsResponse, error)
 	mustEmbedUnimplementedAgentGateDServer()
 }
 
@@ -116,6 +109,9 @@ func (UnimplementedAgentGateDServer) ReleaseSession(context.Context, *ReleaseSes
 }
 func (UnimplementedAgentGateDServer) HookEvent(context.Context, *HookEventRequest) (*HookEventResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method HookEvent not implemented")
+}
+func (UnimplementedAgentGateDServer) ListActiveSessions(context.Context, *ListActiveSessionsRequest) (*ListActiveSessionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListActiveSessions not implemented")
 }
 func (UnimplementedAgentGateDServer) mustEmbedUnimplementedAgentGateDServer() {}
 func (UnimplementedAgentGateDServer) testEmbeddedByValue()                    {}
@@ -192,6 +188,24 @@ func _AgentGateD_HookEvent_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentGateD_ListActiveSessions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListActiveSessionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentGateDServer).ListActiveSessions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentGateD_ListActiveSessions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentGateDServer).ListActiveSessions(ctx, req.(*ListActiveSessionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentGateD_ServiceDesc is the grpc.ServiceDesc for AgentGateD service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -210,6 +224,10 @@ var AgentGateD_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "HookEvent",
 			Handler:    _AgentGateD_HookEvent_Handler,
+		},
+		{
+			MethodName: "ListActiveSessions",
+			Handler:    _AgentGateD_ListActiveSessions_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -558,3 +558,19 @@ func globalSettingsPath() string {
 	}
 	return filepath.Join(home, ".claude", "settings.json")
 }
+
+// ListActiveSessions returns all currently acquired sessions.
+func (s *Server) ListActiveSessions(_ context.Context, _ *daemonpb.ListActiveSessionsRequest) (*daemonpb.ListActiveSessionsResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var active []*daemonpb.ActiveSession
+	for wid, sess := range s.sessions {
+		active = append(active, &daemonpb.ActiveSession{
+			SessionName: sess.sessionName,
+			WrapperId:   wid,
+		})
+	}
+
+	return &daemonpb.ListActiveSessionsResponse{Sessions: active}, nil
+}

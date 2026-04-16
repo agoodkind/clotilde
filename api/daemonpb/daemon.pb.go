@@ -22,12 +22,9 @@ const (
 )
 
 type AcquireSessionRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// session_name is the agent-gate session name (e.g. "my-feature").
-	// Empty for sessions not managed by agent-gate (bare claude invocations).
-	SessionName string `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
-	// wrapper_id is a unique ID for this wrapper process (e.g. PID as string).
-	WrapperId     string `protobuf:"bytes,2,opt,name=wrapper_id,json=wrapperId,proto3" json:"wrapper_id,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionName   string                 `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
+	WrapperId     string                 `protobuf:"bytes,2,opt,name=wrapper_id,json=wrapperId,proto3" json:"wrapper_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -77,17 +74,11 @@ func (x *AcquireSessionRequest) GetWrapperId() string {
 }
 
 type AcquireSessionResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// fake_home is the path to the per-process fake HOME directory.
-	// The wrapper launches claude with HOME=fake_home.
-	FakeHome string `protobuf:"bytes,1,opt,name=fake_home,json=fakeHome,proto3" json:"fake_home,omitempty"`
-	// real_claude is the path to the actual claude binary.
-	RealClaude string `protobuf:"bytes,2,opt,name=real_claude,json=realClaude,proto3" json:"real_claude,omitempty"`
-	// model is the resolved model for this session (from session metadata or global default).
-	Model string `protobuf:"bytes,3,opt,name=model,proto3" json:"model,omitempty"`
-	// settings_file is the path to the per-session settings.json (for --settings flag).
-	// Lives inside fake_home/.claude/settings.json.
-	SettingsFile  string `protobuf:"bytes,4,opt,name=settings_file,json=settingsFile,proto3" json:"settings_file,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	FakeHome      string                 `protobuf:"bytes,1,opt,name=fake_home,json=fakeHome,proto3" json:"fake_home,omitempty"`
+	RealClaude    string                 `protobuf:"bytes,2,opt,name=real_claude,json=realClaude,proto3" json:"real_claude,omitempty"`
+	Model         string                 `protobuf:"bytes,3,opt,name=model,proto3" json:"model,omitempty"`
+	SettingsFile  string                 `protobuf:"bytes,4,opt,name=settings_file,json=settingsFile,proto3" json:"settings_file,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -231,12 +222,10 @@ func (*ReleaseSessionResponse) Descriptor() ([]byte, []int) {
 }
 
 type HookEventRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// raw_json is the raw JSON payload from Claude Code (stdin of hook process).
-	RawJson []byte `protobuf:"bytes,1,opt,name=raw_json,json=rawJson,proto3" json:"raw_json,omitempty"`
-	// wrapper_id identifies which wrapper session this hook belongs to.
-	// The daemon uses this to look up session context.
-	WrapperId     string `protobuf:"bytes,2,opt,name=wrapper_id,json=wrapperId,proto3" json:"wrapper_id,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Payload       []byte                 `protobuf:"bytes,1,opt,name=payload,proto3" json:"payload,omitempty"`
+	WrapperId     string                 `protobuf:"bytes,2,opt,name=wrapper_id,json=wrapperId,proto3" json:"wrapper_id,omitempty"`
+	RawJson       []byte                 `protobuf:"bytes,3,opt,name=raw_json,json=rawJson,proto3" json:"raw_json,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -271,9 +260,9 @@ func (*HookEventRequest) Descriptor() ([]byte, []int) {
 	return file_daemon_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *HookEventRequest) GetRawJson() []byte {
+func (x *HookEventRequest) GetPayload() []byte {
 	if x != nil {
-		return x.RawJson
+		return x.Payload
 	}
 	return nil
 }
@@ -285,15 +274,16 @@ func (x *HookEventRequest) GetWrapperId() string {
 	return ""
 }
 
+func (x *HookEventRequest) GetRawJson() []byte {
+	if x != nil {
+		return x.RawJson
+	}
+	return nil
+}
+
 type HookEventResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// exit_code is the code the hook process should exit with.
-	// 0 = allow, 2 = block.
-	ExitCode int32 `protobuf:"varint,1,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
-	// stdout_data is written to hook process stdout (injected into Claude context).
-	StdoutData []byte `protobuf:"bytes,2,opt,name=stdout_data,json=stdoutData,proto3" json:"stdout_data,omitempty"`
-	// stderr_data is written to hook process stderr.
-	StderrData    []byte `protobuf:"bytes,3,opt,name=stderr_data,json=stderrData,proto3" json:"stderr_data,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ExitCode      int32                  `protobuf:"varint,1,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -335,18 +325,136 @@ func (x *HookEventResponse) GetExitCode() int32 {
 	return 0
 }
 
-func (x *HookEventResponse) GetStdoutData() []byte {
+type ListActiveSessionsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListActiveSessionsRequest) Reset() {
+	*x = ListActiveSessionsRequest{}
+	mi := &file_daemon_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListActiveSessionsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListActiveSessionsRequest) ProtoMessage() {}
+
+func (x *ListActiveSessionsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[6]
 	if x != nil {
-		return x.StdoutData
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListActiveSessionsRequest.ProtoReflect.Descriptor instead.
+func (*ListActiveSessionsRequest) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{6}
+}
+
+type ListActiveSessionsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Sessions      []*ActiveSession       `protobuf:"bytes,1,rep,name=sessions,proto3" json:"sessions,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListActiveSessionsResponse) Reset() {
+	*x = ListActiveSessionsResponse{}
+	mi := &file_daemon_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListActiveSessionsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListActiveSessionsResponse) ProtoMessage() {}
+
+func (x *ListActiveSessionsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListActiveSessionsResponse.ProtoReflect.Descriptor instead.
+func (*ListActiveSessionsResponse) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ListActiveSessionsResponse) GetSessions() []*ActiveSession {
+	if x != nil {
+		return x.Sessions
 	}
 	return nil
 }
 
-func (x *HookEventResponse) GetStderrData() []byte {
+type ActiveSession struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionName   string                 `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
+	WrapperId     string                 `protobuf:"bytes,2,opt,name=wrapper_id,json=wrapperId,proto3" json:"wrapper_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ActiveSession) Reset() {
+	*x = ActiveSession{}
+	mi := &file_daemon_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ActiveSession) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ActiveSession) ProtoMessage() {}
+
+func (x *ActiveSession) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[8]
 	if x != nil {
-		return x.StderrData
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
 	}
-	return nil
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ActiveSession.ProtoReflect.Descriptor instead.
+func (*ActiveSession) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ActiveSession) GetSessionName() string {
+	if x != nil {
+		return x.SessionName
+	}
+	return ""
+}
+
+func (x *ActiveSession) GetWrapperId() string {
+	if x != nil {
+		return x.WrapperId
+	}
+	return ""
 }
 
 var File_daemon_proto protoreflect.FileDescriptor
@@ -367,22 +475,27 @@ const file_daemon_proto_rawDesc = "" +
 	"\x15ReleaseSessionRequest\x12\x1d\n" +
 	"\n" +
 	"wrapper_id\x18\x01 \x01(\tR\twrapperId\"\x18\n" +
-	"\x16ReleaseSessionResponse\"L\n" +
-	"\x10HookEventRequest\x12\x19\n" +
-	"\braw_json\x18\x01 \x01(\fR\arawJson\x12\x1d\n" +
+	"\x16ReleaseSessionResponse\"f\n" +
+	"\x10HookEventRequest\x12\x18\n" +
+	"\apayload\x18\x01 \x01(\fR\apayload\x12\x1d\n" +
 	"\n" +
-	"wrapper_id\x18\x02 \x01(\tR\twrapperId\"r\n" +
+	"wrapper_id\x18\x02 \x01(\tR\twrapperId\x12\x19\n" +
+	"\braw_json\x18\x03 \x01(\fR\arawJson\"0\n" +
 	"\x11HookEventResponse\x12\x1b\n" +
-	"\texit_code\x18\x01 \x01(\x05R\bexitCode\x12\x1f\n" +
-	"\vstdout_data\x18\x02 \x01(\fR\n" +
-	"stdoutData\x12\x1f\n" +
-	"\vstderr_data\x18\x03 \x01(\fR\n" +
-	"stderrData2\x82\x02\n" +
+	"\texit_code\x18\x01 \x01(\x05R\bexitCode\"\x1b\n" +
+	"\x19ListActiveSessionsRequest\"R\n" +
+	"\x1aListActiveSessionsResponse\x124\n" +
+	"\bsessions\x18\x01 \x03(\v2\x18.agentgate.ActiveSessionR\bsessions\"Q\n" +
+	"\rActiveSession\x12!\n" +
+	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x1d\n" +
+	"\n" +
+	"wrapper_id\x18\x02 \x01(\tR\twrapperId2\xe5\x02\n" +
 	"\n" +
 	"AgentGateD\x12U\n" +
 	"\x0eAcquireSession\x12 .agentgate.AcquireSessionRequest\x1a!.agentgate.AcquireSessionResponse\x12U\n" +
 	"\x0eReleaseSession\x12 .agentgate.ReleaseSessionRequest\x1a!.agentgate.ReleaseSessionResponse\x12F\n" +
-	"\tHookEvent\x12\x1b.agentgate.HookEventRequest\x1a\x1c.agentgate.HookEventResponseB%Z#goodkind.io/agent-gate/api/daemonpbb\x06proto3"
+	"\tHookEvent\x12\x1b.agentgate.HookEventRequest\x1a\x1c.agentgate.HookEventResponse\x12a\n" +
+	"\x12ListActiveSessions\x12$.agentgate.ListActiveSessionsRequest\x1a%.agentgate.ListActiveSessionsResponseB)Z'github.com/fgrehm/clotilde/api/daemonpbb\x06proto3"
 
 var (
 	file_daemon_proto_rawDescOnce sync.Once
@@ -396,27 +509,33 @@ func file_daemon_proto_rawDescGZIP() []byte {
 	return file_daemon_proto_rawDescData
 }
 
-var file_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_daemon_proto_goTypes = []any{
-	(*AcquireSessionRequest)(nil),  // 0: agentgate.AcquireSessionRequest
-	(*AcquireSessionResponse)(nil), // 1: agentgate.AcquireSessionResponse
-	(*ReleaseSessionRequest)(nil),  // 2: agentgate.ReleaseSessionRequest
-	(*ReleaseSessionResponse)(nil), // 3: agentgate.ReleaseSessionResponse
-	(*HookEventRequest)(nil),       // 4: agentgate.HookEventRequest
-	(*HookEventResponse)(nil),      // 5: agentgate.HookEventResponse
+	(*AcquireSessionRequest)(nil),      // 0: agentgate.AcquireSessionRequest
+	(*AcquireSessionResponse)(nil),     // 1: agentgate.AcquireSessionResponse
+	(*ReleaseSessionRequest)(nil),      // 2: agentgate.ReleaseSessionRequest
+	(*ReleaseSessionResponse)(nil),     // 3: agentgate.ReleaseSessionResponse
+	(*HookEventRequest)(nil),           // 4: agentgate.HookEventRequest
+	(*HookEventResponse)(nil),          // 5: agentgate.HookEventResponse
+	(*ListActiveSessionsRequest)(nil),  // 6: agentgate.ListActiveSessionsRequest
+	(*ListActiveSessionsResponse)(nil), // 7: agentgate.ListActiveSessionsResponse
+	(*ActiveSession)(nil),              // 8: agentgate.ActiveSession
 }
 var file_daemon_proto_depIdxs = []int32{
-	0, // 0: agentgate.AgentGateD.AcquireSession:input_type -> agentgate.AcquireSessionRequest
-	2, // 1: agentgate.AgentGateD.ReleaseSession:input_type -> agentgate.ReleaseSessionRequest
-	4, // 2: agentgate.AgentGateD.HookEvent:input_type -> agentgate.HookEventRequest
-	1, // 3: agentgate.AgentGateD.AcquireSession:output_type -> agentgate.AcquireSessionResponse
-	3, // 4: agentgate.AgentGateD.ReleaseSession:output_type -> agentgate.ReleaseSessionResponse
-	5, // 5: agentgate.AgentGateD.HookEvent:output_type -> agentgate.HookEventResponse
-	3, // [3:6] is the sub-list for method output_type
-	0, // [0:3] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	8, // 0: agentgate.ListActiveSessionsResponse.sessions:type_name -> agentgate.ActiveSession
+	0, // 1: agentgate.AgentGateD.AcquireSession:input_type -> agentgate.AcquireSessionRequest
+	2, // 2: agentgate.AgentGateD.ReleaseSession:input_type -> agentgate.ReleaseSessionRequest
+	4, // 3: agentgate.AgentGateD.HookEvent:input_type -> agentgate.HookEventRequest
+	6, // 4: agentgate.AgentGateD.ListActiveSessions:input_type -> agentgate.ListActiveSessionsRequest
+	1, // 5: agentgate.AgentGateD.AcquireSession:output_type -> agentgate.AcquireSessionResponse
+	3, // 6: agentgate.AgentGateD.ReleaseSession:output_type -> agentgate.ReleaseSessionResponse
+	5, // 7: agentgate.AgentGateD.HookEvent:output_type -> agentgate.HookEventResponse
+	7, // 8: agentgate.AgentGateD.ListActiveSessions:output_type -> agentgate.ListActiveSessionsResponse
+	5, // [5:9] is the sub-list for method output_type
+	1, // [1:5] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_daemon_proto_init() }
@@ -430,7 +549,7 @@ func file_daemon_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_daemon_proto_rawDesc), len(file_daemon_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
