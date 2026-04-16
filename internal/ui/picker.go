@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	bl "github.com/winder/bubblelayout"
 
 	"github.com/fgrehm/clotilde/internal/session"
 )
@@ -46,6 +47,16 @@ type PickerModel struct {
 	previewReady   bool
 	previewFocused bool // true when tab switches focus to preview
 	lastPreviewIdx int  // track cursor changes to refresh viewport content
+
+	// BubbleLayout for responsive list+preview
+	layout      bl.BubbleLayout
+	listID      bl.ID
+	previewID   bl.ID
+	listWidth   int
+	listHeight  int
+	prevWidth   int
+	prevHeight  int
+	layoutReady bool
 }
 
 // NewPicker creates a new session picker
@@ -64,6 +75,11 @@ func (m PickerModel) WithPreview() PickerModel {
 
 // Init initializes the model (required by bubbletea)
 func (m PickerModel) Init() tea.Cmd {
+	if m.ShowPreview {
+		m.layout = bl.New()
+		m.listID = m.layout.Add("min 30, grow")
+		m.previewID = m.layout.Add("min 25, grow")
+	}
 	return nil
 }
 
@@ -72,23 +88,24 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.Term.HandleResize(msg)
-		// Initialize or resize preview viewport
-		if m.ShowPreview {
-			previewH := m.Term.Height - 6
-			if previewH < 5 {
-				previewH = 5
+		if m.ShowPreview && m.layout != nil {
+			layoutMsg := m.layout.Resize(msg.Width, msg.Height-2) // -2 for help bar
+			if sz, err := layoutMsg.Size(m.listID); err == nil {
+				m.listWidth = sz.Width
+				m.listHeight = sz.Height
 			}
-			previewW := m.Term.Width/2 - 6
-			if previewW < 30 {
-				previewW = 30
+			if sz, err := layoutMsg.Size(m.previewID); err == nil {
+				m.prevWidth = sz.Width - 2 // room for scrollbar
+				m.prevHeight = sz.Height
+				if !m.previewReady {
+					m.previewVP = viewport.New(m.prevWidth, m.prevHeight)
+					m.previewReady = true
+				} else {
+					m.previewVP.Width = m.prevWidth
+					m.previewVP.Height = m.prevHeight
+				}
 			}
-			if !m.previewReady {
-				m.previewVP = viewport.New(previewW, previewH)
-				m.previewReady = true
-			} else {
-				m.previewVP.Width = previewW
-				m.previewVP.Height = previewH
-			}
+			m.layoutReady = true
 		}
 		return m, nil
 
@@ -262,10 +279,111 @@ func (m PickerModel) mouseYToIndex(y int, totalFiltered int) int {
 
 // View renders the session picker
 func (m PickerModel) View() string {
+	if m.ShowPreview && m.layoutReady {
+		return m.viewWithLayout()
+	}
 	if m.ShowPreview {
 		return m.viewWithPreview()
 	}
 	return m.viewSimple()
+}
+
+// viewWithLayout renders using BubbleLayout-allocated sizes
+func (m PickerModel) viewWithLayout() string {
+	filtered := m.sortedFilteredSessions()
+
+	// Render list pane constrained to layout width
+	listPane := m.renderListPaneConstrained(filtered, m.listWidth, m.listHeight)
+
+	// If preview has no space, skip it
+	if m.prevWidth < 20 || len(filtered) == 0 {
+		help := RenderHelpBar("↑↓ navigate · 1/2/3 sort · / filter · enter select · q quit")
+		return lipgloss.JoinVertical(lipgloss.Left, listPane, "", help)
+	}
+
+	// Update preview viewport content
+	if m.previewReady {
+		previewContent := m.getPreviewContent(filtered[m.Nav.Cursor])
+		if m.Nav.Cursor != m.lastPreviewIdx || m.previewVP.TotalLineCount() == 0 {
+			m.previewVP.SetContent(previewContent)
+			m.previewVP.GotoTop()
+			m.lastPreviewIdx = m.Nav.Cursor
+		}
+	}
+
+	// Preview with scrollbar
+	var previewPane string
+	if m.previewReady {
+		borderStyle := InfoBoxStyle.Width(m.prevWidth + 2)
+		if m.previewFocused {
+			borderStyle = borderStyle.BorderForeground(SuccessColor)
+		}
+		previewPane = borderStyle.Render(ViewportWithScrollbar(m.previewVP))
+	}
+
+	content := lipgloss.JoinHorizontal(lipgloss.Top, listPane, " ", previewPane)
+
+	// Help bar
+	var help string
+	if m.previewFocused {
+		help = RenderHelpBar("↑↓ scroll · tab list · enter select · q quit")
+	} else {
+		help = RenderHelpBar("↑↓ navigate · 1/2/3 sort · tab preview · / filter · enter select · q quit")
+	}
+
+	return lipgloss.JoinVertical(lipgloss.Left, content, help)
+}
+
+// renderListPaneConstrained renders the list pane within given width/height constraints
+func (m PickerModel) renderListPaneConstrained(filtered []*session.Session, width, height int) string {
+	var b strings.Builder
+
+	b.WriteString(BoldStyle.Render(m.Title))
+	b.WriteString("\n\n")
+	b.WriteString(m.Filter.RenderFilterInput())
+
+	if len(filtered) == 0 {
+		b.WriteString(RenderEmptyState(m.Filter.Text, "sessions"))
+		return b.String()
+	}
+
+	// Calculate visible lines from layout height
+	maxVisible := height - 5 // title(1) + blank(1) + filter(2) + help(1)
+	if maxVisible < 3 {
+		maxVisible = 3
+	}
+
+	start := max(m.Nav.Cursor-maxVisible/2, 0)
+	end := start + maxVisible
+	if end > len(filtered) {
+		end = len(filtered)
+		start = max(end-maxVisible, 0)
+	}
+
+	for i := start; i < end; i++ {
+		sess := filtered[i]
+		line := m.formatSessionLineConstrained(sess, width-4) // -4 for cursor+padding
+		b.WriteString(RenderCursorLine(i, m.Nav.Cursor, line))
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
+// formatSessionLineConstrained formats a session line within a max width
+func (m PickerModel) formatSessionLineConstrained(sess *session.Session, maxWidth int) string {
+	name := sess.Name
+	if len(name) > maxWidth-15 { // leave room for time
+		name = name[:maxWidth-18] + "..."
+	}
+
+	timeAgo := formatTimeAgo(sess.Metadata.LastAccessed)
+	padding := maxWidth - len(name) - len(timeAgo)
+	if padding < 2 {
+		padding = 2
+	}
+
+	return name + strings.Repeat(" ", padding) + DimStyle.Render(timeAgo)
 }
 
 // viewSimple renders the picker without preview pane

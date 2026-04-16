@@ -6,6 +6,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	bl "github.com/winder/bubblelayout"
 )
 
 var (
@@ -15,15 +16,26 @@ var (
 
 // ViewerModel is a scrollable text viewer using BubbleTea viewport.
 type ViewerModel struct {
-	Title    string
-	Content  string
-	viewport viewport.Model
-	ready    bool
+	Title       string
+	Content     string
+	viewport    viewport.Model
+	ready       bool
+	layout      bl.BubbleLayout
+	headerID    bl.ID
+	contentID   bl.ID
+	footerID    bl.ID
+	layoutReady bool
 }
 
 // NewViewer creates a new scrollable text viewer.
 func NewViewer(title, content string) ViewerModel {
-	return ViewerModel{Title: title, Content: content}
+	m := ViewerModel{Title: title, Content: content}
+	m.layout = bl.New()
+	m.headerID = m.layout.Dock(bl.Dock{Cardinal: bl.NORTH, Min: 1, Preferred: 1, Max: 1})
+	m.footerID = m.layout.Dock(bl.Dock{Cardinal: bl.SOUTH, Min: 1, Preferred: 1, Max: 1})
+	m.contentID = m.layout.Add("grow")
+	m.layoutReady = true
+	return m
 }
 
 func (m ViewerModel) Init() tea.Cmd {
@@ -33,15 +45,16 @@ func (m ViewerModel) Init() tea.Cmd {
 func (m ViewerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		headerHeight := 2
-		footerHeight := 1
-		if !m.ready {
-			m.viewport = viewport.New(msg.Width, msg.Height-headerHeight-footerHeight)
-			m.viewport.SetContent(m.Content)
-			m.ready = true
-		} else {
-			m.viewport.Width = msg.Width
-			m.viewport.Height = msg.Height - headerHeight - footerHeight
+		layoutMsg := m.layout.Resize(msg.Width, msg.Height)
+		if sz, err := layoutMsg.Size(m.contentID); err == nil {
+			if !m.ready {
+				m.viewport = viewport.New(sz.Width, sz.Height)
+				m.viewport.SetContent(m.Content)
+				m.ready = true
+			} else {
+				m.viewport.Width = sz.Width
+				m.viewport.Height = sz.Height
+			}
 		}
 		return m, nil
 
@@ -63,7 +76,7 @@ func (m ViewerModel) View() string {
 	}
 	header := viewerTitleStyle.Render(m.Title) + "\n"
 	footer := viewerFootStyle.Render(fmt.Sprintf(" %d%% · q to close", int(m.viewport.ScrollPercent()*100)))
-	return header + m.viewport.View() + "\n" + footer
+	return header + ViewportWithScrollbar(m.viewport) + "\n" + footer
 }
 
 // RunViewer runs the scrollable text viewer.

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -186,4 +187,48 @@ func (t *TermSize) VisibleLines(reserved int) int {
 		return 10 // fallback minimum
 	}
 	return t.Height - reserved
+}
+
+// RenderScrollbar renders a vertical scrollbar for a viewport.
+// Returns an empty string if the content fits without scrolling.
+// The scrollbar is a single column of characters: track (dim) with a thumb (bright).
+func RenderScrollbar(vp viewport.Model, height int) string {
+	total := vp.TotalLineCount()
+	if total <= height || height <= 0 {
+		return ""
+	}
+
+	// Calculate thumb position and size
+	thumbSize := max(1, height*height/total)
+	scrollRange := height - thumbSize
+	thumbPos := 0
+	if total-height > 0 {
+		thumbPos = int(float64(vp.YOffset) / float64(total-height) * float64(scrollRange))
+	}
+	if thumbPos > scrollRange {
+		thumbPos = scrollRange
+	}
+
+	trackStyle := lipgloss.NewStyle().Foreground(MutedColor)
+	thumbStyle := lipgloss.NewStyle().Foreground(InfoColor)
+
+	var lines []string
+	for i := range height {
+		if i >= thumbPos && i < thumbPos+thumbSize {
+			lines = append(lines, thumbStyle.Render("\u2588")) // full block
+		} else {
+			lines = append(lines, trackStyle.Render("\u2502")) // light vertical
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// ViewportWithScrollbar renders a viewport with a scrollbar on the right edge.
+// If content fits, renders the viewport alone without a scrollbar.
+func ViewportWithScrollbar(vp viewport.Model) string {
+	scrollbar := RenderScrollbar(vp, vp.Height)
+	if scrollbar == "" {
+		return vp.View()
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, vp.View(), " ", scrollbar)
 }

@@ -19,6 +19,7 @@ require (
 	github.com/openai/openai-go/v3 v3.31.0
 	github.com/pkoukk/tiktoken-go v0.1.8
 	github.com/spf13/cobra v1.10.2
+	github.com/winder/bubblelayout v0.0.1
 	golang.org/x/tools v0.43.0
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.11
