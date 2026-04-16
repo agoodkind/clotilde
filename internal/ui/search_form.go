@@ -67,7 +67,7 @@ func NewSearchForm(sessions []*session.Session, initial *session.Session) Search
 	ti.Width = 70
 
 	layout := bl.New()
-	layoutID := layout.Add("min 40, preferred 78, max 100, grow")
+	layoutID := layout.Add("w 40:78:100, grow")
 
 	m := SearchFormModel{
 		Sessions: sessions,
