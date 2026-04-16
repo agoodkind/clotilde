@@ -30,6 +30,7 @@ type AppCallbacks struct {
 	RenameSession func(sess *session.Session) (string, error)
 	ExtractDetail func(sess *session.Session) SessionDetail
 	ExtractModel  func(sess *session.Session) string
+	ViewContent   func(sess *session.Session) string // returns plain text conversation
 	Store         session.Store
 }
 
@@ -523,10 +524,34 @@ func (a *App) resumeSelected() {
 }
 
 func (a *App) viewSelected() {
-	if a.selected == nil {
+	sess := a.selected
+	if sess == nil {
 		return
 	}
-	// TODO: load transcript, show in viewer overlay
+	// ViewContent callback must be set by the caller to provide transcript text
+	if a.cb.ViewContent == nil {
+		return
+	}
+	content := a.cb.ViewContent(sess)
+	if content == "" {
+		return
+	}
+	viewer := NewViewerOverlay("Conversation: "+sess.Name, content)
+	viewer.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape || (event.Key() == tcell.KeyRune && event.Rune() == 'q') {
+			a.pages.RemovePage("viewer")
+			a.app.SetFocus(a.table)
+			a.mode = ModeDetail
+			a.updateHeader()
+			a.updateStatus()
+			return nil
+		}
+		return event
+	})
+	a.pages.AddPage("viewer", viewer, true, true)
+	a.mode = ModeView
+	a.updateHeader()
+	a.updateStatus()
 }
 
 func (a *App) searchSelected() {
