@@ -29,61 +29,77 @@ var rootCmd = &cobra.Command{
 	Run:     runDashboard,
 }
 
-// runDashboard shows the interactive dashboard when no subcommand is provided
+// runDashboard shows the interactive tview TUI when no subcommand is provided
 func runDashboard(cmd *cobra.Command, args []string) {
-	// Non-interactive (piped) invocation with no subcommand: this is claude's
-	// "pipe a prompt" mode (e.g. `echo "query" | claude`). Forward to real claude.
+	// Non-interactive (piped) invocation: forward to real claude.
 	if !isatty.IsTerminal(os.Stdin.Fd()) {
 		os.Exit(ForwardToClaude(os.Args[1:]))
 	}
 
-	// Check if in TTY (interactive terminal)
-	isTTY := isatty.IsTerminal(os.Stdout.Fd())
-	if !isTTY {
+	// Non-TTY: show help
+	if !isatty.IsTerminal(os.Stdout.Fd()) {
 		_ = cmd.Help()
 		return
 	}
 
-	// Use global session store for dashboard
 	store, err := session.NewGlobalFileStore()
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Failed to initialize session storage: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Load all sessions globally (not workspace-scoped)
-	loadSessions := func() []*session.Session {
-		sessions, loadErr := store.List()
-		if loadErr != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Failed to load sessions: %v\n", loadErr)
-			os.Exit(1)
-		}
-		return sessions
+	sessions, err := store.List()
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Failed to load sessions: %v\n", err)
+		os.Exit(1)
 	}
 
-	sessions := loadSessions()
-	sortSessionsByLastAccessed(sessions)
+	// Build callbacks that bridge ui and cmd packages
+	cb := ui.AppCallbacks{
+		Store: store,
+		ResumeSession: func(sess *session.Session) error {
+			return resumeSession(sess, store)
+		},
+		DeleteSession: func(sess *session.Session) error {
+			return deleteSession(sess, store)
+		},
+		ExtractDetail: func(sess *session.Session) ui.SessionDetail {
+			model := "-"
+			if sess.Metadata.TranscriptPath != "" {
+				m, _ := claude.ExtractModelAndLastTime(sess.Metadata.TranscriptPath)
+				if m != "" {
+					model = m
+				}
+			}
+			if model == "-" {
+				settings, _ := store.LoadSettings(sess.Name)
+				if settings != nil && settings.Model != "" {
+					model = settings.Model
+				}
+			}
 
-	// Dashboard loop - keep showing dashboard until quit or session launched
-	for {
-		sessions = loadSessions()
-		sortSessionsByLastAccessed(sessions)
+			var msgs []ui.DetailMessage
+			if sess.Metadata.TranscriptPath != "" {
+				recent := claude.ExtractRecentMessages(sess.Metadata.TranscriptPath, 5, 150)
+				for _, m := range recent {
+					text := strings.TrimSpace(m.Text)
+					if text == "" || strings.HasPrefix(text, "<") || len(text) < 5 {
+						continue
+					}
+					msgs = append(msgs, ui.DetailMessage{Role: m.Role, Text: text})
+				}
+			}
 
-		dashboard := ui.NewDashboard(sessions)
-		selectedAction, err := ui.RunDashboard(dashboard)
-		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Dashboard error: %v\n", err)
-			os.Exit(1)
-		}
+			return ui.SessionDetail{Model: model, Messages: msgs}
+		},
+	}
 
-		if selectedAction == "" {
-			return
-		}
+	app := ui.NewApp(sessions, cb)
+	app.PreWarmStats()
 
-		shouldReturn := handleDashboardAction(selectedAction, sessions, store)
-		if shouldReturn {
-			return
-		}
+	if err := app.Run(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
+		os.Exit(1)
 	}
 }
 
