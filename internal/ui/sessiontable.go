@@ -95,8 +95,18 @@ func NewSessionTable() *SessionTable {
 		}
 	})
 
-	// Handle mouse clicks on headers for sorting
+	// Handle mouse: clicks on headers for sorting, double-click to resume
 	t.Table.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if action == tview.MouseLeftDoubleClick {
+			row, _ := t.Table.GetSelection()
+			if row >= 1 {
+				idx := row - 1
+				if idx < len(t.filtered) && t.OnResume != nil {
+					t.OnResume(t.filtered[idx])
+				}
+			}
+			return action, nil
+		}
 		if action == tview.MouseLeftClick {
 			_, y := event.Position()
 			if y == 0 { // header row
