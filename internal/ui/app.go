@@ -96,7 +96,14 @@ func NewApp(sessions []*session.Session, cb AppCallbacks) *App {
 }
 
 // Run starts the TUI event loop. Blocks until quit.
+// Uses the alternate screen buffer to avoid polluting terminal scrollback.
 func (a *App) Run() error {
+	// Ensure alternate screen buffer is used
+	screen, err := tcell.NewScreen()
+	if err != nil {
+		return err
+	}
+	a.app.SetScreen(screen)
 	return a.app.Run()
 }
 
