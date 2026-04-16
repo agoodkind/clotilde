@@ -164,10 +164,12 @@ func formatSessionName(sess *session.Session) string {
 
 // richPreviewFunc returns a PreviewFunc that shows full session details
 // with clear section separation and stats.
-func richPreviewFunc(store session.Store) ui.PreviewFunc {
+// statsCache is the PickerModel.StatsCache map, shared by reference so background
+// computation results become visible as they arrive.
+func richPreviewFunc(store session.Store, statsCache map[string]*transcript.CompactQuickStats) ui.PreviewFunc {
 	return func(sess *session.Session) string {
 		var lines []string
-		sep := "────────────────────────────"
+		sep := "----------------------------"
 
 		// Header: session name + context summary
 		lines = append(lines, sess.Name)
@@ -195,9 +197,9 @@ func richPreviewFunc(store session.Store) ui.PreviewFunc {
 			}
 		}
 
-		// Compaction stats (lightweight: no UUID chain walk)
+		// Compaction stats: use cache when available, show "Computing..." while pending.
 		if sess.Metadata.TranscriptPath != "" {
-			if qs, err := transcript.QuickStats(sess.Metadata.TranscriptPath); err == nil {
+			if qs, ok := statsCache[sess.Metadata.TranscriptPath]; ok {
 				lines = append(lines, sep)
 				lines = append(lines, "Context")
 				if qs.EstimatedTokens > 0 {
@@ -209,6 +211,10 @@ func richPreviewFunc(store session.Store) ui.PreviewFunc {
 					lines = append(lines, fmt.Sprintf("Last compact: %s", util.FormatRelativeTime(qs.LastCompactTime)))
 				}
 				lines = append(lines, fmt.Sprintf("Total:       %s entries", formatCount(int64(qs.TotalEntries))))
+			} else {
+				lines = append(lines, sep)
+				lines = append(lines, "Context")
+				lines = append(lines, "Computing...")
 			}
 		}
 

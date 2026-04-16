@@ -170,7 +170,7 @@ func handleDashboardAction(selectedAction string, sessions []*session.Session, s
 		}
 
 		picker := ui.NewPicker(sessions, "Select session to resume").WithPreview()
-		picker.PreviewFn = richPreviewFunc(store)
+		picker.PreviewFn = richPreviewFunc(store, picker.StatsCache)
 		selected, err := ui.RunPicker(picker)
 		if err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Picker failed: %v\n", err)
@@ -237,7 +237,7 @@ func handleDashboardAction(selectedAction string, sessions []*session.Session, s
 		}
 
 		picker := ui.NewPicker(forkable, "Select session to fork").WithPreview()
-		picker.PreviewFn = richPreviewFunc(store)
+		picker.PreviewFn = richPreviewFunc(store, picker.StatsCache)
 		parent, err := ui.RunPicker(picker)
 		if err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Picker failed: %v\n", err)
@@ -580,7 +580,7 @@ func forkFromDashboard(parent *session.Session, sessions []*session.Session, sto
 // viewConversation shows a session picker, then displays the conversation in a scrollable viewer.
 func viewConversation(sessions []*session.Session, store session.Store) {
 	picker := ui.NewPicker(sessions, "Select session to view").WithPreview()
-	picker.PreviewFn = richPreviewFunc(store)
+	picker.PreviewFn = richPreviewFunc(store, picker.StatsCache)
 	selected, err := ui.RunPicker(picker)
 	if err != nil || selected == nil {
 		return
@@ -606,7 +606,8 @@ func viewConversation(sessions []*session.Session, store session.Store) {
 // searchConversationForm shows the unified search form (session + query + depth),
 // then runs the search and displays results in the viewer.
 func searchConversationForm(sessions []*session.Session, store session.Store) {
-	result, err := ui.RunSearchForm(sessions, nil, richPreviewFunc(store))
+	statsCache := make(map[string]*transcript.CompactQuickStats)
+	result, err := ui.RunSearchForm(sessions, nil, richPreviewFunc(store, statsCache))
 	if err != nil || result == nil || result.Cancelled {
 		return
 	}
