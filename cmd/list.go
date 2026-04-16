@@ -192,9 +192,6 @@ func richPreviewFunc(store session.Store) ui.PreviewFunc {
 			if info, err := os.Stat(sess.Metadata.TranscriptPath); err == nil {
 				sizeMB := float64(info.Size()) / (1024 * 1024)
 				lines = append(lines, fmt.Sprintf("Transcript: %.1f MB", sizeMB))
-				// Estimated token count: file_size / 6 (rough: ~half JSONL is metadata, ~3 bytes/token)
-				estTokens := info.Size() / 6
-				lines = append(lines, fmt.Sprintf("Tokens:    ~%s (estimated)", formatTokenCount(estTokens)))
 			}
 		}
 
@@ -203,6 +200,9 @@ func richPreviewFunc(store session.Store) ui.PreviewFunc {
 			if qs, err := transcript.QuickStats(sess.Metadata.TranscriptPath); err == nil {
 				lines = append(lines, sep)
 				lines = append(lines, "Context")
+				if qs.EstimatedTokens > 0 {
+					lines = append(lines, fmt.Sprintf("Tokens:      ~%s", formatTokenCount(int64(qs.EstimatedTokens))))
+				}
 				lines = append(lines, fmt.Sprintf("Compactions: %d", qs.Compactions))
 				lines = append(lines, fmt.Sprintf("In context:  %s entries", formatCount(int64(qs.EntriesInContext))))
 				if qs.Compactions > 0 && !qs.LastCompactTime.IsZero() {
