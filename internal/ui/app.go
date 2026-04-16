@@ -127,9 +127,10 @@ func (a *App) selectSession(sess *session.Session) {
 	a.updateHeader()
 }
 
-// deselectSession closes the details pane.
+// deselectSession closes the details pane and removes the highlight.
 func (a *App) deselectSession() {
 	a.selected = nil
+	a.table.Deselect()
 	a.root.ResizeItem(a.details, 0, 0)
 	a.status.SetMode(ModeBrowse)
 	a.updateHeader()
@@ -156,16 +157,22 @@ func (a *App) updateHeader() {
 func (a *App) handleGlobalKey(event *tcell.EventKey) *tcell.EventKey {
 	key := event.Key()
 
-	// Esc always deselects / closes overlays
+	// Esc: close details if open, otherwise quit
 	if key == tcell.KeyEscape {
 		if a.selected != nil {
 			a.deselectSession()
 			return nil
 		}
+		a.app.Stop()
+		return nil
 	}
 
-	// q quits from browse mode (not when in details or overlays)
-	if key == tcell.KeyRune && event.Rune() == 'q' && a.selected == nil {
+	// q quits from any state
+	if key == tcell.KeyRune && event.Rune() == 'q' {
+		if a.selected != nil {
+			a.deselectSession()
+			return nil
+		}
 		a.app.Stop()
 		return nil
 	}
