@@ -52,8 +52,9 @@ type App struct {
 	modelCache map[string]string
 
 	// Table state
-	sortCol SortColumn
-	sortAsc bool
+	tableActive bool // false until first arrow/click activates selection
+	sortCol     SortColumn
+	sortAsc     bool
 }
 
 // NewApp creates and returns the clotilde TUI.
@@ -74,10 +75,10 @@ func NewApp(sessions []*session.Session, cb AppCallbacks) *App {
 		sortAsc:    false,
 	}
 
-	// Table setup
+	// Table setup: start NOT selectable (no highlight on load)
 	a.table.
 		SetBorders(false).
-		SetSelectable(true, false).
+		SetSelectable(false, false).
 		SetFixed(1, 0).
 		SetSeparator(' ').
 		SetSelectedStyle(tcell.StyleDefault.
@@ -85,9 +86,9 @@ func NewApp(sessions []*session.Session, cb AppCallbacks) *App {
 			Foreground(ColorSelectedFg).
 			Bold(true))
 
-	// Table: highlight change opens details
+	// Table: highlight change opens details (only fires when selectable)
 	a.table.SetSelectionChangedFunc(func(row, col int) {
-		if row < 1 {
+		if row < 1 || !a.tableActive {
 			return
 		}
 		idx := row - 1
@@ -96,9 +97,9 @@ func NewApp(sessions []*session.Session, cb AppCallbacks) *App {
 		}
 	})
 
-	// Table: Enter resumes
+	// Table: Enter resumes (only fires when selectable)
 	a.table.SetSelectedFunc(func(row, col int) {
-		if row < 1 {
+		if row < 1 || !a.tableActive {
 			return
 		}
 		idx := row - 1
@@ -120,6 +121,11 @@ func NewApp(sessions []*session.Session, cb AppCallbacks) *App {
 		}
 		if action == tview.MouseLeftClick {
 			_, y := event.Position()
+			if y > 0 && !a.tableActive {
+				// Click on a data row activates the table
+				a.tableActive = true
+				a.table.SetSelectable(true, false)
+			}
 			if y == 0 { // header row click
 				x, _ := event.Position()
 				col := x / (a.termWidth() / 5) // approximate column
@@ -134,6 +140,26 @@ func NewApp(sessions []*session.Session, cb AppCallbacks) *App {
 
 	// Table-level key handler (fires when table has focus)
 	a.table.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		// Activate table selection on first navigation key
+		if !a.tableActive {
+			activate := false
+			switch event.Key() {
+			case tcell.KeyUp, tcell.KeyDown:
+				activate = true
+			case tcell.KeyRune:
+				if event.Rune() == 'j' || event.Rune() == 'k' {
+					activate = true
+				}
+			}
+			if activate {
+				a.tableActive = true
+				a.table.SetSelectable(true, false)
+				a.table.Select(1, 0) // select first data row
+				// Don't return nil: let the selection change callback fire
+				return nil
+			}
+		}
+
 		if event.Key() == tcell.KeyRune {
 			switch event.Rune() {
 			case 'r':
@@ -440,6 +466,8 @@ func (a *App) selectSession(sess *session.Session) {
 
 func (a *App) deselectSession() {
 	a.selected = nil
+	a.tableActive = false
+	a.table.SetSelectable(false, false)
 	a.mode = ModeBrowse
 	a.root.ResizeItem(a.details, 0, 0)
 	a.updateHeader()
