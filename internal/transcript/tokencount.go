@@ -52,7 +52,8 @@ func CountTokensForText(apiKey, text string) (int, error) {
 // Both results are logged to slog for accuracy tracking.
 // CountTokensBestEffort computes tokens using BOTH tiktoken and Claude API (when key available).
 // transcriptPath is logged for traceability (can be empty if not from a transcript).
-func CountTokensBestEffort(apiKey, text string, transcriptPath ...string) (tokens int, exact bool) {
+// sessionID and messageUUID are optional identifiers for full ledger traceability.
+func CountTokensBestEffort(apiKey, text string, transcriptPath string, sessionID string, messageUUID string) (tokens int, exact bool) {
 	textLen := len(text)
 
 	// Always compute tiktoken estimate
@@ -84,26 +85,55 @@ func CountTokensBestEffort(apiKey, text string, transcriptPath ...string) (token
 	hash := sha256.Sum256([]byte(text))
 	hashHex := hex.EncodeToString(hash[:8]) // first 8 bytes = 16 hex chars
 
-	tp := ""
-	if len(transcriptPath) > 0 {
-		tp = transcriptPath[0]
+	// Compute detailed metrics
+	tiktokenRaw := 0
+	if enc != nil {
+		tiktokenRaw = len(enc.Encode(text, nil, nil))
+	}
+	bytesPerToken := float64(0)
+	if tiktokenRaw > 0 {
+		bytesPerToken = float64(textLen) / float64(tiktokenRaw)
+	}
+	apiToTiktoken := float64(0)
+	if apiCount > 0 && tiktokenRaw > 0 {
+		apiToTiktoken = float64(apiCount) / float64(tiktokenRaw)
+	}
+	estimateError := float64(0)
+	if apiCount > 0 {
+		estimateError = float64(tiktokenCount-apiCount) / float64(apiCount) * 100
 	}
 
-	slog.Debug("token count computed",
+	// Count content characteristics for analysis
+	newlines := 0
+	spaces := 0
+	for _, c := range text {
+		if c == '\n' {
+			newlines++
+		} else if c == ' ' || c == '\t' {
+			spaces++
+		}
+	}
+
+	slog.Info("token_ledger",
 		"text_len", textLen,
 		"text_hash", hashHex,
 		"text_preview", preview,
-		"transcript_path", tp,
-		"tiktoken", tiktokenCount,
-		"api", apiCount,
+		"transcript_path", transcriptPath,
+		"session_id", sessionID,
+		"message_uuid", messageUUID,
+		"tiktoken_raw", tiktokenRaw,
+		"tiktoken_adjusted", tiktokenCount,
+		"multiplier", tokenMultiplier,
+		"api_count", apiCount,
 		"api_error", apiErr,
 		"has_api_key", apiKey != "",
-		"ratio", func() float64 {
-			if apiCount > 0 && tiktokenCount > 0 {
-				return float64(apiCount) / float64(tiktokenCount) * tokenMultiplier
-			}
-			return 0
-		}(),
+		"api_to_tiktoken_ratio", fmt.Sprintf("%.4f", apiToTiktoken),
+		"estimate_error_pct", fmt.Sprintf("%.1f", estimateError),
+		"bytes_per_token", fmt.Sprintf("%.2f", bytesPerToken),
+		"newline_count", newlines,
+		"whitespace_count", spaces,
+		"whitespace_pct", fmt.Sprintf("%.1f", float64(spaces+newlines)/float64(max(textLen, 1))*100),
+		"timestamp", time.Now().UTC().Format(time.RFC3339),
 	)
 
 	// Return API count if available, otherwise tiktoken
