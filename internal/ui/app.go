@@ -1,7 +1,17 @@
+// Package ui implements the clotilde TUI using tview/tcell.
+//
+// Architecture follows the k9s pattern:
+//   - tview primitives used directly (Table, TextView, Flex)
+//   - App-level SetInputCapture for global shortcuts (q, Esc, /, 1-5)
+//   - Table-level SetInputCapture for table-specific keys (r, v, s, d, f, n, c)
+//   - tview.Pages for modal overlays
+//   - Focus explicitly managed: only the Table or a modal ever has focus
 package ui
 
 import (
+	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -9,380 +19,273 @@ import (
 
 	"github.com/fgrehm/clotilde/internal/session"
 	"github.com/fgrehm/clotilde/internal/transcript"
+	"github.com/fgrehm/clotilde/internal/util"
 )
 
-// AppCallbacks provides the hooks the TUI calls to perform actions.
-// This breaks the import cycle between ui and cmd/claude packages.
+// AppCallbacks provides hooks the TUI calls to perform actions.
 type AppCallbacks struct {
-	// ResumeSession is called when the user presses 'r' on a selected session.
-	// The TUI suspends, the callback runs Claude, and the TUI resumes after.
 	ResumeSession func(sess *session.Session) error
-
-	// DeleteSession is called after confirmation to delete a session.
 	DeleteSession func(sess *session.Session) error
-
-	// ForkSession is called to fork the selected session.
-	ForkSession func(sess *session.Session) error
-
-	// RenameSession is called to auto-name a session via LLM.
+	ForkSession   func(sess *session.Session) error
 	RenameSession func(sess *session.Session) (string, error)
-
-	// ExtractDetail extracts model and recent messages for the details pane.
-	// This avoids the ui package importing the claude package.
 	ExtractDetail func(sess *session.Session) SessionDetail
-
-	// ExtractModel returns just the model string for a session (lighter than ExtractDetail).
-	ExtractModel func(sess *session.Session) string
-
-	// Store provides session operations.
-	Store session.Store
+	ExtractModel  func(sess *session.Session) string
+	Store         session.Store
 }
 
-// App is the main tview application for clotilde.
+// App is the main tview application.
 type App struct {
-	app      *tview.Application
-	pages    *tview.Pages // for modal overlays
-	root     *tview.Flex  // header + table + details + status
-	header   *HeaderBar
-	table    *SessionTable
-	details  *DetailsPane
-	status   *StatusBar
-	cb       AppCallbacks
-	selected *session.Session // currently selected session (nil = nothing)
+	app     *tview.Application
+	pages   *tview.Pages
+	root    *tview.Flex // vertical: header(1) + table(grow) + details(0|12) + status(1)
+	header  *tview.TextView
+	table   *tview.Table
+	details *DetailsPane
+	status  *tview.TextView
+	cb      AppCallbacks
+
+	// State
+	sessions   []*session.Session
+	selected   *session.Session
+	mode       Mode
+	statsCache map[string]*transcript.CompactQuickStats
+	modelCache map[string]string
+
+	// Table state
+	sortCol SortColumn
+	sortAsc bool
 }
 
-// NewApp creates the clotilde TUI application.
+// NewApp creates and returns the clotilde TUI.
 func NewApp(sessions []*session.Session, cb AppCallbacks) *App {
 	a := &App{
-		app:     tview.NewApplication(),
-		pages:   tview.NewPages(),
-		header:  NewHeaderBar(),
-		table:   NewSessionTable(),
-		details: NewDetailsPane(),
-		status:  NewStatusBar(),
-		cb:      cb,
+		app:        tview.NewApplication(),
+		pages:      tview.NewPages(),
+		header:     tview.NewTextView().SetDynamicColors(true),
+		table:      tview.NewTable(),
+		details:    NewDetailsPane(),
+		status:     tview.NewTextView().SetDynamicColors(true),
+		cb:         cb,
+		sessions:   sessions,
+		mode:       ModeBrowse,
+		statsCache: make(map[string]*transcript.CompactQuickStats),
+		modelCache: make(map[string]string),
+		sortCol:    SortColUsed,
+		sortAsc:    false,
 	}
 
-	// Root layout: header (1) + table (grows) + details (hidden) + status (2)
-	a.root = tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(a.header, 1, 0, false).
-		AddItem(a.table.Table, 0, 1, true).
-		AddItem(a.details, 0, 0, false). // starts hidden
-		AddItem(a.status, 2, 0, false)
+	// Table setup
+	a.table.
+		SetBorders(false).
+		SetSelectable(true, false).
+		SetFixed(1, 0).
+		SetSeparator(' ').
+		SetSelectedStyle(tcell.StyleDefault.
+			Background(ColorSelected).
+			Foreground(ColorSelectedFg).
+			Bold(true))
 
-	// Pages: main content + modal overlays
-	a.pages.AddPage("main", a.root, true, true)
-
-	// Enable mouse
-	a.app.EnableMouse(true)
-
-	// Load sessions
-	a.table.SetSessions(sessions)
-	a.updateHeader()
-
-	// Wire selection callback (highlight change opens details)
-	a.table.OnSelect = func(sess *session.Session) {
-		a.selectSession(sess)
-	}
-
-	// Wire resume callback (Enter key resumes)
-	a.table.OnResume = func(sess *session.Session) {
-		a.selected = sess
-		a.resumeSelected()
-	}
-
-	// Global key handler
-	a.app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		return a.handleGlobalKey(event)
+	// Table: highlight change opens details
+	a.table.SetSelectionChangedFunc(func(row, col int) {
+		if row < 1 {
+			return
+		}
+		idx := row - 1
+		if idx < len(a.sessions) {
+			a.selectSession(a.sessions[idx])
+		}
 	})
 
+	// Table: Enter resumes
+	a.table.SetSelectedFunc(func(row, col int) {
+		if row < 1 {
+			return
+		}
+		idx := row - 1
+		if idx < len(a.sessions) {
+			a.selected = a.sessions[idx]
+			a.resumeSelected()
+		}
+	})
+
+	// Table: mouse double-click resumes, header click sorts
+	a.table.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if action == tview.MouseLeftDoubleClick {
+			row, _ := a.table.GetSelection()
+			if row >= 1 && row-1 < len(a.sessions) {
+				a.selected = a.sessions[row-1]
+				a.resumeSelected()
+			}
+			return action, nil
+		}
+		if action == tview.MouseLeftClick {
+			_, y := event.Position()
+			if y == 0 { // header row click
+				x, _ := event.Position()
+				col := x / (a.termWidth() / 5) // approximate column
+				if col >= 0 && col < 5 {
+					a.toggleSort(SortColumn(col))
+				}
+				return action, nil
+			}
+		}
+		return action, event
+	})
+
+	// Table-level key handler (fires when table has focus)
+	a.table.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyRune {
+			switch event.Rune() {
+			case 'r':
+				if a.selected != nil {
+					a.resumeSelected()
+					return nil
+				}
+			case 'v':
+				if a.selected != nil {
+					a.viewSelected()
+					return nil
+				}
+			case 's':
+				if a.selected != nil {
+					a.searchSelected()
+					return nil
+				}
+			case 'd':
+				if a.selected != nil {
+					a.deleteSelected()
+					return nil
+				}
+			case 'f':
+				if a.selected != nil {
+					a.forkSelected()
+					return nil
+				}
+			case 'n':
+				if a.selected != nil {
+					a.renameSelected()
+					return nil
+				}
+			case 'c':
+				if a.selected != nil {
+					a.compactSelected()
+					return nil
+				}
+			case '/':
+				a.showFilter()
+				return nil
+			case '1':
+				a.toggleSort(SortColName)
+				return nil
+			case '2':
+				a.toggleSort(SortColCreated)
+				return nil
+			case '3':
+				a.toggleSort(SortColUsed)
+				return nil
+			case '4':
+				a.toggleSort(SortColWorkspace)
+				return nil
+			case '5':
+				a.toggleSort(SortColModel)
+				return nil
+			case 'q':
+				if a.selected != nil {
+					a.deselectSession()
+					return nil
+				}
+				a.app.Stop()
+				return nil
+			}
+		}
+		if event.Key() == tcell.KeyEscape {
+			if a.selected != nil {
+				a.deselectSession()
+				return nil
+			}
+			a.app.Stop()
+			return nil
+		}
+		if event.Key() == tcell.KeyTab && a.selected != nil {
+			a.app.SetFocus(a.details.leftCol)
+			return nil
+		}
+		return event
+	})
+
+	// Details pane: Tab returns focus to table, Esc closes
+	for _, tv := range []*tview.TextView{a.details.leftCol, a.details.rightCol} {
+		tv := tv
+		tv.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+			if event.Key() == tcell.KeyTab {
+				a.app.SetFocus(a.table)
+				return nil
+			}
+			if event.Key() == tcell.KeyEscape {
+				a.deselectSession()
+				a.app.SetFocus(a.table)
+				return nil
+			}
+			if event.Key() == tcell.KeyRune && event.Rune() == 'q' {
+				a.deselectSession()
+				a.app.SetFocus(a.table)
+				return nil
+			}
+			return event
+		})
+	}
+
+	// Root layout
+	a.root = tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(a.header, 1, 0, false).
+		AddItem(a.table, 0, 1, true).
+		AddItem(a.details, 0, 0, false). // hidden initially
+		AddItem(a.status, 1, 0, false)
+
+	a.pages.AddPage("main", a.root, true, true)
+
+	// Mouse
+	a.app.EnableMouse(true)
+
+	// Populate
+	a.renderTable()
+	a.updateHeader()
+	a.updateStatus()
+
 	a.app.SetRoot(a.pages, true)
-	a.app.SetFocus(a.table.Table)
+	a.app.SetFocus(a.table)
 
 	return a
 }
 
-// Run starts the TUI event loop. Blocks until quit.
-// Uses the alternate screen buffer to avoid polluting terminal scrollback.
+// Run starts the TUI event loop.
 func (a *App) Run() error {
-	// Ensure alternate screen buffer is used
-	screen, err := tcell.NewScreen()
-	if err != nil {
-		return err
-	}
-	a.app.SetScreen(screen)
 	return a.app.Run()
 }
 
-// selectSession opens the details pane for a session.
-func (a *App) selectSession(sess *session.Session) {
-	a.selected = sess
-	if sess == nil {
-		// Close details pane
-		a.root.ResizeItem(a.details, 0, 0)
-		a.status.SetMode(ModeBrowse)
-		a.app.SetFocus(a.table.Table)
-		return
-	}
-
-	// Extract detail data via callback (avoids import cycle)
-	detail := SessionDetail{Model: "-"}
-	if a.cb.ExtractDetail != nil {
-		detail = a.cb.ExtractDetail(sess)
-	}
-
-	// Share stats cache
-	a.details.SetStatsCache(a.table.StatsCache)
-	a.details.ShowSession(sess, detail)
-
-	// Open details pane (12 rows)
-	a.root.ResizeItem(a.details, 12, 0)
-	a.status.SetMode(ModeDetail)
-	a.updateHeader()
-
-	// Ensure the selected row is visible after the table shrinks
-	row, _ := a.table.Table.GetSelection()
-	a.table.Table.ScrollToBeginning()
-	if row > 0 {
-		a.table.Table.Select(row, 0)
-	}
-}
-
-// deselectSession closes the details pane.
-func (a *App) deselectSession() {
-	a.selected = nil
-	a.root.ResizeItem(a.details, 0, 0)
-	a.status.SetMode(ModeBrowse)
-	a.updateHeader()
-	a.app.SetFocus(a.table.Table)
-}
-
-// updateHeader refreshes the header bar with current counts.
-func (a *App) updateHeader() {
-	total := a.table.TotalCount()
-	forks := 0
-	for _, s := range a.table.sessions {
-		if s.Metadata.IsForkedSession {
-			forks++
-		}
-	}
-	info := ""
-	if a.selected != nil {
-		info = a.selected.Name
-	}
-	a.header.Update(total, forks, info)
-}
-
-// handleGlobalKey routes key events based on the current mode.
-func (a *App) handleGlobalKey(event *tcell.EventKey) *tcell.EventKey {
-	key := event.Key()
-
-	// Esc: close details if open, otherwise quit
-	if key == tcell.KeyEscape {
-		if a.selected != nil {
-			a.deselectSession()
-			return nil
-		}
-		a.app.Stop()
-		return nil
-	}
-
-	// q quits from any state
-	if key == tcell.KeyRune && event.Rune() == 'q' {
-		if a.selected != nil {
-			a.deselectSession()
-			return nil
-		}
-		a.app.Stop()
-		return nil
-	}
-
-	// Tab switches focus between table and details
-	if key == tcell.KeyTab && a.selected != nil {
-		if a.app.GetFocus() == a.table.Table {
-			a.app.SetFocus(a.details)
-			a.status.SetMode(ModeDetail)
-		} else {
-			a.app.SetFocus(a.table.Table)
-			a.status.SetMode(ModeDetail)
-		}
-		return nil
-	}
-
-	// Sort keys (always available)
-	if key == tcell.KeyRune {
-		switch event.Rune() {
-		case '1':
-			a.table.ToggleSort(SortColName)
-			return nil
-		case '2':
-			a.table.ToggleSort(SortColCreated)
-			return nil
-		case '3':
-			a.table.ToggleSort(SortColUsed)
-			return nil
-		case '4':
-			a.table.ToggleSort(SortColWorkspace)
-			return nil
-		case '5':
-			a.table.ToggleSort(SortColModel)
-			return nil
-		}
-	}
-
-	// Filter
-	if key == tcell.KeyRune && event.Rune() == '/' && a.selected == nil {
-		a.showFilter()
-		return nil
-	}
-
-	// Action shortcuts (only when session is selected)
-	if a.selected != nil && key == tcell.KeyRune {
-		switch event.Rune() {
-		case 'r': // resume
-			a.resumeSelected()
-			return nil
-		case 'v': // view conversation
-			a.viewSelected()
-			return nil
-		case 's': // search
-			a.searchSelected()
-			return nil
-		case 'd': // delete
-			a.deleteSelected()
-			return nil
-		case 'f': // fork
-			a.forkSelected()
-			return nil
-		case 'n': // rename
-			a.renameSelected()
-			return nil
-		case 'c': // compact
-			a.compactSelected()
-			return nil
-		}
-	}
-
-	return event
-}
-
-// resumeSelected suspends the TUI, runs Claude, then resumes.
-func (a *App) resumeSelected() {
-	sess := a.selected
-	if sess == nil || a.cb.ResumeSession == nil {
-		return
-	}
-	a.app.Suspend(func() {
-		_ = a.cb.ResumeSession(sess)
-	})
-	// Refresh after resume
-	a.refreshSessions()
-}
-
-// viewSelected shows the conversation viewer.
-func (a *App) viewSelected() {
-	// TODO: implement viewer overlay (#85)
-}
-
-// searchSelected shows the search form.
-func (a *App) searchSelected() {
-	// TODO: implement search overlay (#86)
-}
-
-// deleteSelected shows a confirmation modal.
-func (a *App) deleteSelected() {
-	// TODO: implement confirm modal (#88)
-}
-
-// forkSelected forks the selected session.
-func (a *App) forkSelected() {
-	// TODO: implement fork flow
-}
-
-// renameSelected auto-renames via LLM.
-func (a *App) renameSelected() {
-	// TODO: implement rename flow
-}
-
-// compactSelected shows the compact form.
-func (a *App) compactSelected() {
-	// TODO: implement compact overlay (#87)
-}
-
-// showFilter shows a filter input at the top of the table.
-func (a *App) showFilter() {
-	input := tview.NewInputField().
-		SetLabel("Filter: ").
-		SetFieldWidth(40)
-
-	input.SetDoneFunc(func(key tcell.Key) {
-		switch key {
-		case tcell.KeyEnter:
-			a.table.SetFilter(input.GetText())
-			a.pages.RemovePage("filter")
-			a.app.SetFocus(a.table.Table)
-			a.status.SetMode(ModeBrowse)
-		case tcell.KeyEscape:
-			a.table.SetFilter("")
-			a.pages.RemovePage("filter")
-			a.app.SetFocus(a.table.Table)
-			a.status.SetMode(ModeBrowse)
-		}
-	})
-
-	input.SetChangedFunc(func(text string) {
-		a.table.SetFilter(text)
-	})
-
-	// Show filter as a floating bar at the top
-	a.pages.AddPage("filter", input, true, true)
-	a.app.SetFocus(input)
-	a.status.SetMode(ModeFilter)
-}
-
-// refreshSessions reloads the session list from the store.
-func (a *App) refreshSessions() {
-	if a.cb.Store == nil {
-		return
-	}
-	sessions, err := a.cb.Store.List()
-	if err != nil {
-		return
-	}
-	a.table.SetSessions(sessions)
-	a.updateHeader()
-
-	// Pre-warm model cache and stats cache in background
+// PreWarmStats kicks off background model + stats computation.
+func (a *App) PreWarmStats() {
 	go func() {
-		// Extract models first (fast: reads last few lines of transcript)
-		if a.cb.ExtractModel != nil {
-			for _, sess := range sessions {
+		for _, sess := range a.sessions {
+			// Models
+			if a.cb.ExtractModel != nil {
 				name := sess.Name
-				if _, ok := a.table.ModelCache[name]; ok {
-					continue
-				}
 				model := a.cb.ExtractModel(sess)
+				a.modelCache[name] = model
 				a.app.QueueUpdateDraw(func() {
-					a.table.ModelCache[name] = model
-					a.table.render() // refresh to show model
+					a.renderTable()
 				})
 			}
 		}
-
-		// Then stats (slower: reads full transcript for tiktoken)
-		for _, sess := range sessions {
+		for _, sess := range a.sessions {
+			// Stats
 			path := sess.Metadata.TranscriptPath
 			if path == "" {
 				continue
 			}
-			if _, ok := a.table.StatsCache[path]; ok {
-				continue
-			}
 			if cached := transcript.LoadCachedStats(path); cached != nil {
 				stats := cached.Stats
-				a.app.QueueUpdateDraw(func() {
-					a.table.StatsCache[path] = &stats
-				})
+				a.statsCache[path] = &stats
 				continue
 			}
 			qs, err := transcript.QuickStats(path)
@@ -393,27 +296,273 @@ func (a *App) refreshSessions() {
 				transcript.SaveCachedStats(path, qs, info.ModTime())
 			}
 			qsCopy := qs
+			a.statsCache[path] = &qsCopy
 			a.app.QueueUpdateDraw(func() {
-				a.table.StatsCache[path] = &qsCopy
+				if a.selected != nil {
+					a.showDetails(a.selected)
+				}
 			})
 		}
 	}()
 }
 
-// PreWarmStats starts background stats computation for all sessions.
-func (a *App) PreWarmStats() {
+// --- Rendering ---
+
+func (a *App) renderTable() {
+	a.table.Clear()
+
+	headers := []string{"NAME", "WORKSPACE", "MODEL", "CREATED", "LAST USED"}
+	for col, h := range headers {
+		indicator := ""
+		if SortColumn(col) == a.sortCol {
+			if a.sortAsc {
+				indicator = " ^"
+			} else {
+				indicator = " v"
+			}
+		}
+		a.table.SetCell(0, col, tview.NewTableCell(" "+h+indicator+" ").
+			SetSelectable(false).
+			SetTextColor(ColorText).
+			SetBackgroundColor(ColorHeaderBg).
+			SetAttributes(tcell.AttrBold).
+			SetExpansion(1))
+	}
+
+	for i, sess := range a.sessions {
+		row := i + 1
+		bg := ColorRowEven
+		if i%2 == 1 {
+			bg = ColorRowOdd
+		}
+
+		name := sess.Name
+		if len(name) > 35 {
+			name = name[:32] + "..."
+		}
+		nameColor := ColorText
+		if sess.Metadata.IsForkedSession {
+			nameColor = ColorFork
+		}
+
+		ws := shortPath(sess.Metadata.WorkspaceRoot)
+		if len(ws) > 22 {
+			ws = "..." + ws[len(ws)-19:]
+		}
+
+		model := a.modelCache[sess.Name]
+		if model == "" || model == "-" {
+			model = ""
+		}
+		if model == "<synthetic>" {
+			model = "synthetic"
+		}
+		modelColor := ColorMuted
+		if strings.Contains(model, "opus") {
+			modelColor = ColorModelOpus
+		} else if strings.Contains(model, "sonnet") {
+			modelColor = ColorModelSonnet
+		} else if strings.Contains(model, "haiku") {
+			modelColor = ColorModelHaiku
+		}
+
+		created := sess.Metadata.Created.Format("Jan 02")
+		lastUsed := util.FormatRelativeTime(sess.Metadata.LastAccessed)
+
+		a.table.SetCell(row, 0, tview.NewTableCell(name).SetTextColor(nameColor).SetBackgroundColor(bg).SetExpansion(2))
+		a.table.SetCell(row, 1, tview.NewTableCell(ws).SetTextColor(ColorSubtext).SetBackgroundColor(bg).SetExpansion(1))
+		a.table.SetCell(row, 2, tview.NewTableCell(model).SetTextColor(modelColor).SetBackgroundColor(bg).SetExpansion(1))
+		a.table.SetCell(row, 3, tview.NewTableCell(created).SetTextColor(ColorSubtext).SetBackgroundColor(bg).SetExpansion(1))
+		a.table.SetCell(row, 4, tview.NewTableCell(lastUsed).SetTextColor(ColorSubtext).SetBackgroundColor(bg).SetExpansion(1))
+	}
+}
+
+func (a *App) updateHeader() {
+	a.header.Clear()
+	forks := 0
+	for _, s := range a.sessions {
+		if s.Metadata.IsForkedSession {
+			forks++
+		}
+	}
+	left := "[::b]clotilde[-] [gray]|[-] " + fmtNumber(len(a.sessions)) + " sessions"
+	if forks > 0 {
+		left += " [gray]|[-] " + fmtNumber(forks) + " forks"
+	}
+	// Right side: keybindings (dimmed)
+	var keys string
+	switch a.mode {
+	case ModeBrowse:
+		keys = "[gray]↑↓ scroll  enter resume  1-5 sort  / filter  q quit[-]"
+	case ModeDetail:
+		keys = "[gray]r resume  v view  s search  d delete  f fork  n name  c compact  esc close[-]"
+	default:
+		keys = ""
+	}
+	// Pad between left and right
+	padding := "                    " // will be trimmed by tview
+	fmt.Fprint(a.header, left+padding+keys)
+}
+
+func (a *App) updateStatus() {
+	a.status.Clear()
+	var badge string
+	switch a.mode {
+	case ModeBrowse:
+		badge = "[black:green:b] BROWSE [-:-:-]"
+	case ModeDetail:
+		badge = "[black:blue:b] DETAIL [-:-:-]"
+	case ModeFilter:
+		badge = "[black:purple:b] FILTER [-:-:-]"
+	default:
+		badge = "[black:white:b] " + string(rune(a.mode+'A')) + " [-:-:-]"
+	}
+
+	row, _ := a.table.GetSelection()
+	pos := ""
+	if row > 0 {
+		pos = fmtNumber(row) + "/" + fmtNumber(len(a.sessions))
+	}
+
+	fmt.Fprint(a.status, badge+"  "+pos)
+}
+
+// --- Selection ---
+
+func (a *App) selectSession(sess *session.Session) {
+	a.selected = sess
+	a.mode = ModeDetail
+	a.showDetails(sess)
+	a.root.ResizeItem(a.details, 12, 0)
+	a.updateHeader()
+	a.updateStatus()
+}
+
+func (a *App) deselectSession() {
+	a.selected = nil
+	a.mode = ModeBrowse
+	a.root.ResizeItem(a.details, 0, 0)
+	a.updateHeader()
+	a.updateStatus()
+}
+
+func (a *App) showDetails(sess *session.Session) {
+	detail := SessionDetail{Model: a.modelCache[sess.Name]}
+	if a.cb.ExtractDetail != nil {
+		detail = a.cb.ExtractDetail(sess)
+	}
+	a.details.SetStatsCache(a.statsCache)
+	a.details.ShowSession(sess, detail)
+}
+
+// --- Actions ---
+
+func (a *App) resumeSelected() {
+	if a.selected == nil || a.cb.ResumeSession == nil {
+		return
+	}
+	sess := a.selected
+	a.app.Suspend(func() {
+		_ = a.cb.ResumeSession(sess)
+	})
 	a.refreshSessions()
 }
 
-// FilterInput returns the filter input (helper for showing filter from outside).
-func (a *App) FilterInput() *tview.InputField {
-	return nil // filter is created dynamically in showFilter
+func (a *App) viewSelected()    {} // TODO
+func (a *App) searchSelected()  {} // TODO
+func (a *App) deleteSelected()  {} // TODO
+func (a *App) forkSelected()    {} // TODO
+func (a *App) renameSelected()  {} // TODO
+func (a *App) compactSelected() {} // TODO
+
+func (a *App) showFilter() {
+	input := tview.NewInputField().
+		SetLabel("Filter: ").
+		SetFieldWidth(40)
+
+	input.SetDoneFunc(func(key tcell.Key) {
+		a.pages.RemovePage("filter")
+		a.app.SetFocus(a.table)
+		a.mode = ModeBrowse
+		a.updateHeader()
+		a.updateStatus()
+	})
+
+	input.SetChangedFunc(func(text string) {
+		// TODO: filter sessions
+		_ = text
+	})
+
+	a.pages.AddPage("filter", input, true, true)
+	a.app.SetFocus(input)
+	a.mode = ModeFilter
+	a.updateHeader()
+	a.updateStatus()
 }
 
-// SelectedSession returns the currently selected session.
-func (a *App) SelectedSession() *session.Session {
-	return a.selected
+func (a *App) toggleSort(col SortColumn) {
+	if a.sortCol == col {
+		a.sortAsc = !a.sortAsc
+	} else {
+		a.sortCol = col
+		a.sortAsc = col == SortColName
+	}
+	a.sortSessions()
+	a.renderTable()
 }
 
-// unused import guard
+func (a *App) sortSessions() {
+	sortSessionSlice(a.sessions, a.sortCol, a.sortAsc)
+}
+
+func (a *App) refreshSessions() {
+	if a.cb.Store == nil {
+		return
+	}
+	sessions, err := a.cb.Store.List()
+	if err != nil {
+		return
+	}
+	a.sessions = sessions
+	a.sortSessions()
+	a.renderTable()
+	a.updateHeader()
+	a.updateStatus()
+	a.deselectSession()
+}
+
+func (a *App) termWidth() int {
+	_, _, w, _ := a.table.GetInnerRect()
+	if w <= 0 {
+		return 120
+	}
+	return w
+}
+
+// sortSessionSlice sorts sessions in place by the given column and direction.
+func sortSessionSlice(sessions []*session.Session, col SortColumn, asc bool) {
+	sort.SliceStable(sessions, func(i, j int) bool {
+		a, b := sessions[i], sessions[j]
+		var less bool
+		switch col {
+		case SortColName:
+			less = strings.ToLower(a.Name) < strings.ToLower(b.Name)
+		case SortColWorkspace:
+			less = a.Metadata.WorkspaceRoot < b.Metadata.WorkspaceRoot
+		case SortColModel:
+			less = a.Name < b.Name
+		case SortColCreated:
+			less = a.Metadata.Created.Before(b.Metadata.Created)
+		case SortColUsed:
+			less = a.Metadata.LastAccessed.Before(b.Metadata.LastAccessed)
+		}
+		if !asc {
+			less = !less
+		}
+		return less
+	})
+}
+
+// unused import guards
 var _ = strings.TrimSpace
+var _ = fmt.Sprintf
