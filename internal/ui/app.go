@@ -119,10 +119,20 @@ func NewApp(sessions []*session.Session, cb AppCallbacks) *App {
 		}
 		if action == tview.MouseLeftClick {
 			_, y := event.Position()
-			if y > 0 && !a.tableActive {
-				// Click on a data row activates the table
-				a.tableActive = true
-				a.table.SetSelectable(true, false)
+			if y > 0 {
+				// Click on a data row: activate, select, open details
+				if !a.tableActive {
+					a.tableActive = true
+					a.table.SetSelectable(true, false)
+				}
+				// tview handles selecting the clicked row, but we also open details
+				// Use QueueUpdateDraw to let tview process the click first
+				a.app.QueueUpdateDraw(func() {
+					row, _ := a.table.GetSelection()
+					if row >= 1 && row-1 < len(a.sessions) {
+						a.selectSession(a.sessions[row-1])
+					}
+				})
 			}
 			if y == 0 { // header row click
 				x, _ := event.Position()
@@ -355,27 +365,6 @@ func (a *App) renderTable() {
 	a.table.Clear()
 
 	headers := []string{"NAME", "WORKSPACE", "MODEL", "CREATED", "LAST USED"}
-	for col, h := range headers {
-		indicator := ""
-		if SortColumn(col) == a.sortCol {
-			if a.sortAsc {
-				indicator = " ^"
-			} else {
-				indicator = " v"
-			}
-		}
-		// Only NAME expands to fill remaining space. Other columns size to content.
-		exp := 0
-		if col == 0 {
-			exp = 1
-		}
-		a.table.SetCell(0, col, tview.NewTableCell(" "+h+indicator+" ").
-			SetSelectable(false).
-			SetTextColor(ColorText).
-			SetBackgroundColor(ColorHeaderBg).
-			SetAttributes(tcell.AttrBold).
-			SetExpansion(exp))
-	}
 
 	// Pre-compute column data to find max widths
 	type rowData struct {
@@ -432,6 +421,23 @@ func (a *App) renderTable() {
 		}
 	}
 
+	// Render header with computed widths
+	for col, h := range headers {
+		indicator := ""
+		if SortColumn(col) == a.sortCol {
+			if a.sortAsc {
+				indicator = " ^"
+			} else {
+				indicator = " v"
+			}
+		}
+		a.table.SetCell(0, col, tview.NewTableCell(fmt.Sprintf(" %-*s", colWidths[col], h+indicator)).
+			SetSelectable(false).
+			SetTextColor(ColorText).
+			SetBackgroundColor(ColorHeaderBg).
+			SetAttributes(tcell.AttrBold))
+	}
+
 	// Render data rows with padded cells
 	for i, r := range rows {
 		row := i + 1
@@ -440,7 +446,7 @@ func (a *App) renderTable() {
 			bg = ColorRowOdd
 		}
 
-		a.table.SetCell(row, 0, tview.NewTableCell(fmt.Sprintf("%-*s", colWidths[0], r.name)).SetTextColor(r.nameColor).SetBackgroundColor(bg).SetExpansion(1))
+		a.table.SetCell(row, 0, tview.NewTableCell(fmt.Sprintf("%-*s", colWidths[0], r.name)).SetTextColor(r.nameColor).SetBackgroundColor(bg))
 		a.table.SetCell(row, 1, tview.NewTableCell(fmt.Sprintf("  %-*s", colWidths[1], r.ws)).SetTextColor(ColorSubtext).SetBackgroundColor(bg))
 		a.table.SetCell(row, 2, tview.NewTableCell(fmt.Sprintf("  %-*s", colWidths[2], r.model)).SetTextColor(r.modelColor).SetBackgroundColor(bg))
 		a.table.SetCell(row, 3, tview.NewTableCell(fmt.Sprintf("  %-*s", colWidths[3], r.created)).SetTextColor(ColorSubtext).SetBackgroundColor(bg))
@@ -543,7 +549,9 @@ func (a *App) resumeSelected() {
 	a.app.Suspend(func() {
 		_ = a.cb.ResumeSession(sess)
 	})
+	// Force full redraw after returning from Claude
 	a.refreshSessions()
+	a.app.ForceDraw()
 }
 
 func (a *App) viewSelected() {
