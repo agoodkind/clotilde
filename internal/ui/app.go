@@ -599,9 +599,30 @@ func (a *App) deleteSelected() {
 	a.pages.AddPage("confirm", modal, true, true)
 }
 
-func (a *App) forkSelected()    {} // TODO
-func (a *App) renameSelected()  {} // TODO
-func (a *App) compactSelected() {} // TODO
+func (a *App) forkSelected()   {} // TODO
+func (a *App) renameSelected() {} // TODO
+
+func (a *App) compactSelected() {
+	sess := a.selected
+	if sess == nil {
+		return
+	}
+	overlay := NewCompactFormOverlay(sess, func(result TviewCompactResult) {
+		a.pages.RemovePage("compact")
+		a.app.SetFocus(a.table)
+		a.mode = ModeDetail
+		a.updateHeader()
+		a.updateStatus()
+		if result.Cancelled {
+			return
+		}
+		// TODO: apply compact operations using transcript package
+	})
+	a.pages.AddPage("compact", overlay, true, true)
+	a.mode = ModeCompact
+	a.updateHeader()
+	a.updateStatus()
+}
 
 func (a *App) showFilter() {
 	input := tview.NewInputField().
