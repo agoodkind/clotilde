@@ -40,6 +40,9 @@ type SessionTable struct {
 	// Stats cache: transcript path -> computed stats (populated async)
 	StatsCache map[string]*transcript.CompactQuickStats
 
+	// Model cache: session name -> model string (populated by caller async)
+	ModelCache map[string]string
+
 	// Callbacks
 	OnSelect func(sess *session.Session) // called when a row is selected (Enter/click)
 	OnResume func(sess *session.Session) // called on double-click
@@ -56,6 +59,7 @@ func NewSessionTable() *SessionTable {
 		sortCol:    SortColUsed,
 		sortAsc:    false, // most recent first
 		StatsCache: make(map[string]*transcript.CompactQuickStats),
+		ModelCache: make(map[string]string),
 	}
 
 	t.Table.
@@ -174,7 +178,8 @@ func (t *SessionTable) applyFilterAndSort() {
 func (t *SessionTable) render() {
 	t.Table.Clear()
 
-	// Header row
+	// Header row with background
+	headerBg := tcell.ColorDarkSlateGray
 	for col, h := range t.headers {
 		indicator := ""
 		if SortColumn(col) == t.sortCol {
@@ -184,56 +189,83 @@ func (t *SessionTable) render() {
 				indicator = " v"
 			}
 		}
-		cell := tview.NewTableCell(h + indicator).
+		cell := tview.NewTableCell(" " + h + indicator + " ").
 			SetSelectable(false).
 			SetTextColor(tcell.ColorWhite).
+			SetBackgroundColor(headerBg).
 			SetAttributes(tcell.AttrBold).
 			SetExpansion(1)
 		t.Table.SetCell(0, col, cell)
 	}
 
-	// Data rows
+	// Data rows with alternating background
+	evenBg := tcell.ColorDefault
+	oddBg := tcell.NewRGBColor(30, 30, 40) // subtle dark alternate
+
 	for i, sess := range t.filtered {
 		row := i + 1
+		bg := evenBg
+		if i%2 == 1 {
+			bg = oddBg
+		}
 
-		// Name
+		// Name (with context as subtitle if present)
 		name := sess.Name
-		if len(name) > 30 {
-			name = name[:27] + "..."
+		if len(name) > 35 {
+			name = name[:32] + "..."
 		}
-		nameCell := tview.NewTableCell(name).SetExpansion(2)
+		nameColor := tcell.ColorWhite
 		if sess.Metadata.IsForkedSession {
-			nameCell.SetTextColor(tcell.ColorYellow)
+			nameColor = tcell.ColorYellow
 		} else if sess.Metadata.IsIncognito {
-			nameCell.SetTextColor(tcell.ColorPurple)
+			nameColor = tcell.ColorPurple
 		}
+		nameCell := tview.NewTableCell(name).
+			SetTextColor(nameColor).
+			SetBackgroundColor(bg).
+			SetExpansion(2)
 
 		// Workspace
 		ws := shortPath(sess.Metadata.WorkspaceRoot)
-		if len(ws) > 20 {
-			ws = "..." + ws[len(ws)-17:]
+		if len(ws) > 22 {
+			ws = "..." + ws[len(ws)-19:]
 		}
 		wsCell := tview.NewTableCell(ws).
-			SetTextColor(tcell.Color240).
+			SetTextColor(tcell.Color246).
+			SetBackgroundColor(bg).
 			SetExpansion(1)
 
-		// Model (extracted from settings or "-")
+		// Model from cache
 		model := "-"
-		// Will be populated by caller
+		if m, ok := t.ModelCache[sess.Name]; ok && m != "" {
+			model = m
+		}
+		modelColor := tcell.Color246
+		switch {
+		case strings.Contains(model, "opus"):
+			modelColor = tcell.ColorGold
+		case strings.Contains(model, "sonnet"):
+			modelColor = tcell.ColorCornflowerBlue
+		case strings.Contains(model, "haiku"):
+			modelColor = tcell.ColorLightGreen
+		}
 		modelCell := tview.NewTableCell(model).
-			SetTextColor(tcell.Color240).
+			SetTextColor(modelColor).
+			SetBackgroundColor(bg).
 			SetExpansion(1)
 
 		// Created
 		created := sess.Metadata.Created.Format("Jan 02")
 		createdCell := tview.NewTableCell(created).
-			SetTextColor(tcell.Color240).
+			SetTextColor(tcell.Color246).
+			SetBackgroundColor(bg).
 			SetExpansion(1)
 
 		// Last used
 		lastUsed := util.FormatRelativeTime(sess.Metadata.LastAccessed)
 		usedCell := tview.NewTableCell(lastUsed).
-			SetTextColor(tcell.Color240).
+			SetTextColor(tcell.Color246).
+			SetBackgroundColor(bg).
 			SetExpansion(1)
 
 		t.Table.SetCell(row, 0, nameCell)
