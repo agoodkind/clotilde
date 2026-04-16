@@ -76,12 +76,12 @@ func NewApp(sessions []*session.Session, cb AppCallbacks) *App {
 		sortAsc:    false,
 	}
 
-	// Table setup: borders on, start NOT selectable
+	// Table: clean, no borders, no separators, tight rows
 	a.table.
-		SetBorders(true).
-		SetBordersColor(tcell.Color236).
+		SetBorders(false).
 		SetSelectable(false, false).
 		SetFixed(1, 0).
+		SetSeparator(' ').
 		SetSelectedStyle(tcell.StyleDefault.
 			Background(ColorSelected).
 			Foreground(ColorSelectedFg).
@@ -431,20 +431,16 @@ func (a *App) renderTable() {
 				indicator = " v"
 			}
 		}
-		a.table.SetCell(0, col, tview.NewTableCell(fmt.Sprintf(" %-*s", colWidths[col], h+indicator)).
+		a.table.SetCell(0, col, tview.NewTableCell(fmt.Sprintf("%-*s", colWidths[col], h+indicator)).
 			SetSelectable(false).
-			SetTextColor(ColorText).
-			SetBackgroundColor(ColorHeaderBg).
-			SetAttributes(tcell.AttrBold))
+			SetTextColor(ColorMuted).
+			SetAttributes(tcell.AttrBold|tcell.AttrUnderline))
 	}
 
-	// Render data rows with padded cells
+	// Render data rows (clean, no alternating colors)
 	for i, r := range rows {
 		row := i + 1
-		bg := ColorRowEven
-		if i%2 == 1 {
-			bg = ColorRowOdd
-		}
+		bg := tcell.ColorDefault
 
 		a.table.SetCell(row, 0, tview.NewTableCell(fmt.Sprintf("%-*s", colWidths[0], r.name)).SetTextColor(r.nameColor).SetBackgroundColor(bg))
 		a.table.SetCell(row, 1, tview.NewTableCell(fmt.Sprintf("  %-*s", colWidths[1], r.ws)).SetTextColor(ColorSubtext).SetBackgroundColor(bg))
