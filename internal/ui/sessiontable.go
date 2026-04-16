@@ -70,7 +70,11 @@ func NewSessionTable() *SessionTable {
 		SetBorders(false).
 		SetSelectable(false, false). // start with no selection
 		SetFixed(1, 0).              // fix header row
-		SetSeparator(' ')
+		SetSeparator(' ').
+		SetSelectedStyle(tcell.StyleDefault.
+			Background(ColorSelected).
+			Foreground(ColorSelectedFg).
+			Bold(true))
 
 	// Capture arrow/enter keys to activate selection on first press
 	t.Table.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -92,14 +96,14 @@ func NewSessionTable() *SessionTable {
 		return event
 	})
 
-	// Enter key on a row: fire OnSelect (same as highlight for now)
+	// Enter key on a row: resume the session
 	t.Table.SetSelectedFunc(func(row, col int) {
 		if row < 1 {
 			return
 		}
 		idx := row - 1
-		if idx < len(t.filtered) && t.OnSelect != nil {
-			t.OnSelect(t.filtered[idx])
+		if idx < len(t.filtered) && t.OnResume != nil {
+			t.OnResume(t.filtered[idx])
 		}
 	})
 

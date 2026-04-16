@@ -33,8 +33,8 @@ var (
 	ColorHeaderBg    = tcell.NewRGBColor(49, 50, 68)    // #313244
 	ColorRowEven     = tcell.ColorDefault
 	ColorRowOdd      = tcell.NewRGBColor(35, 35, 52)    // slightly lighter than base
-	ColorSelected    = tcell.NewRGBColor(69, 71, 90)     // #45475A highlight
-	ColorSelectedFg  = tcell.NewRGBColor(205, 214, 244)  // #CDD6F4 bright text on selection
+	ColorSelected    = tcell.NewRGBColor(88, 91, 112)    // #585B70 brighter than header
+	ColorSelectedFg  = tcell.NewRGBColor(255, 255, 255)  // pure white on selection
 )
 
 // Mode colors for the status bar badge
