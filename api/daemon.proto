@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package agentgate;
+
+option go_package = "github.com/fgrehm/clotilde/api/daemonpb";
+
+service AgentGateD {
+  rpc AcquireSession(AcquireSessionRequest) returns (AcquireSessionResponse);
+  rpc ReleaseSession(ReleaseSessionRequest) returns (ReleaseSessionResponse);
+  rpc HookEvent(HookEventRequest) returns (HookEventResponse);
+  rpc ListActiveSessions(ListActiveSessionsRequest) returns (ListActiveSessionsResponse);
+}
+
+message AcquireSessionRequest {
+  string session_name = 1;
+  string wrapper_id = 2;
+}
+
+message AcquireSessionResponse {
+  string fake_home = 1;
+  string real_claude = 2;
+  string model = 3;
+  string settings_file = 4;
+}
+
+message ReleaseSessionRequest {
+  string wrapper_id = 1;
+}
+
+message ReleaseSessionResponse {}
+
+message HookEventRequest {
+  bytes payload = 1;
+  string wrapper_id = 2;
+  bytes raw_json = 3;
+}
+
+message HookEventResponse {
+  int32 exit_code = 1;
+}
+
+message ListActiveSessionsRequest {}
+
+message ListActiveSessionsResponse {
+  repeated ActiveSession sessions = 1;
+}
+
+message ActiveSession {
+  string session_name = 1;
+  string wrapper_id = 2;
+}
