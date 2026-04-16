@@ -73,26 +73,25 @@ type PickerModel struct {
 
 // NewPicker creates a new session picker
 func NewPicker(sessions []*session.Session, title string) PickerModel {
-	return PickerModel{
+	m := PickerModel{
 		Sessions:   sessions,
 		Title:      title,
 		StatsCache: make(map[string]*transcript.CompactQuickStats),
 	}
+	return m
 }
 
-// WithPreview enables the preview pane
+// WithPreview enables the preview pane and initializes the BubbleLayout
 func (m PickerModel) WithPreview() PickerModel {
 	m.ShowPreview = true
+	m.layout = bl.New()
+	m.listID = m.layout.Add("w 30, grow")
+	m.previewID = m.layout.Add("w 25, grow")
 	return m
 }
 
 // Init initializes the model (required by bubbletea)
 func (m PickerModel) Init() tea.Cmd {
-	if m.ShowPreview {
-		m.layout = bl.New()
-		m.listID = m.layout.Add("min 30, grow")
-		m.previewID = m.layout.Add("min 25, grow")
-	}
 
 	// Pre-warm stats cache. Sessions with a fresh disk cache entry are loaded
 	// immediately. Stale or missing entries are computed in background goroutines
