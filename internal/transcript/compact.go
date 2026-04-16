@@ -555,6 +555,7 @@ type CompactQuickStats struct {
 	Compactions      int
 	LastCompactTime  time.Time
 	EntriesInContext int // entries after last compact_boundary
+	EstimatedTokens  int // tiktoken cl100k * 1.15 for in-context message text
 }
 
 // QuickStats reads a transcript file line-by-line, counting total entries,
@@ -594,16 +595,58 @@ func QuickStats(path string) (CompactQuickStats, error) {
 		}
 	}
 
-	// Count non-empty entries after the last boundary
+	// Count entries and tokens after the last boundary
+	enc, _ := tiktoken.GetEncoding("cl100k_base")
+	contextLines := lines
 	if lastBoundaryIdx >= 0 {
-		for _, line := range lines[lastBoundaryIdx+1:] {
-			if line != "" {
-				stats.EntriesInContext++
+		contextLines = lines[lastBoundaryIdx+1:]
+	}
+
+	for _, line := range contextLines {
+		if line == "" {
+			continue
+		}
+		stats.EntriesInContext++
+
+		// Token count for user/assistant message text
+		if enc != nil {
+			var entry struct {
+				Type    string `json:"type"`
+				Message struct {
+					Content json.RawMessage `json:"content"`
+				} `json:"message"`
+			}
+			if json.Unmarshal([]byte(line), &entry) != nil {
+				continue
+			}
+			if entry.Type != "user" && entry.Type != "assistant" {
+				continue
+			}
+			var text string
+			var s string
+			if json.Unmarshal(entry.Message.Content, &s) == nil {
+				text = s
+			} else {
+				var blocks []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				}
+				if json.Unmarshal(entry.Message.Content, &blocks) == nil {
+					for _, b := range blocks {
+						if b.Type == "text" && b.Text != "" {
+							text += b.Text + "\n"
+						}
+					}
+				}
+			}
+			if text != "" {
+				stats.EstimatedTokens += len(enc.Encode(text, nil, nil))
 			}
 		}
-	} else {
-		stats.EntriesInContext = stats.TotalEntries
 	}
+
+	// Apply multiplier for Claude's tokenizer
+	stats.EstimatedTokens = int(float64(stats.EstimatedTokens) * tokenMultiplier)
 
 	return stats, nil
 }
