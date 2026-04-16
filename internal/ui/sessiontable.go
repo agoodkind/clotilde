@@ -43,6 +43,10 @@ type SessionTable struct {
 	// Model cache: session name -> model string (populated by caller async)
 	ModelCache map[string]string
 
+	// selectionActive tracks whether any row is highlighted.
+	// Starts false; becomes true on first arrow key or click.
+	selectionActive bool
+
 	// Callbacks
 	OnSelect func(sess *session.Session) // called when a row is selected (Enter/click)
 	OnResume func(sess *session.Session) // called on double-click
@@ -64,12 +68,44 @@ func NewSessionTable() *SessionTable {
 
 	t.Table.
 		SetBorders(false).
-		SetSelectable(true, false). // rows selectable, not columns
-		SetFixed(1, 0).             // fix header row
+		SetSelectable(false, false). // start with no selection
+		SetFixed(1, 0).              // fix header row
 		SetSeparator(' ')
 
+	// Capture arrow/enter keys to activate selection on first press
+	t.Table.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if !t.selectionActive {
+			switch event.Key() {
+			case tcell.KeyUp, tcell.KeyDown, tcell.KeyEnter:
+				t.selectionActive = true
+				t.Table.SetSelectable(true, false)
+				t.Table.Select(1, 0) // highlight first data row
+				return nil
+			}
+			if event.Key() == tcell.KeyRune && (event.Rune() == 'j' || event.Rune() == 'k') {
+				t.selectionActive = true
+				t.Table.SetSelectable(true, false)
+				t.Table.Select(1, 0)
+				return nil
+			}
+		}
+		return event
+	})
+
+	// Enter key on a row: fire OnSelect (same as highlight for now)
 	t.Table.SetSelectedFunc(func(row, col int) {
-		if row < 1 { // header row
+		if row < 1 {
+			return
+		}
+		idx := row - 1
+		if idx < len(t.filtered) && t.OnSelect != nil {
+			t.OnSelect(t.filtered[idx])
+		}
+	})
+
+	// Any highlight change (arrow keys, click): open details for the highlighted row
+	t.Table.SetSelectionChangedFunc(func(row, col int) {
+		if row < 1 {
 			return
 		}
 		idx := row - 1
@@ -121,6 +157,17 @@ func (t *SessionTable) ToggleSort(col SortColumn) {
 	}
 	t.applyFilterAndSort()
 	t.render()
+}
+
+// Deselect removes the highlight and closes the detail pane.
+func (t *SessionTable) Deselect() {
+	t.selectionActive = false
+	t.Table.SetSelectable(false, false)
+}
+
+// IsSelectionActive returns whether any row is highlighted.
+func (t *SessionTable) IsSelectionActive() bool {
+	return t.selectionActive
 }
 
 // SelectedSession returns the currently highlighted session, or nil.
