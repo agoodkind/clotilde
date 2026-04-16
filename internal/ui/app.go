@@ -86,15 +86,12 @@ func NewApp(sessions []*session.Session, cb AppCallbacks) *App {
 			Foreground(ColorSelectedFg).
 			Bold(true))
 
-	// Table: highlight change opens details (only fires when selectable)
+	// Table: highlight change just updates status (does NOT open details)
 	a.table.SetSelectionChangedFunc(func(row, col int) {
 		if row < 1 || !a.tableActive {
 			return
 		}
-		idx := row - 1
-		if idx < len(a.sessions) {
-			a.selectSession(a.sessions[idx])
-		}
+		a.updateStatus()
 	})
 
 	// Table: Enter resumes (only fires when selectable)
@@ -160,12 +157,31 @@ func NewApp(sessions []*session.Session, cb AppCallbacks) *App {
 			}
 		}
 
+		// Spacebar: open details pane and focus it
+		if event.Key() == tcell.KeyRune && event.Rune() == ' ' && a.tableActive {
+			row, _ := a.table.GetSelection()
+			if row >= 1 && row-1 < len(a.sessions) {
+				a.selectSession(a.sessions[row-1])
+				a.app.SetFocus(a.details.leftCol) // focus details
+			}
+			return nil
+		}
+
 		if event.Key() == tcell.KeyRune {
 			switch event.Rune() {
 			case 'r':
+				// Resume works from highlight OR from details
 				if a.selected != nil {
 					a.resumeSelected()
 					return nil
+				}
+				if a.tableActive {
+					row, _ := a.table.GetSelection()
+					if row >= 1 && row-1 < len(a.sessions) {
+						a.selected = a.sessions[row-1]
+						a.resumeSelected()
+						return nil
+					}
 				}
 			case 'v':
 				if a.selected != nil {
@@ -347,17 +363,17 @@ func (a *App) renderTable() {
 				indicator = " v"
 			}
 		}
-		maxWidths := []int{36, 24, 12, 10, 16}
-		mw := 20
-		if col < len(maxWidths) {
-			mw = maxWidths[col]
+		expansions := []int{3, 2, 1, 1, 1} // NAME gets most space
+		exp := 1
+		if col < len(expansions) {
+			exp = expansions[col]
 		}
 		a.table.SetCell(0, col, tview.NewTableCell(" "+h+indicator+" ").
 			SetSelectable(false).
 			SetTextColor(ColorText).
 			SetBackgroundColor(ColorHeaderBg).
 			SetAttributes(tcell.AttrBold).
-			SetMaxWidth(mw))
+			SetExpansion(exp))
 	}
 
 	for i, sess := range a.sessions {
@@ -400,11 +416,11 @@ func (a *App) renderTable() {
 		created := sess.Metadata.Created.Format("Jan 02")
 		lastUsed := util.FormatRelativeTime(sess.Metadata.LastAccessed)
 
-		a.table.SetCell(row, 0, tview.NewTableCell(name).SetTextColor(nameColor).SetBackgroundColor(bg).SetMaxWidth(36))
-		a.table.SetCell(row, 1, tview.NewTableCell(ws).SetTextColor(ColorSubtext).SetBackgroundColor(bg).SetMaxWidth(24))
-		a.table.SetCell(row, 2, tview.NewTableCell(model).SetTextColor(modelColor).SetBackgroundColor(bg).SetMaxWidth(12))
-		a.table.SetCell(row, 3, tview.NewTableCell(created).SetTextColor(ColorSubtext).SetBackgroundColor(bg).SetMaxWidth(10))
-		a.table.SetCell(row, 4, tview.NewTableCell(lastUsed).SetTextColor(ColorSubtext).SetBackgroundColor(bg).SetMaxWidth(16))
+		a.table.SetCell(row, 0, tview.NewTableCell(name).SetTextColor(nameColor).SetBackgroundColor(bg).SetExpansion(3))
+		a.table.SetCell(row, 1, tview.NewTableCell(ws).SetTextColor(ColorSubtext).SetBackgroundColor(bg).SetExpansion(2))
+		a.table.SetCell(row, 2, tview.NewTableCell(model).SetTextColor(modelColor).SetBackgroundColor(bg).SetExpansion(1))
+		a.table.SetCell(row, 3, tview.NewTableCell(created).SetTextColor(ColorSubtext).SetBackgroundColor(bg).SetExpansion(1))
+		a.table.SetCell(row, 4, tview.NewTableCell(lastUsed).SetTextColor(ColorSubtext).SetBackgroundColor(bg).SetExpansion(1))
 	}
 }
 
