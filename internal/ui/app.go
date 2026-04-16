@@ -80,9 +80,15 @@ func NewApp(sessions []*session.Session, cb AppCallbacks) *App {
 	a.table.SetSessions(sessions)
 	a.updateHeader()
 
-	// Wire selection callback
+	// Wire selection callback (highlight change opens details)
 	a.table.OnSelect = func(sess *session.Session) {
 		a.selectSession(sess)
+	}
+
+	// Wire resume callback (Enter key resumes)
+	a.table.OnResume = func(sess *session.Session) {
+		a.selected = sess
+		a.resumeSelected()
 	}
 
 	// Global key handler
