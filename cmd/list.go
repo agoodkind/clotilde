@@ -13,6 +13,7 @@ import (
 	"github.com/fgrehm/clotilde/internal/claude"
 	"github.com/fgrehm/clotilde/internal/config"
 	"github.com/fgrehm/clotilde/internal/session"
+	"github.com/fgrehm/clotilde/internal/transcript"
 	"github.com/fgrehm/clotilde/internal/ui"
 	"github.com/fgrehm/clotilde/internal/util"
 )
@@ -191,24 +192,45 @@ func richPreviewFunc(store session.Store) ui.PreviewFunc {
 			if info, err := os.Stat(sess.Metadata.TranscriptPath); err == nil {
 				sizeMB := float64(info.Size()) / (1024 * 1024)
 				lines = append(lines, fmt.Sprintf("Transcript: %.1f MB", sizeMB))
+				// Estimated token count: file_size / 6 (rough: ~half JSONL is metadata, ~3 bytes/token)
+				estTokens := info.Size() / 6
+				lines = append(lines, fmt.Sprintf("Tokens:    ~%s (estimated)", formatTokenCount(estTokens)))
 			}
 		}
-		// Message count from transcript
+
+		// Compaction stats (lightweight: no UUID chain walk)
 		if sess.Metadata.TranscriptPath != "" {
-			messages := claude.ExtractRecentMessages(sess.Metadata.TranscriptPath, 3, 100)
-			// Count user messages for "turns"
-			userCount := 0
-			for _, m := range messages {
-				if m.Role == "user" {
-					userCount++
+			if qs, err := transcript.QuickStats(sess.Metadata.TranscriptPath); err == nil {
+				lines = append(lines, sep)
+				lines = append(lines, "Context")
+				lines = append(lines, fmt.Sprintf("Compactions: %d", qs.Compactions))
+				lines = append(lines, fmt.Sprintf("In context:  %s entries", formatCount(int64(qs.EntriesInContext))))
+				if qs.Compactions > 0 && !qs.LastCompactTime.IsZero() {
+					lines = append(lines, fmt.Sprintf("Last compact: %s", util.FormatRelativeTime(qs.LastCompactTime)))
 				}
+				lines = append(lines, fmt.Sprintf("Total:       %s entries", formatCount(int64(qs.TotalEntries))))
+			}
+		}
+
+		// Last 5 non-tool messages
+		if sess.Metadata.TranscriptPath != "" {
+			messages := claude.ExtractRecentMessages(sess.Metadata.TranscriptPath, 5, 150)
+			// Filter out messages that start with '<' (system tags) or are very short
+			var filtered []claude.RecentMessage
+			for _, m := range messages {
+				if strings.HasPrefix(m.Text, "<") {
+					continue
+				}
+				if len(m.Text) < 5 {
+					continue
+				}
+				filtered = append(filtered, m)
 			}
 
-			// Last exchange
-			if len(messages) > 0 {
+			if len(filtered) > 0 {
 				lines = append(lines, sep)
 				lines = append(lines, "Last exchange:")
-				for _, msg := range messages {
+				for _, msg := range filtered {
 					role := "You"
 					if msg.Role == "assistant" {
 						role = "Claude"
@@ -229,6 +251,34 @@ func richPreviewFunc(store session.Store) ui.PreviewFunc {
 
 		return strings.Join(lines, "\n")
 	}
+}
+
+// formatTokenCount formats a token count as a human-readable string (e.g. "~13M", "~310k").
+func formatTokenCount(n int64) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.0fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.0fk", float64(n)/1_000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
+}
+
+// formatCount formats an integer with comma separators (e.g. 30259 → "30,259").
+func formatCount(n int64) string {
+	s := fmt.Sprintf("%d", n)
+	if len(s) <= 3 {
+		return s
+	}
+	var result []byte
+	for i, c := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			result = append(result, ',')
+		}
+		result = append(result, byte(c))
+	}
+	return string(result)
 }
 
 // shortWorkspacePath abbreviates a workspace root path for display.

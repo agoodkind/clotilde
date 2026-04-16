@@ -549,6 +549,65 @@ func PreviewMessages(allLines []string, chainLines []int, startStep, count int) 
 	return messages
 }
 
+// CompactQuickStats holds lightweight stats gathered without building the full UUID chain.
+type CompactQuickStats struct {
+	TotalEntries     int
+	Compactions      int
+	LastCompactTime  time.Time
+	EntriesInContext int // entries after last compact_boundary
+}
+
+// QuickStats reads a transcript file line-by-line, counting total entries,
+// compact_boundary occurrences, and entries after the last boundary.
+// It does NOT build the full UUID chain and is safe to call in hot paths like preview panes.
+func QuickStats(path string) (CompactQuickStats, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return CompactQuickStats{}, err
+	}
+
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+
+	var stats CompactQuickStats
+	lastBoundaryIdx := -1
+
+	for i, line := range lines {
+		if line == "" {
+			continue
+		}
+		stats.TotalEntries++
+
+		if strings.Contains(line, "compact_boundary") {
+			var entry struct {
+				Subtype   string `json:"subtype"`
+				Timestamp string `json:"timestamp"`
+			}
+			if json.Unmarshal([]byte(line), &entry) == nil && entry.Subtype == "compact_boundary" {
+				stats.Compactions++
+				lastBoundaryIdx = i
+				if entry.Timestamp != "" {
+					if t, err := time.Parse(time.RFC3339, entry.Timestamp); err == nil {
+						stats.LastCompactTime = t
+					}
+				}
+			}
+		}
+	}
+
+	// Count non-empty entries after the last boundary
+	if lastBoundaryIdx >= 0 {
+		for _, line := range lines[lastBoundaryIdx+1:] {
+			if line != "" {
+				stats.EntriesInContext++
+			}
+		}
+	} else {
+		stats.EntriesInContext = stats.TotalEntries
+	}
+
+	return stats, nil
+}
+
 // CompactStats returns before/after statistics for a compaction operation.
 type CompactStats struct {
 	BeforeChainLen int
