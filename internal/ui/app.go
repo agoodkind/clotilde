@@ -147,10 +147,9 @@ func (a *App) selectSession(sess *session.Session) {
 	}
 }
 
-// deselectSession closes the details pane and removes the highlight.
+// deselectSession closes the details pane.
 func (a *App) deselectSession() {
 	a.selected = nil
-	a.table.Deselect()
 	a.root.ResizeItem(a.details, 0, 0)
 	a.status.SetMode(ModeBrowse)
 	a.updateHeader()

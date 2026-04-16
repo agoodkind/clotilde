@@ -2,47 +2,44 @@ package ui
 
 import "github.com/gdamore/tcell/v2"
 
-// Catppuccin Mocha-inspired color palette for a cohesive dark theme.
+// Dark theme color palette using standard 256-color values for broad terminal support.
 var (
-	// Base colors
-	ColorBase     = tcell.NewRGBColor(30, 30, 46)    // #1E1E2E background
-	ColorSurface  = tcell.NewRGBColor(49, 50, 68)    // #313244 surface/elevated
-	ColorOverlay  = tcell.NewRGBColor(69, 71, 90)    // #45475A borders/dividers
-	ColorSubtext  = tcell.NewRGBColor(166, 173, 200) // #A6ADC8 secondary text
-	ColorText     = tcell.NewRGBColor(205, 214, 244) // #CDD6F4 primary text
+	// Text
+	ColorText    = tcell.Color252 // bright white-ish
+	ColorSubtext = tcell.Color245 // medium gray
+	ColorMuted   = tcell.Color240 // dim gray
 
-	// Accent colors
-	ColorAccent   = tcell.NewRGBColor(137, 180, 250) // #89B4FA blue (primary accent)
-	ColorSuccess  = tcell.NewRGBColor(166, 227, 161) // #A6E3A1 green
-	ColorWarning  = tcell.NewRGBColor(249, 226, 175) // #F9E2AF yellow/peach
-	ColorError    = tcell.NewRGBColor(243, 139, 168) // #F38BA8 red/pink
-	ColorInfo     = tcell.NewRGBColor(137, 180, 250) // #89B4FA blue (same as accent)
+	// Accents
+	ColorAccent  = tcell.Color75  // light blue
+	ColorSuccess = tcell.Color114 // soft green
+	ColorWarning = tcell.Color222 // warm yellow
+	ColorError   = tcell.Color204 // soft red/pink
+	ColorInfo    = tcell.Color75  // light blue
 
-	// Semantic colors
-	ColorFork      = tcell.NewRGBColor(249, 226, 175) // #F9E2AF peach for forks
-	ColorIncognito = tcell.NewRGBColor(203, 166, 247) // #CBA6F7 mauve for incognito
-	ColorMuted     = tcell.NewRGBColor(108, 112, 134) // #6C7086 muted/dimmed
-	ColorCyan      = tcell.NewRGBColor(148, 226, 213) // #94E2D5 teal
+	// Semantic
+	ColorFork      = tcell.Color222 // warm yellow for forks
+	ColorIncognito = tcell.Color141 // light purple
+	ColorCyan      = tcell.Color80  // teal
 
-	// Model colors (subtle, not screaming)
-	ColorModelOpus   = tcell.NewRGBColor(249, 226, 175) // #F9E2AF warm gold
-	ColorModelSonnet = tcell.NewRGBColor(137, 180, 250) // #89B4FA blue
-	ColorModelHaiku  = tcell.NewRGBColor(166, 227, 161) // #A6E3A1 green
+	// Models
+	ColorModelOpus   = tcell.Color222 // warm yellow
+	ColorModelSonnet = tcell.Color75  // light blue
+	ColorModelHaiku  = tcell.Color114 // soft green
 
 	// Table
-	ColorHeaderBg    = tcell.NewRGBColor(49, 50, 68)    // #313244
-	ColorRowEven     = tcell.ColorDefault
-	ColorRowOdd      = tcell.NewRGBColor(35, 35, 52)    // slightly lighter than base
-	ColorSelected    = tcell.NewRGBColor(88, 91, 112)    // #585B70 brighter than header
-	ColorSelectedFg  = tcell.NewRGBColor(255, 255, 255)  // pure white on selection
+	ColorHeaderBg   = tcell.Color236 // dark gray
+	ColorRowEven    = tcell.ColorDefault
+	ColorRowOdd     = tcell.Color234 // very subtle dark
+	ColorSelected   = tcell.Color238 // medium dark for selection
+	ColorSelectedFg = tcell.Color231 // pure white
 )
 
 // Mode colors for the status bar badge
 var (
-	ColorModeBrowse  = tcell.NewRGBColor(166, 227, 161) // green
-	ColorModeDetail  = tcell.NewRGBColor(137, 180, 250) // blue
-	ColorModeSearch  = tcell.NewRGBColor(249, 226, 175) // peach
-	ColorModeCompact = tcell.NewRGBColor(250, 179, 135) // #FAB387 orange/peach
-	ColorModeView    = tcell.NewRGBColor(148, 226, 213) // teal
-	ColorModeFilter  = tcell.NewRGBColor(203, 166, 247) // mauve
+	ColorModeBrowse  = tcell.Color114 // green
+	ColorModeDetail  = tcell.Color75  // blue
+	ColorModeSearch  = tcell.Color222 // yellow
+	ColorModeCompact = tcell.Color208 // orange
+	ColorModeView    = tcell.Color80  // teal
+	ColorModeFilter  = tcell.Color141 // purple
 )
