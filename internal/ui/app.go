@@ -522,9 +522,58 @@ func (a *App) resumeSelected() {
 	a.refreshSessions()
 }
 
-func (a *App) viewSelected()    {} // TODO
-func (a *App) searchSelected()  {} // TODO
-func (a *App) deleteSelected()  {} // TODO
+func (a *App) viewSelected() {
+	if a.selected == nil {
+		return
+	}
+	// TODO: load transcript, show in viewer overlay
+}
+
+func (a *App) searchSelected() {
+	sess := a.selected
+	if sess == nil {
+		return
+	}
+	overlay := NewSearchFormOverlay(sess, func(result TviewSearchResult) {
+		a.pages.RemovePage("search")
+		a.app.SetFocus(a.table)
+		a.mode = ModeBrowse
+		a.updateHeader()
+		a.updateStatus()
+		if result.Cancelled {
+			return
+		}
+		// TODO: run search, show results in viewer
+	})
+	a.pages.AddPage("search", overlay, true, true)
+	a.mode = ModeSearch
+	a.updateHeader()
+	a.updateStatus()
+}
+
+func (a *App) deleteSelected() {
+	sess := a.selected
+	if sess == nil || a.cb.DeleteSession == nil {
+		return
+	}
+	modal := NewConfirmModal(
+		"Delete Session",
+		"Delete session '"+sess.Name+"'?",
+		[]string{"Session folder and metadata will be removed", "Claude transcript will be deleted"},
+		true,
+		func(confirmed bool) {
+			a.pages.RemovePage("confirm")
+			a.app.SetFocus(a.table)
+			if confirmed {
+				_ = a.cb.DeleteSession(sess)
+				a.deselectSession()
+				a.refreshSessions()
+			}
+		},
+	)
+	a.pages.AddPage("confirm", modal, true, true)
+}
+
 func (a *App) forkSelected()    {} // TODO
 func (a *App) renameSelected()  {} // TODO
 func (a *App) compactSelected() {} // TODO
