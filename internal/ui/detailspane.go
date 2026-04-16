@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
 	"github.com/fgrehm/clotilde/internal/session"
@@ -13,39 +14,56 @@ import (
 )
 
 // SessionDetail holds pre-extracted data for the details pane.
-// The caller extracts this from the claude package to avoid import cycles.
 type SessionDetail struct {
 	Model    string
-	Messages []DetailMessage // last N non-tool messages
+	Messages []DetailMessage
 }
 
 // DetailMessage is a simplified message for display.
 type DetailMessage struct {
-	Role string // "user" or "assistant"
+	Role string
 	Text string
 }
 
-// DetailsPane shows rich session information at the bottom of the screen.
+// DetailsPane shows rich session information in a two-column layout at the bottom.
 type DetailsPane struct {
-	*tview.TextView
+	*tview.Flex
+	leftCol    *tview.TextView
+	rightCol   *tview.TextView
 	sess       *session.Session
 	statsCache map[string]*transcript.CompactQuickStats
 }
 
-// NewDetailsPane creates a scrollable details pane.
+// NewDetailsPane creates a two-column details pane.
 func NewDetailsPane() *DetailsPane {
-	tv := tview.NewTextView().
+	left := tview.NewTextView().
 		SetDynamicColors(true).
 		SetScrollable(true).
 		SetWordWrap(true)
 
-	tv.SetBorder(true).
-		SetTitle(" DETAILS ").
+	right := tview.NewTextView().
+		SetDynamicColors(true).
+		SetScrollable(true).
+		SetWordWrap(true)
+
+	// Two columns inside a bordered flex
+	inner := tview.NewFlex().
+		AddItem(left, 0, 1, true).
+		AddItem(right, 0, 1, false)
+
+	inner.SetBorder(true).
+		SetTitle(" DETAILS (esc close) ").
 		SetTitleAlign(tview.AlignLeft).
-		SetBorderColor(ColorInfo)
+		SetBorderColor(tcell.Color240)
+
+	// Wrap in outer flex for consistent sizing
+	outer := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(inner, 0, 1, true)
 
 	return &DetailsPane{
-		TextView:   tv,
+		Flex:       outer,
+		leftCol:    left,
+		rightCol:   right,
 		statsCache: make(map[string]*transcript.CompactQuickStats),
 	}
 }
@@ -55,89 +73,88 @@ func (d *DetailsPane) SetStatsCache(cache map[string]*transcript.CompactQuickSta
 	d.statsCache = cache
 }
 
-// ShowSession populates the details pane with session information.
-// detail contains pre-extracted model and messages (to avoid import cycles with claude pkg).
+// ShowSession populates both columns with session information.
 func (d *DetailsPane) ShowSession(sess *session.Session, detail SessionDetail) {
 	d.sess = sess
-	d.Clear()
-	d.ScrollToBeginning()
+	d.leftCol.Clear()
+	d.rightCol.Clear()
 
 	if sess == nil {
 		return
 	}
 
-	var b strings.Builder
+	// LEFT COLUMN: identity, timing, stats
+	var left strings.Builder
 
-	// Identity
-	fmt.Fprintf(&b, "[::b]%s[-:-:-]\n", tview.Escape(sess.Name))
+	fmt.Fprintf(&left, "[::b]%s[-:-:-]\n", tview.Escape(sess.Name))
 	if sess.Metadata.Context != "" {
-		fmt.Fprintf(&b, "[gray]%s[-]\n", tview.Escape(sess.Metadata.Context))
+		fmt.Fprintf(&left, "[gray]%s[-]\n", tview.Escape(sess.Metadata.Context))
 	}
-	b.WriteString("\n")
+	left.WriteString("\n")
 
-	// Core info
 	ws := shortPath(sess.Metadata.WorkspaceRoot)
-	fmt.Fprintf(&b, "[white::b]Model:[-:-:-]       %s\n", detail.Model)
-	fmt.Fprintf(&b, "[white::b]Workspace:[-:-:-]   %s\n", ws)
+	fmt.Fprintf(&left, "[::b]Model:[-]       %s\n", detail.Model)
+	fmt.Fprintf(&left, "[::b]Workspace:[-]   %s\n", ws)
 	if sess.Metadata.IsForkedSession {
-		fmt.Fprintf(&b, "[white::b]Type:[-:-:-]        [yellow]fork of %s[-]\n", sess.Metadata.ParentSession)
+		fmt.Fprintf(&left, "[::b]Type:[-]        [yellow]fork of %s[-]\n", sess.Metadata.ParentSession)
 	}
-	b.WriteString("\n")
+	left.WriteString("\n")
 
-	// Timing
-	fmt.Fprintf(&b, "[white::b]Created:[-:-:-]     %s\n", sess.Metadata.Created.Format("2006-01-02 15:04"))
-	fmt.Fprintf(&b, "[white::b]Last used:[-:-:-]   %s\n", util.FormatRelativeTime(sess.Metadata.LastAccessed))
-	b.WriteString("\n")
+	fmt.Fprintf(&left, "[::b]Created:[-]     %s\n", sess.Metadata.Created.Format("2006-01-02 15:04"))
+	fmt.Fprintf(&left, "[::b]Last used:[-]   %s\n", util.FormatRelativeTime(sess.Metadata.LastAccessed))
+	left.WriteString("\n")
 
-	// Transcript stats
 	if sess.Metadata.TranscriptPath != "" {
 		if info, err := os.Stat(sess.Metadata.TranscriptPath); err == nil {
 			sizeMB := float64(info.Size()) / (1024 * 1024)
-			fmt.Fprintf(&b, "[white::b]Transcript:[-:-:-]  %.1f MB\n", sizeMB)
+			fmt.Fprintf(&left, "[::b]Transcript:[-]  %.1f MB\n", sizeMB)
 		}
 	}
 
-	// Context window stats from cache
 	if qs, ok := d.statsCache[sess.Metadata.TranscriptPath]; ok {
-		fmt.Fprintf(&b, "[white::b]Tokens:[-:-:-]      ~%s (tiktoken estimate)\n", fmtTokens(qs.EstimatedTokens))
-		fmt.Fprintf(&b, "[white::b]Compactions:[-:-:-] %d\n", qs.Compactions)
-		fmt.Fprintf(&b, "[white::b]In context:[-:-:-]  %s entries\n", fmtNumber(qs.EntriesInContext))
+		fmt.Fprintf(&left, "[::b]Tokens:[-]      ~%s\n", fmtTokens(qs.EstimatedTokens))
+		fmt.Fprintf(&left, "[::b]Compactions:[-] %d\n", qs.Compactions)
+		fmt.Fprintf(&left, "[::b]In context:[-]  %s entries\n", fmtNumber(qs.EntriesInContext))
 		if qs.Compactions > 0 && !qs.LastCompactTime.IsZero() {
-			fmt.Fprintf(&b, "[white::b]Last compact:[-:-:-] %s\n", util.FormatRelativeTime(qs.LastCompactTime))
+			fmt.Fprintf(&left, "[::b]Last compact:[-] %s\n", util.FormatRelativeTime(qs.LastCompactTime))
 		}
-		fmt.Fprintf(&b, "[white::b]Total:[-:-:-]       %s entries\n", fmtNumber(qs.TotalEntries))
+		fmt.Fprintf(&left, "[::b]Total:[-]       %s entries\n", fmtNumber(qs.TotalEntries))
 	} else if sess.Metadata.TranscriptPath != "" {
-		b.WriteString("[gray]Computing context stats...[-]\n")
+		left.WriteString("[gray]Computing stats...[-]\n")
 	}
-	b.WriteString("\n")
 
-	// Last 5 messages (pre-extracted by caller)
+	d.leftCol.SetText(left.String())
+
+	// RIGHT COLUMN: messages + technical
+	var right strings.Builder
+
 	if len(detail.Messages) > 0 {
-		b.WriteString("[white::b]Last exchange:[-:-:-]\n")
+		right.WriteString("[::b]Last exchange:[-]\n\n")
 		for _, msg := range detail.Messages {
 			role := "[green]You:[-]"
 			if msg.Role == "assistant" {
 				role = "[blue]Claude:[-]"
 			}
 			text := msg.Text
-			if len(text) > 100 {
-				text = text[:97] + "..."
+			if len(text) > 120 {
+				text = text[:117] + "..."
 			}
 			text = tview.Escape(text)
-			fmt.Fprintf(&b, "  %s %s\n", role, text)
+			fmt.Fprintf(&right, "  %s %s\n", role, text)
 		}
-		b.WriteString("\n")
+		right.WriteString("\n")
 	}
 
-	// Technical
-	fmt.Fprintf(&b, "[gray]UUID: %s[-]\n", sess.Metadata.SessionID)
+	right.WriteString("[gray::d]")
+	fmt.Fprintf(&right, "UUID: %s\n", sess.Metadata.SessionID)
 	if len(sess.Metadata.PreviousSessionIDs) > 0 {
-		fmt.Fprintf(&b, "[gray]Previous: %d session(s)[-]\n", len(sess.Metadata.PreviousSessionIDs))
+		fmt.Fprintf(&right, "Previous: %d session(s)\n", len(sess.Metadata.PreviousSessionIDs))
 	}
-	fmt.Fprintf(&b, "[gray]clotilde resume %s[-]\n", sess.Name)
-	fmt.Fprintf(&b, "[gray]claude --resume %s[-]\n", sess.Metadata.SessionID)
+	fmt.Fprintf(&right, "clotilde resume %s\n", sess.Name)
+	fmt.Fprintf(&right, "claude --resume %s\n", sess.Metadata.SessionID)
+	right.WriteString("[-:-:-]")
 
-	d.SetText(b.String())
+	d.rightCol.SetText(right.String())
 }
 
 // fmtTokens formats a token count as "97k" or "1.2M".
