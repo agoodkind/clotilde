@@ -12,7 +12,7 @@ import (
 	tiktoken "github.com/pkoukk/tiktoken-go"
 )
 
-const tokenMultiplier = 1.15 // cl100k undercounts Claude tokens by ~15%
+const tokenMultiplier = 1.20 // cl100k undercounts Claude tokens by ~20% on average (validated against API)
 
 // CompactOptions controls what the compactor strips and where it places the boundary.
 type CompactOptions struct {
