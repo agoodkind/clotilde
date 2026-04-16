@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	bl "github.com/winder/bubblelayout"
 
 	"github.com/fgrehm/clotilde/internal/session"
 )
@@ -41,14 +42,17 @@ var depthDescriptions = map[string]string{
 // SearchFormModel is a BubbleTea model for the search parameter form.
 // It collects session, query, and depth then quits with the result.
 type SearchFormModel struct {
-	Sessions []*session.Session
-	selected *session.Session
-	query    textinput.Model
-	depthIdx int
-	focus    searchField
-	result   SearchFormResult
-	done     bool
-	term     TermSize
+	Sessions  []*session.Session
+	selected  *session.Session
+	query     textinput.Model
+	depthIdx  int
+	focus     searchField
+	result    SearchFormResult
+	done      bool
+	term      TermSize
+	layout    bl.BubbleLayout
+	layoutID  bl.ID
+	layoutMsg bl.BubbleLayoutMsg
 
 	// set by RunSearchForm to signal that picker should run
 	needPicker bool
@@ -62,12 +66,17 @@ func NewSearchForm(sessions []*session.Session, initial *session.Session) Search
 	ti.CharLimit = 512
 	ti.Width = 70
 
+	layout := bl.New()
+	layoutID := layout.Add("min 40, preferred 78, max 100, grow")
+
 	m := SearchFormModel{
 		Sessions: sessions,
 		selected: initial,
 		query:    ti,
 		depthIdx: 0,
 		focus:    fieldQuery,
+		layout:   layout,
+		layoutID: layoutID,
 	}
 
 	if initial == nil && len(sessions) > 0 {
@@ -89,8 +98,10 @@ func (m SearchFormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.term.HandleResize(msg)
-		if m.term.Width > 10 {
-			m.query.Width = min(70, m.term.Width-10)
+		m.layoutMsg = m.layout.Resize(msg.Width, msg.Height)
+		size, err := m.layoutMsg.Size(m.layoutID)
+		if err == nil && size.Width > 0 {
+			m.query.Width = size.Width - 2
 		}
 		return m, nil
 
@@ -201,6 +212,11 @@ func (m *SearchFormModel) syncFocus() {
 
 // sectionWidth returns the inner width for section boxes.
 func (m SearchFormModel) sectionWidth() int {
+	size, err := m.layoutMsg.Size(m.layoutID)
+	if err == nil && size.Width > 0 {
+		return size.Width
+	}
+	// Fallback to default if layout hasn't been initialized
 	w := 78
 	if m.term.Width > 10 {
 		w = min(78, m.term.Width-4)
