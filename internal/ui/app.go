@@ -97,6 +97,7 @@ func NewApp(sessions []*session.Session, cb AppCallbacks) *App {
 	})
 
 	a.app.SetRoot(a.pages, true)
+	a.app.SetFocus(a.table.Table)
 
 	return a
 }
