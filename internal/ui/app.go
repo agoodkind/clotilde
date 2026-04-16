@@ -288,10 +288,18 @@ func NewApp(sessions []*session.Session, cb AppCallbacks) *App {
 		})
 	}
 
+	// Wrap table in a bordered frame for the "floating" look
+	tableFrame := tview.NewFrame(a.table).
+		SetBorders(0, 0, 0, 0, 1, 1) // no header/footer padding, 1 char left/right margin
+	tableFrame.SetBorder(true).
+		SetBorderColor(tcell.Color240).
+		SetTitle(" Sessions ").
+		SetTitleAlign(tview.AlignLeft)
+
 	// Root layout
 	a.root = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(a.header, 1, 0, false).
-		AddItem(a.table, 0, 1, true).
+		AddItem(tableFrame, 0, 1, true).
 		AddItem(a.details, 0, 0, false). // hidden initially
 		AddItem(a.status, 1, 0, false)
 
