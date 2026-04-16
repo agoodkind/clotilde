@@ -4,6 +4,7 @@ package transcript
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -44,19 +45,45 @@ func CountTokensForText(apiKey, text string) (int, error) {
 	return CountTokensExact(apiKey, messages)
 }
 
-// CountTokensBestEffort tries the Claude API first, falls back to tiktoken estimate.
-// Returns the count and whether it's exact (true) or estimated (false).
+// CountTokensBestEffort computes tokens using BOTH tiktoken and Claude API (when key available).
+// Returns the best available count and whether it's exact (API) or estimated (tiktoken).
+// Both results are logged to slog for accuracy tracking.
 func CountTokensBestEffort(apiKey, text string) (tokens int, exact bool) {
+	textLen := len(text)
+
+	// Always compute tiktoken estimate
+	tiktokenCount := 0
+	enc, err := tiktoken.GetEncoding("cl100k_base")
+	if err == nil {
+		raw := len(enc.Encode(text, nil, nil))
+		tiktokenCount = int(float64(raw) * tokenMultiplier)
+	} else {
+		tiktokenCount = textLen / 4 // last resort
+	}
+
+	// Try Claude API if key available
+	apiCount := 0
+	apiErr := ""
 	if apiKey != "" {
 		if n, err := CountTokensForText(apiKey, text); err == nil {
-			return n, true
+			apiCount = n
+		} else {
+			apiErr = err.Error()
 		}
 	}
-	// Fallback: tiktoken cl100k * 1.15
-	enc, err := tiktoken.GetEncoding("cl100k_base")
-	if err != nil {
-		return len(text) / 4, false
+
+	// Log both for accuracy tracking
+	slog.Debug("token count computed",
+		"text_len", textLen,
+		"tiktoken", tiktokenCount,
+		"api", apiCount,
+		"api_error", apiErr,
+		"has_api_key", apiKey != "",
+	)
+
+	// Return API count if available, otherwise tiktoken
+	if apiCount > 0 {
+		return apiCount, true
 	}
-	raw := len(enc.Encode(text, nil, nil))
-	return int(float64(raw) * tokenMultiplier), false
+	return tiktokenCount, false
 }
