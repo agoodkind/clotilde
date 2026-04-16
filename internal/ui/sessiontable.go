@@ -43,9 +43,6 @@ type SessionTable struct {
 	// Model cache: session name -> model string (populated by caller async)
 	ModelCache map[string]string
 
-	// selectionActive tracks whether any row is highlighted.
-	// Starts false; becomes true on first arrow key or click.
-	selectionActive bool
 
 	// Callbacks
 	OnSelect func(sess *session.Session) // called when a row is selected (Enter/click)
@@ -68,33 +65,13 @@ func NewSessionTable() *SessionTable {
 
 	t.Table.
 		SetBorders(false).
-		SetSelectable(false, false). // start with no selection
-		SetFixed(1, 0).              // fix header row
+		SetSelectable(true, false). // rows selectable
+		SetFixed(1, 0).             // fix header row
 		SetSeparator(' ').
 		SetSelectedStyle(tcell.StyleDefault.
 			Background(ColorSelected).
 			Foreground(ColorSelectedFg).
 			Bold(true))
-
-	// Capture arrow/enter keys to activate selection on first press
-	t.Table.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if !t.selectionActive {
-			switch event.Key() {
-			case tcell.KeyUp, tcell.KeyDown, tcell.KeyEnter:
-				t.selectionActive = true
-				t.Table.SetSelectable(true, false)
-				t.Table.Select(1, 0) // highlight first data row
-				return nil
-			}
-			if event.Key() == tcell.KeyRune && (event.Rune() == 'j' || event.Rune() == 'k') {
-				t.selectionActive = true
-				t.Table.SetSelectable(true, false)
-				t.Table.Select(1, 0)
-				return nil
-			}
-		}
-		return event
-	})
 
 	// Enter key on a row: resume the session
 	t.Table.SetSelectedFunc(func(row, col int) {
@@ -161,17 +138,6 @@ func (t *SessionTable) ToggleSort(col SortColumn) {
 	}
 	t.applyFilterAndSort()
 	t.render()
-}
-
-// Deselect removes the highlight and closes the detail pane.
-func (t *SessionTable) Deselect() {
-	t.selectionActive = false
-	t.Table.SetSelectable(false, false)
-}
-
-// IsSelectionActive returns whether any row is highlighted.
-func (t *SessionTable) IsSelectionActive() bool {
-	return t.selectionActive
 }
 
 // SelectedSession returns the currently highlighted session, or nil.
