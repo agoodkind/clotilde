@@ -3,6 +3,8 @@ package transcript
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"time"
@@ -72,13 +74,28 @@ func CountTokensBestEffort(apiKey, text string) (tokens int, exact bool) {
 		}
 	}
 
-	// Log both for accuracy tracking
+	// Log both for accuracy tracking and future analysis
+	preview := text
+	if len(preview) > 100 {
+		preview = preview[:100]
+	}
+	hash := sha256.Sum256([]byte(text))
+	hashHex := hex.EncodeToString(hash[:8]) // first 8 bytes = 16 hex chars
+
 	slog.Debug("token count computed",
 		"text_len", textLen,
+		"text_hash", hashHex,
+		"text_preview", preview,
 		"tiktoken", tiktokenCount,
 		"api", apiCount,
 		"api_error", apiErr,
 		"has_api_key", apiKey != "",
+		"ratio", func() float64 {
+			if apiCount > 0 && tiktokenCount > 0 {
+				return float64(apiCount) / float64(tiktokenCount) * tokenMultiplier
+			}
+			return 0
+		}(),
 	)
 
 	// Return API count if available, otherwise tiktoken
