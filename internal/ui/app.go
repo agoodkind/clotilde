@@ -377,51 +377,74 @@ func (a *App) renderTable() {
 			SetExpansion(exp))
 	}
 
+	// Pre-compute column data to find max widths
+	type rowData struct {
+		name, ws, model, created, lastUsed string
+		nameColor, modelColor              tcell.Color
+	}
+	rows := make([]rowData, len(a.sessions))
+	colWidths := [5]int{4, 9, 5, 7, 9} // min widths from headers
+
 	for i, sess := range a.sessions {
+		r := &rows[i]
+		r.name = sess.Name
+		r.nameColor = ColorText
+		if sess.Metadata.IsForkedSession {
+			r.nameColor = ColorFork
+		}
+
+		r.ws = shortPath(sess.Metadata.WorkspaceRoot)
+
+		r.model = a.modelCache[sess.Name]
+		if r.model == "" || r.model == "-" {
+			r.model = ""
+		}
+		if r.model == "<synthetic>" {
+			r.model = "synthetic"
+		}
+		r.modelColor = ColorMuted
+		if strings.Contains(r.model, "opus") {
+			r.modelColor = ColorModelOpus
+		} else if strings.Contains(r.model, "sonnet") {
+			r.modelColor = ColorModelSonnet
+		} else if strings.Contains(r.model, "haiku") {
+			r.modelColor = ColorModelHaiku
+		}
+
+		r.created = sess.Metadata.Created.Format("Jan 02")
+		r.lastUsed = util.FormatRelativeTime(sess.Metadata.LastAccessed)
+
+		// Track max widths
+		if len(r.name) > colWidths[0] {
+			colWidths[0] = len(r.name)
+		}
+		if len(r.ws) > colWidths[1] {
+			colWidths[1] = len(r.ws)
+		}
+		if len(r.model) > colWidths[2] {
+			colWidths[2] = len(r.model)
+		}
+		if len(r.created) > colWidths[3] {
+			colWidths[3] = len(r.created)
+		}
+		if len(r.lastUsed) > colWidths[4] {
+			colWidths[4] = len(r.lastUsed)
+		}
+	}
+
+	// Render data rows with padded cells
+	for i, r := range rows {
 		row := i + 1
 		bg := ColorRowEven
 		if i%2 == 1 {
 			bg = ColorRowOdd
 		}
 
-		name := sess.Name
-		if len(name) > 35 {
-			name = name[:32] + "..."
-		}
-		nameColor := ColorText
-		if sess.Metadata.IsForkedSession {
-			nameColor = ColorFork
-		}
-
-		ws := shortPath(sess.Metadata.WorkspaceRoot)
-		if len(ws) > 22 {
-			ws = "..." + ws[len(ws)-19:]
-		}
-
-		model := a.modelCache[sess.Name]
-		if model == "" || model == "-" {
-			model = ""
-		}
-		if model == "<synthetic>" {
-			model = "synthetic"
-		}
-		modelColor := ColorMuted
-		if strings.Contains(model, "opus") {
-			modelColor = ColorModelOpus
-		} else if strings.Contains(model, "sonnet") {
-			modelColor = ColorModelSonnet
-		} else if strings.Contains(model, "haiku") {
-			modelColor = ColorModelHaiku
-		}
-
-		created := sess.Metadata.Created.Format("Jan 02")
-		lastUsed := util.FormatRelativeTime(sess.Metadata.LastAccessed)
-
-		a.table.SetCell(row, 0, tview.NewTableCell(name).SetTextColor(nameColor).SetBackgroundColor(bg).SetExpansion(1))
-		a.table.SetCell(row, 1, tview.NewTableCell("  "+ws).SetTextColor(ColorSubtext).SetBackgroundColor(bg))
-		a.table.SetCell(row, 2, tview.NewTableCell("  "+model).SetTextColor(modelColor).SetBackgroundColor(bg))
-		a.table.SetCell(row, 3, tview.NewTableCell("  "+created).SetTextColor(ColorSubtext).SetBackgroundColor(bg))
-		a.table.SetCell(row, 4, tview.NewTableCell("  "+lastUsed).SetTextColor(ColorSubtext).SetBackgroundColor(bg))
+		a.table.SetCell(row, 0, tview.NewTableCell(fmt.Sprintf("%-*s", colWidths[0], r.name)).SetTextColor(r.nameColor).SetBackgroundColor(bg).SetExpansion(1))
+		a.table.SetCell(row, 1, tview.NewTableCell(fmt.Sprintf("  %-*s", colWidths[1], r.ws)).SetTextColor(ColorSubtext).SetBackgroundColor(bg))
+		a.table.SetCell(row, 2, tview.NewTableCell(fmt.Sprintf("  %-*s", colWidths[2], r.model)).SetTextColor(r.modelColor).SetBackgroundColor(bg))
+		a.table.SetCell(row, 3, tview.NewTableCell(fmt.Sprintf("  %-*s", colWidths[3], r.created)).SetTextColor(ColorSubtext).SetBackgroundColor(bg))
+		a.table.SetCell(row, 4, tview.NewTableCell(fmt.Sprintf("  %*s", colWidths[4], r.lastUsed)).SetTextColor(ColorSubtext).SetBackgroundColor(bg))
 	}
 }
 
