@@ -11,8 +11,6 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	bl "github.com/winder/bubblelayout"
-
 	"github.com/fgrehm/clotilde/internal/session"
 	"github.com/fgrehm/clotilde/internal/transcript"
 )
@@ -60,15 +58,11 @@ type PickerModel struct {
 	previewFocused bool // true when tab switches focus to preview
 	lastPreviewIdx int  // track cursor changes to refresh viewport content
 
-	// BubbleLayout for responsive list+preview
-	layout      bl.BubbleLayout
-	listID      bl.ID
-	previewID   bl.ID
-	listWidth   int
-	listHeight  int
-	prevWidth   int
-	prevHeight  int
-	layoutReady bool
+	// Manual layout sizes (computed from terminal dimensions)
+	listWidth  int
+	listHeight int
+	prevWidth  int
+	prevHeight int
 }
 
 // NewPicker creates a new session picker
@@ -81,18 +75,14 @@ func NewPicker(sessions []*session.Session, title string) PickerModel {
 	return m
 }
 
-// WithPreview enables the preview pane and initializes the BubbleLayout
+// WithPreview enables the preview pane
 func (m PickerModel) WithPreview() PickerModel {
 	m.ShowPreview = true
-	m.layout = bl.New()
-	m.listID = m.layout.Add("w 30, grow")
-	m.previewID = m.layout.Add("w 25, grow")
 	return m
 }
 
 // Init initializes the model (required by bubbletea)
 func (m PickerModel) Init() tea.Cmd {
-
 	// Pre-warm stats cache. Sessions with a fresh disk cache entry are loaded
 	// immediately. Stale or missing entries are computed in background goroutines
 	// (max 3 concurrent) and sent back as sessionStatsMsg so the preview pane
@@ -152,24 +142,25 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.Term.HandleResize(msg)
-		if m.ShowPreview && m.layout != nil {
-			layoutMsg := m.layout.Resize(msg.Width, msg.Height-2) // -2 for help bar
-			if sz, err := layoutMsg.Size(m.listID); err == nil {
-				m.listWidth = sz.Width
-				m.listHeight = sz.Height
+		if m.ShowPreview {
+			// Split: list gets 50%, preview gets 50% minus scrollbar/border
+			m.listWidth = msg.Width / 2
+			m.listHeight = msg.Height - 2
+			m.prevWidth = msg.Width - m.listWidth - 6 // border + scrollbar + gap
+			m.prevHeight = msg.Height - 4
+			if m.prevWidth < 20 {
+				m.prevWidth = 20
 			}
-			if sz, err := layoutMsg.Size(m.previewID); err == nil {
-				m.prevWidth = sz.Width - 2 // room for scrollbar
-				m.prevHeight = sz.Height
-				if !m.previewReady {
-					m.previewVP = viewport.New(m.prevWidth, m.prevHeight)
-					m.previewReady = true
-				} else {
-					m.previewVP.Width = m.prevWidth
-					m.previewVP.Height = m.prevHeight
-				}
+			if m.prevHeight < 5 {
+				m.prevHeight = 5
 			}
-			m.layoutReady = true
+			if !m.previewReady {
+				m.previewVP = viewport.New(m.prevWidth, m.prevHeight)
+				m.previewReady = true
+			} else {
+				m.previewVP.Width = m.prevWidth
+				m.previewVP.Height = m.prevHeight
+			}
 		}
 		return m, nil
 
@@ -343,9 +334,6 @@ func (m PickerModel) mouseYToIndex(y int, totalFiltered int) int {
 
 // View renders the session picker
 func (m PickerModel) View() string {
-	if m.ShowPreview && m.layoutReady {
-		return m.viewWithLayout()
-	}
 	if m.ShowPreview {
 		return m.viewWithPreview()
 	}
