@@ -52,8 +52,50 @@ func CountTokensForText(apiKey, text string) (int, error) {
 // Both results are logged to slog for accuracy tracking.
 // CountTokensBestEffort computes tokens using BOTH tiktoken and Claude API (when key available).
 // transcriptPath is logged for traceability (can be empty if not from a transcript).
-// sessionID and messageUUID are optional identifiers for full ledger traceability.
-func CountTokensBestEffort(apiKey, text string, transcriptPath string, sessionID string, messageUUID string) (tokens int, exact bool) {
+// TokenContext carries everything needed to locate, identify, recover, and classify the source text.
+type TokenContext struct {
+	// File pointers (for direct seek to the exact bytes)
+	TranscriptPath string // absolute path to the .jsonl file
+	LineNumber     int    // 0-based line in the JSONL
+	ByteOffset     int64  // byte offset of this line start in the file
+	LineLength     int    // byte length of this JSONL line
+
+	// Entry identity (unique keys into the transcript)
+	MessageUUID string // entry UUID (primary key in transcript)
+	ParentUUID  string // parentUuid (chain predecessor)
+	PromptID    string // promptId field (groups a user turn + response)
+	RequestID   string // Claude API requestId (links to billing)
+
+	// Entry classification
+	Role      string // "user" or "assistant"
+	EntryType string // "user", "assistant", "system", "attachment"
+	Source    string // hook source: "startup", "resume", "compact", "clear"
+
+	// Session identity (multiple keys to find the session)
+	SessionName    string // clotilde session name (store.Get key)
+	SessionID      string // Claude session UUID (claude --resume key)
+	WorkspaceRoot  string // project directory
+	ClotildeRoot   string // .claude/clotilde path
+	ProjectDirHash string // encoded project dir (for ~/.claude/projects/ lookup)
+
+	// Position in conversation
+	MessageIndex    int // 0-based index among all user+assistant messages
+	TurnNumber      int // conversation turn (user+response = 1 turn)
+	ChainDepth      int // position in parentUuid chain from root
+	CompactionEpoch int // which compaction era (0 = before first compact, 1 = after first, etc.)
+
+	// Content block info (one entry can have multiple content blocks)
+	ContentBlockIndex int    // which block within the message content array
+	ContentBlockType  string // "text", "tool_use", "tool_result", "thinking"
+
+	// Git context at time of entry
+	GitBranch string // branch when this entry was written
+	Slug      string // Claude Code slug (conversation identifier)
+	Entrypoint string // "cli", "claude-vscode", etc.
+	Version    string // Claude Code version
+}
+
+func CountTokensBestEffort(apiKey, text string, ctx TokenContext) (tokens int, exact bool) {
 	textLen := len(text)
 
 	// Always compute tiktoken estimate
@@ -83,7 +125,6 @@ func CountTokensBestEffort(apiKey, text string, transcriptPath string, sessionID
 		preview = preview[:100]
 	}
 	hash := sha256.Sum256([]byte(text))
-	hashHex := hex.EncodeToString(hash[:8]) // first 8 bytes = 16 hex chars
 
 	// Compute detailed metrics
 	tiktokenRaw := 0
@@ -103,37 +144,65 @@ func CountTokensBestEffort(apiKey, text string, transcriptPath string, sessionID
 		estimateError = float64(tiktokenCount-apiCount) / float64(apiCount) * 100
 	}
 
-	// Count content characteristics for analysis
-	newlines := 0
-	spaces := 0
-	for _, c := range text {
-		if c == '\n' {
-			newlines++
-		} else if c == ' ' || c == '\t' {
-			spaces++
-		}
+	// Full text hash for exact recovery lookup
+	fullHash := hex.EncodeToString(hash[:])
+
+	// Tail preview for context
+	tail := text
+	if len(tail) > 100 {
+		tail = tail[len(tail)-100:]
 	}
 
 	slog.Info("token_ledger",
+		// Text fingerprint (for exact match without storing full text)
+		"text_sha256", fullHash,
 		"text_len", textLen,
-		"text_hash", hashHex,
-		"text_preview", preview,
-		"transcript_path", transcriptPath,
-		"session_id", sessionID,
-		"message_uuid", messageUUID,
+		"text_head", preview,
+		"text_tail", tail,
+		// File pointers
+		"transcript_path", ctx.TranscriptPath,
+		"line_number", ctx.LineNumber,
+		"byte_offset", ctx.ByteOffset,
+		"line_length", ctx.LineLength,
+		// Entry identity
+		"message_uuid", ctx.MessageUUID,
+		"parent_uuid", ctx.ParentUUID,
+		"prompt_id", ctx.PromptID,
+		"request_id", ctx.RequestID,
+		// Classification
+		"role", ctx.Role,
+		"entry_type", ctx.EntryType,
+		"source", ctx.Source,
+		// Session identity
+		"session_name", ctx.SessionName,
+		"session_id", ctx.SessionID,
+		"workspace_root", ctx.WorkspaceRoot,
+		"project_dir_hash", ctx.ProjectDirHash,
+		// Position
+		"message_index", ctx.MessageIndex,
+		"turn_number", ctx.TurnNumber,
+		"chain_depth", ctx.ChainDepth,
+		"compaction_epoch", ctx.CompactionEpoch,
+		// Content block
+		"content_block_index", ctx.ContentBlockIndex,
+		"content_block_type", ctx.ContentBlockType,
+		// Git/environment
+		"git_branch", ctx.GitBranch,
+		"slug", ctx.Slug,
+		"entrypoint", ctx.Entrypoint,
+		"version", ctx.Version,
+		// Token counts
 		"tiktoken_raw", tiktokenRaw,
 		"tiktoken_adjusted", tiktokenCount,
 		"multiplier", tokenMultiplier,
 		"api_count", apiCount,
 		"api_error", apiErr,
 		"has_api_key", apiKey != "",
+		// Derived
 		"api_to_tiktoken_ratio", fmt.Sprintf("%.4f", apiToTiktoken),
 		"estimate_error_pct", fmt.Sprintf("%.1f", estimateError),
 		"bytes_per_token", fmt.Sprintf("%.2f", bytesPerToken),
-		"newline_count", newlines,
-		"whitespace_count", spaces,
-		"whitespace_pct", fmt.Sprintf("%.1f", float64(spaces+newlines)/float64(max(textLen, 1))*100),
-		"timestamp", time.Now().UTC().Format(time.RFC3339),
+		"timestamp", time.Now().UTC().Format(time.RFC3339Nano),
 	)
 
 	// Return API count if available, otherwise tiktoken
