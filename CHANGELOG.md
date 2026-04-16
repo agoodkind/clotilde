@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+**TUI rewrite - tview/tcell**
+
+- **Full tview/tcell TUI rewrite**: Replaced BubbleTea dashboard with native tview application for improved terminal compatibility and rendering performance.
+- **Session table as primary view**: Interactive sortable session table with clickable column headers (up to 5 keys). Displays NAME, MODEL, DIR, CREATED, and LAST USED columns with auto-sizing and proportional widths.
+- **Details pane (bottom panel)**: Two-column layout with left stats panel (session metadata: UUID, workspace, transcript size, message count) and right messages panel (scrollable conversation preview).
+- **nvim-style status bar**: Bottom status line with BROWSE/DETAIL/SEARCH/COMPACT mode badges, scroll position percentage, and contextual help text.
+- **Spacebar opens details with focus**: Spacebar opens the details pane with automatic focus, Enter returns focus to session table and resumes session. Arrow keys move selection without opening details.
+- **Double-click to resume**: Double-clicking a session row immediately resumes that session. Mouse scroll support for navigating tables and panes.
+- **Search form overlay**: s key opens a full-screen search form overlay with session picker, query input, and depth selector (quick/normal/deep/extra-deep, navigated with arrow keys).
+- **Compact form overlay**: c key opens a compact form overlay with boundary percentage input, strip options (tool results, large blocks), and dry-run toggle before executing compaction.
+- **Delete confirmation modal**: d key opens a confirmation modal for session deletion with esc/no and enter/yes controls.
+- **Conversation viewer overlay**: v key opens a full-screen overlay displaying the complete session conversation with scrolling support.
+- **Background model extraction**: SESSION table populates MODEL column asynchronously by parsing transcripts in background goroutines.
+- **256-color terminal palette**: Catppuccin Mocha color scheme using tcell's 256-color terminal palette for broad compatibility (vs BubbleTea's Lipgloss color system).
+
 **Session management**
 
 - **Session display names**: Sessions now support a `displayName` metadata field shown in the TUI instead of the raw session ID (e.g. `opnsense-bgp-cutover` instead of `configs-6d383f1d`). The original name is unchanged and still used for `resume`, `fork`, `delete`, etc. Dashboard, picker, list table, and inspect all show the display name; picker filter matches both raw name and display name.
@@ -93,6 +108,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Main `clotilde` command now uses tview app**: Replaced BubbleTea dashboard with native tview TUI application. All session management is now handled through the interactive session table, details pane, and overlay modals.
+- **Arrow keys move highlight without opening details**: Arrow keys navigate the session table without opening the details pane. Spacebar explicitly opens the details pane with focus. Esc closes the details pane or exits (layered escape handling).
+- **Table columns auto-size proportionally**: Session table columns now auto-size to available terminal width instead of using hardcoded widths, ensuring optimal use of screen space.
 - **Session listing defaults to global**: `clotilde list`, dashboard, and resume picker now show all sessions globally instead of workspace-filtered. Pass `--workspace` / `-w` flag to filter to current workspace.
 - **MCP server list/search/get tools**: Use `store.Resolve()` for unified session lookup instead of exact name matching.
 - **Dashboard menu simplification**: Removed redundant "List all sessions" action, renamed "Resume session" to "Browse sessions".
@@ -110,6 +128,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Scrollback artifacts on quit**: Fixed terminal scrollback corruption on exit by using explicit tcell screen initialization and cleanup.
+- **Focus chain issues**: Fixed input capture issues by ensuring input capture is properly registered on correct primitives per tview architecture.
 - **Transcript parser dropping 31.6% of user messages**: Fixed handling of array-format user content blocks that were previously invisible to parsing logic.
 - **MCP search resolving wrong session**: Fixed edge case where multiple sessions with similar names would resolve to incorrect session due to exact name matching.
 - **bench-embed memory accumulation**: Fixed multiple model instances loading without unloading, causing memory buildup.
