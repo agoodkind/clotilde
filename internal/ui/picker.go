@@ -14,6 +14,7 @@ import (
 	bl "github.com/winder/bubblelayout"
 
 	"github.com/fgrehm/clotilde/internal/session"
+	"github.com/fgrehm/clotilde/internal/transcript"
 )
 
 // PreviewFunc generates preview text for a session in the picker pane.
@@ -29,6 +30,12 @@ const (
 	SortByName
 )
 
+// sessionStatsMsg is delivered when a background stat computation completes.
+type sessionStatsMsg struct {
+	Path  string
+	Stats transcript.CompactQuickStats
+}
+
 // PickerModel represents the session picker state
 type PickerModel struct {
 	Sessions    []*session.Session
@@ -41,6 +48,11 @@ type PickerModel struct {
 	Filter      FilterState
 	Term        TermSize
 	Sort        SortMode // current sort (default: last used)
+
+	// Stats cache: transcript path → computed/cached stats.
+	// The PreviewFn reads this map so it can show stats instantly on cache hits
+	// and "Computing…" while background goroutines work on misses.
+	StatsCache map[string]*transcript.CompactQuickStats
 
 	// Preview viewport for scrollable preview pane
 	previewVP      viewport.Model
@@ -62,8 +74,9 @@ type PickerModel struct {
 // NewPicker creates a new session picker
 func NewPicker(sessions []*session.Session, title string) PickerModel {
 	return PickerModel{
-		Sessions: sessions,
-		Title:    title,
+		Sessions:   sessions,
+		Title:      title,
+		StatsCache: make(map[string]*transcript.CompactQuickStats),
 	}
 }
 
@@ -80,12 +93,64 @@ func (m PickerModel) Init() tea.Cmd {
 		m.listID = m.layout.Add("min 30, grow")
 		m.previewID = m.layout.Add("min 25, grow")
 	}
-	return nil
+
+	// Pre-warm stats cache. Sessions with a fresh disk cache entry are loaded
+	// immediately. Stale or missing entries are computed in background goroutines
+	// (max 3 concurrent) and sent back as sessionStatsMsg so the preview pane
+	// re-renders when they arrive.
+	var cmds []tea.Cmd
+	sem := make(chan struct{}, 3) // semaphore limits concurrent computations to 3
+
+	for _, sess := range m.Sessions {
+		path := sess.Metadata.TranscriptPath
+		if path == "" {
+			continue
+		}
+
+		// Disk cache hit: populate in-memory cache immediately, no goroutine needed.
+		if cached := transcript.LoadCachedStats(path); cached != nil {
+			statsCopy := cached.Stats
+			m.StatsCache[path] = &statsCopy
+			continue
+		}
+
+		// Cache miss: schedule background computation.
+		p := path // capture loop variable
+		cmds = append(cmds, func() tea.Msg {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			qs, err := transcript.QuickStats(p)
+			if err != nil {
+				return nil //nolint:nilnil // background stat failure is intentionally silent
+			}
+
+			// Persist to disk so the next picker open is instant.
+			if info, statErr := os.Stat(p); statErr == nil {
+				transcript.SaveCachedStats(p, qs, info.ModTime())
+			}
+
+			return sessionStatsMsg{Path: p, Stats: qs}
+		})
+	}
+
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
 }
 
 // Update handles keyboard input and window resize
 func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case sessionStatsMsg:
+		// Store the result and invalidate the preview viewport so the
+		// next render picks up the new stats.
+		stats := msg.Stats
+		m.StatsCache[msg.Path] = &stats
+		m.lastPreviewIdx = -1 // force preview content refresh
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.Term.HandleResize(msg)
 		if m.ShowPreview && m.layout != nil {

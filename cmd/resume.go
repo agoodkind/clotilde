@@ -67,7 +67,7 @@ Pass additional flags to Claude Code after '--':
 
 				// Show picker with rich preview pane
 				picker := ui.NewPicker(sessions, "Select session to resume").WithPreview()
-				picker.PreviewFn = richPreviewFunc(store)
+				picker.PreviewFn = richPreviewFunc(store, picker.StatsCache)
 				selected, err := ui.RunPicker(picker)
 				if err != nil {
 					return fmt.Errorf("picker failed: %w", err)
