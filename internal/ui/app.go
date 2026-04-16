@@ -347,12 +347,17 @@ func (a *App) renderTable() {
 				indicator = " v"
 			}
 		}
+		maxWidths := []int{36, 24, 12, 10, 16}
+		mw := 20
+		if col < len(maxWidths) {
+			mw = maxWidths[col]
+		}
 		a.table.SetCell(0, col, tview.NewTableCell(" "+h+indicator+" ").
 			SetSelectable(false).
 			SetTextColor(ColorText).
 			SetBackgroundColor(ColorHeaderBg).
 			SetAttributes(tcell.AttrBold).
-			SetExpansion(1))
+			SetMaxWidth(mw))
 	}
 
 	for i, sess := range a.sessions {
@@ -395,11 +400,11 @@ func (a *App) renderTable() {
 		created := sess.Metadata.Created.Format("Jan 02")
 		lastUsed := util.FormatRelativeTime(sess.Metadata.LastAccessed)
 
-		a.table.SetCell(row, 0, tview.NewTableCell(name).SetTextColor(nameColor).SetBackgroundColor(bg).SetExpansion(2))
-		a.table.SetCell(row, 1, tview.NewTableCell(ws).SetTextColor(ColorSubtext).SetBackgroundColor(bg).SetExpansion(1))
-		a.table.SetCell(row, 2, tview.NewTableCell(model).SetTextColor(modelColor).SetBackgroundColor(bg).SetExpansion(1))
-		a.table.SetCell(row, 3, tview.NewTableCell(created).SetTextColor(ColorSubtext).SetBackgroundColor(bg).SetExpansion(1))
-		a.table.SetCell(row, 4, tview.NewTableCell(lastUsed).SetTextColor(ColorSubtext).SetBackgroundColor(bg).SetExpansion(1))
+		a.table.SetCell(row, 0, tview.NewTableCell(name).SetTextColor(nameColor).SetBackgroundColor(bg).SetMaxWidth(36))
+		a.table.SetCell(row, 1, tview.NewTableCell(ws).SetTextColor(ColorSubtext).SetBackgroundColor(bg).SetMaxWidth(24))
+		a.table.SetCell(row, 2, tview.NewTableCell(model).SetTextColor(modelColor).SetBackgroundColor(bg).SetMaxWidth(12))
+		a.table.SetCell(row, 3, tview.NewTableCell(created).SetTextColor(ColorSubtext).SetBackgroundColor(bg).SetMaxWidth(10))
+		a.table.SetCell(row, 4, tview.NewTableCell(lastUsed).SetTextColor(ColorSubtext).SetBackgroundColor(bg).SetMaxWidth(16))
 	}
 }
 
