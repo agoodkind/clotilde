@@ -66,7 +66,7 @@ func NewApp(sessions []*session.Session, cb AppCallbacks) *App {
 		header:     tview.NewTextView().SetDynamicColors(true),
 		table:      tview.NewTable(),
 		details:    NewDetailsPane(),
-		status:     tview.NewTextView().SetDynamicColors(true),
+		status:     func() *tview.TextView { tv := tview.NewTextView().SetDynamicColors(true); tv.SetBackgroundColor(tcell.Color235); return tv }(),
 		cb:         cb,
 		sessions:   sessions,
 		mode:       ModeBrowse,
@@ -76,12 +76,12 @@ func NewApp(sessions []*session.Session, cb AppCallbacks) *App {
 		sortAsc:    false,
 	}
 
-	// Table setup: start NOT selectable (no highlight on load)
+	// Table setup: borders on, start NOT selectable
 	a.table.
-		SetBorders(false).
+		SetBorders(true).
+		SetBordersColor(tcell.Color236).
 		SetSelectable(false, false).
 		SetFixed(1, 0).
-		SetSeparator(' ').
 		SetSelectedStyle(tcell.StyleDefault.
 			Background(ColorSelected).
 			Foreground(ColorSelectedFg).
@@ -483,30 +483,43 @@ func (a *App) updateHeader() {
 
 func (a *App) updateStatus() {
 	a.status.Clear()
-	var badge string
+	var badge, keys string
 	switch a.mode {
 	case ModeBrowse:
 		badge = "[black:green:b] BROWSE [-:-:-]"
+		keys = "[gray::d]↑↓ j/k scroll  enter resume  space detail  1-5 sort  / filter  q quit[-:-:-]"
 	case ModeDetail:
 		badge = "[black:blue:b] DETAIL [-:-:-]"
+		keys = "[gray::d]r resume  v view  s search  d delete  f fork  n name  c compact  esc close[-:-:-]"
 	case ModeFilter:
 		badge = "[black:purple:b] FILTER [-:-:-]"
+		keys = "[gray::d]type to filter  enter confirm  esc clear[-:-:-]"
+	case ModeSearch:
+		badge = "[black:yellow:b] SEARCH [-:-:-]"
+		keys = "[gray::d]tab next  enter search  esc cancel[-:-:-]"
+	case ModeCompact:
+		badge = "[black:orange:b] COMPACT [-:-:-]"
+		keys = "[gray::d]tab next  enter apply  esc cancel[-:-:-]"
+	case ModeView:
+		badge = "[black:darkcyan:b] VIEW [-:-:-]"
+		keys = "[gray::d]↑↓ scroll  q/esc close[-:-:-]"
 	default:
-		badge = "[black:white:b] " + string(rune(a.mode+'A')) + " [-:-:-]"
+		badge = "[black:white:b] ? [-:-:-]"
 	}
 
 	row, _ := a.table.GetSelection()
 	total := len(a.sessions)
-	pos := fmt.Sprintf("%d sessions", total)
+	pos := "Top"
 	if a.tableActive && row > 0 {
-		pct := 0
-		if total > 0 {
-			pct = row * 100 / total
+		pct := row * 100 / total
+		if pct >= 99 {
+			pos = "Bot"
+		} else {
+			pos = fmt.Sprintf("%d%%", pct)
 		}
-		pos = fmt.Sprintf("%d/%d  %d%%", row, total, pct)
 	}
 
-	fmt.Fprint(a.status, badge+"  "+pos)
+	fmt.Fprintf(a.status, "%s  %s  [white::b]%s[-:-:-]", badge, keys, pos)
 }
 
 // --- Selection ---
