@@ -88,10 +88,10 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.Term.HandleResize(msg)
 		if !m.vpReady {
-			m.vp = viewport.New(msg.Width, msg.Height)
+			m.vp = viewport.New(msg.Width-2, msg.Height) // -2 for scrollbar + gap
 			m.vpReady = true
 		} else {
-			m.vp.Width = msg.Width
+			m.vp.Width = msg.Width - 2 // -2 for scrollbar + gap
 			m.vp.Height = msg.Height
 		}
 		m.vp.SetContent(m.renderContent())
@@ -169,7 +169,7 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m DashboardModel) View() string {
 	if m.vpReady {
 		m.vp.SetContent(m.renderContent())
-		return m.vp.View()
+		return ViewportWithScrollbar(m.vp)
 	}
 	return m.renderContent()
 }
