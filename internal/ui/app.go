@@ -66,7 +66,7 @@ func NewApp(sessions []*session.Session, cb AppCallbacks) *App {
 	// Root layout: header (1) + table (grows) + details (hidden) + status (2)
 	a.root = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(a.header, 1, 0, false).
-		AddItem(a.table, 0, 1, true).
+		AddItem(a.table.Table, 0, 1, true).
 		AddItem(a.details, 0, 0, false). // starts hidden
 		AddItem(a.status, 2, 0, false)
 
@@ -120,7 +120,7 @@ func (a *App) selectSession(sess *session.Session) {
 		// Close details pane
 		a.root.ResizeItem(a.details, 0, 0)
 		a.status.SetMode(ModeBrowse)
-		a.app.SetFocus(a.table)
+		a.app.SetFocus(a.table.Table)
 		return
 	}
 
@@ -153,7 +153,7 @@ func (a *App) deselectSession() {
 	a.root.ResizeItem(a.details, 0, 0)
 	a.status.SetMode(ModeBrowse)
 	a.updateHeader()
-	a.app.SetFocus(a.table)
+	a.app.SetFocus(a.table.Table)
 }
 
 // updateHeader refreshes the header bar with current counts.
@@ -202,7 +202,7 @@ func (a *App) handleGlobalKey(event *tcell.EventKey) *tcell.EventKey {
 			a.app.SetFocus(a.details)
 			a.status.SetMode(ModeDetail)
 		} else {
-			a.app.SetFocus(a.table)
+			a.app.SetFocus(a.table.Table)
 			a.status.SetMode(ModeDetail)
 		}
 		return nil
@@ -319,12 +319,12 @@ func (a *App) showFilter() {
 		case tcell.KeyEnter:
 			a.table.SetFilter(input.GetText())
 			a.pages.RemovePage("filter")
-			a.app.SetFocus(a.table)
+			a.app.SetFocus(a.table.Table)
 			a.status.SetMode(ModeBrowse)
 		case tcell.KeyEscape:
 			a.table.SetFilter("")
 			a.pages.RemovePage("filter")
-			a.app.SetFocus(a.table)
+			a.app.SetFocus(a.table.Table)
 			a.status.SetMode(ModeBrowse)
 		}
 	})
