@@ -364,10 +364,10 @@ func (a *App) renderTable() {
 				indicator = " v"
 			}
 		}
-		expansions := []int{3, 2, 1, 1, 1} // NAME gets most space
-		exp := 1
-		if col < len(expansions) {
-			exp = expansions[col]
+		// Only NAME expands to fill remaining space. Other columns size to content.
+		exp := 0
+		if col == 0 {
+			exp = 1
 		}
 		a.table.SetCell(0, col, tview.NewTableCell(" "+h+indicator+" ").
 			SetSelectable(false).
@@ -417,11 +417,11 @@ func (a *App) renderTable() {
 		created := sess.Metadata.Created.Format("Jan 02")
 		lastUsed := util.FormatRelativeTime(sess.Metadata.LastAccessed)
 
-		a.table.SetCell(row, 0, tview.NewTableCell(name).SetTextColor(nameColor).SetBackgroundColor(bg).SetExpansion(3))
-		a.table.SetCell(row, 1, tview.NewTableCell(ws).SetTextColor(ColorSubtext).SetBackgroundColor(bg).SetExpansion(2))
-		a.table.SetCell(row, 2, tview.NewTableCell(model).SetTextColor(modelColor).SetBackgroundColor(bg).SetExpansion(1))
-		a.table.SetCell(row, 3, tview.NewTableCell(created).SetTextColor(ColorSubtext).SetBackgroundColor(bg).SetExpansion(1))
-		a.table.SetCell(row, 4, tview.NewTableCell(lastUsed).SetTextColor(ColorSubtext).SetBackgroundColor(bg).SetExpansion(1))
+		a.table.SetCell(row, 0, tview.NewTableCell(name).SetTextColor(nameColor).SetBackgroundColor(bg).SetExpansion(1))
+		a.table.SetCell(row, 1, tview.NewTableCell("  "+ws).SetTextColor(ColorSubtext).SetBackgroundColor(bg))
+		a.table.SetCell(row, 2, tview.NewTableCell("  "+model).SetTextColor(modelColor).SetBackgroundColor(bg))
+		a.table.SetCell(row, 3, tview.NewTableCell("  "+created).SetTextColor(ColorSubtext).SetBackgroundColor(bg))
+		a.table.SetCell(row, 4, tview.NewTableCell("  "+lastUsed).SetTextColor(ColorSubtext).SetBackgroundColor(bg))
 	}
 }
 
