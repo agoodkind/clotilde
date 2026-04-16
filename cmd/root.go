@@ -63,6 +63,19 @@ func runDashboard(cmd *cobra.Command, args []string) {
 		DeleteSession: func(sess *session.Session) error {
 			return deleteSession(sess, store)
 		},
+		ExtractModel: func(sess *session.Session) string {
+			if sess.Metadata.TranscriptPath != "" {
+				m, _ := claude.ExtractModelAndLastTime(sess.Metadata.TranscriptPath)
+				if m != "" {
+					return m
+				}
+			}
+			settings, _ := store.LoadSettings(sess.Name)
+			if settings != nil && settings.Model != "" {
+				return settings.Model
+			}
+			return "-"
+		},
 		ExtractDetail: func(sess *session.Session) ui.SessionDetail {
 			model := "-"
 			if sess.Metadata.TranscriptPath != "" {

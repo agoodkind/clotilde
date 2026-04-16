@@ -31,6 +31,9 @@ type AppCallbacks struct {
 	// This avoids the ui package importing the claude package.
 	ExtractDetail func(sess *session.Session) SessionDetail
 
+	// ExtractModel returns just the model string for a session (lighter than ExtractDetail).
+	ExtractModel func(sess *session.Session) string
+
 	// Store provides session operations.
 	Store session.Store
 }
@@ -322,8 +325,24 @@ func (a *App) refreshSessions() {
 	a.table.SetSessions(sessions)
 	a.updateHeader()
 
-	// Pre-warm stats cache in background
+	// Pre-warm model cache and stats cache in background
 	go func() {
+		// Extract models first (fast: reads last few lines of transcript)
+		if a.cb.ExtractModel != nil {
+			for _, sess := range sessions {
+				name := sess.Name
+				if _, ok := a.table.ModelCache[name]; ok {
+					continue
+				}
+				model := a.cb.ExtractModel(sess)
+				a.app.QueueUpdateDraw(func() {
+					a.table.ModelCache[name] = model
+					a.table.render() // refresh to show model
+				})
+			}
+		}
+
+		// Then stats (slower: reads full transcript for tiktoken)
 		for _, sess := range sessions {
 			path := sess.Metadata.TranscriptPath
 			if path == "" {
