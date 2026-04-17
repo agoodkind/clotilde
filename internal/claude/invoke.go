@@ -65,7 +65,12 @@ func Start(clotildeRoot string, sess *session.Session, settingsFile string, addi
 		return invokeWithCleanup(clotildeRoot, sess, args, env, "")
 	}
 
-	err := invokeInteractive(args, env, "")
+	var err error
+	if remoteControlEnabled(settingsFile) {
+		err = invokeInteractivePTY(args, env, "", sess.Metadata.SessionID)
+	} else {
+		err = invokeInteractive(args, env, "")
+	}
 	cleanupEmptySession(clotildeRoot, sess)
 	return err
 }
@@ -84,6 +89,9 @@ func Resume(clotildeRoot string, sess *session.Session, settingsFile string, add
 		return invokeWithCleanup(clotildeRoot, sess, args, env, sess.Metadata.WorkDir)
 	}
 
+	if remoteControlEnabled(settingsFile) {
+		return invokeInteractivePTY(args, env, sess.Metadata.WorkDir, sess.Metadata.SessionID)
+	}
 	return invokeInteractive(args, env, sess.Metadata.WorkDir)
 }
 
@@ -103,7 +111,12 @@ func Fork(clotildeRoot string, parentSess *session.Session, forkName string, set
 		return invokeWithCleanup(clotildeRoot, forkSession, args, env, "")
 	}
 
-	err := invokeInteractive(args, env, "")
+	var err error
+	if remoteControlEnabled(settingsFile) {
+		err = invokeInteractivePTY(args, env, "", forkSession.Metadata.SessionID)
+	} else {
+		err = invokeInteractive(args, env, "")
+	}
 	cleanupEmptySession(clotildeRoot, forkSession)
 	return err
 }

@@ -209,10 +209,17 @@ type App struct {
 	status  *StatusBarWidget
 
 	// activeTab indexes into tabs.Tabs. 0 is the sessions dashboard. 1
-	// is the settings editor stub. The dashboard renders the table view
-	// when activeTab is 0; other indices replace the body with a tab
-	// specific panel.
+	// is the settings editor stub. 2 is the sidecar live view. The
+	// dashboard renders the table view when activeTab is 0; other
+	// indices replace the body with a tab specific panel.
 	activeTab int
+
+	// sidecar holds the live remote control panel. nil until the user
+	// pins a session by pressing S on a row. Recreated when the user
+	// pivots to a different session.
+	sidecar          *SidecarPanel
+	sidecarSessionID string
+	sidecarCancel    func() // cancels the daemon TailTranscript stream
 
 	// Overlays (one at a time)
 	overlay Widget
@@ -331,7 +338,7 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	a.sortSessions()
 
 	// Build widgets
-	a.tabs = NewTabBar([]string{"Sessions", "Settings"})
+	a.tabs = NewTabBar([]string{"Sessions", "Settings", "Sidecar"})
 	a.tabs.OnActivate = func(idx int) { a.activeTab = idx }
 	a.table = NewTableWidget([]string{"NAME", "BASEDIR", "MODEL", "RC", "MSGS", "SUMMARY", "LAST USED", "CREATED"})
 	a.table.SortCol = int(a.sortCol)
@@ -448,6 +455,10 @@ func (a *App) Run() error {
 	// The recover catches panics so a crash does not leave the user
 	// stuck in alt-screen with mouse mode active.
 	defer func() {
+		if a.sidecarCancel != nil {
+			a.sidecarCancel()
+			a.sidecarCancel = nil
+		}
 		if r := recover(); r != nil {
 			a.teardownScreen()
 			panic(r)
@@ -929,6 +940,21 @@ func (a *App) handleKey(e *tcell.EventKey) {
 		return
 	}
 
+	// When the Sidecar tab is active, the panel owns most key events
+	// so the user can type into the inject input without the global
+	// shortcuts (e.g. "d" for delete) firing while typing a message.
+	// Esc returns to the Sessions tab.
+	if a.activeTab == 2 && a.sidecar != nil {
+		if e.Key() == tcell.KeyEscape {
+			a.activeTab = 0
+			a.tabs.SetActive(0)
+			return
+		}
+		if a.sidecar.HandleEvent(e) {
+			return
+		}
+	}
+
 	// When a details sub-pane is focused, scroll keys go to that pane.
 	// Escape/Tab are handled globally below; action keys (r/v/s/d/c/etc.)
 	// still work from details focus to avoid mode confusion.
@@ -999,6 +1025,20 @@ func (a *App) handleKey(e *tcell.EventKey) {
 		case '2':
 			a.activeTab = 1
 			a.tabs.SetActive(1)
+			return
+		case '3':
+			a.activeTab = 2
+			a.tabs.SetActive(2)
+			return
+		case 'S':
+			// Pin the highlighted row in the sidecar tab and switch
+			// to it. Useful when the user wants the live transcript
+			// view of a remote control session one keystroke away.
+			if sess := a.rowSession(); sess != nil {
+				a.pinSidecar(sess)
+				a.activeTab = 2
+				a.tabs.SetActive(2)
+			}
 			return
 		case '!':
 			a.toggleSort(SortColName)
@@ -1302,6 +1342,8 @@ func (a *App) draw() {
 		if a.selected != nil {
 			a.details.Draw(a.screen, a.detailRect)
 		}
+	case 2:
+		a.drawSidecarTab(a.tableRect)
 	default:
 		a.drawSettingsTab(a.tableRect)
 	}
@@ -2002,6 +2044,75 @@ func (a *App) editConfigFile(project bool) {
 		cmd.Stderr = os.Stderr
 		_ = cmd.Run()
 	})
+}
+
+// drawSidecarTab renders the Sidecar tab body. When no session is
+// pinned the body shows a hint explaining the S shortcut. When a
+// session is pinned the embedded panel handles the rendering.
+func (a *App) drawSidecarTab(r Rect) {
+	if a.sidecar == nil {
+		drawString(a.screen, r.X+2, r.Y+1, StyleDefault.Foreground(ColorAccent).Bold(true), "Sidecar", r.W-4)
+		drawString(a.screen, r.X+2, r.Y+3, StyleSubtext, "Press S on a Sessions row to pin its live transcript here.", r.W-4)
+		drawString(a.screen, r.X+2, r.Y+4, StyleSubtext, "Sessions launched with --remote-control accept text from this panel.", r.W-4)
+		return
+	}
+	a.sidecar.Draw(a.screen, r)
+}
+
+// pinSidecar sets the panel target to the given session. Cancels any
+// running TailTranscript subscription, then opens a fresh stream and
+// fans the events into the panel buffer.
+func (a *App) pinSidecar(sess *session.Session) {
+	if sess == nil || sess.Metadata.SessionID == "" {
+		return
+	}
+	if a.sidecarCancel != nil {
+		a.sidecarCancel()
+		a.sidecarCancel = nil
+	}
+	bridgeURL := ""
+	if b, ok := a.bridgeFor(sess); ok {
+		bridgeURL = b.URL
+	}
+	panel := NewSidecarPanel(sess.Name, sess.Metadata.SessionID, bridgeURL)
+	panel.OnSend = func(text string) error {
+		if a.cb.SendToSession == nil {
+			return fmt.Errorf("daemon offline")
+		}
+		return a.cb.SendToSession(sess.Metadata.SessionID, text)
+	}
+	a.sidecar = panel
+	a.sidecarSessionID = sess.Metadata.SessionID
+
+	if a.cb.TailTranscript == nil {
+		return
+	}
+	events, cancel, err := a.cb.TailTranscript(sess.Metadata.SessionID, -1)
+	if err != nil {
+		panel.status = "tail failed: " + err.Error()
+		return
+	}
+	a.sidecarCancel = cancel
+	go a.runSidecarTail(events, panel)
+}
+
+// runSidecarTail drains the daemon stream and appends each line to
+// the panel buffer. PostEvent triggers a redraw on each line.
+func (a *App) runSidecarTail(events <-chan TranscriptLine, panel *SidecarPanel) {
+	for line := range events {
+		when := ""
+		if !line.Timestamp.IsZero() {
+			when = line.Timestamp.Local().Format("15:04:05")
+		}
+		panel.Append(SidecarLine{
+			Role: line.Role,
+			Text: line.Text,
+			When: when,
+		})
+		if a.screen != nil {
+			_ = a.screen.PostEvent(tcell.NewEventInterrupt(a))
+		}
+	}
 }
 
 // drawSettingsTab renders the Settings tab body. It surfaces the active

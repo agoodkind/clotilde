@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -60,6 +61,9 @@ type Server struct {
 	// `claude --remote-control`. Populated by the bridge watcher.
 	bridgeMu sync.RWMutex
 	bridges  map[string]*daemonpb.Bridge
+
+	// transcripts hub fans tail lines out to multiple subscribers.
+	transcripts *transcriptHub
 }
 
 // wrapperSession holds runtime state for one active claude wrapper process.
@@ -85,6 +89,7 @@ func New(log *slog.Logger) (*Server, error) {
 		subscribers:   make(map[chan *daemonpb.RegistryEvent]struct{}),
 		settingsLocks: make(map[string]*sync.Mutex),
 		bridges:       make(map[string]*daemonpb.Bridge),
+		transcripts:   newTranscriptHub(),
 	}
 
 	globalPath := globalSettingsPath()
@@ -1078,4 +1083,117 @@ func (s *Server) removeBridge(sessionID string) {
 		BridgeUrl:       prev.Url,
 	})
 	s.log.Info("bridge closed", "session_id", sessionID, "bridge", prev.BridgeSessionId)
+}
+
+// resolveTranscriptPath looks up the transcript path for a Claude
+// session UUID. Walks the global session store and returns the path
+// of the first session whose Metadata.SessionID or PreviousSessionIDs
+// matches. Returns the empty string when nothing matches.
+func resolveTranscriptPath(sessionID string) string {
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		return ""
+	}
+	all, err := store.List()
+	if err != nil {
+		return ""
+	}
+	for _, s := range all {
+		if s.Metadata.SessionID == sessionID {
+			return s.Metadata.TranscriptPath
+		}
+		for _, prev := range s.Metadata.PreviousSessionIDs {
+			if prev == sessionID {
+				return s.Metadata.TranscriptPath
+			}
+		}
+	}
+	return ""
+}
+
+// TailTranscript streams transcript lines for a session via the hub.
+// Reference counted so multiple subscribers share one underlying
+// fsnotify watcher per transcript.
+func (s *Server) TailTranscript(req *daemonpb.TailTranscriptRequest, stream daemonpb.AgentGateD_TailTranscriptServer) error {
+	if req.SessionId == "" {
+		return status.Error(codes.InvalidArgument, "session_id is required")
+	}
+	path := resolveTranscriptPath(req.SessionId)
+	if path == "" {
+		return status.Errorf(codes.NotFound, "no transcript for session %q", req.SessionId)
+	}
+	startOffset := req.StartAtOffset
+	if startOffset == 0 {
+		// Default to streaming future lines only. Callers that want
+		// the full file pass start_at_offset = 1 (effectively any
+		// nonzero positive value before the file size).
+		startOffset = -1
+	}
+	ch, cleanup, err := s.transcripts.Subscribe(req.SessionId, path, startOffset)
+	if err != nil {
+		return status.Errorf(codes.Internal, "open tailer: %v", err)
+	}
+	defer cleanup()
+
+	ctx := stream.Context()
+	for {
+		select {
+		case line, ok := <-ch:
+			if !ok {
+				return nil
+			}
+			if err := stream.Send(line); err != nil {
+				return err
+			}
+		case <-ctx.Done():
+			return nil
+		}
+	}
+}
+
+// SendToSession delivers text into a running claude session via the
+// per session inject socket the wrapper opened on launch. Returns
+// delivered=false when no socket exists, so callers can fall back to
+// telling the user to use the local terminal directly.
+func (s *Server) SendToSession(_ context.Context, req *daemonpb.SendToSessionRequest) (*daemonpb.SendToSessionResponse, error) {
+	if req.SessionId == "" {
+		return nil, status.Error(codes.InvalidArgument, "session_id is required")
+	}
+	socketPath := injectSocketPath(req.SessionId)
+	if _, err := os.Stat(socketPath); err != nil {
+		return &daemonpb.SendToSessionResponse{Delivered: false}, nil
+	}
+	conn, err := net.DialTimeout("unix", socketPath, 2*time.Second)
+	if err != nil {
+		return &daemonpb.SendToSessionResponse{Delivered: false}, nil
+	}
+	defer conn.Close()
+	payload := req.Text
+	if !strings.HasSuffix(payload, "\n") {
+		payload += "\n"
+	}
+	n, werr := conn.Write([]byte(payload))
+	if werr != nil {
+		return &daemonpb.SendToSessionResponse{Delivered: false, BytesWritten: int32(n)}, nil
+	}
+	return &daemonpb.SendToSessionResponse{Delivered: true, BytesWritten: int32(n)}, nil
+}
+
+// injectSocketPath returns the per session Unix socket path the
+// wrapper opens when launched with --remote-control. The directory is
+// created lazily by the wrapper.
+func injectSocketPath(sessionID string) string {
+	dir := injectSocketDir()
+	return filepath.Join(dir, sessionID+".sock")
+}
+
+// injectSocketDir is the per user directory that holds inject sockets.
+// Lives under XDG_RUNTIME_DIR when set, otherwise the per user temp
+// directory so macOS users (no XDG_RUNTIME_DIR by default) still get a
+// session local path.
+func injectSocketDir() string {
+	if xdg := os.Getenv("XDG_RUNTIME_DIR"); xdg != "" {
+		return filepath.Join(xdg, "clotilde", "inject")
+	}
+	return filepath.Join(os.TempDir(), "clotilde-inject")
 }
