@@ -1908,19 +1908,63 @@ func (a *App) openNewSessionPrompt() {
 	picker.OnSelect = func(path string) {
 		a.closeOverlay()
 		basedir := strings.TrimSpace(path)
+		a.openNewSessionRemoteControlModal(basedir)
+	}
+	a.overlay = picker
+	a.mode = StatusFilter
+}
+
+// openNewSessionRemoteControlModal is the second step in the new
+// session flow. After the basedir is chosen, the user picks whether
+// claude should launch with --remote-control or without. Both options
+// suspend the TUI, start the session, and refresh the table on
+// return. The modal defaults to "without" so users who just want a
+// local session can confirm by pressing Enter on the highlighted
+// option.
+func (a *App) openNewSessionRemoteControlModal(basedir string) {
+	launch := func(enableRC bool) {
+		a.closeOverlay()
 		runner := func() {
 			if a.cb.StartSessionWithBasedir != nil {
 				_ = a.cb.StartSessionWithBasedir(basedir)
-				return
-			}
-			if a.cb.StartSession != nil {
+			} else if a.cb.StartSession != nil {
 				_ = a.cb.StartSession()
 			}
+			if !enableRC {
+				return
+			}
+			// After the session was created, the latest session is
+			// the most recently touched one. Flip its RC flag. The
+			// session may have already exited by the time this runs
+			// but SetRemoteControl persists into settings.json so the
+			// preference is ready for the next resume.
+			if a.cb.SetRemoteControl == nil || a.cb.Store == nil {
+				return
+			}
+			sessions, err := a.cb.Store.List()
+			if err != nil || len(sessions) == 0 {
+				return
+			}
+			_ = a.cb.SetRemoteControl(sessions[0], true)
 		}
 		a.suspendAndRun(runner)
 		a.refreshSessions()
 	}
-	a.overlay = picker
+	entries := []OptionsModalEntry{
+		{
+			Label:  "Launch without remote control",
+			Hint:   "classic stdio",
+			Action: func() { launch(false) },
+		},
+		{
+			Label:  "Launch with --remote-control",
+			Hint:   "exposes bridge URL at claude.ai/code",
+			Action: func() { launch(true) },
+		},
+	}
+	modal := NewOptionsModal("Start new session at "+shortPath(basedir), entries)
+	modal.OnCancel = func() { a.closeOverlay() }
+	a.overlay = modal
 	a.mode = StatusFilter
 }
 
@@ -2352,28 +2396,19 @@ func (a *App) openBridgeEntry(sess *session.Session, close func()) OptionsModalE
 }
 
 // copyBridgeEntry builds the "copy bridge URL" entry.  Disabled when
-// no bridge is active. Pipes the URL to pbcopy on macOS.
+// no bridge is active. Uses CopyToClipboard which picks the right
+// tool for the host OS (pbcopy, wl-copy, xclip, xsel, or clip.exe).
 func (a *App) copyBridgeEntry(sess *session.Session, close func()) OptionsModalEntry {
 	b, ok := a.bridgeFor(sess)
 	return OptionsModalEntry{
 		Label: "Copy bridge URL",
-		Hint:  "via pbcopy",
+		Hint:  "system clipboard",
 		Action: func() {
 			close()
 			if !ok {
 				return
 			}
-			cmd := exec.Command("pbcopy")
-			stdin, err := cmd.StdinPipe()
-			if err != nil {
-				return
-			}
-			if err := cmd.Start(); err != nil {
-				return
-			}
-			_, _ = stdin.Write([]byte(b.URL))
-			_ = stdin.Close()
-			_ = cmd.Wait()
+			_ = CopyToClipboard(b.URL)
 		},
 		Disabled: !ok,
 	}
