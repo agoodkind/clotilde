@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"time"
 
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
@@ -93,6 +94,76 @@ func returnToDashboard(sess *session.Session) {
 	}
 	fmt.Println()
 	runPostSessionDashboard(sess)
+}
+
+// refreshSessionSummary requests a fresh Context summary via the daemon and
+// polls the on-disk metadata until it changes, up to a short timeout. The
+// onDone callback fires with the updated session once the new Context is
+// persisted. It is called with nil if the refresh times out or fails.
+//
+// Unlike autoUpdateContext this function is called from the live TUI, not
+// on session exit, so it has to watch for completion to redraw the row.
+// The daemon runs the LLM call in the background; polling is necessary
+// because the gRPC call returns before the LLM finishes.
+func refreshSessionSummary(store session.Store, sess *session.Session, onDone func(*session.Session)) error {
+	if sess == nil {
+		return fmt.Errorf("nil session")
+	}
+	if sess.Metadata.IsIncognito || sess.Metadata.TranscriptPath == "" {
+		return nil
+	}
+
+	recent := claude.ExtractRecentMessages(sess.Metadata.TranscriptPath, 5, 300)
+	if len(recent) == 0 {
+		return nil
+	}
+
+	messages := make([]string, 0, len(recent))
+	for _, m := range recent {
+		role := "User"
+		if m.Role == "assistant" {
+			role = "Assistant"
+		}
+		messages = append(messages, fmt.Sprintf("[%s] %s", role, m.Text))
+	}
+
+	ctx := context.Background()
+	client, err := daemon.ConnectOrStart(ctx)
+	if err != nil {
+		return err
+	}
+	// Dispatch the request. The daemon returns immediately; the LLM call
+	// happens in a separate goroutine inside the daemon process.
+	if err := client.UpdateContext(sess.Name, sess.Metadata.WorkspaceRoot, messages); err != nil {
+		client.Close()
+		return err
+	}
+	client.Close()
+
+	// Poll in a goroutine so the UI stays responsive.
+	originalCtx := sess.Metadata.Context
+	go func() {
+		deadline := time.Now().Add(45 * time.Second)
+		ticker := time.NewTicker(750 * time.Millisecond)
+		defer ticker.Stop()
+		for time.Now().Before(deadline) {
+			<-ticker.C
+			updated, err := store.Get(sess.Name)
+			if err != nil || updated == nil {
+				continue
+			}
+			if updated.Metadata.Context != originalCtx {
+				if onDone != nil {
+					onDone(updated)
+				}
+				return
+			}
+		}
+		if onDone != nil {
+			onDone(nil)
+		}
+	}()
+	return nil
 }
 
 // autoUpdateContext sends a fire-and-forget request to the daemon to generate
