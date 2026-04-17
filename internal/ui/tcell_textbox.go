@@ -114,7 +114,8 @@ func (tb *TextBox) TotalLines(w int) int {
 	return len(tb.wrappedLines(w))
 }
 
-// Draw renders into r.
+// Draw renders into r. A cute one column scrollbar appears on the right
+// edge whenever the wrapped content is taller than the viewport.
 func (tb *TextBox) Draw(scr tcell.Screen, r Rect) {
 	tb.Rect = r
 	clearRect(scr, r)
@@ -122,21 +123,39 @@ func (tb *TextBox) Draw(scr tcell.Screen, r Rect) {
 	y := r.Y
 	contentY := y
 
+	// Compute whether we will need a scrollbar before we wrap text, so
+	// we can shrink the wrap width to match the content column. Missing
+	// this step makes the last rune of every line collide with the bar.
+	// We wrap provisionally using the full width to count rows, then
+	// rewrap at the narrower width if overflow is detected.
+	rawLines := tb.wrappedLines(r.W)
+	rows := r.H
+	if tb.Title != "" {
+		rows = r.H - 1
+	}
+	needsBar := len(rawLines) > rows && r.W > 2
+	contentW := r.W
+	if needsBar {
+		contentW = r.W - 1
+	}
+
 	if tb.Title != "" {
 		style := tb.TitleStyle
 		if style == (tcell.Style{}) {
 			style = StyleMuted
 		}
-		drawString(scr, r.X, y, style, tb.Title, r.W)
+		drawString(scr, r.X, y, style, tb.Title, contentW)
 		contentY = y + 1
 	}
 
-	rows := r.H - (contentY - r.Y)
 	if rows <= 0 {
 		return
 	}
 
-	lines := tb.wrappedLines(r.W)
+	lines := rawLines
+	if needsBar {
+		lines = tb.wrappedLines(contentW)
+	}
 	maxOff := imax(0, len(lines)-rows)
 	tb.Offset = clamp(tb.Offset, 0, maxOff)
 
@@ -147,7 +166,7 @@ func (tb *TextBox) Draw(scr tcell.Screen, r Rect) {
 		}
 		segs := lines[idx]
 		x := r.X
-		remaining := r.W
+		remaining := contentW
 		for _, seg := range segs {
 			used := drawString(scr, x, contentY+i, seg.Style, seg.Text, remaining)
 			x += used
@@ -156,6 +175,10 @@ func (tb *TextBox) Draw(scr tcell.Screen, r Rect) {
 				break
 			}
 		}
+	}
+
+	if needsBar {
+		drawScrollbar(scr, r.X+r.W-1, contentY, rows, rows, len(lines), tb.Offset)
 	}
 }
 
