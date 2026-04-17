@@ -23,13 +23,14 @@ import (
 type ReturnPrompt struct {
 	SessionName string
 	Stats       []ReturnPromptStat // key/value pairs rendered as a block
-	Index       int                // 0 resume, 1 list, 2 quit
+	Index       int                // 0 resume, 1 compact, 2 list, 3 quit
 	Rect        Rect
 
-	OnResume func()
-	OnList   func()
-	OnQuit   func()
-	OnCancel func() // Esc: same as OnList (dismiss to the full table)
+	OnResume  func()
+	OnCompact func()
+	OnList    func()
+	OnQuit    func()
+	OnCancel  func() // Esc: same as OnList (dismiss to the full table)
 }
 
 // ReturnPromptStat is one labeled statistic shown in the modal body.
@@ -38,19 +39,21 @@ type ReturnPromptStat struct {
 	Value string
 }
 
-const returnOptionCount = 3
+const returnOptionCount = 4
 
 // Draw renders a centered modal with a stats block and a three row menu.
 // Dimensions scale to the longest line so the box never clips content.
 func (p *ReturnPrompt) Draw(scr tcell.Screen, r Rect) {
 	title := "Session exited"
 	resumeLine := fmt.Sprintf("Return to %s", p.SessionName)
+	compactLine := "Compact this session..."
 	listLine := "Go back to session list"
 	quitLine := "Quit clotilde"
 
 	// Width: the longer of the widest stat row and the widest option.
 	widest := runeCount(title)
 	widest = imax(widest, runeCount(resumeLine))
+	widest = imax(widest, runeCount(compactLine))
 	widest = imax(widest, runeCount(listLine))
 	widest = imax(widest, runeCount(quitLine))
 	for _, s := range p.Stats {
@@ -98,11 +101,13 @@ func (p *ReturnPrompt) Draw(scr tcell.Screen, r Rect) {
 	y++
 
 	// Options.
-	drawOption(scr, inner.X, y, inner.W, "Return", resumeLine, p.Index == 0, ColorSuccess)
+	drawOption(scr, inner.X, y, inner.W, "Return ", resumeLine, p.Index == 0, ColorSuccess)
 	y++
-	drawOption(scr, inner.X, y, inner.W, "List  ", listLine, p.Index == 1, ColorAccent)
+	drawOption(scr, inner.X, y, inner.W, "Compact", compactLine, p.Index == 1, ColorWarning)
 	y++
-	drawOption(scr, inner.X, y, inner.W, "Quit  ", quitLine, p.Index == 2, ColorError)
+	drawOption(scr, inner.X, y, inner.W, "List   ", listLine, p.Index == 2, ColorAccent)
+	y++
+	drawOption(scr, inner.X, y, inner.W, "Quit   ", quitLine, p.Index == 3, ColorError)
 	y++
 
 	// Footer hint sits on the last inner row.
@@ -178,6 +183,11 @@ func (p *ReturnPrompt) HandleEvent(ev tcell.Event) bool {
 					p.OnList()
 				}
 				return true
+			case 'c', 'C':
+				if p.OnCompact != nil {
+					p.OnCompact()
+				}
+				return true
 			}
 		}
 	case *tcell.EventMouse:
@@ -196,10 +206,14 @@ func (p *ReturnPrompt) activate() {
 			p.OnResume()
 		}
 	case 1:
+		if p.OnCompact != nil {
+			p.OnCompact()
+		}
+	case 2:
 		if p.OnList != nil {
 			p.OnList()
 		}
-	case 2:
+	case 3:
 		if p.OnQuit != nil {
 			p.OnQuit()
 		}
