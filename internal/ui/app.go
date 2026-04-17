@@ -318,7 +318,7 @@ func (a *App) openReturnPrompt(sess *session.Session) {
 	prompt := &ReturnPrompt{
 		SessionName: sess.Name,
 		Stats:       a.buildReturnPromptStats(sess),
-		Index:       2, // Quit is the default highlighted option
+		Index:       3, // Quit is the default highlighted option
 	}
 	prompt.OnResume = func() {
 		a.overlay = nil
@@ -326,6 +326,10 @@ func (a *App) openReturnPrompt(sess *session.Session) {
 		if row := a.table.SelectedRow; row >= 0 && row < len(a.visibleIdx) {
 			a.resumeRow(row)
 		}
+	}
+	prompt.OnCompact = func() {
+		a.overlay = nil
+		a.openRichCompactForm(sess)
 	}
 	prompt.OnList = func() {
 		a.overlay = nil
