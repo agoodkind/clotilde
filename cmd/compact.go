@@ -562,25 +562,39 @@ Examples:
 // applyCompactChoices executes a compact with the given UI-generated choices.
 // Called from the main TUI's compact form. Mirrors the CLI pipeline: backup,
 // strip, then move boundary. Writes are skipped when DryRun is set.
-func applyCompactChoices(sess *session.Session, c ui.CompactChoices) error {
+// Returns a CompactResult so the TUI can display what changed without
+// scraping stdout.
+func applyCompactChoices(sess *session.Session, c ui.CompactChoices) (ui.CompactResult, error) {
+	res := ui.CompactResult{
+		KeptLastImages:   c.KeepLastImages,
+		KeptLastTools:    c.KeepLastToolResults,
+		KeptLastThinking: c.KeepLastThinking,
+	}
 	path := sess.Metadata.TranscriptPath
 	if path == "" {
-		return fmt.Errorf("session has no transcript path")
+		return res, fmt.Errorf("session has no transcript path")
 	}
-	if _, err := os.Stat(path); err != nil {
-		return fmt.Errorf("transcript not found: %w", err)
+	beforeInfo, err := os.Stat(path)
+	if err != nil {
+		return res, fmt.Errorf("transcript not found: %w", err)
+	}
+	res.BeforeBytes = beforeInfo.Size()
+	if beforeChain, _, _, err := transcript.WalkChain(path); err == nil {
+		res.BeforeChainLines = len(beforeChain)
 	}
 	if !c.DryRun {
-		if _, err := transcript.BackupTranscript(path, sess.Name); err != nil {
-			return fmt.Errorf("pre-compact backup failed: %w", err)
+		backup, err := transcript.BackupTranscript(path, sess.Name)
+		if err != nil {
+			return res, fmt.Errorf("pre-compact backup failed: %w", err)
 		}
+		res.BackupPath = backup.Path
 	}
 
 	// Strip phase.
 	if c.StripToolResults || c.StripThinking || c.StripImages || c.StripLargeInputs {
 		chain, _, all, err := transcript.WalkChain(path)
 		if err != nil {
-			return err
+			return res, err
 		}
 		opts := transcript.CompactOptions{
 			StripToolResults:    c.StripToolResults,
@@ -593,10 +607,15 @@ func applyCompactChoices(sess *session.Session, c ui.CompactChoices) error {
 		if c.StripLargeInputs {
 			opts.StripLargeBytes = 1024
 		}
-		newLines, _ := transcript.StripContent(all, chain, opts)
+		newLines, stats := transcript.StripContent(all, chain, opts)
+		res.StrippedTotal += stats.Total()
+		res.StrippedImages += stats.Images
+		res.StrippedTools += stats.ToolResults
+		res.StrippedThinking += stats.Thinking
+		res.StrippedLargeIn += stats.LargeInputs
 		if !c.DryRun {
 			if err := writeLines(path, newLines); err != nil {
-				return err
+				return res, err
 			}
 		}
 	}
@@ -605,9 +624,10 @@ func applyCompactChoices(sess *session.Session, c ui.CompactChoices) error {
 	// the entire repositioning step. Without UseBoundary the strip
 	// flags above are the only thing the user wanted us to do.
 	if c.UseBoundary && c.BoundaryPercent > 0 && c.BoundaryPercent < 100 {
+		res.BoundaryMoved = true
 		chain, _, all, err := transcript.WalkChain(path)
 		if err != nil {
-			return err
+			return res, err
 		}
 		summary := "Conversation compacted."
 		existing := transcript.FindBoundaries(all)
@@ -626,14 +646,14 @@ func applyCompactChoices(sess *session.Session, c ui.CompactChoices) error {
 			if !c.DryRun {
 				removed, rmErr := transcript.RemoveBoundary(all, lastB)
 				if rmErr != nil {
-					return fmt.Errorf("removing old boundary: %w", rmErr)
+					return res, fmt.Errorf("removing old boundary: %w", rmErr)
 				}
 				if err := writeLines(path, removed); err != nil {
-					return err
+					return res, err
 				}
 				chain, _, all, err = transcript.WalkChain(path)
 				if err != nil {
-					return err
+					return res, err
 				}
 			}
 		}
@@ -643,15 +663,21 @@ func applyCompactChoices(sess *session.Session, c ui.CompactChoices) error {
 		}
 		newLines, insErr := transcript.InsertBoundary(all, chain, targetStep, summary)
 		if insErr != nil {
-			return fmt.Errorf("inserting boundary: %w", insErr)
+			return res, fmt.Errorf("inserting boundary: %w", insErr)
 		}
 		if !c.DryRun {
 			if err := writeLines(path, newLines); err != nil {
-				return err
+				return res, err
 			}
 		}
 	}
-	return nil
+	if afterInfo, statErr := os.Stat(path); statErr == nil {
+		res.AfterBytes = afterInfo.Size()
+	}
+	if afterChain, _, _, err := transcript.WalkChain(path); err == nil {
+		res.AfterChainLines = len(afterChain)
+	}
+	return res, nil
 }
 
 func writeLines(path string, lines []string) error {

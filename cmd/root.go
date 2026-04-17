@@ -139,7 +139,7 @@ func buildAppCallbacks(store session.Store, sessions []*session.Session) ui.AppC
 		DeleteSession: func(sess *session.Session) error {
 			return deleteSession(sess, store)
 		},
-		ApplyCompact: func(sess *session.Session, choices ui.CompactChoices) error {
+		ApplyCompact: func(sess *session.Session, choices ui.CompactChoices) (ui.CompactResult, error) {
 			return applyCompactChoices(sess, choices)
 		},
 		RenameSession: func(sess *session.Session) (string, error) {
