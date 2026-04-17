@@ -454,17 +454,14 @@ func (s *Server) updateSessionContext(payload hookEventPayload) {
 	// of ~/.claude/projects/-/ (the encoded form of /). Running from /
 	// also caused macOS TCC prompts because claude tried to inspect
 	// neighbouring system directories.
+	// Anchor claude in a clotilde-owned scratch dir so the resulting
+	// transcript file lands inside ~/Library/Caches/clotilde/... and
+	// not in ~/.claude/projects/-/ (the encoded form of /). The
+	// subprocess inherits the daemon's environment because claude
+	// needs ANTHROPIC_API_KEY and the rest of its npm runtime.
 	cmd := exec.CommandContext(ctx, claudeBin, "-p", "--model", "sonnet", prompt)
-	scratch := contextScratchDir()
-	if scratch != "" {
+	if scratch := contextScratchDir(); scratch != "" {
 		cmd.Dir = scratch
-	}
-	// Force a minimal env so the subprocess does not inherit the
-	// daemon's launchd PATH and re-trigger the same TCC probes that
-	// cachedRealClaudePath protects against.
-	cmd.Env = []string{
-		"HOME=" + os.Getenv("HOME"),
-		"PATH=/usr/bin:/bin:/usr/sbin:/sbin",
 	}
 	output, err := cmd.Output()
 	if err != nil {
