@@ -53,6 +53,29 @@ type AppCallbacks struct {
 	// SetBasedir rewrites the session's workspaceRoot field in metadata.
 	// newPath is already resolved by the caller; "" clears the field.
 	SetBasedir func(sess *session.Session, newPath string) error
+	// SetRemoteControl flips the per session --remote-control flag.
+	// The callback should route through the daemon so subscribers see
+	// the change. The TUI uses the result to refresh its visible state.
+	SetRemoteControl func(sess *session.Session, enabled bool) error
+	// SetGlobalRemoteControl writes the global config default. Used by
+	// the Settings tab to flip the default for sessions that have no
+	// explicit per session value.
+	SetGlobalRemoteControl func(enabled bool) error
+	// IsRemoteControlEnabled reports the current per session value so
+	// the options popup can render the correct toggle label.
+	IsRemoteControlEnabled func(sess *session.Session) bool
+	// IsGlobalRemoteControlEnabled reports the global default for the
+	// Settings tab indicator.
+	IsGlobalRemoteControlEnabled func() bool
+	// ListBridges returns the daemon's view of active bridges.
+	ListBridges func() ([]Bridge, error)
+	// SendToSession injects text into the running claude session via
+	// the daemon. The TUI sidecar uses this for user input.
+	SendToSession func(sessionID, text string) error
+	// TailTranscript opens a streaming subscription for live transcript
+	// lines from the daemon. Used by the sidecar widget. The returned
+	// cancel function tears down the stream.
+	TailTranscript func(sessionID string, startOffset int64) (<-chan TranscriptLine, func(), error)
 	// RefreshSummary triggers a background regeneration of the session's
 	// Context field via the daemon. It should return quickly once the
 	// request is queued. The returned sessions callback (may be nil)
@@ -76,9 +99,32 @@ type AppCallbacks struct {
 // ui package keeps its own type so the daemon's protobuf does not leak
 // into widget code.
 type RegistryEvent struct {
-	Kind        string
-	SessionName string
-	SessionID   string
+	Kind            string
+	SessionName     string
+	SessionID       string
+	BridgeSessionID string
+	BridgeURL       string
+}
+
+// Bridge mirrors the daemon's notion of an active claude
+// --remote-control session so widgets can render the URL without
+// importing the daemon protobuf.
+type Bridge struct {
+	SessionID       string
+	PID             int64
+	BridgeSessionID string
+	URL             string
+}
+
+// TranscriptLine carries one parsed line of a streamed transcript
+// from the daemon. The widget renders Role and Text directly and uses
+// Timestamp for the leading clock column.
+type TranscriptLine struct {
+	ByteOffset int64
+	RawJSONL   string
+	Role       string
+	Text       string
+	Timestamp  time.Time
 }
 
 // CompactResult is the in-TUI summary of a finished compaction. The
@@ -197,6 +243,12 @@ type App struct {
 	// Caches
 	statsCache map[string]*transcript.CompactQuickStats
 	modelCache map[string]string
+	// bridges holds the daemon's view of active claude --remote-control
+	// bridges. Keyed by Claude session UUID. Updated on startup via
+	// ListBridges and on each BRIDGE_OPENED / BRIDGE_CLOSED event.
+	bridgeMu sync.RWMutex
+	bridges  map[string]Bridge
+
 	// exactTokenCache stores Claude API token counts keyed by transcript
 	// path. Populated by a background goroutine when ANTHROPIC_API_KEY is
 	// set. When a path has an entry the display switches off the "~"
@@ -265,6 +317,7 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 		mode:          StatusBrowse,
 		statsCache:      make(map[string]*transcript.CompactQuickStats),
 		modelCache:      make(map[string]string),
+		bridges:         make(map[string]Bridge),
 		exactTokenCache: make(map[string]int),
 		detailCache:       make(map[string]SessionDetail),
 		detailLoading:     make(map[string]bool),
@@ -280,7 +333,7 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	// Build widgets
 	a.tabs = NewTabBar([]string{"Sessions", "Settings"})
 	a.tabs.OnActivate = func(idx int) { a.activeTab = idx }
-	a.table = NewTableWidget([]string{"NAME", "BASEDIR", "MODEL", "MSGS", "SUMMARY", "LAST USED", "CREATED"})
+	a.table = NewTableWidget([]string{"NAME", "BASEDIR", "MODEL", "RC", "MSGS", "SUMMARY", "LAST USED", "CREATED"})
 	a.table.SortCol = int(a.sortCol)
 	a.table.SortAsc = a.sortAsc
 	a.table.OnActivate = func(row int) { a.openSessionOptions(row) }
@@ -289,6 +342,7 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	}
 	a.details = NewDetailsView()
 	a.details.FormatTokens = a.formatSessionTokens
+	a.details.LookupBridge = a.bridgeFor
 	a.status = &StatusBarWidget{Mode: StatusBrowse}
 
 	a.populateTable()
@@ -428,6 +482,18 @@ func (a *App) Run() error {
 		}
 	}
 
+	// Seed the bridge map from the daemon. Subsequent
+	// BRIDGE_OPENED / BRIDGE_CLOSED events keep it fresh.
+	if a.cb.ListBridges != nil {
+		if list, err := a.cb.ListBridges(); err == nil {
+			a.bridgeMu.Lock()
+			for _, b := range list {
+				a.bridges[b.SessionID] = b
+			}
+			a.bridgeMu.Unlock()
+		}
+	}
+
 	// Idle sweeper that regenerates stale session summaries one at a
 	// time while the user is inactive. Rate limited so it never floods
 	// the daemon or the upstream LLM.
@@ -546,12 +612,30 @@ func (a *App) noteInteraction() {
 }
 
 // runRegistrySubscriber drains the daemon event stream and pokes the
-// store watcher's interrupt path on every event. The reload runs on
-// the same code path as the polling watcher so concurrency stays
-// simple: the event loop owns all state mutations.
+// store watcher's interrupt path on every event. Bridge events also
+// patch the local bridge map so the dashboard reflects new and
+// closed bridges within milliseconds. The reload runs on the same
+// code path as the polling watcher so concurrency stays simple.
 func (a *App) runRegistrySubscriber(events <-chan RegistryEvent) {
 	for ev := range events {
-		_ = ev
+		switch ev.Kind {
+		case "BRIDGE_OPENED":
+			if ev.SessionID != "" {
+				a.bridgeMu.Lock()
+				a.bridges[ev.SessionID] = Bridge{
+					SessionID:       ev.SessionID,
+					BridgeSessionID: ev.BridgeSessionID,
+					URL:             ev.BridgeURL,
+				}
+				a.bridgeMu.Unlock()
+			}
+		case "BRIDGE_CLOSED":
+			if ev.SessionID != "" {
+				a.bridgeMu.Lock()
+				delete(a.bridges, ev.SessionID)
+				a.bridgeMu.Unlock()
+			}
+		}
 		if a.screen != nil {
 			_ = a.screen.PostEvent(tcell.NewEventInterrupt(a))
 		}
@@ -1127,10 +1211,9 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 			// CREATED). MSGS and SUMMARY do not have their own sort
 			// mode yet so clicks on those columns fall through.
 			if y == a.tableRect.Y {
-				// Table column order: NAME, BASEDIR, MODEL, MSGS,
-				// SUMMARY, LAST USED, CREATED. Each clickable column
-				// toggles its sort and flips the asc flag on a repeat
-				// click of the same column.
+				// Table column order: NAME, BASEDIR, MODEL, RC, MSGS,
+				// SUMMARY, LAST USED, CREATED. The RC badge has no
+				// sort mode of its own; clicks on it fall through.
 				switch a.table.ColAtX(x) {
 				case 0:
 					a.toggleSort(SortColName)
@@ -1138,13 +1221,13 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 					a.toggleSort(SortColWorkspace)
 				case 2:
 					a.toggleSort(SortColModel)
-				case 3:
-					a.toggleSort(SortColMessages)
 				case 4:
-					a.toggleSort(SortColSummary)
+					a.toggleSort(SortColMessages)
 				case 5:
-					a.toggleSort(SortColUsed)
+					a.toggleSort(SortColSummary)
 				case 6:
+					a.toggleSort(SortColUsed)
+				case 7:
 					a.toggleSort(SortColCreated)
 				}
 				return
@@ -1359,10 +1442,19 @@ func (a *App) rowFor(sess *session.Session) []TableCell {
 		msgs = "-"
 		msgStyle = StyleDefault.Foreground(ColorMuted).Dim(true)
 	}
+	rcCell := TableCell{Text: " - ", Style: StyleDefault.Foreground(ColorMuted).Dim(true)}
+	if _, active := a.bridgeFor(sess); active {
+		rcCell = TableCell{Text: " RC ", Style: StyleDefault.Foreground(ColorSuccess).Bold(true)}
+	} else if a.cb.IsRemoteControlEnabled != nil && a.cb.IsRemoteControlEnabled(sess) {
+		// Flag is on but no live bridge yet; the session is configured
+		// to launch with --remote-control next time it is resumed.
+		rcCell = TableCell{Text: " rc ", Style: StyleDefault.Foreground(ColorAccent)}
+	}
 	return []TableCell{
 		{Text: sess.Name, Style: nameStyle},
 		{Text: shortPath(sess.Metadata.WorkspaceRoot), Style: subStyle},
 		{Text: model, Style: modelStyle},
+		rcCell,
 		{Text: msgs, Style: msgStyle},
 		{Text: summary, Style: summaryStyle},
 		{Text: util.FormatRelativeTime(lastUsedTime(sess)), Style: subStyle},
@@ -1461,8 +1553,9 @@ func (a *App) toggleSort(col SortColumn) {
 	}
 }
 
-// sortColTableIndex maps a SortColumn to the table column index used by
-// the table widget for header indicators.
+// sortColTableIndex maps a SortColumn to the table column index used
+// by the table widget for header indicators. The RC badge column
+// occupies index 3 between MODEL and MSGS.
 func sortColTableIndex(c SortColumn) int {
 	switch c {
 	case SortColName:
@@ -1472,13 +1565,13 @@ func sortColTableIndex(c SortColumn) int {
 	case SortColModel:
 		return 2
 	case SortColMessages:
-		return 3
-	case SortColSummary:
 		return 4
-	case SortColUsed:
+	case SortColSummary:
 		return 5
-	case SortColCreated:
+	case SortColUsed:
 		return 6
+	case SortColCreated:
+		return 7
 	}
 	return -1
 }
@@ -2057,6 +2150,90 @@ func (a *App) popOverlay() bool {
 	return true
 }
 
+// remoteControlEntry builds the toggle entry for the options popup.
+// The label flips between Enable and Disable based on the current
+// per session value as known to the wired callback.
+func (a *App) remoteControlEntry(sess *session.Session, close func()) OptionsModalEntry {
+	enabled := false
+	if a.cb.IsRemoteControlEnabled != nil {
+		enabled = a.cb.IsRemoteControlEnabled(sess)
+	}
+	label := "Enable remote control"
+	if enabled {
+		label = "Disable remote control"
+	}
+	return OptionsModalEntry{
+		Label: label,
+		Hint:  "claude --remote-control",
+		Action: func() {
+			close()
+			if a.cb.SetRemoteControl != nil {
+				_ = a.cb.SetRemoteControl(sess, !enabled)
+				a.refreshSessions()
+			}
+		},
+		Disabled: a.cb.SetRemoteControl == nil,
+	}
+}
+
+// openBridgeEntry builds the "open bridge in browser" entry.  Only
+// enabled when the daemon reports an active bridge for this session.
+func (a *App) openBridgeEntry(sess *session.Session, close func()) OptionsModalEntry {
+	b, ok := a.bridgeFor(sess)
+	return OptionsModalEntry{
+		Label: "Open bridge in browser",
+		Hint:  "uses /usr/bin/open",
+		Action: func() {
+			close()
+			if !ok {
+				return
+			}
+			_ = exec.Command("open", b.URL).Start()
+		},
+		Disabled: !ok,
+	}
+}
+
+// copyBridgeEntry builds the "copy bridge URL" entry.  Disabled when
+// no bridge is active. Pipes the URL to pbcopy on macOS.
+func (a *App) copyBridgeEntry(sess *session.Session, close func()) OptionsModalEntry {
+	b, ok := a.bridgeFor(sess)
+	return OptionsModalEntry{
+		Label: "Copy bridge URL",
+		Hint:  "via pbcopy",
+		Action: func() {
+			close()
+			if !ok {
+				return
+			}
+			cmd := exec.Command("pbcopy")
+			stdin, err := cmd.StdinPipe()
+			if err != nil {
+				return
+			}
+			if err := cmd.Start(); err != nil {
+				return
+			}
+			_, _ = stdin.Write([]byte(b.URL))
+			_ = stdin.Close()
+			_ = cmd.Wait()
+		},
+		Disabled: !ok,
+	}
+}
+
+// bridgeFor returns the cached bridge for sess, if any. Reads under
+// the bridge mutex.
+func (a *App) bridgeFor(sess *session.Session) (Bridge, bool) {
+	if sess == nil || sess.Metadata.SessionID == "" {
+		return Bridge{}, false
+	}
+	a.bridgeMu.RLock()
+	defer a.bridgeMu.RUnlock()
+	b, ok := a.bridges[sess.Metadata.SessionID]
+	return b, ok
+}
+
 // rowSession returns the session under the table cursor regardless of
 // whether the details pane is currently showing it. Returns nil when no
 // row is highlighted.
@@ -2117,6 +2294,9 @@ func (a *App) openSessionOptionsFor(sess *session.Session) {
 				a.openBasedirEditor(sess)
 			},
 		},
+		a.remoteControlEntry(sess, close),
+		a.openBridgeEntry(sess, close),
+		a.copyBridgeEntry(sess, close),
 		{
 			Label: "Rename",
 			Hint:  "edits the registry name",

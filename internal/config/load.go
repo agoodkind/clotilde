@@ -70,6 +70,39 @@ func LoadGlobalOrDefault() (*Config, error) {
 	return cfg, nil
 }
 
+// SaveGlobal writes the config back to the global location as TOML.
+// The directory is created if missing. Existing JSON files are not
+// migrated; callers can delete the JSON manually after the TOML lands.
+func SaveGlobal(cfg *Config) error {
+	if cfg == nil {
+		return fmt.Errorf("nil config")
+	}
+	globalDir := filepath.Dir(GlobalConfigPath())
+	if err := os.MkdirAll(globalDir, 0o755); err != nil {
+		return fmt.Errorf("create global config dir: %w", err)
+	}
+	tomlPath := filepath.Join(globalDir, "config.toml")
+	tmp := tomlPath + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return fmt.Errorf("open tmp: %w", err)
+	}
+	if err := toml.NewEncoder(f).Encode(cfg); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("encode toml: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("close tmp: %w", err)
+	}
+	if err := os.Rename(tmp, tomlPath); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("rename: %w", err)
+	}
+	return nil
+}
+
 // MergedProfiles returns a profile map combining global and project configs.
 // Project-level profiles take precedence over global ones with the same name.
 func MergedProfiles(clotildeRoot string) (map[string]Profile, error) {

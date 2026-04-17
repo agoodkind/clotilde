@@ -35,10 +35,11 @@ type Metadata struct {
 
 // Settings represents Claude Code session-specific settings stored in settings.json.
 type Settings struct {
-	Model       string      `json:"model,omitempty"`
-	EffortLevel string      `json:"effortLevel,omitempty"`
-	OutputStyle string      `json:"outputStyle,omitempty"`
-	Permissions Permissions `json:"permissions,omitzero"`
+	Model         string      `json:"model,omitempty"`
+	EffortLevel   string      `json:"effortLevel,omitempty"`
+	OutputStyle   string      `json:"outputStyle,omitempty"`
+	RemoteControl bool        `json:"remoteControl,omitempty"`
+	Permissions   Permissions `json:"permissions,omitzero"`
 }
 
 // Permissions represents the permissions configuration for a session.

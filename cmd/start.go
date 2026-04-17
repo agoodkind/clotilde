@@ -102,6 +102,13 @@ Pass additional flags to Claude Code after '--':
 				return err
 			}
 
+			// Persist remote control preference into session settings
+			// before launch so claude.Start picks the flag up via the
+			// remoteControlEnabled helper. The daemon owns the write.
+			if err := applyRemoteControlFlag(cmd, result.Session); err != nil {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), ui.Warning(fmt.Sprintf("remote control setting failed: %v", err)))
+			}
+
 			// Print output
 			if params.Incognito {
 				_, _ = fmt.Fprintln(cmd.OutOrStdout(), ui.Info(fmt.Sprintf("👻 Created incognito session '%s' (%s)", result.Session.Name, result.Session.Metadata.SessionID)))
@@ -125,6 +132,8 @@ Pass additional flags to Claude Code after '--':
 	cmd.Flags().Bool("incognito", false, "Create incognito session (auto-deletes on exit)")
 	cmd.Flags().String("context", "", "Session context (e.g. \"working on ticket GH-123\")")
 	cmd.Flags().String("profile", "", "Named profile from config (model, permissions, output style)")
+	cmd.Flags().Bool("remote-control", false, "Launch with --remote-control so the session is exposed via claude.ai/code/<bridge>")
+	cmd.Flags().Bool("no-remote-control", false, "Force-disable remote control even if a profile or global default has it on")
 
 	// Permission flags
 	cmd.Flags().String("permission-mode", "", "Permission mode (acceptEdits, bypassPermissions, default, dontAsk, plan)")

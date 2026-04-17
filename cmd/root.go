@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
@@ -211,9 +212,93 @@ func buildAppCallbacks(store session.Store, sessions []*session.Session) ui.AppC
 				defer close(out)
 				for ev := range raw {
 					out <- ui.RegistryEvent{
-						Kind:        ev.GetKind().String(),
-						SessionName: ev.GetSessionName(),
-						SessionID:   ev.GetSessionId(),
+						Kind:            ev.GetKind().String(),
+						SessionName:     ev.GetSessionName(),
+						SessionID:       ev.GetSessionId(),
+						BridgeSessionID: ev.GetBridgeSessionId(),
+						BridgeURL:       ev.GetBridgeUrl(),
+					}
+				}
+			}()
+			return out, cancel, nil
+		},
+		SetRemoteControl: func(sess *session.Session, enabled bool) error {
+			if sess == nil || sess.Name == "" {
+				return fmt.Errorf("nil session")
+			}
+			ok, err := daemon.UpdateSessionRemoteControlViaDaemon(context.Background(), sess.Name, enabled)
+			if !ok {
+				return fmt.Errorf("daemon update failed: %w", err)
+			}
+			return nil
+		},
+		SetGlobalRemoteControl: func(enabled bool) error {
+			ok, err := daemon.UpdateGlobalRemoteControlViaDaemon(context.Background(), enabled)
+			if !ok {
+				return fmt.Errorf("daemon update failed: %w", err)
+			}
+			return nil
+		},
+		IsRemoteControlEnabled: func(sess *session.Session) bool {
+			if sess == nil {
+				return false
+			}
+			fs, ok := store.(*session.FileStore)
+			if !ok {
+				return false
+			}
+			settings, _ := fs.LoadSettings(sess.Name)
+			return settings != nil && settings.RemoteControl
+		},
+		IsGlobalRemoteControlEnabled: func() bool {
+			cfg, err := config.LoadGlobalOrDefault()
+			return err == nil && cfg.Defaults.RemoteControl
+		},
+		ListBridges: func() ([]ui.Bridge, error) {
+			raw, err := daemon.ListBridgesViaDaemon(context.Background())
+			if err != nil {
+				return nil, err
+			}
+			out := make([]ui.Bridge, 0, len(raw))
+			for _, b := range raw {
+				out = append(out, ui.Bridge{
+					SessionID:       b.GetSessionId(),
+					PID:             b.GetPid(),
+					BridgeSessionID: b.GetBridgeSessionId(),
+					URL:             b.GetUrl(),
+				})
+			}
+			return out, nil
+		},
+		SendToSession: func(sessionID, text string) error {
+			ok, err := daemon.SendToSessionViaDaemon(context.Background(), sessionID, text)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return fmt.Errorf("session not listening on inject socket")
+			}
+			return nil
+		},
+		TailTranscript: func(sessionID string, startOffset int64) (<-chan ui.TranscriptLine, func(), error) {
+			raw, cancel, err := daemon.TailTranscriptViaDaemon(context.Background(), sessionID, startOffset)
+			if err != nil {
+				return nil, nil, err
+			}
+			out := make(chan ui.TranscriptLine, 32)
+			go func() {
+				defer close(out)
+				for ln := range raw {
+					ts := time.Time{}
+					if ln.GetTimestampNanos() > 0 {
+						ts = time.Unix(0, ln.GetTimestampNanos())
+					}
+					out <- ui.TranscriptLine{
+						ByteOffset: ln.GetByteOffset(),
+						RawJSONL:   ln.GetRawJsonl(),
+						Role:       ln.GetRole(),
+						Text:       ln.GetText(),
+						Timestamp:  ts,
 					}
 				}
 			}()

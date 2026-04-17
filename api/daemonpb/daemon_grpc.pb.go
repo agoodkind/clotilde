@@ -19,14 +19,19 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AgentGateD_AcquireSession_FullMethodName     = "/agentgate.AgentGateD/AcquireSession"
-	AgentGateD_ReleaseSession_FullMethodName     = "/agentgate.AgentGateD/ReleaseSession"
-	AgentGateD_HookEvent_FullMethodName          = "/agentgate.AgentGateD/HookEvent"
-	AgentGateD_ListActiveSessions_FullMethodName = "/agentgate.AgentGateD/ListActiveSessions"
-	AgentGateD_TriggerScan_FullMethodName        = "/agentgate.AgentGateD/TriggerScan"
-	AgentGateD_SubscribeRegistry_FullMethodName  = "/agentgate.AgentGateD/SubscribeRegistry"
-	AgentGateD_RenameSession_FullMethodName      = "/agentgate.AgentGateD/RenameSession"
-	AgentGateD_DeleteSession_FullMethodName      = "/agentgate.AgentGateD/DeleteSession"
+	AgentGateD_AcquireSession_FullMethodName        = "/agentgate.AgentGateD/AcquireSession"
+	AgentGateD_ReleaseSession_FullMethodName        = "/agentgate.AgentGateD/ReleaseSession"
+	AgentGateD_HookEvent_FullMethodName             = "/agentgate.AgentGateD/HookEvent"
+	AgentGateD_ListActiveSessions_FullMethodName    = "/agentgate.AgentGateD/ListActiveSessions"
+	AgentGateD_TriggerScan_FullMethodName           = "/agentgate.AgentGateD/TriggerScan"
+	AgentGateD_SubscribeRegistry_FullMethodName     = "/agentgate.AgentGateD/SubscribeRegistry"
+	AgentGateD_RenameSession_FullMethodName         = "/agentgate.AgentGateD/RenameSession"
+	AgentGateD_DeleteSession_FullMethodName         = "/agentgate.AgentGateD/DeleteSession"
+	AgentGateD_UpdateSessionSettings_FullMethodName = "/agentgate.AgentGateD/UpdateSessionSettings"
+	AgentGateD_UpdateGlobalSettings_FullMethodName  = "/agentgate.AgentGateD/UpdateGlobalSettings"
+	AgentGateD_ListBridges_FullMethodName           = "/agentgate.AgentGateD/ListBridges"
+	AgentGateD_TailTranscript_FullMethodName        = "/agentgate.AgentGateD/TailTranscript"
+	AgentGateD_SendToSession_FullMethodName         = "/agentgate.AgentGateD/SendToSession"
 )
 
 // AgentGateDClient is the client API for AgentGateD service.
@@ -41,6 +46,11 @@ type AgentGateDClient interface {
 	SubscribeRegistry(ctx context.Context, in *SubscribeRegistryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[RegistryEvent], error)
 	RenameSession(ctx context.Context, in *RenameSessionRequest, opts ...grpc.CallOption) (*RenameSessionResponse, error)
 	DeleteSession(ctx context.Context, in *DeleteSessionRequest, opts ...grpc.CallOption) (*DeleteSessionResponse, error)
+	UpdateSessionSettings(ctx context.Context, in *UpdateSessionSettingsRequest, opts ...grpc.CallOption) (*UpdateSessionSettingsResponse, error)
+	UpdateGlobalSettings(ctx context.Context, in *UpdateGlobalSettingsRequest, opts ...grpc.CallOption) (*UpdateGlobalSettingsResponse, error)
+	ListBridges(ctx context.Context, in *ListBridgesRequest, opts ...grpc.CallOption) (*ListBridgesResponse, error)
+	TailTranscript(ctx context.Context, in *TailTranscriptRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TranscriptLine], error)
+	SendToSession(ctx context.Context, in *SendToSessionRequest, opts ...grpc.CallOption) (*SendToSessionResponse, error)
 }
 
 type agentGateDClient struct {
@@ -140,6 +150,65 @@ func (c *agentGateDClient) DeleteSession(ctx context.Context, in *DeleteSessionR
 	return out, nil
 }
 
+func (c *agentGateDClient) UpdateSessionSettings(ctx context.Context, in *UpdateSessionSettingsRequest, opts ...grpc.CallOption) (*UpdateSessionSettingsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateSessionSettingsResponse)
+	err := c.cc.Invoke(ctx, AgentGateD_UpdateSessionSettings_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentGateDClient) UpdateGlobalSettings(ctx context.Context, in *UpdateGlobalSettingsRequest, opts ...grpc.CallOption) (*UpdateGlobalSettingsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateGlobalSettingsResponse)
+	err := c.cc.Invoke(ctx, AgentGateD_UpdateGlobalSettings_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentGateDClient) ListBridges(ctx context.Context, in *ListBridgesRequest, opts ...grpc.CallOption) (*ListBridgesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListBridgesResponse)
+	err := c.cc.Invoke(ctx, AgentGateD_ListBridges_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentGateDClient) TailTranscript(ctx context.Context, in *TailTranscriptRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TranscriptLine], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &AgentGateD_ServiceDesc.Streams[1], AgentGateD_TailTranscript_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[TailTranscriptRequest, TranscriptLine]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentGateD_TailTranscriptClient = grpc.ServerStreamingClient[TranscriptLine]
+
+func (c *agentGateDClient) SendToSession(ctx context.Context, in *SendToSessionRequest, opts ...grpc.CallOption) (*SendToSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SendToSessionResponse)
+	err := c.cc.Invoke(ctx, AgentGateD_SendToSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentGateDServer is the server API for AgentGateD service.
 // All implementations must embed UnimplementedAgentGateDServer
 // for forward compatibility.
@@ -152,6 +221,11 @@ type AgentGateDServer interface {
 	SubscribeRegistry(*SubscribeRegistryRequest, grpc.ServerStreamingServer[RegistryEvent]) error
 	RenameSession(context.Context, *RenameSessionRequest) (*RenameSessionResponse, error)
 	DeleteSession(context.Context, *DeleteSessionRequest) (*DeleteSessionResponse, error)
+	UpdateSessionSettings(context.Context, *UpdateSessionSettingsRequest) (*UpdateSessionSettingsResponse, error)
+	UpdateGlobalSettings(context.Context, *UpdateGlobalSettingsRequest) (*UpdateGlobalSettingsResponse, error)
+	ListBridges(context.Context, *ListBridgesRequest) (*ListBridgesResponse, error)
+	TailTranscript(*TailTranscriptRequest, grpc.ServerStreamingServer[TranscriptLine]) error
+	SendToSession(context.Context, *SendToSessionRequest) (*SendToSessionResponse, error)
 	mustEmbedUnimplementedAgentGateDServer()
 }
 
@@ -185,6 +259,21 @@ func (UnimplementedAgentGateDServer) RenameSession(context.Context, *RenameSessi
 }
 func (UnimplementedAgentGateDServer) DeleteSession(context.Context, *DeleteSessionRequest) (*DeleteSessionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteSession not implemented")
+}
+func (UnimplementedAgentGateDServer) UpdateSessionSettings(context.Context, *UpdateSessionSettingsRequest) (*UpdateSessionSettingsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateSessionSettings not implemented")
+}
+func (UnimplementedAgentGateDServer) UpdateGlobalSettings(context.Context, *UpdateGlobalSettingsRequest) (*UpdateGlobalSettingsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateGlobalSettings not implemented")
+}
+func (UnimplementedAgentGateDServer) ListBridges(context.Context, *ListBridgesRequest) (*ListBridgesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListBridges not implemented")
+}
+func (UnimplementedAgentGateDServer) TailTranscript(*TailTranscriptRequest, grpc.ServerStreamingServer[TranscriptLine]) error {
+	return status.Error(codes.Unimplemented, "method TailTranscript not implemented")
+}
+func (UnimplementedAgentGateDServer) SendToSession(context.Context, *SendToSessionRequest) (*SendToSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SendToSession not implemented")
 }
 func (UnimplementedAgentGateDServer) mustEmbedUnimplementedAgentGateDServer() {}
 func (UnimplementedAgentGateDServer) testEmbeddedByValue()                    {}
@@ -344,6 +433,89 @@ func _AgentGateD_DeleteSession_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentGateD_UpdateSessionSettings_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateSessionSettingsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentGateDServer).UpdateSessionSettings(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentGateD_UpdateSessionSettings_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentGateDServer).UpdateSessionSettings(ctx, req.(*UpdateSessionSettingsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentGateD_UpdateGlobalSettings_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateGlobalSettingsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentGateDServer).UpdateGlobalSettings(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentGateD_UpdateGlobalSettings_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentGateDServer).UpdateGlobalSettings(ctx, req.(*UpdateGlobalSettingsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentGateD_ListBridges_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListBridgesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentGateDServer).ListBridges(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentGateD_ListBridges_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentGateDServer).ListBridges(ctx, req.(*ListBridgesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentGateD_TailTranscript_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(TailTranscriptRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(AgentGateDServer).TailTranscript(m, &grpc.GenericServerStream[TailTranscriptRequest, TranscriptLine]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentGateD_TailTranscriptServer = grpc.ServerStreamingServer[TranscriptLine]
+
+func _AgentGateD_SendToSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SendToSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentGateDServer).SendToSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentGateD_SendToSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentGateDServer).SendToSession(ctx, req.(*SendToSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentGateD_ServiceDesc is the grpc.ServiceDesc for AgentGateD service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -379,11 +551,32 @@ var AgentGateD_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "DeleteSession",
 			Handler:    _AgentGateD_DeleteSession_Handler,
 		},
+		{
+			MethodName: "UpdateSessionSettings",
+			Handler:    _AgentGateD_UpdateSessionSettings_Handler,
+		},
+		{
+			MethodName: "UpdateGlobalSettings",
+			Handler:    _AgentGateD_UpdateGlobalSettings_Handler,
+		},
+		{
+			MethodName: "ListBridges",
+			Handler:    _AgentGateD_ListBridges_Handler,
+		},
+		{
+			MethodName: "SendToSession",
+			Handler:    _AgentGateD_SendToSession_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "SubscribeRegistry",
 			Handler:       _AgentGateD_SubscribeRegistry_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "TailTranscript",
+			Handler:       _AgentGateD_TailTranscript_Handler,
 			ServerStreams: true,
 		},
 	},

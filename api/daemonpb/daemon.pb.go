@@ -29,6 +29,8 @@ const (
 	RegistryEvent_SESSION_UPDATED  RegistryEvent_Kind = 2
 	RegistryEvent_SESSION_DELETED  RegistryEvent_Kind = 3
 	RegistryEvent_SESSION_RENAMED  RegistryEvent_Kind = 4
+	RegistryEvent_BRIDGE_OPENED    RegistryEvent_Kind = 5
+	RegistryEvent_BRIDGE_CLOSED    RegistryEvent_Kind = 6
 )
 
 // Enum value maps for RegistryEvent_Kind.
@@ -39,6 +41,8 @@ var (
 		2: "SESSION_UPDATED",
 		3: "SESSION_DELETED",
 		4: "SESSION_RENAMED",
+		5: "BRIDGE_OPENED",
+		6: "BRIDGE_CLOSED",
 	}
 	RegistryEvent_Kind_value = map[string]int32{
 		"KIND_UNSPECIFIED": 0,
@@ -46,6 +50,8 @@ var (
 		"SESSION_UPDATED":  2,
 		"SESSION_DELETED":  3,
 		"SESSION_RENAMED":  4,
+		"BRIDGE_OPENED":    5,
+		"BRIDGE_CLOSED":    6,
 	}
 )
 
@@ -637,13 +643,15 @@ func (*SubscribeRegistryRequest) Descriptor() ([]byte, []int) {
 }
 
 type RegistryEvent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Kind          RegistryEvent_Kind     `protobuf:"varint,1,opt,name=kind,proto3,enum=agentgate.RegistryEvent_Kind" json:"kind,omitempty"`
-	SessionName   string                 `protobuf:"bytes,2,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
-	SessionId     string                 `protobuf:"bytes,3,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	OldName       string                 `protobuf:"bytes,4,opt,name=old_name,json=oldName,proto3" json:"old_name,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Kind            RegistryEvent_Kind     `protobuf:"varint,1,opt,name=kind,proto3,enum=agentgate.RegistryEvent_Kind" json:"kind,omitempty"`
+	SessionName     string                 `protobuf:"bytes,2,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
+	SessionId       string                 `protobuf:"bytes,3,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	OldName         string                 `protobuf:"bytes,4,opt,name=old_name,json=oldName,proto3" json:"old_name,omitempty"`
+	BridgeSessionId string                 `protobuf:"bytes,5,opt,name=bridge_session_id,json=bridgeSessionId,proto3" json:"bridge_session_id,omitempty"`
+	BridgeUrl       string                 `protobuf:"bytes,6,opt,name=bridge_url,json=bridgeUrl,proto3" json:"bridge_url,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RegistryEvent) Reset() {
@@ -700,6 +708,20 @@ func (x *RegistryEvent) GetSessionId() string {
 func (x *RegistryEvent) GetOldName() string {
 	if x != nil {
 		return x.OldName
+	}
+	return ""
+}
+
+func (x *RegistryEvent) GetBridgeSessionId() string {
+	if x != nil {
+		return x.BridgeSessionId
+	}
+	return ""
+}
+
+func (x *RegistryEvent) GetBridgeUrl() string {
+	if x != nil {
+		return x.BridgeUrl
 	}
 	return ""
 }
@@ -872,6 +894,687 @@ func (*DeleteSessionResponse) Descriptor() ([]byte, []int) {
 	return file_daemon_proto_rawDescGZIP(), []int{16}
 }
 
+type Settings struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Model         string                 `protobuf:"bytes,1,opt,name=model,proto3" json:"model,omitempty"`
+	EffortLevel   string                 `protobuf:"bytes,2,opt,name=effort_level,json=effortLevel,proto3" json:"effort_level,omitempty"`
+	OutputStyle   string                 `protobuf:"bytes,3,opt,name=output_style,json=outputStyle,proto3" json:"output_style,omitempty"`
+	RemoteControl bool                   `protobuf:"varint,4,opt,name=remote_control,json=remoteControl,proto3" json:"remote_control,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Settings) Reset() {
+	*x = Settings{}
+	mi := &file_daemon_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Settings) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Settings) ProtoMessage() {}
+
+func (x *Settings) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Settings.ProtoReflect.Descriptor instead.
+func (*Settings) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *Settings) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+func (x *Settings) GetEffortLevel() string {
+	if x != nil {
+		return x.EffortLevel
+	}
+	return ""
+}
+
+func (x *Settings) GetOutputStyle() string {
+	if x != nil {
+		return x.OutputStyle
+	}
+	return ""
+}
+
+func (x *Settings) GetRemoteControl() bool {
+	if x != nil {
+		return x.RemoteControl
+	}
+	return false
+}
+
+type UpdateSessionSettingsRequest struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Name     string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Settings *Settings              `protobuf:"bytes,2,opt,name=settings,proto3" json:"settings,omitempty"`
+	// Field names from Settings to apply. Empty mask means apply all
+	// non zero fields. Listing remote_control alone toggles just that
+	// value without overwriting model or anything else.
+	UpdateMask    []string `protobuf:"bytes,3,rep,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateSessionSettingsRequest) Reset() {
+	*x = UpdateSessionSettingsRequest{}
+	mi := &file_daemon_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateSessionSettingsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateSessionSettingsRequest) ProtoMessage() {}
+
+func (x *UpdateSessionSettingsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateSessionSettingsRequest.ProtoReflect.Descriptor instead.
+func (*UpdateSessionSettingsRequest) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *UpdateSessionSettingsRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *UpdateSessionSettingsRequest) GetSettings() *Settings {
+	if x != nil {
+		return x.Settings
+	}
+	return nil
+}
+
+func (x *UpdateSessionSettingsRequest) GetUpdateMask() []string {
+	if x != nil {
+		return x.UpdateMask
+	}
+	return nil
+}
+
+type UpdateSessionSettingsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateSessionSettingsResponse) Reset() {
+	*x = UpdateSessionSettingsResponse{}
+	mi := &file_daemon_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateSessionSettingsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateSessionSettingsResponse) ProtoMessage() {}
+
+func (x *UpdateSessionSettingsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateSessionSettingsResponse.ProtoReflect.Descriptor instead.
+func (*UpdateSessionSettingsResponse) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{19}
+}
+
+type GlobalDefaults struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RemoteControl bool                   `protobuf:"varint,1,opt,name=remote_control,json=remoteControl,proto3" json:"remote_control,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GlobalDefaults) Reset() {
+	*x = GlobalDefaults{}
+	mi := &file_daemon_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GlobalDefaults) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GlobalDefaults) ProtoMessage() {}
+
+func (x *GlobalDefaults) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GlobalDefaults.ProtoReflect.Descriptor instead.
+func (*GlobalDefaults) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *GlobalDefaults) GetRemoteControl() bool {
+	if x != nil {
+		return x.RemoteControl
+	}
+	return false
+}
+
+type UpdateGlobalSettingsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Defaults      *GlobalDefaults        `protobuf:"bytes,1,opt,name=defaults,proto3" json:"defaults,omitempty"`
+	UpdateMask    []string               `protobuf:"bytes,2,rep,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateGlobalSettingsRequest) Reset() {
+	*x = UpdateGlobalSettingsRequest{}
+	mi := &file_daemon_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateGlobalSettingsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateGlobalSettingsRequest) ProtoMessage() {}
+
+func (x *UpdateGlobalSettingsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateGlobalSettingsRequest.ProtoReflect.Descriptor instead.
+func (*UpdateGlobalSettingsRequest) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *UpdateGlobalSettingsRequest) GetDefaults() *GlobalDefaults {
+	if x != nil {
+		return x.Defaults
+	}
+	return nil
+}
+
+func (x *UpdateGlobalSettingsRequest) GetUpdateMask() []string {
+	if x != nil {
+		return x.UpdateMask
+	}
+	return nil
+}
+
+type UpdateGlobalSettingsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateGlobalSettingsResponse) Reset() {
+	*x = UpdateGlobalSettingsResponse{}
+	mi := &file_daemon_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateGlobalSettingsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateGlobalSettingsResponse) ProtoMessage() {}
+
+func (x *UpdateGlobalSettingsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateGlobalSettingsResponse.ProtoReflect.Descriptor instead.
+func (*UpdateGlobalSettingsResponse) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{22}
+}
+
+type Bridge struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	SessionId       string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Pid             int64                  `protobuf:"varint,2,opt,name=pid,proto3" json:"pid,omitempty"`
+	BridgeSessionId string                 `protobuf:"bytes,3,opt,name=bridge_session_id,json=bridgeSessionId,proto3" json:"bridge_session_id,omitempty"`
+	Url             string                 `protobuf:"bytes,4,opt,name=url,proto3" json:"url,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *Bridge) Reset() {
+	*x = Bridge{}
+	mi := &file_daemon_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Bridge) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Bridge) ProtoMessage() {}
+
+func (x *Bridge) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Bridge.ProtoReflect.Descriptor instead.
+func (*Bridge) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *Bridge) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *Bridge) GetPid() int64 {
+	if x != nil {
+		return x.Pid
+	}
+	return 0
+}
+
+func (x *Bridge) GetBridgeSessionId() string {
+	if x != nil {
+		return x.BridgeSessionId
+	}
+	return ""
+}
+
+func (x *Bridge) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+type ListBridgesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListBridgesRequest) Reset() {
+	*x = ListBridgesRequest{}
+	mi := &file_daemon_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListBridgesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListBridgesRequest) ProtoMessage() {}
+
+func (x *ListBridgesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListBridgesRequest.ProtoReflect.Descriptor instead.
+func (*ListBridgesRequest) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{24}
+}
+
+type ListBridgesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Bridges       []*Bridge              `protobuf:"bytes,1,rep,name=bridges,proto3" json:"bridges,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListBridgesResponse) Reset() {
+	*x = ListBridgesResponse{}
+	mi := &file_daemon_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListBridgesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListBridgesResponse) ProtoMessage() {}
+
+func (x *ListBridgesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListBridgesResponse.ProtoReflect.Descriptor instead.
+func (*ListBridgesResponse) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *ListBridgesResponse) GetBridges() []*Bridge {
+	if x != nil {
+		return x.Bridges
+	}
+	return nil
+}
+
+type TailTranscriptRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	SessionId string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// start_at_offset = 0 means stream future lines only.
+	StartAtOffset int64 `protobuf:"varint,2,opt,name=start_at_offset,json=startAtOffset,proto3" json:"start_at_offset,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TailTranscriptRequest) Reset() {
+	*x = TailTranscriptRequest{}
+	mi := &file_daemon_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TailTranscriptRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TailTranscriptRequest) ProtoMessage() {}
+
+func (x *TailTranscriptRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TailTranscriptRequest.ProtoReflect.Descriptor instead.
+func (*TailTranscriptRequest) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *TailTranscriptRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *TailTranscriptRequest) GetStartAtOffset() int64 {
+	if x != nil {
+		return x.StartAtOffset
+	}
+	return 0
+}
+
+type TranscriptLine struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	ByteOffset int64                  `protobuf:"varint,1,opt,name=byte_offset,json=byteOffset,proto3" json:"byte_offset,omitempty"`
+	RawJsonl   string                 `protobuf:"bytes,2,opt,name=raw_jsonl,json=rawJsonl,proto3" json:"raw_jsonl,omitempty"`
+	Role       string                 `protobuf:"bytes,3,opt,name=role,proto3" json:"role,omitempty"`
+	Text       string                 `protobuf:"bytes,4,opt,name=text,proto3" json:"text,omitempty"`
+	// Unix nanoseconds. Avoids pulling in google.protobuf.Timestamp for one field.
+	TimestampNanos int64 `protobuf:"varint,5,opt,name=timestamp_nanos,json=timestampNanos,proto3" json:"timestamp_nanos,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *TranscriptLine) Reset() {
+	*x = TranscriptLine{}
+	mi := &file_daemon_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TranscriptLine) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TranscriptLine) ProtoMessage() {}
+
+func (x *TranscriptLine) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TranscriptLine.ProtoReflect.Descriptor instead.
+func (*TranscriptLine) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *TranscriptLine) GetByteOffset() int64 {
+	if x != nil {
+		return x.ByteOffset
+	}
+	return 0
+}
+
+func (x *TranscriptLine) GetRawJsonl() string {
+	if x != nil {
+		return x.RawJsonl
+	}
+	return ""
+}
+
+func (x *TranscriptLine) GetRole() string {
+	if x != nil {
+		return x.Role
+	}
+	return ""
+}
+
+func (x *TranscriptLine) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+func (x *TranscriptLine) GetTimestampNanos() int64 {
+	if x != nil {
+		return x.TimestampNanos
+	}
+	return 0
+}
+
+type SendToSessionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Text          string                 `protobuf:"bytes,2,opt,name=text,proto3" json:"text,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SendToSessionRequest) Reset() {
+	*x = SendToSessionRequest{}
+	mi := &file_daemon_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SendToSessionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SendToSessionRequest) ProtoMessage() {}
+
+func (x *SendToSessionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SendToSessionRequest.ProtoReflect.Descriptor instead.
+func (*SendToSessionRequest) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *SendToSessionRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *SendToSessionRequest) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+type SendToSessionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	BytesWritten  int32                  `protobuf:"varint,1,opt,name=bytes_written,json=bytesWritten,proto3" json:"bytes_written,omitempty"`
+	Delivered     bool                   `protobuf:"varint,2,opt,name=delivered,proto3" json:"delivered,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SendToSessionResponse) Reset() {
+	*x = SendToSessionResponse{}
+	mi := &file_daemon_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SendToSessionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SendToSessionResponse) ProtoMessage() {}
+
+func (x *SendToSessionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SendToSessionResponse.ProtoReflect.Descriptor instead.
+func (*SendToSessionResponse) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *SendToSessionResponse) GetBytesWritten() int32 {
+	if x != nil {
+		return x.BytesWritten
+	}
+	return 0
+}
+
+func (x *SendToSessionResponse) GetDelivered() bool {
+	if x != nil {
+		return x.Delivered
+	}
+	return false
+}
+
 var File_daemon_proto protoreflect.FileDescriptor
 
 const file_daemon_proto_rawDesc = "" +
@@ -909,26 +1612,76 @@ const file_daemon_proto_rawDesc = "" +
 	"\x13TriggerScanResponse\x12#\n" +
 	"\radopted_count\x18\x01 \x01(\x05R\fadoptedCount\x12#\n" +
 	"\radopted_names\x18\x02 \x03(\tR\fadoptedNames\"\x1a\n" +
-	"\x18SubscribeRegistryRequest\"\x91\x02\n" +
+	"\x18SubscribeRegistryRequest\"\x83\x03\n" +
 	"\rRegistryEvent\x121\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1d.agentgate.RegistryEvent.KindR\x04kind\x12!\n" +
 	"\fsession_name\x18\x02 \x01(\tR\vsessionName\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x03 \x01(\tR\tsessionId\x12\x19\n" +
-	"\bold_name\x18\x04 \x01(\tR\aoldName\"p\n" +
+	"\bold_name\x18\x04 \x01(\tR\aoldName\x12*\n" +
+	"\x11bridge_session_id\x18\x05 \x01(\tR\x0fbridgeSessionId\x12\x1d\n" +
+	"\n" +
+	"bridge_url\x18\x06 \x01(\tR\tbridgeUrl\"\x96\x01\n" +
 	"\x04Kind\x12\x14\n" +
 	"\x10KIND_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fSESSION_ADOPTED\x10\x01\x12\x13\n" +
 	"\x0fSESSION_UPDATED\x10\x02\x12\x13\n" +
 	"\x0fSESSION_DELETED\x10\x03\x12\x13\n" +
-	"\x0fSESSION_RENAMED\x10\x04\"L\n" +
+	"\x0fSESSION_RENAMED\x10\x04\x12\x11\n" +
+	"\rBRIDGE_OPENED\x10\x05\x12\x11\n" +
+	"\rBRIDGE_CLOSED\x10\x06\"L\n" +
 	"\x14RenameSessionRequest\x12\x19\n" +
 	"\bold_name\x18\x01 \x01(\tR\aoldName\x12\x19\n" +
 	"\bnew_name\x18\x02 \x01(\tR\anewName\"\x17\n" +
 	"\x15RenameSessionResponse\"*\n" +
 	"\x14DeleteSessionRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"\x17\n" +
-	"\x15DeleteSessionResponse2\xb1\x05\n" +
+	"\x15DeleteSessionResponse\"\x8d\x01\n" +
+	"\bSettings\x12\x14\n" +
+	"\x05model\x18\x01 \x01(\tR\x05model\x12!\n" +
+	"\feffort_level\x18\x02 \x01(\tR\veffortLevel\x12!\n" +
+	"\foutput_style\x18\x03 \x01(\tR\voutputStyle\x12%\n" +
+	"\x0eremote_control\x18\x04 \x01(\bR\rremoteControl\"\x84\x01\n" +
+	"\x1cUpdateSessionSettingsRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12/\n" +
+	"\bsettings\x18\x02 \x01(\v2\x13.agentgate.SettingsR\bsettings\x12\x1f\n" +
+	"\vupdate_mask\x18\x03 \x03(\tR\n" +
+	"updateMask\"\x1f\n" +
+	"\x1dUpdateSessionSettingsResponse\"7\n" +
+	"\x0eGlobalDefaults\x12%\n" +
+	"\x0eremote_control\x18\x01 \x01(\bR\rremoteControl\"u\n" +
+	"\x1bUpdateGlobalSettingsRequest\x125\n" +
+	"\bdefaults\x18\x01 \x01(\v2\x19.agentgate.GlobalDefaultsR\bdefaults\x12\x1f\n" +
+	"\vupdate_mask\x18\x02 \x03(\tR\n" +
+	"updateMask\"\x1e\n" +
+	"\x1cUpdateGlobalSettingsResponse\"w\n" +
+	"\x06Bridge\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x10\n" +
+	"\x03pid\x18\x02 \x01(\x03R\x03pid\x12*\n" +
+	"\x11bridge_session_id\x18\x03 \x01(\tR\x0fbridgeSessionId\x12\x10\n" +
+	"\x03url\x18\x04 \x01(\tR\x03url\"\x14\n" +
+	"\x12ListBridgesRequest\"B\n" +
+	"\x13ListBridgesResponse\x12+\n" +
+	"\abridges\x18\x01 \x03(\v2\x11.agentgate.BridgeR\abridges\"^\n" +
+	"\x15TailTranscriptRequest\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12&\n" +
+	"\x0fstart_at_offset\x18\x02 \x01(\x03R\rstartAtOffset\"\x9f\x01\n" +
+	"\x0eTranscriptLine\x12\x1f\n" +
+	"\vbyte_offset\x18\x01 \x01(\x03R\n" +
+	"byteOffset\x12\x1b\n" +
+	"\traw_jsonl\x18\x02 \x01(\tR\brawJsonl\x12\x12\n" +
+	"\x04role\x18\x03 \x01(\tR\x04role\x12\x12\n" +
+	"\x04text\x18\x04 \x01(\tR\x04text\x12'\n" +
+	"\x0ftimestamp_nanos\x18\x05 \x01(\x03R\x0etimestampNanos\"I\n" +
+	"\x14SendToSessionRequest\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x12\n" +
+	"\x04text\x18\x02 \x01(\tR\x04text\"Z\n" +
+	"\x15SendToSessionResponse\x12#\n" +
+	"\rbytes_written\x18\x01 \x01(\x05R\fbytesWritten\x12\x1c\n" +
+	"\tdelivered\x18\x02 \x01(\bR\tdelivered2\xf9\b\n" +
 	"\n" +
 	"AgentGateD\x12U\n" +
 	"\x0eAcquireSession\x12 .agentgate.AcquireSessionRequest\x1a!.agentgate.AcquireSessionResponse\x12U\n" +
@@ -938,7 +1691,12 @@ const file_daemon_proto_rawDesc = "" +
 	"\vTriggerScan\x12\x1d.agentgate.TriggerScanRequest\x1a\x1e.agentgate.TriggerScanResponse\x12T\n" +
 	"\x11SubscribeRegistry\x12#.agentgate.SubscribeRegistryRequest\x1a\x18.agentgate.RegistryEvent0\x01\x12R\n" +
 	"\rRenameSession\x12\x1f.agentgate.RenameSessionRequest\x1a .agentgate.RenameSessionResponse\x12R\n" +
-	"\rDeleteSession\x12\x1f.agentgate.DeleteSessionRequest\x1a .agentgate.DeleteSessionResponseB)Z'github.com/fgrehm/clotilde/api/daemonpbb\x06proto3"
+	"\rDeleteSession\x12\x1f.agentgate.DeleteSessionRequest\x1a .agentgate.DeleteSessionResponse\x12j\n" +
+	"\x15UpdateSessionSettings\x12'.agentgate.UpdateSessionSettingsRequest\x1a(.agentgate.UpdateSessionSettingsResponse\x12g\n" +
+	"\x14UpdateGlobalSettings\x12&.agentgate.UpdateGlobalSettingsRequest\x1a'.agentgate.UpdateGlobalSettingsResponse\x12L\n" +
+	"\vListBridges\x12\x1d.agentgate.ListBridgesRequest\x1a\x1e.agentgate.ListBridgesResponse\x12O\n" +
+	"\x0eTailTranscript\x12 .agentgate.TailTranscriptRequest\x1a\x19.agentgate.TranscriptLine0\x01\x12R\n" +
+	"\rSendToSession\x12\x1f.agentgate.SendToSessionRequest\x1a .agentgate.SendToSessionResponseB)Z'github.com/fgrehm/clotilde/api/daemonpbb\x06proto3"
 
 var (
 	file_daemon_proto_rawDescOnce sync.Once
@@ -953,51 +1711,77 @@ func file_daemon_proto_rawDescGZIP() []byte {
 }
 
 var file_daemon_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
+var file_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_daemon_proto_goTypes = []any{
-	(RegistryEvent_Kind)(0),            // 0: agentgate.RegistryEvent.Kind
-	(*AcquireSessionRequest)(nil),      // 1: agentgate.AcquireSessionRequest
-	(*AcquireSessionResponse)(nil),     // 2: agentgate.AcquireSessionResponse
-	(*ReleaseSessionRequest)(nil),      // 3: agentgate.ReleaseSessionRequest
-	(*ReleaseSessionResponse)(nil),     // 4: agentgate.ReleaseSessionResponse
-	(*HookEventRequest)(nil),           // 5: agentgate.HookEventRequest
-	(*HookEventResponse)(nil),          // 6: agentgate.HookEventResponse
-	(*ListActiveSessionsRequest)(nil),  // 7: agentgate.ListActiveSessionsRequest
-	(*ListActiveSessionsResponse)(nil), // 8: agentgate.ListActiveSessionsResponse
-	(*ActiveSession)(nil),              // 9: agentgate.ActiveSession
-	(*TriggerScanRequest)(nil),         // 10: agentgate.TriggerScanRequest
-	(*TriggerScanResponse)(nil),        // 11: agentgate.TriggerScanResponse
-	(*SubscribeRegistryRequest)(nil),   // 12: agentgate.SubscribeRegistryRequest
-	(*RegistryEvent)(nil),              // 13: agentgate.RegistryEvent
-	(*RenameSessionRequest)(nil),       // 14: agentgate.RenameSessionRequest
-	(*RenameSessionResponse)(nil),      // 15: agentgate.RenameSessionResponse
-	(*DeleteSessionRequest)(nil),       // 16: agentgate.DeleteSessionRequest
-	(*DeleteSessionResponse)(nil),      // 17: agentgate.DeleteSessionResponse
+	(RegistryEvent_Kind)(0),               // 0: agentgate.RegistryEvent.Kind
+	(*AcquireSessionRequest)(nil),         // 1: agentgate.AcquireSessionRequest
+	(*AcquireSessionResponse)(nil),        // 2: agentgate.AcquireSessionResponse
+	(*ReleaseSessionRequest)(nil),         // 3: agentgate.ReleaseSessionRequest
+	(*ReleaseSessionResponse)(nil),        // 4: agentgate.ReleaseSessionResponse
+	(*HookEventRequest)(nil),              // 5: agentgate.HookEventRequest
+	(*HookEventResponse)(nil),             // 6: agentgate.HookEventResponse
+	(*ListActiveSessionsRequest)(nil),     // 7: agentgate.ListActiveSessionsRequest
+	(*ListActiveSessionsResponse)(nil),    // 8: agentgate.ListActiveSessionsResponse
+	(*ActiveSession)(nil),                 // 9: agentgate.ActiveSession
+	(*TriggerScanRequest)(nil),            // 10: agentgate.TriggerScanRequest
+	(*TriggerScanResponse)(nil),           // 11: agentgate.TriggerScanResponse
+	(*SubscribeRegistryRequest)(nil),      // 12: agentgate.SubscribeRegistryRequest
+	(*RegistryEvent)(nil),                 // 13: agentgate.RegistryEvent
+	(*RenameSessionRequest)(nil),          // 14: agentgate.RenameSessionRequest
+	(*RenameSessionResponse)(nil),         // 15: agentgate.RenameSessionResponse
+	(*DeleteSessionRequest)(nil),          // 16: agentgate.DeleteSessionRequest
+	(*DeleteSessionResponse)(nil),         // 17: agentgate.DeleteSessionResponse
+	(*Settings)(nil),                      // 18: agentgate.Settings
+	(*UpdateSessionSettingsRequest)(nil),  // 19: agentgate.UpdateSessionSettingsRequest
+	(*UpdateSessionSettingsResponse)(nil), // 20: agentgate.UpdateSessionSettingsResponse
+	(*GlobalDefaults)(nil),                // 21: agentgate.GlobalDefaults
+	(*UpdateGlobalSettingsRequest)(nil),   // 22: agentgate.UpdateGlobalSettingsRequest
+	(*UpdateGlobalSettingsResponse)(nil),  // 23: agentgate.UpdateGlobalSettingsResponse
+	(*Bridge)(nil),                        // 24: agentgate.Bridge
+	(*ListBridgesRequest)(nil),            // 25: agentgate.ListBridgesRequest
+	(*ListBridgesResponse)(nil),           // 26: agentgate.ListBridgesResponse
+	(*TailTranscriptRequest)(nil),         // 27: agentgate.TailTranscriptRequest
+	(*TranscriptLine)(nil),                // 28: agentgate.TranscriptLine
+	(*SendToSessionRequest)(nil),          // 29: agentgate.SendToSessionRequest
+	(*SendToSessionResponse)(nil),         // 30: agentgate.SendToSessionResponse
 }
 var file_daemon_proto_depIdxs = []int32{
 	9,  // 0: agentgate.ListActiveSessionsResponse.sessions:type_name -> agentgate.ActiveSession
 	0,  // 1: agentgate.RegistryEvent.kind:type_name -> agentgate.RegistryEvent.Kind
-	1,  // 2: agentgate.AgentGateD.AcquireSession:input_type -> agentgate.AcquireSessionRequest
-	3,  // 3: agentgate.AgentGateD.ReleaseSession:input_type -> agentgate.ReleaseSessionRequest
-	5,  // 4: agentgate.AgentGateD.HookEvent:input_type -> agentgate.HookEventRequest
-	7,  // 5: agentgate.AgentGateD.ListActiveSessions:input_type -> agentgate.ListActiveSessionsRequest
-	10, // 6: agentgate.AgentGateD.TriggerScan:input_type -> agentgate.TriggerScanRequest
-	12, // 7: agentgate.AgentGateD.SubscribeRegistry:input_type -> agentgate.SubscribeRegistryRequest
-	14, // 8: agentgate.AgentGateD.RenameSession:input_type -> agentgate.RenameSessionRequest
-	16, // 9: agentgate.AgentGateD.DeleteSession:input_type -> agentgate.DeleteSessionRequest
-	2,  // 10: agentgate.AgentGateD.AcquireSession:output_type -> agentgate.AcquireSessionResponse
-	4,  // 11: agentgate.AgentGateD.ReleaseSession:output_type -> agentgate.ReleaseSessionResponse
-	6,  // 12: agentgate.AgentGateD.HookEvent:output_type -> agentgate.HookEventResponse
-	8,  // 13: agentgate.AgentGateD.ListActiveSessions:output_type -> agentgate.ListActiveSessionsResponse
-	11, // 14: agentgate.AgentGateD.TriggerScan:output_type -> agentgate.TriggerScanResponse
-	13, // 15: agentgate.AgentGateD.SubscribeRegistry:output_type -> agentgate.RegistryEvent
-	15, // 16: agentgate.AgentGateD.RenameSession:output_type -> agentgate.RenameSessionResponse
-	17, // 17: agentgate.AgentGateD.DeleteSession:output_type -> agentgate.DeleteSessionResponse
-	10, // [10:18] is the sub-list for method output_type
-	2,  // [2:10] is the sub-list for method input_type
-	2,  // [2:2] is the sub-list for extension type_name
-	2,  // [2:2] is the sub-list for extension extendee
-	0,  // [0:2] is the sub-list for field type_name
+	18, // 2: agentgate.UpdateSessionSettingsRequest.settings:type_name -> agentgate.Settings
+	21, // 3: agentgate.UpdateGlobalSettingsRequest.defaults:type_name -> agentgate.GlobalDefaults
+	24, // 4: agentgate.ListBridgesResponse.bridges:type_name -> agentgate.Bridge
+	1,  // 5: agentgate.AgentGateD.AcquireSession:input_type -> agentgate.AcquireSessionRequest
+	3,  // 6: agentgate.AgentGateD.ReleaseSession:input_type -> agentgate.ReleaseSessionRequest
+	5,  // 7: agentgate.AgentGateD.HookEvent:input_type -> agentgate.HookEventRequest
+	7,  // 8: agentgate.AgentGateD.ListActiveSessions:input_type -> agentgate.ListActiveSessionsRequest
+	10, // 9: agentgate.AgentGateD.TriggerScan:input_type -> agentgate.TriggerScanRequest
+	12, // 10: agentgate.AgentGateD.SubscribeRegistry:input_type -> agentgate.SubscribeRegistryRequest
+	14, // 11: agentgate.AgentGateD.RenameSession:input_type -> agentgate.RenameSessionRequest
+	16, // 12: agentgate.AgentGateD.DeleteSession:input_type -> agentgate.DeleteSessionRequest
+	19, // 13: agentgate.AgentGateD.UpdateSessionSettings:input_type -> agentgate.UpdateSessionSettingsRequest
+	22, // 14: agentgate.AgentGateD.UpdateGlobalSettings:input_type -> agentgate.UpdateGlobalSettingsRequest
+	25, // 15: agentgate.AgentGateD.ListBridges:input_type -> agentgate.ListBridgesRequest
+	27, // 16: agentgate.AgentGateD.TailTranscript:input_type -> agentgate.TailTranscriptRequest
+	29, // 17: agentgate.AgentGateD.SendToSession:input_type -> agentgate.SendToSessionRequest
+	2,  // 18: agentgate.AgentGateD.AcquireSession:output_type -> agentgate.AcquireSessionResponse
+	4,  // 19: agentgate.AgentGateD.ReleaseSession:output_type -> agentgate.ReleaseSessionResponse
+	6,  // 20: agentgate.AgentGateD.HookEvent:output_type -> agentgate.HookEventResponse
+	8,  // 21: agentgate.AgentGateD.ListActiveSessions:output_type -> agentgate.ListActiveSessionsResponse
+	11, // 22: agentgate.AgentGateD.TriggerScan:output_type -> agentgate.TriggerScanResponse
+	13, // 23: agentgate.AgentGateD.SubscribeRegistry:output_type -> agentgate.RegistryEvent
+	15, // 24: agentgate.AgentGateD.RenameSession:output_type -> agentgate.RenameSessionResponse
+	17, // 25: agentgate.AgentGateD.DeleteSession:output_type -> agentgate.DeleteSessionResponse
+	20, // 26: agentgate.AgentGateD.UpdateSessionSettings:output_type -> agentgate.UpdateSessionSettingsResponse
+	23, // 27: agentgate.AgentGateD.UpdateGlobalSettings:output_type -> agentgate.UpdateGlobalSettingsResponse
+	26, // 28: agentgate.AgentGateD.ListBridges:output_type -> agentgate.ListBridgesResponse
+	28, // 29: agentgate.AgentGateD.TailTranscript:output_type -> agentgate.TranscriptLine
+	30, // 30: agentgate.AgentGateD.SendToSession:output_type -> agentgate.SendToSessionResponse
+	18, // [18:31] is the sub-list for method output_type
+	5,  // [5:18] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_daemon_proto_init() }
@@ -1011,7 +1795,7 @@ func file_daemon_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_daemon_proto_rawDesc), len(file_daemon_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   17,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

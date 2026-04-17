@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/fgrehm/clotilde/api/daemonpb"
+	"github.com/fgrehm/clotilde/internal/bridge"
 	"github.com/fgrehm/clotilde/internal/config"
 	"github.com/fgrehm/clotilde/internal/session"
 )
@@ -47,6 +48,18 @@ type Server struct {
 	// guards the map so subscribe and broadcast can run concurrently.
 	subMu       sync.Mutex
 	subscribers map[chan *daemonpb.RegistryEvent]struct{}
+
+	// settingsLocks serialises writes per session name so two callers
+	// updating the same session do not stomp on each other. The lock
+	// for a session is created lazily and lives for the daemon's
+	// lifetime; the cardinality is bounded by the number of sessions.
+	settingsLocksMu sync.Mutex
+	settingsLocks   map[string]*sync.Mutex
+
+	// bridges maps Claude session UUIDs to the bridge URL exposed by
+	// `claude --remote-control`. Populated by the bridge watcher.
+	bridgeMu sync.RWMutex
+	bridges  map[string]*daemonpb.Bridge
 }
 
 // wrapperSession holds runtime state for one active claude wrapper process.
@@ -65,11 +78,13 @@ func New(log *slog.Logger) (*Server, error) {
 	}
 
 	s := &Server{
-		log:         log,
-		sessions:    make(map[string]*wrapperSession),
-		watcher:     watcher,
-		scanWake:    make(chan struct{}, 4),
-		subscribers: make(map[chan *daemonpb.RegistryEvent]struct{}),
+		log:           log,
+		sessions:      make(map[string]*wrapperSession),
+		watcher:       watcher,
+		scanWake:      make(chan struct{}, 4),
+		subscribers:   make(map[chan *daemonpb.RegistryEvent]struct{}),
+		settingsLocks: make(map[string]*sync.Mutex),
+		bridges:       make(map[string]*daemonpb.Bridge),
 	}
 
 	globalPath := globalSettingsPath()
@@ -89,7 +104,45 @@ func New(log *slog.Logger) (*Server, error) {
 	go s.watchGlobalSettings()
 	go s.runDiscoveryScanner()
 
+	if home, err := os.UserHomeDir(); err == nil {
+		sessionsDir := filepath.Join(home, ".claude", "sessions")
+		if w, err := bridge.Start(sessionsDir); err == nil {
+			go s.runBridgeWatcher(w)
+			s.log.Info("bridge watcher started", "dir", sessionsDir)
+		} else {
+			s.log.Warn("bridge watcher failed", "err", err)
+		}
+	}
+
 	return s, nil
+}
+
+// runBridgeWatcher consumes bridge events from the watcher and
+// translates them into RegistryEvent broadcasts.
+func (s *Server) runBridgeWatcher(w *bridge.Watcher) {
+	// Seed the cache with anything the watcher already saw on its
+	// initial scan so ListBridges callers do not race the first event.
+	for _, b := range w.Snapshot() {
+		s.setBridge(&daemonpb.Bridge{
+			SessionId:       b.SessionID,
+			Pid:             b.PID,
+			BridgeSessionId: b.BridgeSessionID,
+			Url:             b.URL,
+		})
+	}
+	for ev := range w.Events() {
+		switch ev.Kind {
+		case bridge.EventOpened:
+			s.setBridge(&daemonpb.Bridge{
+				SessionId:       ev.Bridge.SessionID,
+				Pid:             ev.Bridge.PID,
+				BridgeSessionId: ev.Bridge.BridgeSessionID,
+				Url:             ev.Bridge.URL,
+			})
+		case bridge.EventClosed:
+			s.removeBridge(ev.Bridge.SessionID)
+		}
+	}
 }
 
 // runDiscoveryScanner periodically walks ~/.claude/projects and adopts
@@ -859,4 +912,170 @@ func (s *Server) ListActiveSessions(_ context.Context, _ *daemonpb.ListActiveSes
 	}
 
 	return &daemonpb.ListActiveSessionsResponse{Sessions: active}, nil
+}
+
+// settingsLockFor returns the per-session mutex used to serialise
+// settings.json writes. The lock is created lazily so cold sessions
+// do not occupy memory.
+func (s *Server) settingsLockFor(name string) *sync.Mutex {
+	s.settingsLocksMu.Lock()
+	defer s.settingsLocksMu.Unlock()
+	if m, ok := s.settingsLocks[name]; ok {
+		return m
+	}
+	m := &sync.Mutex{}
+	s.settingsLocks[name] = m
+	return m
+}
+
+// UpdateSessionSettings is the daemon side write path for per session
+// settings.json. Mutations from the TUI, CLI, and any other client
+// go through here so writes serialise per session and broadcast to
+// every subscriber on completion.
+func (s *Server) UpdateSessionSettings(_ context.Context, req *daemonpb.UpdateSessionSettingsRequest) (*daemonpb.UpdateSessionSettingsResponse, error) {
+	if req.Name == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
+	}
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "store init: %v", err)
+	}
+	sess, err := store.Get(req.Name)
+	if err != nil || sess == nil {
+		return nil, status.Errorf(codes.NotFound, "session %q not found", req.Name)
+	}
+	lock := s.settingsLockFor(req.Name)
+	lock.Lock()
+	defer lock.Unlock()
+
+	current, _ := store.LoadSettings(req.Name)
+	if current == nil {
+		current = &session.Settings{}
+	}
+	applyMask := func(field string) bool {
+		if len(req.UpdateMask) == 0 {
+			return true
+		}
+		for _, m := range req.UpdateMask {
+			if m == field {
+				return true
+			}
+		}
+		return false
+	}
+	if req.Settings != nil {
+		if applyMask("model") {
+			current.Model = req.Settings.Model
+		}
+		if applyMask("effort_level") {
+			current.EffortLevel = req.Settings.EffortLevel
+		}
+		if applyMask("output_style") {
+			current.OutputStyle = req.Settings.OutputStyle
+		}
+		if applyMask("remote_control") {
+			current.RemoteControl = req.Settings.RemoteControl
+		}
+	}
+	if err := store.SaveSettings(req.Name, current); err != nil {
+		return nil, status.Errorf(codes.Internal, "save settings: %v", err)
+	}
+	s.publishEvent(&daemonpb.RegistryEvent{
+		Kind:        daemonpb.RegistryEvent_SESSION_UPDATED,
+		SessionName: req.Name,
+		SessionId:   sess.Metadata.SessionID,
+	})
+	s.log.Info("session settings updated via RPC",
+		"session", req.Name,
+		"remote_control", current.RemoteControl,
+		"model", current.Model,
+		"effort", current.EffortLevel,
+	)
+	return &daemonpb.UpdateSessionSettingsResponse{}, nil
+}
+
+// UpdateGlobalSettings mutates the clotilde global config defaults
+// from any client. Currently only the remote_control default is
+// exposed because that is the field this work needs. The handler
+// rewrites the global config TOML through internal/config so callers
+// do not need filesystem access.
+func (s *Server) UpdateGlobalSettings(_ context.Context, req *daemonpb.UpdateGlobalSettingsRequest) (*daemonpb.UpdateGlobalSettingsResponse, error) {
+	cfg, err := config.LoadGlobalOrDefault()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "load global: %v", err)
+	}
+	applyMask := func(field string) bool {
+		if len(req.UpdateMask) == 0 {
+			return true
+		}
+		for _, m := range req.UpdateMask {
+			if m == field {
+				return true
+			}
+		}
+		return false
+	}
+	if req.Defaults != nil && applyMask("remote_control") {
+		cfg.Defaults.RemoteControl = req.Defaults.RemoteControl
+	}
+	if err := config.SaveGlobal(cfg); err != nil {
+		return nil, status.Errorf(codes.Internal, "save global: %v", err)
+	}
+	s.log.Info("global settings updated via RPC", "remote_control", cfg.Defaults.RemoteControl)
+	return &daemonpb.UpdateGlobalSettingsResponse{}, nil
+}
+
+// ListBridges returns the current set of active claude --remote-control
+// bridges as discovered by the bridge watcher.
+func (s *Server) ListBridges(_ context.Context, _ *daemonpb.ListBridgesRequest) (*daemonpb.ListBridgesResponse, error) {
+	s.bridgeMu.RLock()
+	defer s.bridgeMu.RUnlock()
+	out := make([]*daemonpb.Bridge, 0, len(s.bridges))
+	for _, b := range s.bridges {
+		bb := *b
+		out = append(out, &bb)
+	}
+	return &daemonpb.ListBridgesResponse{Bridges: out}, nil
+}
+
+// setBridge records a bridge entry and broadcasts BRIDGE_OPENED.
+func (s *Server) setBridge(b *daemonpb.Bridge) {
+	if b == nil || b.SessionId == "" {
+		return
+	}
+	s.bridgeMu.Lock()
+	prev, exists := s.bridges[b.SessionId]
+	s.bridges[b.SessionId] = b
+	s.bridgeMu.Unlock()
+	if exists && prev != nil && prev.BridgeSessionId == b.BridgeSessionId {
+		return
+	}
+	s.publishEvent(&daemonpb.RegistryEvent{
+		Kind:            daemonpb.RegistryEvent_BRIDGE_OPENED,
+		SessionId:       b.SessionId,
+		BridgeSessionId: b.BridgeSessionId,
+		BridgeUrl:       b.Url,
+	})
+	s.log.Info("bridge opened", "session_id", b.SessionId, "bridge", b.BridgeSessionId)
+}
+
+// removeBridge clears a bridge entry and broadcasts BRIDGE_CLOSED.
+func (s *Server) removeBridge(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	s.bridgeMu.Lock()
+	prev, ok := s.bridges[sessionID]
+	delete(s.bridges, sessionID)
+	s.bridgeMu.Unlock()
+	if !ok || prev == nil {
+		return
+	}
+	s.publishEvent(&daemonpb.RegistryEvent{
+		Kind:            daemonpb.RegistryEvent_BRIDGE_CLOSED,
+		SessionId:       sessionID,
+		BridgeSessionId: prev.BridgeSessionId,
+		BridgeUrl:       prev.Url,
+	})
+	s.log.Info("bridge closed", "session_id", sessionID, "bridge", prev.BridgeSessionId)
 }

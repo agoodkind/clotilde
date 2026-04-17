@@ -350,6 +350,124 @@ func (c *Client) UpdateContext(sessionName, workspaceRoot string, messages []str
 	return err
 }
 
+// UpdateSessionRemoteControlViaDaemon flips the per session remote
+// control flag through the daemon. Returns true when the daemon
+// accepted the update so callers can fall back to a direct file write
+// only when the daemon is unreachable.
+func UpdateSessionRemoteControlViaDaemon(ctx context.Context, name string, enabled bool) (bool, error) {
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer c.conn.Close()
+	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, err = c.rpc.UpdateSessionSettings(rpcCtx, &daemonpb.UpdateSessionSettingsRequest{
+		Name:       name,
+		Settings:   &daemonpb.Settings{RemoteControl: enabled},
+		UpdateMask: []string{"remote_control"},
+	})
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// UpdateGlobalRemoteControlViaDaemon flips the global default. The
+// daemon serialises writes to ~/.config/clotilde/config.toml.
+func UpdateGlobalRemoteControlViaDaemon(ctx context.Context, enabled bool) (bool, error) {
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer c.conn.Close()
+	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, err = c.rpc.UpdateGlobalSettings(rpcCtx, &daemonpb.UpdateGlobalSettingsRequest{
+		Defaults:   &daemonpb.GlobalDefaults{RemoteControl: enabled},
+		UpdateMask: []string{"remote_control"},
+	})
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// ListBridgesViaDaemon fetches the daemon's current bridge map.
+func ListBridgesViaDaemon(ctx context.Context) ([]*daemonpb.Bridge, error) {
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer c.conn.Close()
+	rpcCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	resp, err := c.rpc.ListBridges(rpcCtx, &daemonpb.ListBridgesRequest{})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Bridges, nil
+}
+
+// SendToSessionViaDaemon delivers text into a running claude session
+// through its inject socket. The daemon resolves the session id to a
+// socket path and forwards the bytes. Returns false when no listener
+// is present (session not running, or wrapper does not own a pty).
+func SendToSessionViaDaemon(ctx context.Context, sessionID, text string) (bool, error) {
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer c.conn.Close()
+	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	resp, err := c.rpc.SendToSession(rpcCtx, &daemonpb.SendToSessionRequest{
+		SessionId: sessionID,
+		Text:      text,
+	})
+	if err != nil {
+		return false, err
+	}
+	return resp.GetDelivered(), nil
+}
+
+// TailTranscriptViaDaemon opens the daemon's transcript stream for
+// the given session id. The returned channel closes when the stream
+// terminates. Calling cancel stops the subscription.
+func TailTranscriptViaDaemon(parent context.Context, sessionID string, startOffset int64) (<-chan *daemonpb.TranscriptLine, context.CancelFunc, error) {
+	c, err := ConnectOrStart(parent)
+	if err != nil {
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithCancel(parent)
+	stream, err := c.rpc.TailTranscript(ctx, &daemonpb.TailTranscriptRequest{
+		SessionId:     sessionID,
+		StartAtOffset: startOffset,
+	})
+	if err != nil {
+		cancel()
+		c.conn.Close()
+		return nil, nil, err
+	}
+	out := make(chan *daemonpb.TranscriptLine, 64)
+	go func() {
+		defer close(out)
+		defer c.conn.Close()
+		for {
+			line, err := stream.Recv()
+			if err != nil {
+				return
+			}
+			select {
+			case out <- line:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, cancel, nil
+}
+
 const launchAgentLabel = "io.goodkind.clotilde.daemon"
 
 // startDaemon starts the daemon process. On macOS, tries launchctl kickstart

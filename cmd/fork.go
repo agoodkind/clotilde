@@ -239,6 +239,10 @@ Pass additional flags to Claude Code after '--':
 				settingsFile = filepath.Join(forkDir, "settings.json")
 			}
 
+			if rcErr := applyRemoteControlFlag(cmd, fork); rcErr != nil {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), ui.Warning(fmt.Sprintf("remote control setting failed: %v", rcErr)))
+			}
+
 			// Invoke claude with fork (pass fork session for cleanup handling)
 			err = claude.Fork(clotildeRoot, parentSess, forkName, settingsFile, additionalArgs, fork)
 			autoUpdateContext(store, fork)
@@ -250,6 +254,8 @@ Pass additional flags to Claude Code after '--':
 	cmd.Flags().Bool("incognito", false, "Create fork as incognito session (auto-deletes on exit)")
 	cmd.Flags().String("context", "", "Session context (e.g. \"working on ticket GH-123\")")
 	cmd.Flags().String("model", "", "Claude model to use (haiku, sonnet, opus); opus defaults to 1M context")
+	cmd.Flags().Bool("remote-control", false, "Launch the fork with --remote-control")
+	cmd.Flags().Bool("no-remote-control", false, "Disable remote control on the fork even if the parent has it on")
 	registerShorthandFlags(cmd)
 	_ = cmd.RegisterFlagCompletionFunc("model", modelCompletion)
 	return cmd

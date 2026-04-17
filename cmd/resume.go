@@ -156,6 +156,10 @@ Pass additional flags to Claude Code after '--':
 				}
 			}
 
+			if rcErr := applyRemoteControlFlag(cmd, sess); rcErr != nil {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), ui.Warning(fmt.Sprintf("remote control setting failed: %v", rcErr)))
+			}
+
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Resuming session '%s' (%s)\n\n", name, sess.Metadata.SessionID)
 
 			// Invoke claude
@@ -168,6 +172,8 @@ Pass additional flags to Claude Code after '--':
 	}
 	cmd.Flags().String("model", "", "Claude model to use (haiku, sonnet, opus); opus defaults to 1M context")
 	cmd.Flags().String("context", "", "Session context (e.g. \"working on ticket GH-123\")")
+	cmd.Flags().Bool("remote-control", false, "Launch with --remote-control so the session is exposed via claude.ai/code/<bridge>")
+	cmd.Flags().Bool("no-remote-control", false, "Force-disable remote control even if the session previously had it on")
 	registerShorthandFlags(cmd)
 	_ = cmd.RegisterFlagCompletionFunc("model", modelCompletion)
 	return cmd

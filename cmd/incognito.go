@@ -87,6 +87,10 @@ process crashes or is killed (SIGKILL), the session may persist. Use
 				return err
 			}
 
+			if rcErr := applyRemoteControlFlag(cmd, result.Session); rcErr != nil {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), ui.Warning(fmt.Sprintf("remote control setting failed: %v", rcErr)))
+			}
+
 			// Print output
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), ui.Info(fmt.Sprintf("👻 Created incognito session '%s' (%s)", result.Session.Name, result.Session.Metadata.SessionID)))
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), ui.Info("👻 This session will auto-delete when you exit Claude"))
@@ -99,6 +103,8 @@ process crashes or is killed (SIGKILL), the session may persist. Use
 	cmd.Flags().String("model", "", "Claude model to use (haiku, sonnet, opus); opus defaults to 1M context")
 	cmd.Flags().String("context", "", "Session context (e.g. \"working on ticket GH-123\")")
 	cmd.Flags().String("profile", "", "Named profile from config (model, permissions, output style)")
+	cmd.Flags().Bool("remote-control", false, "Launch with --remote-control")
+	cmd.Flags().Bool("no-remote-control", false, "Force-disable remote control")
 
 	// Permission flags
 	cmd.Flags().String("permission-mode", "", "Permission mode (acceptEdits, bypassPermissions, default, dontAsk, plan)")

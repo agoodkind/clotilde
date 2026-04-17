@@ -39,6 +39,25 @@ type DetailsView struct {
 	// formatter. The default falls back to the local approximate
 	// formatter so the widget remains usable in isolation.
 	FormatTokens func(sess *session.Session, estimated int) string
+
+	// LookupBridge returns the active claude --remote-control bridge
+	// for sess, if any. Set by the App so the details pane can
+	// surface the bridge URL without importing the daemon protobuf.
+	LookupBridge func(sess *session.Session) (Bridge, bool)
+}
+
+// formatBridge renders the Remote control row in the details left
+// column. Active bridges show their URL; inactive sessions show a
+// hint about how to enable.
+func (d *DetailsView) formatBridge(sess *session.Session) string {
+	if d.LookupBridge == nil {
+		return "(daemon offline)"
+	}
+	b, ok := d.LookupBridge(sess)
+	if !ok {
+		return "off"
+	}
+	return "active  " + b.URL
 }
 
 // formatTokens delegates to the injected formatter or falls back to a
@@ -104,6 +123,7 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail, sta
 
 	section("Identity")
 	kv("Model", detail.Model)
+	kv("Remote ctrl", d.formatBridge(sess))
 	kv("Basedir", shortPath(sess.Metadata.WorkspaceRoot))
 	if sess.Metadata.WorkDir != "" && sess.Metadata.WorkDir != sess.Metadata.WorkspaceRoot {
 		kv("Work dir", shortPath(sess.Metadata.WorkDir))

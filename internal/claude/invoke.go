@@ -29,14 +29,26 @@ func appendCommonArgs(args []string, settingsFile string) []string {
 	if settingsFile != "" && util.FileExists(settingsFile) {
 		args = append(args, "--settings", settingsFile)
 	}
-
-	// Apply global defaults from config
-	cfg, err := config.LoadGlobalOrDefault()
-	if err == nil && cfg.Defaults.RemoteControl {
+	if remoteControlEnabled(settingsFile) {
 		args = append(args, "--remote-control")
 	}
-
 	return args
+}
+
+// remoteControlEnabled decides whether to pass --remote-control to
+// claude. Per session settings.json wins. The global config default
+// fills in when the session has no explicit value. The two layers
+// allow a user to opt one session in without forcing the flag on
+// every other session.
+func remoteControlEnabled(settingsFile string) bool {
+	if settingsFile != "" && util.FileExists(settingsFile) {
+		var s session.Settings
+		if err := util.ReadJSON(settingsFile, &s); err == nil && s.RemoteControl {
+			return true
+		}
+	}
+	cfg, err := config.LoadGlobalOrDefault()
+	return err == nil && cfg.Defaults.RemoteControl
 }
 
 // Start invokes claude CLI to start a new session.

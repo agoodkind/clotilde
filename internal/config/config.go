@@ -115,6 +115,10 @@ type Profile struct {
 	PermissionMode string       `json:"permissionMode,omitempty" toml:"permission_mode,omitempty"`
 	Permissions    *Permissions `json:"permissions,omitempty" toml:"permissions,omitempty"`
 	OutputStyle    string       `json:"outputStyle,omitempty" toml:"output_style,omitempty"`
+	// RemoteControl is a per profile override of the global default.
+	// nil means inherit. false explicitly disables. true explicitly
+	// enables.
+	RemoteControl *bool `json:"remoteControl,omitempty" toml:"remote_control,omitempty"`
 }
 
 // Permissions represents the permissions configuration for sessions.

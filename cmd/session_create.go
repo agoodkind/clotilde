@@ -181,6 +181,9 @@ func createSession(params SessionCreateParams) (*SessionCreateResult, error) {
 		if profile.OutputStyle != "" {
 			settings.OutputStyle = profile.OutputStyle
 		}
+		if profile.RemoteControl != nil {
+			settings.RemoteControl = *profile.RemoteControl
+		}
 	}
 
 	// CLI flags override profile values
