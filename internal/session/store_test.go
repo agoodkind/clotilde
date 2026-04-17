@@ -143,20 +143,21 @@ var _ = Describe("FileStore", func() {
 
 	Describe("List", func() {
 		It("should list all sessions sorted by lastAccessed", func() {
+			// Build each session AFTER its sleep. NewSession captures
+			// time.Now() at construction, so declaring all three up
+			// front and sleeping only between Create calls gives all
+			// three the same timestamp and lets sort.Slice pick an
+			// arbitrary order.
 			s1 := session.NewSession("session-1", "uuid-1")
+			Expect(store.Create(s1)).To(Succeed())
+
+			time.Sleep(10 * time.Millisecond)
 			s2 := session.NewSession("session-2", "uuid-2")
+			Expect(store.Create(s2)).To(Succeed())
+
+			time.Sleep(10 * time.Millisecond)
 			s3 := session.NewSession("session-3", "uuid-3")
-
-			err := store.Create(s1)
-			Expect(err).NotTo(HaveOccurred())
-
-			time.Sleep(10 * time.Millisecond)
-			err = store.Create(s2)
-			Expect(err).NotTo(HaveOccurred())
-
-			time.Sleep(10 * time.Millisecond)
-			err = store.Create(s3)
-			Expect(err).NotTo(HaveOccurred())
+			Expect(store.Create(s3)).To(Succeed())
 
 			sessions, err := store.List()
 			Expect(err).NotTo(HaveOccurred())

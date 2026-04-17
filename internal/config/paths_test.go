@@ -16,8 +16,10 @@ var _ = Describe("FindClotildeRoot", func() {
 	var originalWd string
 
 	BeforeEach(func() {
-		tempDir = GinkgoT().TempDir()
-		var err error
+		raw := GinkgoT().TempDir()
+		resolved, err := filepath.EvalSymlinks(raw)
+		Expect(err).NotTo(HaveOccurred())
+		tempDir = resolved
 		originalWd, err = os.Getwd()
 		Expect(err).NotTo(HaveOccurred())
 	})
@@ -239,8 +241,10 @@ var _ = Describe("FindOrCreateClotildeRoot", func() {
 	var originalWd string
 
 	BeforeEach(func() {
-		tempDir = GinkgoT().TempDir()
-		var err error
+		raw := GinkgoT().TempDir()
+		resolved, err := filepath.EvalSymlinks(raw)
+		Expect(err).NotTo(HaveOccurred())
+		tempDir = resolved
 		originalWd, err = os.Getwd()
 		Expect(err).NotTo(HaveOccurred())
 	})
@@ -343,8 +347,10 @@ var _ = Describe("IsInitialized", func() {
 	var originalWd string
 
 	BeforeEach(func() {
-		tempDir = GinkgoT().TempDir()
-		var err error
+		raw := GinkgoT().TempDir()
+		resolved, err := filepath.EvalSymlinks(raw)
+		Expect(err).NotTo(HaveOccurred())
+		tempDir = resolved
 		originalWd, err = os.Getwd()
 		Expect(err).NotTo(HaveOccurred())
 	})

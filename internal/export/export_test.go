@@ -89,8 +89,14 @@ var _ = Describe("BuildHTML", func() {
 		decoded, err := base64.StdEncoding.DecodeString(b64Data)
 		Expect(err).NotTo(HaveOccurred())
 
-		// Parse JSON
-		var data export.ExportData
+		// Parse JSON. BuildHTML emits a legacy "entries" shape for
+		// backward compatibility with older HTML templates, so the
+		// test decodes into a matching local struct rather than the
+		// current ExportData (which uses "messages").
+		var data struct {
+			SessionName string            `json:"sessionName"`
+			Entries     []json.RawMessage `json:"entries"`
+		}
 		err = json.Unmarshal(decoded, &data)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(data.SessionName).To(Equal("test-session"))
