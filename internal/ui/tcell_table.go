@@ -81,10 +81,20 @@ func (t *TableWidget) visibleRows() int {
 	return imax(0, t.Rect.H-1) // reserve one line for header
 }
 
-// Draw renders the table into r.
+// Draw renders the table into r. When the table has more rows than fit in
+// the viewport, a cute one column scrollbar is painted on the right edge.
 func (t *TableWidget) Draw(scr tcell.Screen, r Rect) {
 	t.Rect = r
 	clearRect(scr, r)
+
+	// Reserve the rightmost column for a scrollbar when overflow exists.
+	// Rows draw into contentW so the bar and the text never overlap.
+	vis := imax(0, r.H-1)
+	needsBar := len(t.Rows) > vis && r.W > 2
+	contentW := r.W
+	if needsBar {
+		contentW = r.W - 1
+	}
 
 	widths := t.ColumnWidths()
 
@@ -108,12 +118,11 @@ func (t *TableWidget) Draw(scr tcell.Screen, r Rect) {
 		} else {
 			text = fmt.Sprintf("%-*s", widths[i], label)
 		}
-		drawString(scr, x, r.Y, StyleHeader, text, r.X+r.W-x)
+		drawString(scr, x, r.Y, StyleHeader, text, r.X+contentW-x)
 		x += widths[i]
 	}
 
 	// Data rows
-	vis := t.visibleRows()
 	for vi := 0; vi < vis; vi++ {
 		di := t.Offset + vi
 		if di >= len(t.Rows) {
@@ -124,7 +133,7 @@ func (t *TableWidget) Draw(scr tcell.Screen, r Rect) {
 		isSel := t.Active && di == t.SelectedRow
 
 		if isSel {
-			fillRow(scr, r.X, y, r.W, StyleSelected)
+			fillRow(scr, r.X, y, contentW, StyleSelected)
 		}
 
 		x := r.X
@@ -146,9 +155,13 @@ func (t *TableWidget) Draw(scr tcell.Screen, r Rect) {
 			} else {
 				text = fmt.Sprintf("%-*s", widths[i], cell.Text)
 			}
-			drawString(scr, x, y, style, text, r.X+r.W-x)
+			drawString(scr, x, y, style, text, r.X+contentW-x)
 			x += widths[i]
 		}
+	}
+
+	if needsBar {
+		drawScrollbar(scr, r.X+r.W-1, r.Y+1, vis, vis, len(t.Rows), t.Offset)
 	}
 }
 

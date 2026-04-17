@@ -110,3 +110,52 @@ func clamp(v, lo, hi int) int {
 	}
 	return v
 }
+
+// drawScrollbar paints a vertical scrollbar on column x from row y0 to y0+h-1.
+// It draws nothing when all content fits (total <= visible).
+//
+//	visible: how many rows of content are currently on screen
+//	total:   total number of rows
+//	offset:  scroll offset in content rows (0-based)
+//
+// The thumb length is proportional to visible/total with a minimum of one row
+// so tiny thumbs remain hittable. The thumb position reflects offset/total.
+// Track character is a faint vertical bar. Thumb character is a solid block.
+func drawScrollbar(scr tcell.Screen, x, y0, h, visible, total, offset int) {
+	if h <= 0 || total <= visible {
+		return
+	}
+	trackStyle := StyleDefault.Foreground(ColorBorder)
+	thumbStyle := StyleDefault.Foreground(ColorAccent)
+
+	// Draw the track first as a faint rule
+	for i := 0; i < h; i++ {
+		scr.SetContent(x, y0+i, '│', nil, trackStyle)
+	}
+
+	// Thumb size proportional to visible window
+	thumbLen := h * visible / total
+	if thumbLen < 1 {
+		thumbLen = 1
+	}
+	if thumbLen > h {
+		thumbLen = h
+	}
+
+	// Thumb position scales the offset to the remaining track length.
+	maxOff := total - visible
+	if maxOff < 1 {
+		maxOff = 1
+	}
+	thumbStart := (h - thumbLen) * offset / maxOff
+	if thumbStart < 0 {
+		thumbStart = 0
+	}
+	if thumbStart+thumbLen > h {
+		thumbStart = h - thumbLen
+	}
+
+	for i := 0; i < thumbLen; i++ {
+		scr.SetContent(x, y0+thumbStart+i, '█', nil, thumbStyle)
+	}
+}
