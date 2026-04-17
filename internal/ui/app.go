@@ -639,12 +639,18 @@ func (a *App) runRegistrySubscriber(events <-chan RegistryEvent) {
 					URL:             ev.BridgeURL,
 				}
 				a.bridgeMu.Unlock()
+				if a.sidecar != nil && a.sidecarSessionID == ev.SessionID {
+					a.sidecar.BridgeURL = ev.BridgeURL
+				}
 			}
 		case "BRIDGE_CLOSED":
 			if ev.SessionID != "" {
 				a.bridgeMu.Lock()
 				delete(a.bridges, ev.SessionID)
 				a.bridgeMu.Unlock()
+				if a.sidecar != nil && a.sidecarSessionID == ev.SessionID {
+					a.sidecar.BridgeURL = ""
+				}
 			}
 		}
 		if a.screen != nil {
