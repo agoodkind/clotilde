@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -432,7 +433,9 @@ func (s *Server) updateSessionContext(payload hookEventPayload) {
 	}
 
 	promptParts = append(promptParts, "Recent messages:")
-	promptParts = append(promptParts, payload.Messages...)
+	for _, m := range payload.Messages {
+		promptParts = append(promptParts, sanitizePromptLine(m))
+	}
 
 	prompt := strings.Join(promptParts, "\n")
 
@@ -446,7 +449,23 @@ func (s *Server) updateSessionContext(payload hookEventPayload) {
 		return
 	}
 
+	// Run claude -p in a clotilde-owned scratch dir so the resulting
+	// transcript file lands in ~/.claude/projects/<our scratch>/ instead
+	// of ~/.claude/projects/-/ (the encoded form of /). Running from /
+	// also caused macOS TCC prompts because claude tried to inspect
+	// neighbouring system directories.
 	cmd := exec.CommandContext(ctx, claudeBin, "-p", "--model", "sonnet", prompt)
+	scratch := contextScratchDir()
+	if scratch != "" {
+		cmd.Dir = scratch
+	}
+	// Force a minimal env so the subprocess does not inherit the
+	// daemon's launchd PATH and re-trigger the same TCC probes that
+	// cachedRealClaudePath protects against.
+	cmd.Env = []string{
+		"HOME=" + os.Getenv("HOME"),
+		"PATH=/usr/bin:/bin:/usr/sbin:/sbin",
+	}
 	output, err := cmd.Output()
 	if err != nil {
 		s.log.Warn("context update: claude -p failed", "session", payload.SessionName, "err", err)
@@ -497,6 +516,50 @@ func (s *Server) updateSessionContext(payload hookEventPayload) {
 	}
 
 	s.log.Info("context updated", "session", payload.SessionName, "context", summary)
+}
+
+var (
+	imageMarkerRe  = regexp.MustCompile(`(?i)\[image[^\]]*\]`)
+	absolutePathRe = regexp.MustCompile(`/(?:Users|Volumes|System|Library)/[^\s\]]+`)
+)
+
+// sanitizePromptLine strips image markers and absolute file paths from
+// a message line before it lands in the labeling prompt. claude -p
+// otherwise interprets entries like "[Image #4]" or
+// "/Users/.../Photos Library.photoslibrary/foo" as files to load,
+// triggering macOS TCC prompts for whatever protected directory they
+// reference. The replacement keeps the surrounding text intact so the
+// model still has signal about the conversation topic.
+func sanitizePromptLine(line string) string {
+	out := line
+	out = imageMarkerRe.ReplaceAllString(out, "[image]")
+	out = absolutePathRe.ReplaceAllString(out, "<path>")
+	return out
+}
+
+// contextScratchDir returns a clotilde-owned working directory that
+// the daemon uses as cwd when invoking claude -p for context summaries.
+// Anchoring claude there keeps its transcript files inside the scratch
+// project and stops them from polluting ~/.claude/projects/-/. The dir
+// is created lazily and cached for the life of the process.
+var (
+	scratchDirOnce sync.Once
+	scratchDirPath string
+)
+
+func contextScratchDir() string {
+	scratchDirOnce.Do(func() {
+		base, err := os.UserCacheDir()
+		if err != nil {
+			return
+		}
+		dir := filepath.Join(base, "clotilde", "context-scratch")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return
+		}
+		scratchDirPath = dir
+	})
+	return scratchDirPath
 }
 
 // projectMemoryPathFromRoot returns the path to MEMORY.md for a workspace root.
