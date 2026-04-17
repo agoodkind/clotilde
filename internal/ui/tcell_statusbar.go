@@ -59,8 +59,8 @@ func legendFor(m StatusMode) []TextSegment {
 		}
 	case StatusDetail:
 		pairs = []kv{
-			{"r", "resume"}, {"v", "view"}, {"s", "search"},
-			{"d", "delete"}, {"f", "fork"}, {"n", "name"},
+			{"tab", "scroll pane"}, {"r", "resume"}, {"v", "view"},
+			{"s", "search"}, {"d", "delete"}, {"f", "fork"},
 			{"c", "compact"}, {"esc", "close"},
 		}
 	case StatusFilter:

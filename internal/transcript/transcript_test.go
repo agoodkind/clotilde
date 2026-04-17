@@ -150,6 +150,33 @@ func TestStripContent_EmptyAfterThinking(t *testing.T) {
 	}
 }
 
+// TestStripContent_Images verifies that --strip-images removes image blocks
+// from user message content and also from tool_result.content arrays.
+func TestStripContent_Images(t *testing.T) {
+	// User message with a text block and an image block.
+	userMsg := `{"type":"user","uuid":"u1","timestamp":"2026-04-10T10:00:00Z","message":{"role":"user","content":[{"type":"text","text":"check this"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]}}`
+	// Tool result whose content array contains an image (e.g. Read on a PNG).
+	toolMsg := `{"type":"user","uuid":"u2","timestamp":"2026-04-10T10:00:01Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"file is an image"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"BBBB"}}]}]}}`
+	lines := []string{userMsg, toolMsg}
+
+	result, stats := StripContent(lines, []int{0, 1}, CompactOptions{StripImages: true})
+	if stats.Images < 2 {
+		t.Errorf("expected at least 2 images removed, got %d", stats.Images)
+	}
+	if strings.Contains(result[0], `"type":"image"`) {
+		t.Errorf("user-message image survived:\n%s", result[0])
+	}
+	if !strings.Contains(result[0], `"check this"`) {
+		t.Errorf("accompanying text was dropped:\n%s", result[0])
+	}
+	if strings.Contains(result[1], `"type":"image"`) {
+		t.Errorf("tool_result image survived:\n%s", result[1])
+	}
+	if !strings.Contains(result[1], `"file is an image"`) {
+		t.Errorf("tool_result text was dropped:\n%s", result[1])
+	}
+}
+
 // TestStripContent_ThinkingIndependentFromToolResults verifies that
 // --strip-tool-results no longer implicitly strips thinking blocks, and
 // that --strip-thinking leaves tool_result blocks untouched.

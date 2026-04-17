@@ -138,6 +138,7 @@ Examples:
   clotilde compact my-session --move-boundary 50
   clotilde compact my-session --strip-tool-results --keep-last 200
   clotilde compact my-session --strip-thinking
+  clotilde compact my-session --strip-images
   clotilde compact my-session --strip-large 1000 --dry-run
   clotilde compact my-session --remove-last-boundary`,
 		Args: cobra.ExactArgs(1),
@@ -169,6 +170,7 @@ Examples:
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			stripResults, _ := cmd.Flags().GetBool("strip-tool-results")
 			stripThinking, _ := cmd.Flags().GetBool("strip-thinking")
+			stripImages, _ := cmd.Flags().GetBool("strip-images")
 			stripLarge, _ := cmd.Flags().GetInt("strip-large")
 			keepLast, _ := cmd.Flags().GetInt("keep-last")
 			stripBeforeStr, _ := cmd.Flags().GetString("strip-before")
@@ -194,7 +196,7 @@ Examples:
 			}
 
 			// When no action flags are set and stdout is a TTY, launch the interactive UI.
-			noActionFlags := !dryRun && !stripResults && !stripThinking && stripLarge == 0 && keepLast == 0 &&
+			noActionFlags := !dryRun && !stripResults && !stripThinking && !stripImages && stripLarge == 0 && keepLast == 0 &&
 				stripBeforeStr == "" && moveBoundary == 0 && !removeLast
 			if noActionFlags && isatty.IsTerminal(os.Stdout.Fd()) {
 				chain, _, all, walkErr := transcript.WalkChain(path)
@@ -237,7 +239,7 @@ Examples:
 			}
 			fmt.Fprintln(out)
 
-			willWrite := !dryRun && (stripResults || stripThinking || stripLarge > 0 || moveBoundary > 0 || removeLast)
+			willWrite := !dryRun && (stripResults || stripThinking || stripImages || stripLarge > 0 || moveBoundary > 0 || removeLast)
 			if willWrite {
 				bk, bkErr := transcript.BackupTranscript(path, sess.Name)
 				if bkErr != nil {
@@ -282,21 +284,22 @@ Examples:
 			}
 
 			// --- Action: strip content ---
-			if stripResults || stripThinking || stripLarge > 0 {
+			if stripResults || stripThinking || stripImages || stripLarge > 0 {
 				opts := transcript.CompactOptions{
 					StripToolResults: stripResults,
 					StripThinking:    stripThinking,
+					StripImages:      stripImages,
 					StripLargeBytes:  stripLarge,
 					StripBefore:      stripBefore,
 					KeepLast:         keepLast,
 				}
-				fmt.Fprintf(out, "Stripping (tool_results=%v, thinking=%v, large>%d bytes, keep_last=%d)...\n",
-					stripResults, stripThinking, stripLarge, keepLast)
+				fmt.Fprintf(out, "Stripping (tool_results=%v, thinking=%v, images=%v, large>%d bytes, keep_last=%d)...\n",
+					stripResults, stripThinking, stripImages, stripLarge, keepLast)
 
 				chain, _, all, _ := transcript.WalkChain(path)
 				newLines, stats := transcript.StripContent(all, chain, opts)
-				fmt.Fprintf(out, "Stripped:   %d blocks total (tool_results=%d thinking=%d large_inputs=%d)\n",
-					stats.Total(), stats.ToolResults, stats.Thinking, stats.LargeInputs)
+				fmt.Fprintf(out, "Stripped:   %d blocks total (tool_results=%d thinking=%d images=%d large_inputs=%d)\n",
+					stats.Total(), stats.ToolResults, stats.Thinking, stats.Images, stats.LargeInputs)
 
 				if dryRun {
 					fmt.Fprintln(out, "[dry-run] No writes performed.")
@@ -409,6 +412,7 @@ Examples:
 	cmd.Flags().Bool("dry-run", false, "Show what would change without writing")
 	cmd.Flags().Bool("strip-tool-results", false, "Replace tool results with stubs")
 	cmd.Flags().Bool("strip-thinking", false, "Remove assistant thinking blocks")
+	cmd.Flags().Bool("strip-images", false, "Remove image blocks (fixes 'image exceeds dimension limit' on resume)")
 	cmd.Flags().Int("strip-large", 0, "Strip tool results/inputs larger than N bytes")
 	cmd.Flags().String("strip-before", "", "Only strip entries before this time (RFC3339 or YYYY-MM-DD)")
 	cmd.Flags().Int("keep-last", 0, "Keep last N chain entries fully intact")
