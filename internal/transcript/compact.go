@@ -33,6 +33,17 @@ type CompactOptions struct {
 	StripLargeBytes int
 	// KeepLast keeps the last N messages fully intact (no stripping).
 	KeepLast int
+	// KeepLastImages preserves the most recent N image blocks even
+	// when StripImages is true. The remaining (older) image blocks
+	// are still stripped. Useful when the user wants to drop image
+	// history but keep the latest screenshot the model just looked at.
+	// 0 means strip all when StripImages is true.
+	KeepLastImages int
+	// KeepLastToolResults preserves the most recent N tool_result
+	// bodies even when StripToolResults is true.
+	KeepLastToolResults int
+	// KeepLastThinking preserves the most recent N thinking blocks.
+	KeepLastThinking int
 	// TargetTokens is the desired post-boundary token count. Used with token counting.
 	TargetTokens int
 	// DryRun shows what would be removed without writing.
@@ -304,6 +315,68 @@ func (s StripStats) Total() int {
 	return s.ToolResults + s.LargeInputs + s.Thinking + s.Images
 }
 
+// keepSet is keyed by chain line index and then by content block index.
+// A (line, block) pair present in the set is exempt from stripping
+// because it fell within the most recent N occurrences of the block
+// type the user asked to preserve.
+type keepSet map[int]map[int]bool
+
+// buildKeepSet walks the chain in reverse and marks the most recent n
+// blocks of blockType for preservation. When n is zero the return value
+// is an empty set so every block stays eligible for stripping.
+func buildKeepSet(allLines []string, chainLines []int, blockType string, n int) keepSet {
+	out := keepSet{}
+	if n <= 0 {
+		return out
+	}
+	seen := 0
+	for i := len(chainLines) - 1; i >= 0 && seen < n; i-- {
+		ln := chainLines[i]
+		line := allLines[ln]
+		var entry struct {
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal([]byte(line), &entry) != nil {
+			continue
+		}
+		var blocks []json.RawMessage
+		if json.Unmarshal(entry.Message.Content, &blocks) != nil {
+			continue
+		}
+		for bi := len(blocks) - 1; bi >= 0 && seen < n; bi-- {
+			var b map[string]json.RawMessage
+			if json.Unmarshal(blocks[bi], &b) != nil {
+				continue
+			}
+			var t string
+			if json.Unmarshal(b["type"], &t) != nil || t != blockType {
+				continue
+			}
+			if out[ln] == nil {
+				out[ln] = map[int]bool{}
+			}
+			out[ln][bi] = true
+			seen++
+		}
+	}
+	return out
+}
+
+// keepInSet reports whether a block at (line, blockIdx) was marked for
+// preservation by buildKeepSet.
+func keepInSet(s keepSet, line, blockIdx int) bool {
+	if s == nil {
+		return false
+	}
+	m, ok := s[line]
+	if !ok {
+		return false
+	}
+	return m[blockIdx]
+}
+
 // StripContent applies stripping rules to entries based on CompactOptions.
 // Returns the modified lines and a per-type breakdown of what was stripped.
 func StripContent(allLines []string, chainLines []int, opts CompactOptions) ([]string, StripStats) {
@@ -319,6 +392,16 @@ func StripContent(allLines []string, chainLines []int, opts CompactOptions) ([]s
 			keepIntact[ln] = true
 		}
 	}
+
+	// Build keep sets for the three "keep last N" options. The walk is
+	// reverse so the most recent N occurrences of each block type are
+	// marked. The strip loop below skips any (lineIdx, blockIdx) pair
+	// found in the appropriate set so the user always sees the latest
+	// screenshots, the latest tool results, and the latest thinking
+	// regardless of the global strip flags.
+	keepImages := buildKeepSet(allLines, chainLines, "image", opts.KeepLastImages)
+	keepToolResults := buildKeepSet(allLines, chainLines, "tool_result", opts.KeepLastToolResults)
+	keepThinking := buildKeepSet(allLines, chainLines, "thinking", opts.KeepLastThinking)
 
 	var stats StripStats
 	result := make([]string, len(allLines))
@@ -369,6 +452,9 @@ func StripContent(allLines []string, chainLines []int, opts CompactOptions) ([]s
 
 			switch blockType {
 			case "tool_result":
+				if keepInSet(keepToolResults, ln, i) {
+					continue
+				}
 				// If asked to strip images, also dig into tool_result.content
 				// arrays and remove embedded image blocks (e.g. Read on a PNG).
 				if opts.StripImages {
@@ -459,14 +545,14 @@ func StripContent(allLines []string, chainLines []int, opts CompactOptions) ([]s
 				}
 
 			case "thinking":
-				if opts.StripThinking {
+				if opts.StripThinking && !keepInSet(keepThinking, ln, i) {
 					content[i] = nil
 					modified = true
 					stats.Thinking++
 				}
 
 			case "image":
-				if opts.StripImages {
+				if opts.StripImages && !keepInSet(keepImages, ln, i) {
 					content[i] = nil
 					modified = true
 					stats.Images++

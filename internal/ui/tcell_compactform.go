@@ -18,9 +18,15 @@ type CompactChoices struct {
 	StripThinking    bool
 	StripImages      bool
 	StripLargeInputs bool
-	Applied          bool
-	DryRun           bool
-	Cancelled        bool
+	// Per-strip keep-last counts. The most recent N blocks of each
+	// type stay intact even when their strip flag is on. Zero means
+	// "strip everything" (the original behavior).
+	KeepLastImages      int
+	KeepLastToolResults int
+	KeepLastThinking    int
+	Applied             bool
+	DryRun              bool
+	Cancelled           bool
 }
 
 // CompactForm is the in-TUI overlay for the compact command. It exposes a
@@ -36,12 +42,15 @@ type CompactForm struct {
 	ChainLines []int
 
 	// Current values. Initialize before first Draw.
-	UseBoundary      bool
-	BoundaryPercent  int
-	StripToolResults bool
-	StripThinking    bool
-	StripImages      bool
-	StripLargeInputs bool
+	UseBoundary         bool
+	BoundaryPercent     int
+	StripToolResults    bool
+	StripThinking       bool
+	StripImages         bool
+	StripLargeInputs    bool
+	KeepLastImages      int
+	KeepLastToolResults int
+	KeepLastThinking    int
 
 	// Focus cursor. Indexes into the flat fields list defined in the
 	// fields() method.
@@ -500,13 +509,16 @@ func (f *CompactForm) activate() bool {
 
 func (f *CompactForm) choices(applied, dryRun bool) CompactChoices {
 	return CompactChoices{
-		BoundaryPercent:  f.BoundaryPercent,
-		StripToolResults: f.StripToolResults,
-		StripThinking:    f.StripThinking,
-		StripImages:      f.StripImages,
-		StripLargeInputs: f.StripLargeInputs,
-		Applied:          applied,
-		DryRun:           dryRun,
+		BoundaryPercent:     f.BoundaryPercent,
+		StripToolResults:    f.StripToolResults,
+		StripThinking:       f.StripThinking,
+		StripImages:         f.StripImages,
+		StripLargeInputs:    f.StripLargeInputs,
+		KeepLastImages:      f.KeepLastImages,
+		KeepLastToolResults: f.KeepLastToolResults,
+		KeepLastThinking:    f.KeepLastThinking,
+		Applied:             applied,
+		DryRun:              dryRun,
 	}
 }
 
