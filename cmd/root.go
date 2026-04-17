@@ -46,6 +46,12 @@ func runDashboard(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	// Adopt orphan transcripts in the background. The daemon also runs
+	// this, but doing it here makes the dashboard self-healing even when
+	// the daemon is not running yet. The result is picked up by the
+	// existing store watcher inside the TUI.
+	go runDiscoveryAdoption(store)
+
 	sessions, err := store.List()
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Failed to load sessions: %v\n", err)
@@ -60,6 +66,26 @@ func runDashboard(cmd *cobra.Command, args []string) {
 		_, _ = fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// runDiscoveryAdoption walks ~/.claude/projects and creates registry
+// entries for any transcript whose UUID is unknown. Errors are swallowed
+// because this runs as a best-effort startup task; the user only sees
+// the result indirectly through the dashboard listing.
+func runDiscoveryAdoption(store *session.FileStore) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	projects := filepath.Join(home, ".claude", "projects")
+	if _, err := os.Stat(projects); err != nil {
+		return
+	}
+	results, err := session.ScanProjects(projects)
+	if err != nil {
+		return
+	}
+	_, _ = session.AdoptUnknown(store, results)
 }
 
 // runPostSessionDashboard shows the main tcell TUI after a session exits,

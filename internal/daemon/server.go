@@ -73,8 +73,57 @@ func New(log *slog.Logger) (*Server, error) {
 	}
 
 	go s.watchGlobalSettings()
+	go s.runDiscoveryScanner()
 
 	return s, nil
+}
+
+// runDiscoveryScanner periodically walks ~/.claude/projects and adopts
+// any transcripts whose UUID is not already tracked by clotilde. Runs
+// once at startup, then on a 5 minute cadence. Errors are logged but do
+// not stop the loop. Auto-name and subagent transcripts are skipped at
+// the scan layer.
+func (s *Server) runDiscoveryScanner() {
+	const interval = 5 * time.Minute
+	for {
+		s.runDiscoveryOnce()
+		time.Sleep(interval)
+	}
+}
+
+func (s *Server) runDiscoveryOnce() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	projects := filepath.Join(home, ".claude", "projects")
+	if _, err := os.Stat(projects); err != nil {
+		return
+	}
+	results, err := session.ScanProjects(projects)
+	if err != nil {
+		s.log.Warn("discovery scan failed", "err", err)
+		return
+	}
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		s.log.Warn("discovery store init failed", "err", err)
+		return
+	}
+	adopted, err := session.AdoptUnknown(store, results)
+	if err != nil {
+		s.log.Warn("discovery adopt failed", "err", err)
+		return
+	}
+	if len(adopted) > 0 {
+		names := make([]string, 0, len(adopted))
+		for _, a := range adopted {
+			names = append(names, a.Name)
+		}
+		s.log.Info("discovery adopted sessions", "count", len(adopted), "names", names)
+	} else {
+		s.log.Debug("discovery scan: nothing new", "transcripts", len(results))
+	}
 }
 
 // Close shuts down the watcher and cleans up all active session runtime dirs.
