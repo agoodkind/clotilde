@@ -193,9 +193,13 @@ func generateName(
 		lines = append(lines, fmt.Sprintf("[%s] %s", role, text))
 	}
 
-	prompt := `Based on these messages from a coding session, generate a SHORT human-readable name in kebab-case (3 to 5 words, all lowercase, hyphens only, no numbers). The name must describe the MAIN topic or task. Output ONLY the kebab-case name. Nothing else. No punctuation. No explanation.
+	prompt := `You output exactly ONE token. That token is a kebab-case name with 3 to 5 words. All lowercase letters and hyphens only. No numbers. No periods. No quotes. No backticks. No spaces. No newlines. Do not greet. Do not explain. Do not ask questions. Do not write sentences. If you cannot determine a topic from the messages, output the literal string "unnamed-session". Never output more than 48 characters.
 
-Good examples: opnsense-bgp-cutover, clotilde-search-pipeline, tack-node-model-refactor, mwan-firewall-rules-cleanup
+Good examples:
+opnsense-bgp-cutover
+clotilde-search-pipeline
+tack-node-model-refactor
+mwan-firewall-rules-cleanup
 
 Messages:
 ` + strings.Join(lines, "\n")
@@ -209,12 +213,31 @@ Messages:
 		return "", fmt.Errorf("claude -p failed: %w", err)
 	}
 
-	generated := strings.TrimSpace(string(output))
-	generated = strings.ToLower(generated)
-	// Strip any surrounding quotes or punctuation the model might add.
-	generated = strings.Trim(generated, `"'`+"`.,;:!?")
-	// Collapse spaces to hyphens in case model adds them.
+	// Parse the model output aggressively. The model sometimes returns a
+	// paragraph despite the prompt; keep only the FIRST line and strip any
+	// surrounding markup before validating.
+	raw := strings.TrimSpace(string(output))
+	if idx := strings.IndexAny(raw, "\r\n"); idx >= 0 {
+		raw = raw[:idx]
+	}
+	// Remove common decoration: surrounding quotes, trailing punctuation,
+	// leading list markers like "- " or "* ".
+	raw = strings.Trim(raw, " \t`\"'"+".,;:!?)")
+	raw = strings.TrimPrefix(raw, "- ")
+	raw = strings.TrimPrefix(raw, "* ")
+	raw = strings.TrimPrefix(raw, "> ")
+	generated := strings.ToLower(raw)
 	generated = strings.ReplaceAll(generated, " ", "-")
+	// Reject outputs that look like prose. Anything above 48 chars, anything
+	// with sentence punctuation, or anything with multi-line content is not
+	// a name.
+	if len(generated) > 48 ||
+		strings.ContainsAny(generated, ".,!?\"'`()[]{}<>\n\r\t") {
+		return "", fmt.Errorf("LLM returned prose, not a name (%d chars)", len(generated))
+	}
+	if generated == "unnamed-session" {
+		return "", fmt.Errorf("LLM declined to name this session")
+	}
 
 	if !kebabRe.MatchString(generated) {
 		return "", fmt.Errorf("LLM returned invalid name %q", generated)
