@@ -108,6 +108,7 @@ func New(log *slog.Logger) (*Server, error) {
 
 	go s.watchGlobalSettings()
 	go s.runDiscoveryScanner()
+	go s.runScratchCleaner()
 
 	if home, err := os.UserHomeDir(); err == nil {
 		sessionsDir := filepath.Join(home, ".claude", "sessions")
@@ -655,6 +656,63 @@ var (
 	scratchDirOnce sync.Once
 	scratchDirPath string
 )
+
+// runScratchCleaner deletes transcripts left behind in
+// ~/.claude/projects/<encoded scratch dir>/ by past claude -p calls
+// for context summaries. Each call writes one file. The files are
+// throwaway: their summary already lives in session metadata. Without
+// pruning the directory grows without bound.
+//
+// The cleaner runs every hour and removes any transcript older than
+// 12 hours. Anything that was useful for debugging in the last half
+// day is preserved so the user can inspect prompt drift.
+func (s *Server) runScratchCleaner() {
+	const interval = 1 * time.Hour
+	const maxAge = 12 * time.Hour
+	for {
+		s.cleanScratchOnce(maxAge)
+		time.Sleep(interval)
+	}
+}
+
+func (s *Server) cleanScratchOnce(maxAge time.Duration) {
+	scratch := contextScratchDir()
+	if scratch == "" {
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	encoded := strings.ReplaceAll(scratch, "/", "-")
+	encoded = strings.ReplaceAll(encoded, ".", "-")
+	dir := filepath.Join(home, ".claude", "projects", encoded)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-maxAge)
+	removed := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		full := filepath.Join(dir, e.Name())
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(cutoff) {
+			continue
+		}
+		if err := os.Remove(full); err == nil {
+			removed++
+		}
+	}
+	if removed > 0 {
+		s.log.Info("scratch cleaner pruned old summary transcripts", "removed", removed, "dir", dir)
+	}
+}
 
 func contextScratchDir() string {
 	scratchDirOnce.Do(func() {
