@@ -28,6 +28,14 @@ import (
 
 // ---------------- Public API ----------------
 
+// AppOptions tweaks the startup behavior of the main TUI. Every field is
+// optional. Zero values preserve the normal dashboard flow.
+type AppOptions struct {
+	// ReturnTo, when non-nil, pre-selects the given session in the table.
+	// The header banner prompts the user to resume or pick something else.
+	ReturnTo *session.Session
+}
+
 // AppCallbacks provides hooks the TUI calls to perform actions.
 // Kept identical to the previous tview API so cmd/root.go needs no changes.
 type AppCallbacks struct {
@@ -122,10 +130,18 @@ type App struct {
 
 	// Scroll position readout for status bar
 	positionText string
+
+	// Post-session return banner. When non-empty the header shows a prompt
+	// that invites the user to resume the named session with Enter.
+	returnBanner string
 }
 
 // NewApp creates and returns the clotilde TUI.
-func NewApp(sessions []*session.Session, cb AppCallbacks) *App {
+func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *App {
+	var opt AppOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
 	a := &App{
 		cb:         cb,
 		sessions:   sessions,
@@ -152,7 +168,44 @@ func NewApp(sessions []*session.Session, cb AppCallbacks) *App {
 	a.status = &StatusBarWidget{Mode: StatusBrowse}
 
 	a.populateTable()
+
+	// If a ReturnTo session is provided, pre-select its row and set the
+	// banner. The row is located after any sorting or filtering so that
+	// the activation highlights the correct index.
+	if opt.ReturnTo != nil {
+		for vi, idx := range a.visibleIdx {
+			if a.sessions[idx].Name == opt.ReturnTo.Name {
+				a.table.Active = true
+				a.table.SelectedRow = vi
+				a.table.Offset = vi
+				a.returnBanner = opt.ReturnTo.Name
+				break
+			}
+		}
+		a.openReturnPrompt(opt.ReturnTo)
+	}
 	return a
+}
+
+// openReturnPrompt shows the compact two option overlay so the user can
+// Enter to resume or press Down then Enter to quit clotilde entirely.
+func (a *App) openReturnPrompt(sess *session.Session) {
+	prompt := &ReturnPrompt{SessionName: sess.Name}
+	prompt.OnResume = func() {
+		a.overlay = nil
+		if row := a.table.SelectedRow; row >= 0 && row < len(a.visibleIdx) {
+			a.resumeRow(row)
+		}
+	}
+	prompt.OnQuit = func() {
+		a.overlay = nil
+		a.running = false
+	}
+	prompt.OnCancel = func() {
+		a.overlay = nil
+		a.returnBanner = ""
+	}
+	a.overlay = prompt
 }
 
 // Run starts the event loop.
@@ -468,6 +521,18 @@ func (a *App) draw() {
 	}
 	drawString(a.screen, 0, 0, StyleHeaderBar.Bold(true), left, w)
 
+	// Post-session banner: right-aligned hint in the header bar.
+	if a.returnBanner != "" {
+		banner := fmt.Sprintf(" Returning from %s  enter resume  q quit ", a.returnBanner)
+		bx := w - runeCount(banner)
+		if bx < runeCount(left)+2 {
+			bx = runeCount(left) + 2
+		}
+		if bx < w {
+			drawString(a.screen, bx, 0, StyleHeaderBar.Foreground(ColorAccent).Bold(true), banner, w-bx)
+		}
+	}
+
 	// Table
 	a.table.Draw(a.screen, a.tableRect)
 
@@ -749,10 +814,22 @@ func (a *App) resumeRow(row int) {
 		return
 	}
 	sess := a.sessions[a.visibleIdx[row]]
+	a.returnBanner = "" // acted on; don't re-prompt after the shell round trip
 	a.suspendAndRun(func() {
 		_ = a.cb.ResumeSession(sess)
 	})
+	// After claude exits, surface the same session in the banner again so
+	// the user can quickly re-enter if they closed by accident.
+	a.returnBanner = sess.Name
 	a.refreshSessions()
+	// Re-select the row (refreshSessions resets selection on deselect).
+	for vi, idx := range a.visibleIdx {
+		if a.sessions[idx].Name == sess.Name {
+			a.table.Active = true
+			a.table.SelectedRow = vi
+			break
+		}
+	}
 }
 
 func (a *App) newSession() {
