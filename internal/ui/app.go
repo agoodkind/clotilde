@@ -45,6 +45,9 @@ type AppCallbacks struct {
 	ForkSession   func(sess *session.Session) error
 	RenameSession func(sess *session.Session) (string, error)
 	StartSession  func() error
+	// StartSessionWithBasedir creates a new session pinned to the given
+	// workspace root. Empty string falls back to the caller's cwd.
+	StartSessionWithBasedir func(basedir string) error
 	ApplyCompact  func(sess *session.Session, choices CompactChoices) error
 	// SetBasedir rewrites the session's workspaceRoot field in metadata.
 	// newPath is already resolved by the caller; "" clears the field.
@@ -102,8 +105,10 @@ const (
 	SortColName SortColumn = iota
 	SortColWorkspace
 	SortColModel
-	SortColCreated
+	SortColMessages
+	SortColSummary
 	SortColUsed
+	SortColCreated
 )
 
 // ---------------- App ----------------
@@ -953,6 +958,10 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 			// CREATED). MSGS and SUMMARY do not have their own sort
 			// mode yet so clicks on those columns fall through.
 			if y == a.tableRect.Y {
+				// Table column order: NAME, BASEDIR, MODEL, MSGS,
+				// SUMMARY, LAST USED, CREATED. Each clickable column
+				// toggles its sort and flips the asc flag on a repeat
+				// click of the same column.
 				switch a.table.ColAtX(x) {
 				case 0:
 					a.toggleSort(SortColName)
@@ -960,6 +969,10 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 					a.toggleSort(SortColWorkspace)
 				case 2:
 					a.toggleSort(SortColModel)
+				case 3:
+					a.toggleSort(SortColMessages)
+				case 4:
+					a.toggleSort(SortColSummary)
 				case 5:
 					a.toggleSort(SortColUsed)
 				case 6:
@@ -1245,6 +1258,10 @@ func (a *App) sortSessions() {
 			less = x.Metadata.WorkspaceRoot < y.Metadata.WorkspaceRoot
 		case SortColModel:
 			less = a.modelCache[x.Name] < a.modelCache[y.Name]
+		case SortColMessages:
+			less = sessionMessageCount(a, x) < sessionMessageCount(a, y)
+		case SortColSummary:
+			less = strings.ToLower(x.Metadata.Context) < strings.ToLower(y.Metadata.Context)
 		case SortColCreated:
 			less = x.Metadata.Created.Before(y.Metadata.Created)
 		case SortColUsed:
@@ -1267,6 +1284,32 @@ func (a *App) toggleSort(col SortColumn) {
 	}
 	a.sortSessions()
 	a.populateTable()
+	if a.table != nil {
+		a.table.SortCol = sortColTableIndex(col)
+		a.table.SortAsc = a.sortAsc
+	}
+}
+
+// sortColTableIndex maps a SortColumn to the table column index used by
+// the table widget for header indicators.
+func sortColTableIndex(c SortColumn) int {
+	switch c {
+	case SortColName:
+		return 0
+	case SortColWorkspace:
+		return 1
+	case SortColModel:
+		return 2
+	case SortColMessages:
+		return 3
+	case SortColSummary:
+		return 4
+	case SortColUsed:
+		return 5
+	case SortColCreated:
+		return 6
+	}
+	return -1
 }
 
 // currentSession returns the session at the currently selected table row.
@@ -1516,13 +1559,40 @@ func (a *App) resumeRow(row int) {
 }
 
 func (a *App) newSession() {
-	if a.cb.StartSession == nil {
-		return
+	a.openNewSessionPrompt()
+}
+
+// openNewSessionPrompt asks the user where the new session should
+// anchor its basedir. The default is the caller's current working
+// directory; an empty submission falls back to "no basedir set". Path
+// resolution happens in the wired callback so tilde and relative paths
+// behave consistently with the CLI.
+func (a *App) openNewSessionPrompt() {
+	cwd, _ := os.Getwd()
+	input := NewTextInput("Basedir: ")
+	input.Text = cwd
+	input.CursorX = runeCount(cwd)
+	input.OnSubmit = func(s string) {
+		a.closeOverlay()
+		basedir := strings.TrimSpace(s)
+		runner := func() {
+			if a.cb.StartSessionWithBasedir != nil {
+				_ = a.cb.StartSessionWithBasedir(basedir)
+				return
+			}
+			if a.cb.StartSession != nil {
+				_ = a.cb.StartSession()
+			}
+		}
+		a.suspendAndRun(runner)
+		a.refreshSessions()
 	}
-	a.suspendAndRun(func() {
-		_ = a.cb.StartSession()
-	})
-	a.refreshSessions()
+	input.OnCancel = a.closeOverlay
+	a.overlay = &InputOverlay{
+		Input: input,
+		Title: "New session basedir (enter to confirm, esc to cancel)",
+	}
+	a.mode = StatusFilter
 }
 
 func (a *App) viewSelected() {
@@ -2036,6 +2106,20 @@ func isEphemeralSession(sess *session.Session) bool {
 		return true
 	}
 	return false
+}
+
+// sessionMessageCount returns the cached transcript entry count for a
+// session. Sessions with no cached stats sort last (count -1 maps to a
+// very small number for ascending order, very large for descending).
+func sessionMessageCount(a *App, sess *session.Session) int {
+	if sess == nil {
+		return -1
+	}
+	qs, ok := a.statsCache[sess.Metadata.TranscriptPath]
+	if !ok || qs == nil {
+		return -1
+	}
+	return qs.TotalEntries
 }
 
 // lastUsedTime returns the best available "last activity" timestamp for a
