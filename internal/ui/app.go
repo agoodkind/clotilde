@@ -341,7 +341,18 @@ func (a *App) Run() error {
 	if err := a.initScreen(); err != nil {
 		return err
 	}
-	defer a.screen.Fini()
+	// Defer a sequenced teardown that always disables the alt-screen
+	// modes we turned on. macOS Terminal and iTerm both leave the
+	// cursor and mouse-tracking state half-set when only Fini runs.
+	// The recover catches panics so a crash does not leave the user
+	// stuck in alt-screen with mouse mode active.
+	defer func() {
+		if r := recover(); r != nil {
+			a.teardownScreen()
+			panic(r)
+		}
+		a.teardownScreen()
+	}()
 
 	a.running = true
 	a.draw()
@@ -575,6 +586,28 @@ func (a *App) syncTableSelectionWithOffset() {
 	} else if a.table.SelectedRow >= a.table.Offset+vis {
 		a.table.SelectedRow = a.table.Offset + vis - 1
 	}
+}
+
+// teardownScreen returns the terminal to a sensible state. Mouse and
+// focus tracking are explicitly disabled before Fini so the host
+// terminal does not keep emitting tracking sequences after exit.
+// Calling this twice is safe.
+func (a *App) teardownScreen() {
+	if a.screen == nil {
+		return
+	}
+	a.screen.DisableMouse()
+	a.screen.DisableFocus()
+	a.screen.ShowCursor(0, 0)
+	a.screen.Fini()
+	a.screen = nil
+	// Some terminals (notably macOS Terminal.app and iTerm2 with
+	// certain profiles) need a final reset to clear the alt-screen,
+	// scroll-region, and mouse tracking state that tcell sometimes
+	// leaves on. The escape sequence below is the standard "reset
+	// everything" sequence: exit alt-screen, disable mouse modes,
+	// clear scroll region, restore cursor.
+	fmt.Fprint(os.Stdout, "\x1b[?1049l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?25h\x1b[r")
 }
 
 // initScreen allocates a tcell screen and enables mouse + focus.
@@ -2144,13 +2177,15 @@ func (a *App) softRefreshSessions() {
 }
 
 // suspendAndRun shuts down the screen, runs fn (which may launch claude),
-// then re-initializes the screen and repaints. This replaces tview's Suspend.
+// then re-initializes the screen and repaints. This replaces tview's
+// Suspend. The teardown path mirrors the Run defer so suspend leaves
+// the terminal in the same clean state as a clean exit.
 func (a *App) suspendAndRun(fn func()) {
 	if a.screen == nil {
 		fn()
 		return
 	}
-	a.screen.Fini()
+	a.teardownScreen()
 	fn()
 	_ = a.initScreen()
 	a.draw()
