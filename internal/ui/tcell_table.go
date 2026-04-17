@@ -24,11 +24,17 @@ type TableWidget struct {
 	Active      bool // true after first user interaction (shows highlight)
 	SelectedRow int  // 0 based data row index
 	Offset      int  // top visible data row index
+	HOffset     int  // leftmost visible column in cells
 
 	// ScrollbarRect is the last drawn scrollbar region. Zero height when
 	// the table is not tall enough to need a bar. Used by the parent App
 	// for click-to-jump and drag-to-scroll hit tests.
 	ScrollbarRect Rect
+
+	// LastContentWidth records the total width of all column content in
+	// the most recent Draw. The parent App reads it to clamp HOffset and
+	// to know whether horizontal scrolling is necessary.
+	LastContentWidth int
 
 	// Sort state (visual only; caller toggles via SortCol/SortAsc)
 	SortCol int
@@ -86,14 +92,14 @@ func (t *TableWidget) visibleRows() int {
 	return imax(0, t.Rect.H-1) // reserve one line for header
 }
 
-// Draw renders the table into r. When the table has more rows than fit in
-// the viewport, a cute one column scrollbar is painted on the right edge.
+// Draw renders the table into r. Two scrollbars appear when needed: a
+// vertical bar on the right edge for row overflow, and a horizontal
+// indicator through the column layout when the total content width
+// exceeds r.W. HOffset controls horizontal scroll.
 func (t *TableWidget) Draw(scr tcell.Screen, r Rect) {
 	t.Rect = r
 	clearRect(scr, r)
 
-	// Reserve the rightmost column for a scrollbar when overflow exists.
-	// Rows draw into contentW so the bar and the text never overlap.
 	vis := imax(0, r.H-1)
 	needsBar := len(t.Rows) > vis && r.W > 2
 	contentW := r.W
@@ -103,11 +109,46 @@ func (t *TableWidget) Draw(scr tcell.Screen, r Rect) {
 
 	widths := t.ColumnWidths()
 
-	// Header row with sort indicator
-	x := r.X
+	// Sum total virtual width so we know when to enable horizontal scroll
+	// and how far HOffset may go.
+	totalW := 0
+	for i, w := range widths {
+		if i > 0 {
+			totalW += t.ColGaps
+		}
+		totalW += w
+	}
+	t.LastContentWidth = totalW
+	maxHOff := imax(0, totalW-contentW)
+	if t.HOffset > maxHOff {
+		t.HOffset = maxHOff
+	}
+	if t.HOffset < 0 {
+		t.HOffset = 0
+	}
+
+	// drawShifted paints text at virtual column position vx so that
+	// vx == HOffset appears at the left edge. Partial visibility at
+	// either edge is handled by slicing.
+	drawShifted := func(vx, y int, style tcell.Style, text string) {
+		runes := []rune(text)
+		for i, ch := range runes {
+			col := vx + i - t.HOffset
+			if col < 0 {
+				continue
+			}
+			if col >= contentW {
+				break
+			}
+			scr.SetContent(r.X+col, y, ch, nil, style)
+		}
+	}
+
+	// Header row
+	vx := 0
 	for i, h := range t.Headers {
 		if i > 0 {
-			x += t.ColGaps
+			vx += t.ColGaps
 		}
 		label := h
 		if i == t.SortCol {
@@ -123,8 +164,8 @@ func (t *TableWidget) Draw(scr tcell.Screen, r Rect) {
 		} else {
 			text = fmt.Sprintf("%-*s", widths[i], label)
 		}
-		drawString(scr, x, r.Y, StyleHeader, text, r.X+contentW-x)
-		x += widths[i]
+		drawShifted(vx, r.Y, StyleHeader, text)
+		vx += widths[i]
 	}
 
 	// Data rows
@@ -141,10 +182,10 @@ func (t *TableWidget) Draw(scr tcell.Screen, r Rect) {
 			fillRow(scr, r.X, y, contentW, StyleSelected)
 		}
 
-		x := r.X
+		vx := 0
 		for i := 0; i < len(t.Headers); i++ {
 			if i > 0 {
-				x += t.ColGaps
+				vx += t.ColGaps
 			}
 			var cell TableCell
 			if i < len(row) {
@@ -160,9 +201,18 @@ func (t *TableWidget) Draw(scr tcell.Screen, r Rect) {
 			} else {
 				text = fmt.Sprintf("%-*s", widths[i], cell.Text)
 			}
-			drawString(scr, x, y, style, text, r.X+contentW-x)
-			x += widths[i]
+			drawShifted(vx, y, style, text)
+			vx += widths[i]
 		}
+	}
+
+	// Left and right overflow hint arrows render on the header row so
+	// the user can tell more columns exist off screen.
+	if t.HOffset > 0 {
+		scr.SetContent(r.X, r.Y, '◂', nil, StyleDefault.Foreground(ColorAccent).Bold(true))
+	}
+	if totalW-t.HOffset > contentW {
+		scr.SetContent(r.X+contentW-1, r.Y, '▸', nil, StyleDefault.Foreground(ColorAccent).Bold(true))
 	}
 
 	if needsBar {
@@ -249,6 +299,18 @@ func (t *TableWidget) ScrollDown(n int) {
 	t.Offset = clamp(t.Offset+n, 0, maxOff)
 }
 
+// ScrollLeft nudges horizontal offset by n cells, clamping at zero.
+func (t *TableWidget) ScrollLeft(n int) {
+	t.HOffset = imax(0, t.HOffset-n)
+}
+
+// ScrollRight nudges horizontal offset by n cells, clamping at the
+// rightmost position where the widest column is still partly visible.
+func (t *TableWidget) ScrollRight(n int) {
+	maxOff := imax(0, t.LastContentWidth-t.Rect.W+1)
+	t.HOffset = clamp(t.HOffset+n, 0, maxOff)
+}
+
 // SelectAt sets the selected row (activates if not already).
 func (t *TableWidget) SelectAt(row int) {
 	if row < 0 || row >= len(t.Rows) {
@@ -324,6 +386,12 @@ func (t *TableWidget) HandleEvent(ev tcell.Event) bool {
 	case tcell.KeyEnd:
 		t.MoveDown(len(t.Rows))
 		return true
+	case tcell.KeyLeft:
+		t.ScrollLeft(6)
+		return true
+	case tcell.KeyRight:
+		t.ScrollRight(6)
+		return true
 	case tcell.KeyEnter:
 		if t.Active && t.OnActivate != nil {
 			t.OnActivate(t.SelectedRow)
@@ -336,6 +404,12 @@ func (t *TableWidget) HandleEvent(ev tcell.Event) bool {
 			return true
 		case 'k':
 			t.MoveUp(1)
+			return true
+		case 'h':
+			t.ScrollLeft(6)
+			return true
+		case 'l':
+			t.ScrollRight(6)
 			return true
 		case 'g':
 			t.MoveUp(len(t.Rows))

@@ -258,9 +258,20 @@ func (s *Server) updateSessionContext(payload hookEventPayload) {
 
 	s.log.Info("updating session context", "session", payload.SessionName)
 
-	// Build prompt
+	// Build prompt.
+	// The summary should describe the session's TOPIC, not its current
+	// status. Prior revisions asked "what is this session currently
+	// working on", which Sonnet read as a live-state question and would
+	// answer "Session ended with no active coding task" for sessions
+	// whose last turn was idle. Asking for the topic produces a useful
+	// label regardless of whether the conversation is still in flight.
 	var promptParts []string
-	promptParts = append(promptParts, "Based on these recent messages from a coding session, write ONE short sentence (under 15 words) describing what this session is currently working on. Be specific — mention the project, feature, or task name. Output ONLY the sentence, nothing else.")
+	promptParts = append(promptParts, "Write a topic label of AT MOST 5 words that names what this coding conversation is about. Pretend you are labeling a bookmark tab. Do not describe state. Do not mention whether it is finished. Do not mention message counts. Mention the concrete project, feature, or task by name when evident. Output ONLY the label. No preamble. No trailing punctuation.")
+	promptParts = append(promptParts, "")
+	promptParts = append(promptParts, "Good examples:")
+	promptParts = append(promptParts, "Clotilde tcell TUI rewrite")
+	promptParts = append(promptParts, "MWAN health-check CLI")
+	promptParts = append(promptParts, "Tack node model schema")
 	promptParts = append(promptParts, "")
 
 	// Include project memory if available

@@ -113,7 +113,11 @@ func refreshSessionSummary(store session.Store, sess *session.Session, onDone fu
 		return nil
 	}
 
-	recent := claude.ExtractRecentMessages(sess.Metadata.TranscriptPath, 5, 300)
+	// Pull a wide window of messages so the labeler can see the arc of
+	// the conversation, not just the closing turns. A hundred messages
+	// at 300 runes each fits comfortably in a single prompt and gives
+	// the model enough signal to extract a topic.
+	recent := claude.ExtractRecentMessages(sess.Metadata.TranscriptPath, 100, 300)
 	if len(recent) == 0 {
 		return nil
 	}
@@ -175,8 +179,9 @@ func autoUpdateContext(_ *session.FileStore, sess *session.Session) {
 		return
 	}
 
-	// Extract messages on the client side (claude package can't be imported by daemon)
-	recent := claude.ExtractRecentMessages(sess.Metadata.TranscriptPath, 5, 300)
+	// Extract messages on the client side (claude package can't be imported by daemon).
+	// Sample 100 messages so the labeler sees the conversation arc.
+	recent := claude.ExtractRecentMessages(sess.Metadata.TranscriptPath, 100, 300)
 	if len(recent) == 0 {
 		return
 	}
