@@ -560,8 +560,10 @@ func applyCompactChoices(sess *session.Session, c ui.CompactChoices) error {
 		}
 	}
 
-	// Move boundary phase.
-	if c.BoundaryPercent > 0 && c.BoundaryPercent < 100 {
+	// Move boundary phase. The form's "Set boundary" checkbox gates
+	// the entire repositioning step. Without UseBoundary the strip
+	// flags above are the only thing the user wanted us to do.
+	if c.UseBoundary && c.BoundaryPercent > 0 && c.BoundaryPercent < 100 {
 		chain, _, all, err := transcript.WalkChain(path)
 		if err != nil {
 			return err
