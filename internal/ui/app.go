@@ -763,6 +763,15 @@ func (a *App) syncTableSelectionWithOffset() {
 // focus tracking are explicitly disabled before Fini so the host
 // terminal does not keep emitting tracking sequences after exit.
 // Calling this twice is safe.
+//
+// The post-Fini reset sequence covers every private mode that tcell
+// or our initScreen turned on, plus a DECSTR soft reset. Earlier
+// revisions only reset the alt screen, mouse, and scroll region,
+// which left focus reporting and bracketed paste mode active on
+// macOS Terminal and iTerm2. That caused stray "^[[I"/"^[[O" tokens
+// to land in the shell after exit, and pasted text showed up wrapped
+// in "^[[200~...^[[201~". The full sequence below matches what tput
+// reset emits minus the screen clear.
 func (a *App) teardownScreen() {
 	if a.screen == nil {
 		return
@@ -772,13 +781,24 @@ func (a *App) teardownScreen() {
 	a.screen.ShowCursor(0, 0)
 	a.screen.Fini()
 	a.screen = nil
-	// Some terminals (notably macOS Terminal.app and iTerm2 with
-	// certain profiles) need a final reset to clear the alt-screen,
-	// scroll-region, and mouse tracking state that tcell sometimes
-	// leaves on. The escape sequence below is the standard "reset
-	// everything" sequence: exit alt-screen, disable mouse modes,
-	// clear scroll region, restore cursor.
-	fmt.Fprint(os.Stdout, "\x1b[?1049l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?25h\x1b[r")
+
+	// Reset escape sequences, emitted in a single write so a
+	// ctrl-c mid-sequence cannot leave the terminal half-reset.
+	const reset = "" +
+		"\x1b[?2004l" + // disable bracketed paste
+		"\x1b[?1004l" + // disable focus reporting
+		"\x1b[?1000l" + // disable X10 mouse
+		"\x1b[?1002l" + // disable cell-motion mouse
+		"\x1b[?1003l" + // disable any-motion mouse
+		"\x1b[?1006l" + // disable SGR mouse
+		"\x1b[?1049l" + // exit alt screen
+		"\x1b[?25h" + //  show cursor
+		"\x1b[?7h" + //   re-enable autowrap
+		"\x1b[r" + //     reset scroll region to full screen
+		"\x1b[0m" + //    reset SGR attributes
+		"\x1b>" + //      keypad normal (DECKPNM)
+		"\x1b[!p" //      DECSTR soft reset (clears DECCKM, DECOM, DECAWM, etc)
+	fmt.Fprint(os.Stdout, reset)
 }
 
 // initScreen allocates a tcell screen and enables mouse + focus.
