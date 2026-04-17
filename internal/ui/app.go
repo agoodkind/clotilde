@@ -1665,19 +1665,17 @@ func (a *App) newSession() {
 	a.openNewSessionPrompt()
 }
 
-// openNewSessionPrompt asks the user where the new session should
-// anchor its basedir. The default is the caller's current working
-// directory; an empty submission falls back to "no basedir set". Path
-// resolution happens in the wired callback so tilde and relative paths
-// behave consistently with the CLI.
+// openNewSessionPrompt opens the file picker so the user can navigate
+// to the directory the new session should be anchored under. Pressing
+// "s" in the picker commits the highlighted directory; Enter steps in.
+// The directory is then passed to StartSessionWithBasedir. Esc cancels.
 func (a *App) openNewSessionPrompt() {
 	cwd, _ := os.Getwd()
-	input := NewTextInput("Basedir: ")
-	input.Text = cwd
-	input.CursorX = runeCount(cwd)
-	input.OnSubmit = func(s string) {
+	picker := NewFilePickerOverlay("Pick basedir for new session", cwd)
+	picker.OnCancel = func() { a.closeOverlay() }
+	picker.OnSelect = func(path string) {
 		a.closeOverlay()
-		basedir := strings.TrimSpace(s)
+		basedir := strings.TrimSpace(path)
 		runner := func() {
 			if a.cb.StartSessionWithBasedir != nil {
 				_ = a.cb.StartSessionWithBasedir(basedir)
@@ -1690,11 +1688,7 @@ func (a *App) openNewSessionPrompt() {
 		a.suspendAndRun(runner)
 		a.refreshSessions()
 	}
-	input.OnCancel = a.closeOverlay
-	a.overlay = &InputOverlay{
-		Input: input,
-		Title: "New session basedir (enter to confirm, esc to cancel)",
-	}
+	a.overlay = picker
 	a.mode = StatusFilter
 }
 
