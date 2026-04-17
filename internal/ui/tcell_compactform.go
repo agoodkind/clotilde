@@ -623,18 +623,34 @@ func (a *App) openRichCompactForm(sess *session.Session) {
 	}
 	form := NewCompactForm(sess.Name, nil, nil)
 	form.OnDone = func(c CompactChoices) {
-		a.overlay = nil
 		if c.Cancelled {
+			a.overlay = nil
 			return
 		}
 		if a.cb.ApplyCompact == nil {
+			a.overlay = nil
 			return
 		}
+		// Leave the form as the bottom overlay and push a small
+		// "applying..." status on top of it. When the apply finishes
+		// the status is replaced with the result modal. Dismissing
+		// the modal pops back to the form so the user can tweak
+		// settings and run again without re-opening anything.
 		a.mode = StatusCompact
-		a.suspendAndRun(func() {
-			_ = a.cb.ApplyCompact(sess, c)
-		})
-		a.refreshSessions()
+		a.pushOverlay(NewCompactStatusModal(sess.Name))
+		go func() {
+			result, err := a.cb.ApplyCompact(sess, c)
+			a.refreshSessions()
+			if a.screen == nil {
+				return
+			}
+			modal := NewCompactResultModal(sess.Name, result, err)
+			modal.OnClose = func() { a.popOverlay() }
+			// Replace the in-flight status modal (top of stack) with
+			// the result modal so the form stays underneath.
+			a.overlay = modal
+			_ = a.screen.PostEvent(tcell.NewEventInterrupt(a))
+		}()
 	}
 	a.overlay = form
 	a.mode = StatusCompact

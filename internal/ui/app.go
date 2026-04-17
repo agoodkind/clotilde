@@ -49,7 +49,7 @@ type AppCallbacks struct {
 	// StartSessionWithBasedir creates a new session pinned to the given
 	// workspace root. Empty string falls back to the caller's cwd.
 	StartSessionWithBasedir func(basedir string) error
-	ApplyCompact  func(sess *session.Session, choices CompactChoices) error
+	ApplyCompact  func(sess *session.Session, choices CompactChoices) (CompactResult, error)
 	// SetBasedir rewrites the session's workspaceRoot field in metadata.
 	// newPath is already resolved by the caller; "" clears the field.
 	SetBasedir func(sess *session.Session, newPath string) error
@@ -79,6 +79,27 @@ type RegistryEvent struct {
 	Kind        string
 	SessionName string
 	SessionID   string
+}
+
+// CompactResult is the in-TUI summary of a finished compaction. The
+// applier fills it from the underlying transcript pipeline so the
+// dashboard can show what the user just changed without printing to
+// stdout.
+type CompactResult struct {
+	BackupPath        string
+	BeforeBytes       int64
+	AfterBytes        int64
+	BeforeChainLines  int
+	AfterChainLines   int
+	BoundaryMoved     bool
+	StrippedTotal     int
+	StrippedImages    int
+	StrippedTools     int
+	StrippedThinking  int
+	StrippedLargeIn   int
+	KeptLastImages    int
+	KeptLastTools     int
+	KeptLastThinking  int
 }
 
 // SessionDetail holds pre-extracted data for the details pane.
@@ -149,6 +170,12 @@ type App struct {
 
 	// Overlays (one at a time)
 	overlay Widget
+	// overlayStack remembers overlays under the current one. Pushing a
+	// new overlay on top (e.g. the compact result modal over the
+	// compact form) preserves the bottom layer so dismissing the top
+	// returns the user where they came from instead of dropping them
+	// to the dashboard.
+	overlayStack []Widget
 
 	// Rects (recomputed on resize)
 	headerRect Rect
@@ -1160,22 +1187,24 @@ func (a *App) draw() {
 	}
 
 	// Tab strip (purple). Always visible across tabs so the user can
-	// click between Sessions and Settings.
+	// click between Sessions and Settings. The dashboard summary
+	// renders right-aligned on the same row to save vertical space.
 	a.tabs.Active = a.activeTab
 	a.tabs.Draw(a.screen, Rect{X: 0, Y: 0, W: w, H: 1})
 
-	// Sub header beneath the tab strip carries the dashboard summary.
-	fillRow(a.screen, 0, 1, w, StyleHeaderBar)
-	left := fmt.Sprintf(" clotilde  %d sessions", len(a.visibleIdx))
+	right := fmt.Sprintf("clotilde  %d sessions", len(a.visibleIdx))
 	if a.hiddenCount > 0 {
-		left += fmt.Sprintf("  (%d hidden, H to show)", a.hiddenCount)
+		right += fmt.Sprintf("  (%d hidden, H to show)", a.hiddenCount)
 	} else if a.showEphemeral {
-		left += "  (showing test/tmp)"
+		right += "  (showing test/tmp)"
 	}
 	if a.filter != "" {
-		left += fmt.Sprintf("  (filter: %q)", a.filter)
+		right += fmt.Sprintf("  (filter: %q)", a.filter)
 	}
-	drawString(a.screen, 0, 1, StyleHeaderBar.Bold(true), left, w)
+	rx := w - runeCount(right) - 2
+	if rx > 0 {
+		drawString(a.screen, rx, 0, StyleTabBar.Bold(true), right, w-rx)
+	}
 
 	switch a.activeTab {
 	case 0:
@@ -1214,10 +1243,10 @@ func (a *App) draw() {
 
 func (a *App) layout() {
 	w, h := a.screen.Size()
-	a.headerRect = Rect{X: 0, Y: 0, W: w, H: 2}
+	a.headerRect = Rect{X: 0, Y: 0, W: w, H: 1}
 
 	// Table takes the available width and hugs content height, with header.
-	tableTop := 2
+	tableTop := 1
 	statusH := 1
 	statusY := h - statusH
 	if statusY < 2 {
@@ -1686,10 +1715,17 @@ func (a *App) resumeRow(row int) {
 	a.suspendAndRun(func() {
 		_ = a.cb.ResumeSession(sess)
 	})
-	// After claude exits, surface the same session in the banner again so
-	// the user can quickly re-enter if they closed by accident.
-	a.returnBanner = sess.Name
+	// After claude exits, refresh the row's metadata (LastAccessed,
+	// Context, etc.) and pop the post-session ReturnPrompt so the user
+	// has the same Resume / List / Quit choices they get from the CLI
+	// resume path. Without this, repeated resume-from-dashboard cycles
+	// silently drop the user back to the table with no indication.
 	a.refreshSessions()
+	if updated := a.findSessionByName(sess.Name); updated != nil {
+		a.openReturnPrompt(updated)
+	} else {
+		a.openReturnPrompt(sess)
+	}
 	// Re-select the row (refreshSessions resets selection on deselect).
 	for vi, idx := range a.visibleIdx {
 		if a.sessions[idx].Name == sess.Name {
@@ -1979,6 +2015,42 @@ func (a *App) openHelpModal() {
 	modal := NewOptionsModal("Keyboard shortcuts", rows)
 	modal.OnCancel = close
 	a.overlay = modal
+}
+
+// findSessionByName returns the in-memory session matching name, or
+// nil. Used after a refresh to pick up updated metadata.
+func (a *App) findSessionByName(name string) *session.Session {
+	for _, s := range a.sessions {
+		if s != nil && s.Name == name {
+			return s
+		}
+	}
+	return nil
+}
+
+// pushOverlay layers w on top of the current overlay, preserving the
+// underlying one in the stack. Pop returns the user to it. Used by
+// flows like compact-then-show-result that should not lose the panel
+// the user was working in.
+func (a *App) pushOverlay(w Widget) {
+	if a.overlay != nil {
+		a.overlayStack = append(a.overlayStack, a.overlay)
+	}
+	a.overlay = w
+}
+
+// popOverlay restores the previous overlay, if any, and returns true.
+// Returns false when the stack is empty so the caller knows to fall
+// back to its normal close behavior.
+func (a *App) popOverlay() bool {
+	if len(a.overlayStack) == 0 {
+		a.overlay = nil
+		return false
+	}
+	last := len(a.overlayStack) - 1
+	a.overlay = a.overlayStack[last]
+	a.overlayStack = a.overlayStack[:last]
+	return true
 }
 
 // rowSession returns the session under the table cursor regardless of
