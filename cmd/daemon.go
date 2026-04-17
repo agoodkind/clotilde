@@ -9,6 +9,7 @@ import (
 	"github.com/fgrehm/clotilde/internal/config"
 	"github.com/fgrehm/clotilde/internal/daemon"
 	"github.com/spf13/cobra"
+	"goodkind.io/gklog"
 )
 
 func newDaemonCmd() *cobra.Command {
@@ -17,21 +18,34 @@ func newDaemonCmd() *cobra.Command {
 		Short:  "Start the background daemon (internal)",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			log := openLog("daemon")
+			log, closeLog := openLog("daemon")
+			defer closeLog()
 			return daemon.Run(log)
 		},
 	}
 }
 
 // openLog returns a slog.Logger that writes JSON to the unified XDG state
-// log file at ~/.local/state/clotilde/clotilde.jsonl.
+// log file at ~/.local/state/clotilde/clotilde.jsonl, with rotation.
 // The component field distinguishes daemon vs wrapper entries.
-func openLog(component string) *slog.Logger {
+func openLog(component string) (*slog.Logger, func()) {
 	logPath := filepath.Join(config.DefaultStateDir(), "clotilde.jsonl")
-	_ = os.MkdirAll(filepath.Dir(logPath), 0o755)
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return slog.New(slog.NewJSONHandler(io.Discard, nil))
+	noClose := func() {}
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		return slog.New(slog.NewJSONHandler(io.Discard, nil)), noClose
 	}
-	return slog.New(slog.NewJSONHandler(f, nil)).With("component", component)
+	inner, closer, err := gklog.New(gklog.Config{
+		JSONLogFile:   logPath,
+		Rotation:      gklog.RotationConfig{MaxSizeMB: 5, MaxBackups: 0, MaxAgeDays: 0},
+		DisableStdout: true,
+		JSONMinLevel:  "debug",
+	})
+	if err != nil {
+		return slog.New(slog.NewJSONHandler(io.Discard, nil)), noClose
+	}
+	return inner.With("component", component), func() {
+		if closer != nil {
+			_ = closer.Close()
+		}
+	}
 }
