@@ -1,0 +1,222 @@
+package ui
+
+import (
+	"strings"
+
+	"github.com/gdamore/tcell/v2"
+)
+
+// TextBox is a scrollable, read-only text area.
+// It wraps on whitespace when width is fixed, and supports keyboard/mouse scroll.
+type TextBox struct {
+	// Lines hold raw (unwrapped) logical lines. Markup tags like [gray]..[-]
+	// are stripped on draw; colored spans are rendered by the caller via
+	// Segments if richer formatting is needed.
+	Lines []string
+
+	// Segments are an optional richer form. When non-nil they take precedence
+	// over Lines: each inner slice is one logical line composed of styled runs.
+	Segments [][]TextSegment
+
+	// Title shown on the top row. Empty means no title.
+	Title string
+
+	// TitleStyle for the title line.
+	TitleStyle tcell.Style
+
+	// Scroll offset (in wrapped rows).
+	Offset int
+
+	// Rect last drawn.
+	Rect Rect
+
+	// Word wrap. If true, lines are wrapped on spaces to fit rect width.
+	Wrap bool
+
+	// Focused controls whether keyboard events move the scroll.
+	Focused bool
+}
+
+// TextSegment is a styled run of text.
+type TextSegment struct {
+	Text  string
+	Style tcell.Style
+}
+
+// SetLines replaces content (plain).
+func (tb *TextBox) SetLines(lines []string) {
+	tb.Lines = lines
+	tb.Segments = nil
+	tb.Offset = 0
+}
+
+// SetSegments replaces content (styled).
+func (tb *TextBox) SetSegments(segs [][]TextSegment) {
+	tb.Segments = segs
+	tb.Lines = nil
+	tb.Offset = 0
+}
+
+// wrappedLines expands Lines/Segments into display lines fitting width w.
+func (tb *TextBox) wrappedLines(w int) [][]TextSegment {
+	if w <= 0 {
+		return nil
+	}
+	var src [][]TextSegment
+	if tb.Segments != nil {
+		src = tb.Segments
+	} else {
+		src = make([][]TextSegment, len(tb.Lines))
+		for i, ln := range tb.Lines {
+			src[i] = []TextSegment{{Text: stripMarkup(ln), Style: StyleDefault}}
+		}
+	}
+	if !tb.Wrap {
+		return src
+	}
+	// Simple greedy word wrap per logical line.
+	var out [][]TextSegment
+	for _, line := range src {
+		// Flatten to a string plus style per rune for easy splitting.
+		plain := ""
+		for _, seg := range line {
+			plain += seg.Text
+		}
+		if runeCount(plain) <= w {
+			out = append(out, line)
+			continue
+		}
+		// Wrap by words; simple approach, splits on spaces.
+		words := strings.Fields(plain)
+		var cur string
+		for _, word := range words {
+			candidate := cur
+			if candidate != "" {
+				candidate += " "
+			}
+			candidate += word
+			if runeCount(candidate) > w && cur != "" {
+				out = append(out, []TextSegment{{Text: cur, Style: StyleDefault}})
+				cur = word
+			} else {
+				cur = candidate
+			}
+		}
+		if cur != "" {
+			out = append(out, []TextSegment{{Text: cur, Style: StyleDefault}})
+		}
+	}
+	return out
+}
+
+// TotalLines reports the number of wrapped display lines for width w.
+func (tb *TextBox) TotalLines(w int) int {
+	return len(tb.wrappedLines(w))
+}
+
+// Draw renders into r.
+func (tb *TextBox) Draw(scr tcell.Screen, r Rect) {
+	tb.Rect = r
+	clearRect(scr, r)
+
+	y := r.Y
+	contentY := y
+
+	if tb.Title != "" {
+		style := tb.TitleStyle
+		if style == (tcell.Style{}) {
+			style = StyleMuted
+		}
+		drawString(scr, r.X, y, style, tb.Title, r.W)
+		contentY = y + 1
+	}
+
+	rows := r.H - (contentY - r.Y)
+	if rows <= 0 {
+		return
+	}
+
+	lines := tb.wrappedLines(r.W)
+	maxOff := imax(0, len(lines)-rows)
+	tb.Offset = clamp(tb.Offset, 0, maxOff)
+
+	for i := 0; i < rows; i++ {
+		idx := tb.Offset + i
+		if idx >= len(lines) {
+			break
+		}
+		segs := lines[idx]
+		x := r.X
+		remaining := r.W
+		for _, seg := range segs {
+			used := drawString(scr, x, contentY+i, seg.Style, seg.Text, remaining)
+			x += used
+			remaining -= used
+			if remaining <= 0 {
+				break
+			}
+		}
+	}
+}
+
+// HandleEvent handles scroll keys when focused.
+func (tb *TextBox) HandleEvent(ev tcell.Event) bool {
+	if !tb.Focused {
+		return false
+	}
+	ek, ok := ev.(*tcell.EventKey)
+	if !ok {
+		return false
+	}
+	rows := imax(1, tb.Rect.H)
+	switch ek.Key() {
+	case tcell.KeyUp:
+		tb.Offset = imax(0, tb.Offset-1)
+		return true
+	case tcell.KeyDown:
+		tb.Offset++
+		return true
+	case tcell.KeyPgUp:
+		tb.Offset = imax(0, tb.Offset-rows)
+		return true
+	case tcell.KeyPgDn:
+		tb.Offset += rows
+		return true
+	case tcell.KeyHome:
+		tb.Offset = 0
+		return true
+	case tcell.KeyEnd:
+		tb.Offset = 1 << 30 // clamp on next draw
+		return true
+	case tcell.KeyRune:
+		switch ek.Rune() {
+		case 'j':
+			tb.Offset++
+			return true
+		case 'k':
+			tb.Offset = imax(0, tb.Offset-1)
+			return true
+		case 'g':
+			tb.Offset = 0
+			return true
+		case 'G':
+			tb.Offset = 1 << 30
+			return true
+		}
+	}
+	return false
+}
+
+// ScrollPercent returns visible position as 0..100, or -1 if fully fits.
+func (tb *TextBox) ScrollPercent(width int) int {
+	total := tb.TotalLines(width)
+	rows := imax(1, tb.Rect.H)
+	if total <= rows {
+		return -1
+	}
+	maxOff := total - rows
+	if maxOff <= 0 {
+		return 100
+	}
+	return clamp(tb.Offset*100/maxOff, 0, 100)
+}

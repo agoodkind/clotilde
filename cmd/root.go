@@ -63,6 +63,23 @@ func runDashboard(cmd *cobra.Command, args []string) {
 		DeleteSession: func(sess *session.Session) error {
 			return deleteSession(sess, store)
 		},
+		StartSession: func() error {
+			existingNames := make([]string, len(sessions))
+			for i, s := range sessions {
+				existingNames[i] = s.Name
+			}
+			name := util.GenerateUniqueRandomName(existingNames)
+
+			result, err := createSession(SessionCreateParams{Name: name})
+			if err != nil {
+				return fmt.Errorf("failed to create session: %w", err)
+			}
+
+			fmt.Println(ui.Success(fmt.Sprintf("Created session '%s' (%s)", result.Session.Name, result.Session.Metadata.SessionID)))
+			fmt.Println("\nStarting Claude Code...")
+
+			return claude.Start(result.ClotildeRoot, result.Session, result.SettingsFile, nil)
+		},
 		ViewContent: func(sess *session.Session) string {
 			messages, err := loadSessionMessages(sess)
 			if err != nil || len(messages) == 0 {

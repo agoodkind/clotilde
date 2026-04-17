@@ -18,6 +18,10 @@ const tokenMultiplier = 1.20 // cl100k undercounts Claude tokens by ~20% on aver
 type CompactOptions struct {
 	// StripToolResults replaces tool_result content with a stub.
 	StripToolResults bool
+	// StripThinking removes assistant thinking blocks entirely.
+	// Previously this was coupled to StripToolResults; it is now an
+	// independent flag so callers can strip thinking without touching tools.
+	StripThinking bool
 	// StripBefore only strips entries before this timestamp (zero = strip all).
 	StripBefore time.Time
 	// StripLargeBytes strips tool results and inputs larger than this (0 = use StripToolResults for all).
@@ -282,9 +286,19 @@ func InsertBoundary(allLines []string, chainLines []int, targetStep int, summary
 	return result, nil
 }
 
+// StripStats is a per-block-type tally of what StripContent removed or stubbed.
+type StripStats struct {
+	ToolResults int // number of tool_result blocks whose body was replaced with a stub
+	LargeInputs int // number of tool_use input fields truncated for size
+	Thinking    int // number of thinking blocks removed
+}
+
+// Total is the sum of all per-type counts.
+func (s StripStats) Total() int { return s.ToolResults + s.LargeInputs + s.Thinking }
+
 // StripContent applies stripping rules to entries based on CompactOptions.
-// Returns the modified lines and the count of stripped blocks.
-func StripContent(allLines []string, chainLines []int, opts CompactOptions) ([]string, int) {
+// Returns the modified lines and a per-type breakdown of what was stripped.
+func StripContent(allLines []string, chainLines []int, opts CompactOptions) ([]string, StripStats) {
 	chainSet := make(map[int]bool)
 	for _, ln := range chainLines {
 		chainSet[ln] = true
@@ -298,7 +312,7 @@ func StripContent(allLines []string, chainLines []int, opts CompactOptions) ([]s
 		}
 	}
 
-	stripped := 0
+	var stats StripStats
 	result := make([]string, len(allLines))
 	copy(result, allLines)
 
@@ -362,7 +376,7 @@ func StripContent(allLines []string, chainLines []int, opts CompactOptions) ([]s
 						newBlock, _ := json.Marshal(b)
 						content[i] = newBlock
 						modified = true
-						stripped++
+						stats.ToolResults++
 					}
 				}
 
@@ -389,7 +403,7 @@ func StripContent(allLines []string, chainLines []int, opts CompactOptions) ([]s
 						if len(s) > threshold {
 							input[k], _ = json.Marshal(s[:200] + "... [stripped]")
 							inputModified = true
-							stripped++
+							stats.LargeInputs++
 						}
 					}
 				}
@@ -401,17 +415,20 @@ func StripContent(allLines []string, chainLines []int, opts CompactOptions) ([]s
 				}
 
 			case "thinking":
-				if opts.StripToolResults {
+				if opts.StripThinking {
 					content[i] = nil
 					modified = true
-					stripped++
+					stats.Thinking++
 				}
 			}
 		}
 
 		if modified {
-			// Remove nil entries (stripped thinking blocks)
-			var cleaned []json.RawMessage
+			// Remove nil entries (stripped thinking blocks).
+			// IMPORTANT: use a non-nil zero-length slice so json.Marshal emits
+			// `"content":[]` instead of `"content":null`. Claude Code's transcript
+			// parser NPEs on `message.content == null`.
+			cleaned := make([]json.RawMessage, 0, len(content))
 			for _, c := range content {
 				if c != nil {
 					cleaned = append(cleaned, c)
@@ -432,7 +449,7 @@ func StripContent(allLines []string, chainLines []int, opts CompactOptions) ([]s
 		}
 	}
 
-	return result, stripped
+	return result, stats
 }
 
 // EstimateTokens estimates the token count for a set of chain entries using

@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -13,12 +14,103 @@ import (
 	"github.com/fgrehm/clotilde/internal/ui"
 )
 
+// transcriptStats captures the shape of a transcript at a point in time.
+type transcriptStats struct {
+	TotalLines   int
+	ChainLines   int
+	Bytes        int64
+	Tokens       int // approximate, via tiktoken cl100k with 1.20x multiplier
+	Boundaries   int
+}
+
+// snapshotStats reads the file at path, walks the chain, and returns a snapshot.
+func snapshotStats(path string) (transcriptStats, error) {
+	var s transcriptStats
+	info, err := os.Stat(path)
+	if err != nil {
+		return s, fmt.Errorf("stat transcript: %w", err)
+	}
+	s.Bytes = info.Size()
+
+	chain, _, all, err := transcript.WalkChain(path)
+	if err != nil {
+		return s, fmt.Errorf("walking chain: %w", err)
+	}
+	s.TotalLines = len(all)
+	s.ChainLines = len(chain)
+	s.Boundaries = len(transcript.FindBoundaries(all))
+
+	tokens, tokErr := transcript.EstimateTokens(all, chain)
+	if tokErr == nil {
+		s.Tokens = tokens
+	}
+	return s, nil
+}
+
+// printStats prints a single snapshot under a label.
+func printStats(w io.Writer, label string, s transcriptStats) {
+	fmt.Fprintf(w, "%-8s lines=%-6d chain=%-6d bytes=%-10s tokens=%-8s boundaries=%d\n",
+		label+":", s.TotalLines, s.ChainLines, fmtBytes(s.Bytes), fmtTokens(s.Tokens), s.Boundaries)
+}
+
+// printDelta prints a summary line describing before -> after with signed deltas.
+func printDelta(w io.Writer, before, after transcriptStats) {
+	dLines := after.TotalLines - before.TotalLines
+	dChain := after.ChainLines - before.ChainLines
+	dBytes := after.Bytes - before.Bytes
+	dTokens := after.Tokens - before.Tokens
+	pct := 0.0
+	if before.Tokens > 0 {
+		pct = float64(dTokens) / float64(before.Tokens) * 100
+	}
+	fmt.Fprintf(w, "Δ        lines=%+d chain=%+d bytes=%s tokens=%s (%+.1f%%)\n",
+		dLines, dChain, fmtBytesSigned(dBytes), fmtTokensSigned(dTokens), pct)
+}
+
+func fmtBytes(n int64) string {
+	if n < 1024 {
+		return fmt.Sprintf("%dB", n)
+	}
+	if n < 1024*1024 {
+		return fmt.Sprintf("%.1fKB", float64(n)/1024)
+	}
+	return fmt.Sprintf("%.2fMB", float64(n)/(1024*1024))
+}
+
+func fmtBytesSigned(n int64) string {
+	sign := "+"
+	if n < 0 {
+		sign = "-"
+		n = -n
+	}
+	return sign + fmtBytes(n)
+}
+
+func fmtTokens(n int) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d", n)
+	}
+	if n < 1_000_000 {
+		return fmt.Sprintf("%.1fk", float64(n)/1000)
+	}
+	return fmt.Sprintf("%.2fM", float64(n)/1_000_000)
+}
+
+func fmtTokensSigned(n int) string {
+	sign := "+"
+	if n < 0 {
+		sign = "-"
+		n = -n
+	}
+	return sign + fmtTokens(n)
+}
+
 func newCompactCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "compact <session>",
 		Short: "Advanced compaction of a session transcript",
 		Long: `Compact a session transcript by moving the compaction boundary and
-optionally stripping tool results, large inputs, and thinking blocks.
+optionally stripping tool results, thinking blocks, or large inputs.
 
 This manipulates the Claude Code JSONL transcript directly, controlling
 what the LLM sees in its context window on the next resume.
@@ -26,11 +118,13 @@ what the LLM sees in its context window on the next resume.
 Examples:
   clotilde compact my-session --move-boundary 50
   clotilde compact my-session --strip-tool-results --keep-last 200
+  clotilde compact my-session --strip-thinking
   clotilde compact my-session --strip-large 1000 --dry-run
   clotilde compact my-session --remove-last-boundary`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
+			out := cmd.OutOrStdout()
 
 			store, err := globalStore()
 			if err != nil {
@@ -55,6 +149,7 @@ Examples:
 
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			stripResults, _ := cmd.Flags().GetBool("strip-tool-results")
+			stripThinking, _ := cmd.Flags().GetBool("strip-thinking")
 			stripLarge, _ := cmd.Flags().GetInt("strip-large")
 			keepLast, _ := cmd.Flags().GetInt("keep-last")
 			stripBeforeStr, _ := cmd.Flags().GetString("strip-before")
@@ -73,60 +168,81 @@ Examples:
 				}
 			}
 
-			// Walk the chain
-			chainLines, _, allLines, err := transcript.WalkChain(path)
+			// Initial snapshot
+			before, err := snapshotStats(path)
 			if err != nil {
-				return fmt.Errorf("walking chain: %w", err)
+				return err
 			}
 
 			// When no action flags are set and stdout is a TTY, launch the interactive UI.
-			noActionFlags := !dryRun && !stripResults && stripLarge == 0 && keepLast == 0 &&
+			noActionFlags := !dryRun && !stripResults && !stripThinking && stripLarge == 0 && keepLast == 0 &&
 				stripBeforeStr == "" && moveBoundary == 0 && !removeLast
 			if noActionFlags && isatty.IsTerminal(os.Stdout.Fd()) {
-				choices, tuiErr := ui.RunCompactUI(sess.Name, path, chainLines, allLines)
+				chain, _, all, walkErr := transcript.WalkChain(path)
+				if walkErr != nil {
+					return fmt.Errorf("walking chain: %w", walkErr)
+				}
+				choices, tuiErr := ui.RunCompactUI(sess.Name, path, chain, all)
 				if tuiErr != nil {
 					return fmt.Errorf("compact UI: %w", tuiErr)
 				}
 				if choices.Cancelled || (!choices.Applied && !choices.DryRun) {
-					fmt.Fprintln(cmd.OutOrStdout(), "Cancelled.")
+					fmt.Fprintln(out, "Cancelled.")
 					return nil
 				}
-
-				// Map TUI choices back to flag variables so the rest of the function applies them.
 				moveBoundary = choices.BoundaryPercent
 				stripResults = choices.StripToolResults
-				if choices.StripThinking {
-					stripResults = true
-				}
+				stripThinking = choices.StripThinking
 				if choices.StripLargeInputs {
 					stripLarge = 1024
 				}
 				dryRun = choices.DryRun
 			}
 
-			boundaries := transcript.FindBoundaries(allLines)
-			fmt.Fprintf(cmd.OutOrStdout(), "Session: %s\n", sess.Name)
-			fmt.Fprintf(cmd.OutOrStdout(), "Transcript: %s\n", path)
-			fmt.Fprintf(cmd.OutOrStdout(), "Total lines: %d\n", len(allLines))
-			fmt.Fprintf(cmd.OutOrStdout(), "Chain length: %d entries\n", len(chainLines))
-			fmt.Fprintf(cmd.OutOrStdout(), "Compact boundaries: %d\n", len(boundaries))
-			for i, b := range boundaries {
-				fmt.Fprintf(cmd.OutOrStdout(), "  %d. line %d\n", i+1, b)
+			// Header
+			fmt.Fprintf(out, "Session:    %s\n", sess.Name)
+			fmt.Fprintf(out, "Transcript: %s\n", path)
+			if dryRun {
+				fmt.Fprintln(out, "Mode:       DRY RUN (no writes)")
 			}
-			fmt.Fprintln(cmd.OutOrStdout())
+			printStats(out, "Before", before)
 
-			// Remove last boundary
-			if removeLast && len(boundaries) >= 2 {
-				lastBoundary := boundaries[len(boundaries)-1]
-				beforeTokens, _ := transcript.EstimateTokens(allLines, chainLines)
-				fmt.Fprintf(cmd.OutOrStdout(), "Removing boundary at line %d...\n", lastBoundary)
-				fmt.Fprintf(cmd.OutOrStdout(), "Before: %d chain entries, ~%dk tokens\n", len(chainLines), beforeTokens/1000)
+			// Existing boundaries for context
+			_, _, allLines, err := transcript.WalkChain(path)
+			if err != nil {
+				return err
+			}
+			boundaries := transcript.FindBoundaries(allLines)
+			if len(boundaries) > 0 {
+				fmt.Fprintf(out, "Boundaries: %d @ lines %v\n", len(boundaries), boundaries)
+			}
+			fmt.Fprintln(out)
 
-				if dryRun {
-					fmt.Fprintln(cmd.OutOrStdout(), "[dry-run] Would remove boundary and reconnect chain")
+			willWrite := !dryRun && (stripResults || stripThinking || stripLarge > 0 || moveBoundary > 0 || removeLast)
+			if willWrite {
+				bk, bkErr := transcript.BackupTranscript(path, sess.Name)
+				if bkErr != nil {
+					return fmt.Errorf("pre-compact backup failed (refusing to proceed): %w", bkErr)
+				}
+				fmt.Fprintf(out, "Backup:     %s (%s)\n\n", bk.Path, fmtBytes(bk.Bytes))
+			}
+
+			// --- Action: remove last boundary ---
+			if removeLast {
+				if len(boundaries) < 1 {
+					fmt.Fprintln(out, "No boundary to remove.")
 					return nil
 				}
-				newLines, removeErr := transcript.RemoveBoundary(allLines, lastBoundary)
+				lastBoundary := boundaries[len(boundaries)-1]
+				fmt.Fprintf(out, "Removing boundary at line %d...\n", lastBoundary)
+
+				if dryRun {
+					fmt.Fprintln(out, "[dry-run] Would remove boundary and reconnect chain.")
+					return nil
+				}
+
+				chain, _, all, _ := transcript.WalkChain(path)
+				newLines, removeErr := transcript.RemoveBoundary(all, lastBoundary)
 				if removeErr != nil {
 					return fmt.Errorf("removing boundary: %w", removeErr)
 				}
@@ -134,132 +250,151 @@ Examples:
 					return writeErr
 				}
 
-				// Show after stats
-				afterChain, _, afterLines, _ := transcript.WalkChain(path)
-				afterTokens, _ := transcript.EstimateTokens(afterLines, afterChain)
-				fmt.Fprintf(cmd.OutOrStdout(), "After:  %d chain entries, ~%dk tokens\n", len(afterChain), afterTokens/1000)
+				after, _ := snapshotStats(path)
+				printStats(out, "After", after)
+				printDelta(out, before, after)
 
-				preview := transcript.PreviewMessages(afterLines, afterChain, 0, 5)
-				fmt.Fprintln(cmd.OutOrStdout(), "\nFirst 5 user messages after new boundary:")
+				fmt.Fprintln(out, "\nFirst 5 user messages after removal:")
+				afterChain, _, afterAll, _ := transcript.WalkChain(path)
+				preview := transcript.PreviewMessages(afterAll, afterChain, 0, 5)
+				_ = chain
 				for i, msg := range preview {
-					fmt.Fprintf(cmd.OutOrStdout(), "  %d. %s\n", i+1, msg)
+					fmt.Fprintf(out, "  %d. %s\n", i+1, msg)
 				}
-
-				fmt.Fprintf(cmd.OutOrStdout(), "\nRemoved. New effective boundary: line %d\n", boundaries[len(boundaries)-2])
 				return nil
 			}
 
-			// Strip content
-			if stripResults || stripLarge > 0 {
+			// --- Action: strip content ---
+			if stripResults || stripThinking || stripLarge > 0 {
 				opts := transcript.CompactOptions{
 					StripToolResults: stripResults,
+					StripThinking:    stripThinking,
 					StripLargeBytes:  stripLarge,
 					StripBefore:      stripBefore,
 					KeepLast:         keepLast,
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Stripping content (tool_results=%v, large>%d, keep_last=%d)...\n",
-					stripResults, stripLarge, keepLast)
-				newLines, stripped := transcript.StripContent(allLines, chainLines, opts)
-				fmt.Fprintf(cmd.OutOrStdout(), "Stripped %d blocks\n", stripped)
+				fmt.Fprintf(out, "Stripping (tool_results=%v, thinking=%v, large>%d bytes, keep_last=%d)...\n",
+					stripResults, stripThinking, stripLarge, keepLast)
+
+				chain, _, all, _ := transcript.WalkChain(path)
+				newLines, stats := transcript.StripContent(all, chain, opts)
+				fmt.Fprintf(out, "Stripped:   %d blocks total (tool_results=%d thinking=%d large_inputs=%d)\n",
+					stats.Total(), stats.ToolResults, stats.Thinking, stats.LargeInputs)
 
 				if dryRun {
-					fmt.Fprintln(cmd.OutOrStdout(), "[dry-run] Would write stripped content")
+					fmt.Fprintln(out, "[dry-run] No writes performed.")
 					return nil
 				}
 				if writeErr := writeLines(path, newLines); writeErr != nil {
 					return writeErr
 				}
-				fmt.Fprintln(cmd.OutOrStdout(), "Written.")
 
-				// Re-walk chain after stripping for boundary placement
-				chainLines, _, allLines, err = transcript.WalkChain(path)
-				if err != nil {
-					return fmt.Errorf("re-walking chain: %w", err)
+				after, _ := snapshotStats(path)
+				printStats(out, "After", after)
+				printDelta(out, before, after)
+
+				// If --move-boundary is also set, fall through to apply it.
+				if moveBoundary == 0 {
+					return nil
 				}
+				fmt.Fprintln(out)
+				// Re-read for the next step
+				before = after
 			}
 
-			// Move boundary
+			// --- Action: move boundary ---
 			if moveBoundary > 0 {
 				if moveBoundary > 100 {
 					return fmt.Errorf("--move-boundary must be 1-100 (percent of chain visible)")
 				}
 
-				// Get summary text from existing boundary before removing it
+				// Get summary text from existing boundary before removing it.
 				summaryText := "Conversation compacted."
-				existingBoundaries := transcript.FindBoundaries(allLines)
+				chain, _, all, _ := transcript.WalkChain(path)
+				existingBoundaries := transcript.FindBoundaries(all)
 				if len(existingBoundaries) > 0 {
 					lastB := existingBoundaries[len(existingBoundaries)-1]
-					if lastB+1 < len(allLines) {
+					if lastB+1 < len(all) {
 						var summary struct {
 							Message struct {
 								Content string `json:"content"`
 							} `json:"message"`
 						}
-						if json.Unmarshal([]byte(allLines[lastB+1]), &summary) == nil && summary.Message.Content != "" {
+						if json.Unmarshal([]byte(all[lastB+1]), &summary) == nil && summary.Message.Content != "" {
 							summaryText = summary.Message.Content
 						}
 					}
-
-					// Remove the last boundary first so we operate on the full chain
-					fmt.Fprintf(cmd.OutOrStdout(), "Removing existing boundary at line %d before repositioning...\n", lastB)
+					fmt.Fprintf(out, "Removing existing boundary at line %d before repositioning...\n", lastB)
 					if !dryRun {
-						newLines, removeErr := transcript.RemoveBoundary(allLines, lastB)
+						removed, removeErr := transcript.RemoveBoundary(all, lastB)
 						if removeErr != nil {
 							return fmt.Errorf("removing old boundary: %w", removeErr)
 						}
-						if writeErr := writeLines(path, newLines); writeErr != nil {
+						if writeErr := writeLines(path, removed); writeErr != nil {
 							return writeErr
 						}
-						// Re-walk the full chain after removal
-						chainLines, _, allLines, err = transcript.WalkChain(path)
+						chain, _, all, err = transcript.WalkChain(path)
 						if err != nil {
-							return fmt.Errorf("re-walking chain after boundary removal: %w", err)
+							return fmt.Errorf("re-walking chain: %w", err)
 						}
-						fmt.Fprintf(cmd.OutOrStdout(), "Chain after removal: %d entries\n", len(chainLines))
 					}
 				}
 
-				targetStep := len(chainLines) - (len(chainLines) * moveBoundary / 100)
+				targetStep := len(chain) - (len(chain) * moveBoundary / 100)
 				if targetStep < 1 {
 					targetStep = 1
 				}
-				visibleCount := len(chainLines) - targetStep
-				fmt.Fprintf(cmd.OutOrStdout(), "Moving boundary to %d%% visible (%d entries)...\n", moveBoundary, visibleCount)
+				visibleCount := len(chain) - targetStep
+				fmt.Fprintf(out, "Moving boundary to %d%% visible (%d entries)...\n", moveBoundary, visibleCount)
 
-				// Show before/after stats
-				beforeTokens, _ := transcript.EstimateTokens(allLines, chainLines)
-				afterChain := chainLines[targetStep:]
-				afterTokens, _ := transcript.EstimateTokens(allLines, afterChain)
-
-				fmt.Fprintf(cmd.OutOrStdout(), "\nBefore: %d chain entries, ~%dk tokens\n", len(chainLines), beforeTokens/1000)
-				fmt.Fprintf(cmd.OutOrStdout(), "After:  %d chain entries, ~%dk tokens\n", visibleCount, afterTokens/1000)
-				fmt.Fprintf(cmd.OutOrStdout(), "\nFirst 5 user messages after new boundary:\n")
-				preview := transcript.PreviewMessages(allLines, chainLines, targetStep, 5)
-				for i, msg := range preview {
-					fmt.Fprintf(cmd.OutOrStdout(), "  %d. %s\n", i+1, msg)
+				// Preview lines after the proposed boundary
+				preview := transcript.PreviewMessages(all, chain, targetStep, 5)
+				if len(preview) > 0 {
+					fmt.Fprintln(out, "First 5 user messages after new boundary:")
+					for i, msg := range preview {
+						fmt.Fprintf(out, "  %d. %s\n", i+1, msg)
+					}
+					fmt.Fprintln(out)
 				}
-				fmt.Fprintln(cmd.OutOrStdout())
 
 				if dryRun {
-					fmt.Fprintln(cmd.OutOrStdout(), "[dry-run] No changes written.")
+					// Compute a hypothetical "after" using just the chain slice.
+					afterChain := chain[targetStep:]
+					tokens, _ := transcript.EstimateTokens(all, afterChain)
+					hypothetical := transcriptStats{
+						TotalLines: len(all),
+						ChainLines: len(afterChain),
+						Bytes:      before.Bytes, // no write
+						Tokens:     tokens,
+						Boundaries: len(existingBoundaries),
+					}
+					printStats(out, "After*", hypothetical)
+					printDelta(out, before, hypothetical)
+					fmt.Fprintln(out, "[dry-run] No writes performed. (After* reflects projected chain only.)")
 					return nil
 				}
-				newLines, insertErr := transcript.InsertBoundary(allLines, chainLines, targetStep, summaryText)
+
+				newLines, insertErr := transcript.InsertBoundary(all, chain, targetStep, summaryText)
 				if insertErr != nil {
 					return fmt.Errorf("inserting boundary: %w", insertErr)
 				}
 				if writeErr := writeLines(path, newLines); writeErr != nil {
 					return writeErr
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Boundary placed. %d entries visible after boundary.\n", visibleCount)
+				after, _ := snapshotStats(path)
+				printStats(out, "After", after)
+				printDelta(out, before, after)
+				return nil
 			}
 
+			// No action was taken (and no TUI triggered); just print stats and exit.
 			return nil
 		},
 	}
 
 	cmd.Flags().Bool("dry-run", false, "Show what would change without writing")
 	cmd.Flags().Bool("strip-tool-results", false, "Replace tool results with stubs")
+	cmd.Flags().Bool("strip-thinking", false, "Remove assistant thinking blocks")
 	cmd.Flags().Int("strip-large", 0, "Strip tool results/inputs larger than N bytes")
 	cmd.Flags().String("strip-before", "", "Only strip entries before this time (RFC3339 or YYYY-MM-DD)")
 	cmd.Flags().Int("keep-last", 0, "Keep last N chain entries fully intact")

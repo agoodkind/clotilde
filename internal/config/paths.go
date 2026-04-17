@@ -204,6 +204,20 @@ func GlobalDataDir() string {
 	return filepath.Join(dataHome, "clotilde")
 }
 
+// GlobalBackupsDir returns the directory where compact operations stash
+// pre-change copies of transcript files. Respects $XDG_DATA_HOME.
+// Layout:
+//
+//	$XDG_DATA_HOME/clotilde/backups/<session-name>/<timestamp>-<uuid>.jsonl
+func GlobalBackupsDir() string {
+	return filepath.Join(GlobalDataDir(), "backups")
+}
+
+// EnsureGlobalBackupsDir creates the backups root if it does not exist.
+func EnsureGlobalBackupsDir() error {
+	return os.MkdirAll(GlobalBackupsDir(), 0o755)
+}
+
 // GlobalSessionsDir returns the path to the global sessions directory.
 func GlobalSessionsDir() string {
 	return filepath.Join(GlobalDataDir(), SessionsDir)

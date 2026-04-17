@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **New `--strip-thinking` flag on `clotilde compact`.** Previously thinking blocks were stripped as a side effect of `--strip-tool-results`. They are now controlled by an independent flag. `--strip-tool-results` only touches `tool_result` blocks. `--strip-thinking` only removes assistant thinking blocks. The two flags compose freely.
+- **Automatic pre-compact transcript backups.** Every destructive `clotilde compact` run now copies the current transcript into `$XDG_DATA_HOME/clotilde/backups/<session>/` before applying any change. Filenames use a UTC timestamp with millisecond precision so successive backups never collide. The most recent 20 backups per session are retained; older ones are pruned automatically. Dry-run compacts skip the backup step.
+
+### Fixed
+
+- **Compact no longer writes `"content":null` into transcripts.** When the compact "strip" option removed the only block of an assistant message (typically a lone thinking block), the resulting content array was marshalled as `null` instead of `[]`. Claude Code's transcript loader then crashed on resume with `null is not an object (evaluating 'H.message.content.length')`. The empty array is now emitted correctly, and a regression test (`TestStripContent_EmptyAfterThinking`) guards against it.
+
+### Changed
+
+**TUI rewrite - raw tcell (removes tview)**
+
+- **Full rewrite of the main `clotilde` TUI on top of raw tcell.** The tview dependency is removed entirely. Every widget (Table, TextBox, StatusBar, Modal, Input, DetailsView) is implemented directly on tcell primitives in `internal/ui/tcell_*.go`.
+- **Fixes mouse clicks on session rows.** Clicks now hit-test directly against widget rectangles (no Frame wrapper, no InRect delegation chain). Single click opens the details pane. Double click resumes the session.
+- **Fixes unresponsive TUI after terminal tab switch.** `screen.EnableFocus()` is now called, and `tcell.EventFocus` triggers a full `screen.Sync()` on refocus.
+- **Ctrl+C always quits.** Global key handling runs before any widget and cannot be blocked by focus routing.
+- Legacy BubbleTea-based subcommand helpers (`picker`, `viewer`, `confirm`, `dashboard`, `table`, `input`) remain in place for subcommands such as `clotilde delete <name>` and `clotilde resume` (when called without TTY). They are unaffected by the rewrite.
+
+### Added
+
 **TUI rewrite - tview/tcell**
 
 - **Full tview/tcell TUI rewrite**: Replaced BubbleTea dashboard with native tview application for improved terminal compatibility and rendering performance.
