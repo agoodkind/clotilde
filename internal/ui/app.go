@@ -1325,10 +1325,14 @@ func (a *App) trackSelection(row int) {
 		return
 	}
 	sess := a.sessions[a.visibleIdx[row]]
-	// Keep details in sync if currently shown.
+	// Keep details in sync if currently shown. The first arrow key
+	// press also auto-opens the pane so the user gets context without
+	// hitting Space first.
 	if a.selected != nil {
 		a.selected = sess
 		a.populateDetails()
+	} else if a.table.Active {
+		a.openDetails(sess)
 	}
 	// Kick off a background summary refresh if the cached Context is
 	// stale. This runs whether or not the details pane is open, so the
