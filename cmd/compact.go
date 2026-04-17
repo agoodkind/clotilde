@@ -264,6 +264,9 @@ Examples:
 			stripImages, _ := cmd.Flags().GetBool("strip-images")
 			stripLarge, _ := cmd.Flags().GetInt("strip-large")
 			keepLast, _ := cmd.Flags().GetInt("keep-last")
+			keepLastImages, _ := cmd.Flags().GetInt("keep-last-images")
+			keepLastTools, _ := cmd.Flags().GetInt("keep-last-tool-results")
+			keepLastThink, _ := cmd.Flags().GetInt("keep-last-thinking")
 			stripBeforeStr, _ := cmd.Flags().GetString("strip-before")
 			moveBoundary, _ := cmd.Flags().GetInt("move-boundary")
 			removeLast, _ := cmd.Flags().GetBool("remove-last-boundary")
@@ -373,12 +376,15 @@ Examples:
 			// --- Action: strip content ---
 			if stripResults || stripThinking || stripImages || stripLarge > 0 {
 				opts := transcript.CompactOptions{
-					StripToolResults: stripResults,
-					StripThinking:    stripThinking,
-					StripImages:      stripImages,
-					StripLargeBytes:  stripLarge,
-					StripBefore:      stripBefore,
-					KeepLast:         keepLast,
+					StripToolResults:    stripResults,
+					StripThinking:       stripThinking,
+					StripImages:         stripImages,
+					StripLargeBytes:     stripLarge,
+					StripBefore:         stripBefore,
+					KeepLast:            keepLast,
+					KeepLastImages:      keepLastImages,
+					KeepLastToolResults: keepLastTools,
+					KeepLastThinking:    keepLastThink,
 				}
 				fmt.Fprintf(out, "Stripping (tool_results=%v, thinking=%v, images=%v, large>%d bytes, keep_last=%d)...\n",
 					stripResults, stripThinking, stripImages, stripLarge, keepLast)
@@ -503,6 +509,9 @@ Examples:
 	cmd.Flags().Int("strip-large", 0, "Strip tool results/inputs larger than N bytes")
 	cmd.Flags().String("strip-before", "", "Only strip entries before this time (RFC3339 or YYYY-MM-DD)")
 	cmd.Flags().Int("keep-last", 0, "Keep last N chain entries fully intact")
+	cmd.Flags().Int("keep-last-images", 0, "Preserve the last N image blocks even when --strip-images is on")
+	cmd.Flags().Int("keep-last-tool-results", 0, "Preserve the last N tool_result bodies even when --strip-tool-results is on")
+	cmd.Flags().Int("keep-last-thinking", 0, "Preserve the last N thinking blocks even when --strip-thinking is on")
 	cmd.Flags().Int("move-boundary", 0, "Move boundary so N%% of chain is visible (1-100)")
 	cmd.Flags().Bool("remove-last-boundary", false, "Remove the most recent compact boundary")
 
@@ -533,9 +542,12 @@ func applyCompactChoices(sess *session.Session, c ui.CompactChoices) error {
 			return err
 		}
 		opts := transcript.CompactOptions{
-			StripToolResults: c.StripToolResults,
-			StripThinking:    c.StripThinking,
-			StripImages:      c.StripImages,
+			StripToolResults:    c.StripToolResults,
+			StripThinking:       c.StripThinking,
+			StripImages:         c.StripImages,
+			KeepLastImages:      c.KeepLastImages,
+			KeepLastToolResults: c.KeepLastToolResults,
+			KeepLastThinking:    c.KeepLastThinking,
 		}
 		if c.StripLargeInputs {
 			opts.StripLargeBytes = 1024
