@@ -34,6 +34,20 @@ type DetailsView struct {
 	Rect      Rect
 	LeftRect  Rect // last-drawn rect for the left pane, used for mouse hit-testing
 	RightRect Rect // last-drawn rect for the right pane
+
+	// FormatTokens lets the parent App inject its tokenizer-aware
+	// formatter. The default falls back to the local approximate
+	// formatter so the widget remains usable in isolation.
+	FormatTokens func(sess *session.Session, estimated int) string
+}
+
+// formatTokens delegates to the injected formatter or falls back to a
+// safe approximate format.
+func (d *DetailsView) formatTokens(sess *session.Session, estimated int) string {
+	if d.FormatTokens != nil {
+		return d.FormatTokens(sess, estimated)
+	}
+	return fmtTokenCount(estimated, false)
 }
 
 // NewDetailsView constructs a details pane.
@@ -117,7 +131,7 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail, sta
 		}
 	}
 	if qs, ok := statsCache[sess.Metadata.TranscriptPath]; ok {
-		kv("Tokens", "~"+fmtTokens(qs.EstimatedTokens))
+		kv("Tokens", d.formatTokens(sess, qs.EstimatedTokens))
 		kv("Compactions", fmt.Sprintf("%d", qs.Compactions))
 		kv("In context", fmt.Sprintf("%s entries", fmtInt(qs.EntriesInContext)))
 		if qs.Compactions > 0 && !qs.LastCompactTime.IsZero() {
@@ -336,6 +350,17 @@ func fmtTokens(n int) string {
 		return fmt.Sprintf("%dk", n/1_000)
 	}
 	return fmt.Sprintf("%d", n)
+}
+
+// fmtTokenCount formats a token value with the "approximate" prefix
+// applied only when the source is the local tiktoken estimate. Counts
+// returned by the Claude API are exact, so the prefix would be
+// misleading. Callers pass exact=true when the value came from the API.
+func fmtTokenCount(n int, exact bool) string {
+	if exact {
+		return fmtTokens(n)
+	}
+	return "~" + fmtTokens(n)
 }
 
 func fmtInt(n int) string {
