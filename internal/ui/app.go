@@ -114,9 +114,16 @@ type App struct {
 	cb     AppCallbacks
 
 	// Widgets
+	tabs    *TabBarWidget
 	table   *TableWidget
 	details *DetailsView
 	status  *StatusBarWidget
+
+	// activeTab indexes into tabs.Tabs. 0 is the sessions dashboard. 1
+	// is the settings editor stub. The dashboard renders the table view
+	// when activeTab is 0; other indices replace the body with a tab
+	// specific panel.
+	activeTab int
 
 	// Overlays (one at a time)
 	overlay Widget
@@ -215,6 +222,8 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	a.sortSessions()
 
 	// Build widgets
+	a.tabs = NewTabBar([]string{"Sessions", "Settings"})
+	a.tabs.OnActivate = func(idx int) { a.activeTab = idx }
 	a.table = NewTableWidget([]string{"NAME", "BASEDIR", "MODEL", "MSGS", "SUMMARY", "LAST USED", "CREATED"})
 	a.table.SortCol = int(a.sortCol)
 	a.table.SortAsc = a.sortAsc
@@ -736,18 +745,26 @@ func (a *App) handleKey(e *tcell.EventKey) {
 			a.openFilter()
 			return
 		case '1':
-			a.toggleSort(SortColName)
+			a.activeTab = 0
+			a.tabs.SetActive(0)
 			return
 		case '2':
+			a.activeTab = 1
+			a.tabs.SetActive(1)
+			return
+		case '!':
+			a.toggleSort(SortColName)
+			return
+		case '@':
 			a.toggleSort(SortColWorkspace)
 			return
-		case '3':
+		case '#':
 			a.toggleSort(SortColModel)
 			return
-		case '4':
+		case '$':
 			a.toggleSort(SortColUsed)
 			return
-		case '5':
+		case '%':
 			a.toggleSort(SortColCreated)
 			return
 		// App-level shortcuts. We avoid binding lowercase letters that
@@ -825,6 +842,11 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 
 	if a.overlay != nil {
 		a.overlay.HandleEvent(e)
+		return
+	}
+
+	// Tab strip click takes priority over the rest of the body.
+	if a.tabs != nil && a.tabs.HandleEvent(e) {
 		return
 	}
 
@@ -986,8 +1008,13 @@ func (a *App) draw() {
 		}
 	}
 
-	// Header bar
-	fillRow(a.screen, 0, 0, w, StyleHeaderBar)
+	// Tab strip (purple). Always visible across tabs so the user can
+	// click between Sessions and Settings.
+	a.tabs.Active = a.activeTab
+	a.tabs.Draw(a.screen, Rect{X: 0, Y: 0, W: w, H: 1})
+
+	// Sub header beneath the tab strip carries the dashboard summary.
+	fillRow(a.screen, 0, 1, w, StyleHeaderBar)
 	left := fmt.Sprintf(" clotilde  %d sessions", len(a.visibleIdx))
 	if a.hiddenCount > 0 {
 		left += fmt.Sprintf("  (%d hidden, H to show)", a.hiddenCount)
@@ -997,14 +1024,19 @@ func (a *App) draw() {
 	if a.filter != "" {
 		left += fmt.Sprintf("  (filter: %q)", a.filter)
 	}
-	drawString(a.screen, 0, 0, StyleHeaderBar.Bold(true), left, w)
+	drawString(a.screen, 0, 1, StyleHeaderBar.Bold(true), left, w)
 
-	// Table
-	a.table.Draw(a.screen, a.tableRect)
+	switch a.activeTab {
+	case 0:
+		// Table
+		a.table.Draw(a.screen, a.tableRect)
 
-	// Details
-	if a.selected != nil {
-		a.details.Draw(a.screen, a.detailRect)
+		// Details
+		if a.selected != nil {
+			a.details.Draw(a.screen, a.detailRect)
+		}
+	default:
+		a.drawSettingsTab(a.tableRect)
 	}
 
 	// Status bar
@@ -1031,10 +1063,10 @@ func (a *App) draw() {
 
 func (a *App) layout() {
 	w, h := a.screen.Size()
-	a.headerRect = Rect{X: 0, Y: 0, W: w, H: 1}
+	a.headerRect = Rect{X: 0, Y: 0, W: w, H: 2}
 
 	// Table takes the available width and hugs content height, with header.
-	tableTop := 1
+	tableTop := 2
 	statusH := 1
 	statusY := h - statusH
 	if statusY < 2 {
@@ -1587,6 +1619,30 @@ func (a *App) openFilter() {
 	}
 	a.overlay = &InputOverlay{Input: input, Title: "Filter"}
 	a.mode = StatusFilter
+}
+
+// drawSettingsTab renders the placeholder body for the Settings tab.
+// The real config editor lands in a follow-up; this stub keeps the tab
+// usable so the visual structure is in place.
+func (a *App) drawSettingsTab(r Rect) {
+	if r.W <= 0 || r.H <= 0 {
+		return
+	}
+	lines := []string{
+		"Settings",
+		"",
+		"Edit ~/.config/clotilde/config.toml or .claude/clotilde/config.json directly.",
+		"An in-TUI editor lands in a follow-up commit.",
+		"",
+		"Press 1 (or click the Sessions tab) to return.",
+	}
+	for i, l := range lines {
+		style := StyleSubtext
+		if i == 0 {
+			style = StyleDefault.Foreground(ColorAccent).Bold(true)
+		}
+		drawString(a.screen, r.X+2, r.Y+1+i, style, l, r.W-4)
+	}
 }
 
 // openHelpModal shows the full keymap. Triggered by "?" anywhere in
