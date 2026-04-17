@@ -21,6 +21,58 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type RegistryEvent_Kind int32
+
+const (
+	RegistryEvent_KIND_UNSPECIFIED RegistryEvent_Kind = 0
+	RegistryEvent_SESSION_ADOPTED  RegistryEvent_Kind = 1
+	RegistryEvent_SESSION_UPDATED  RegistryEvent_Kind = 2
+	RegistryEvent_SESSION_DELETED  RegistryEvent_Kind = 3
+)
+
+// Enum value maps for RegistryEvent_Kind.
+var (
+	RegistryEvent_Kind_name = map[int32]string{
+		0: "KIND_UNSPECIFIED",
+		1: "SESSION_ADOPTED",
+		2: "SESSION_UPDATED",
+		3: "SESSION_DELETED",
+	}
+	RegistryEvent_Kind_value = map[string]int32{
+		"KIND_UNSPECIFIED": 0,
+		"SESSION_ADOPTED":  1,
+		"SESSION_UPDATED":  2,
+		"SESSION_DELETED":  3,
+	}
+)
+
+func (x RegistryEvent_Kind) Enum() *RegistryEvent_Kind {
+	p := new(RegistryEvent_Kind)
+	*p = x
+	return p
+}
+
+func (x RegistryEvent_Kind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RegistryEvent_Kind) Descriptor() protoreflect.EnumDescriptor {
+	return file_daemon_proto_enumTypes[0].Descriptor()
+}
+
+func (RegistryEvent_Kind) Type() protoreflect.EnumType {
+	return &file_daemon_proto_enumTypes[0]
+}
+
+func (x RegistryEvent_Kind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RegistryEvent_Kind.Descriptor instead.
+func (RegistryEvent_Kind) EnumDescriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{12, 0}
+}
+
 type AcquireSessionRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionName   string                 `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
@@ -457,6 +509,190 @@ func (x *ActiveSession) GetWrapperId() string {
 	return ""
 }
 
+type TriggerScanRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TriggerScanRequest) Reset() {
+	*x = TriggerScanRequest{}
+	mi := &file_daemon_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TriggerScanRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TriggerScanRequest) ProtoMessage() {}
+
+func (x *TriggerScanRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TriggerScanRequest.ProtoReflect.Descriptor instead.
+func (*TriggerScanRequest) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{9}
+}
+
+type TriggerScanResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AdoptedCount  int32                  `protobuf:"varint,1,opt,name=adopted_count,json=adoptedCount,proto3" json:"adopted_count,omitempty"`
+	AdoptedNames  []string               `protobuf:"bytes,2,rep,name=adopted_names,json=adoptedNames,proto3" json:"adopted_names,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TriggerScanResponse) Reset() {
+	*x = TriggerScanResponse{}
+	mi := &file_daemon_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TriggerScanResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TriggerScanResponse) ProtoMessage() {}
+
+func (x *TriggerScanResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TriggerScanResponse.ProtoReflect.Descriptor instead.
+func (*TriggerScanResponse) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *TriggerScanResponse) GetAdoptedCount() int32 {
+	if x != nil {
+		return x.AdoptedCount
+	}
+	return 0
+}
+
+func (x *TriggerScanResponse) GetAdoptedNames() []string {
+	if x != nil {
+		return x.AdoptedNames
+	}
+	return nil
+}
+
+type SubscribeRegistryRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SubscribeRegistryRequest) Reset() {
+	*x = SubscribeRegistryRequest{}
+	mi := &file_daemon_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubscribeRegistryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubscribeRegistryRequest) ProtoMessage() {}
+
+func (x *SubscribeRegistryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubscribeRegistryRequest.ProtoReflect.Descriptor instead.
+func (*SubscribeRegistryRequest) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{11}
+}
+
+type RegistryEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Kind          RegistryEvent_Kind     `protobuf:"varint,1,opt,name=kind,proto3,enum=agentgate.RegistryEvent_Kind" json:"kind,omitempty"`
+	SessionName   string                 `protobuf:"bytes,2,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
+	SessionId     string                 `protobuf:"bytes,3,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RegistryEvent) Reset() {
+	*x = RegistryEvent{}
+	mi := &file_daemon_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RegistryEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RegistryEvent) ProtoMessage() {}
+
+func (x *RegistryEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RegistryEvent.ProtoReflect.Descriptor instead.
+func (*RegistryEvent) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *RegistryEvent) GetKind() RegistryEvent_Kind {
+	if x != nil {
+		return x.Kind
+	}
+	return RegistryEvent_KIND_UNSPECIFIED
+}
+
+func (x *RegistryEvent) GetSessionName() string {
+	if x != nil {
+		return x.SessionName
+	}
+	return ""
+}
+
+func (x *RegistryEvent) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
 var File_daemon_proto protoreflect.FileDescriptor
 
 const file_daemon_proto_rawDesc = "" +
@@ -489,13 +725,30 @@ const file_daemon_proto_rawDesc = "" +
 	"\rActiveSession\x12!\n" +
 	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x1d\n" +
 	"\n" +
-	"wrapper_id\x18\x02 \x01(\tR\twrapperId2\xe5\x02\n" +
+	"wrapper_id\x18\x02 \x01(\tR\twrapperId\"\x14\n" +
+	"\x12TriggerScanRequest\"_\n" +
+	"\x13TriggerScanResponse\x12#\n" +
+	"\radopted_count\x18\x01 \x01(\x05R\fadoptedCount\x12#\n" +
+	"\radopted_names\x18\x02 \x03(\tR\fadoptedNames\"\x1a\n" +
+	"\x18SubscribeRegistryRequest\"\xe1\x01\n" +
+	"\rRegistryEvent\x121\n" +
+	"\x04kind\x18\x01 \x01(\x0e2\x1d.agentgate.RegistryEvent.KindR\x04kind\x12!\n" +
+	"\fsession_name\x18\x02 \x01(\tR\vsessionName\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x03 \x01(\tR\tsessionId\"[\n" +
+	"\x04Kind\x12\x14\n" +
+	"\x10KIND_UNSPECIFIED\x10\x00\x12\x13\n" +
+	"\x0fSESSION_ADOPTED\x10\x01\x12\x13\n" +
+	"\x0fSESSION_UPDATED\x10\x02\x12\x13\n" +
+	"\x0fSESSION_DELETED\x10\x032\x89\x04\n" +
 	"\n" +
 	"AgentGateD\x12U\n" +
 	"\x0eAcquireSession\x12 .agentgate.AcquireSessionRequest\x1a!.agentgate.AcquireSessionResponse\x12U\n" +
 	"\x0eReleaseSession\x12 .agentgate.ReleaseSessionRequest\x1a!.agentgate.ReleaseSessionResponse\x12F\n" +
 	"\tHookEvent\x12\x1b.agentgate.HookEventRequest\x1a\x1c.agentgate.HookEventResponse\x12a\n" +
-	"\x12ListActiveSessions\x12$.agentgate.ListActiveSessionsRequest\x1a%.agentgate.ListActiveSessionsResponseB)Z'github.com/fgrehm/clotilde/api/daemonpbb\x06proto3"
+	"\x12ListActiveSessions\x12$.agentgate.ListActiveSessionsRequest\x1a%.agentgate.ListActiveSessionsResponse\x12L\n" +
+	"\vTriggerScan\x12\x1d.agentgate.TriggerScanRequest\x1a\x1e.agentgate.TriggerScanResponse\x12T\n" +
+	"\x11SubscribeRegistry\x12#.agentgate.SubscribeRegistryRequest\x1a\x18.agentgate.RegistryEvent0\x01B)Z'github.com/fgrehm/clotilde/api/daemonpbb\x06proto3"
 
 var (
 	file_daemon_proto_rawDescOnce sync.Once
@@ -509,33 +762,44 @@ func file_daemon_proto_rawDescGZIP() []byte {
 	return file_daemon_proto_rawDescData
 }
 
-var file_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_daemon_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_daemon_proto_goTypes = []any{
-	(*AcquireSessionRequest)(nil),      // 0: agentgate.AcquireSessionRequest
-	(*AcquireSessionResponse)(nil),     // 1: agentgate.AcquireSessionResponse
-	(*ReleaseSessionRequest)(nil),      // 2: agentgate.ReleaseSessionRequest
-	(*ReleaseSessionResponse)(nil),     // 3: agentgate.ReleaseSessionResponse
-	(*HookEventRequest)(nil),           // 4: agentgate.HookEventRequest
-	(*HookEventResponse)(nil),          // 5: agentgate.HookEventResponse
-	(*ListActiveSessionsRequest)(nil),  // 6: agentgate.ListActiveSessionsRequest
-	(*ListActiveSessionsResponse)(nil), // 7: agentgate.ListActiveSessionsResponse
-	(*ActiveSession)(nil),              // 8: agentgate.ActiveSession
+	(RegistryEvent_Kind)(0),            // 0: agentgate.RegistryEvent.Kind
+	(*AcquireSessionRequest)(nil),      // 1: agentgate.AcquireSessionRequest
+	(*AcquireSessionResponse)(nil),     // 2: agentgate.AcquireSessionResponse
+	(*ReleaseSessionRequest)(nil),      // 3: agentgate.ReleaseSessionRequest
+	(*ReleaseSessionResponse)(nil),     // 4: agentgate.ReleaseSessionResponse
+	(*HookEventRequest)(nil),           // 5: agentgate.HookEventRequest
+	(*HookEventResponse)(nil),          // 6: agentgate.HookEventResponse
+	(*ListActiveSessionsRequest)(nil),  // 7: agentgate.ListActiveSessionsRequest
+	(*ListActiveSessionsResponse)(nil), // 8: agentgate.ListActiveSessionsResponse
+	(*ActiveSession)(nil),              // 9: agentgate.ActiveSession
+	(*TriggerScanRequest)(nil),         // 10: agentgate.TriggerScanRequest
+	(*TriggerScanResponse)(nil),        // 11: agentgate.TriggerScanResponse
+	(*SubscribeRegistryRequest)(nil),   // 12: agentgate.SubscribeRegistryRequest
+	(*RegistryEvent)(nil),              // 13: agentgate.RegistryEvent
 }
 var file_daemon_proto_depIdxs = []int32{
-	8, // 0: agentgate.ListActiveSessionsResponse.sessions:type_name -> agentgate.ActiveSession
-	0, // 1: agentgate.AgentGateD.AcquireSession:input_type -> agentgate.AcquireSessionRequest
-	2, // 2: agentgate.AgentGateD.ReleaseSession:input_type -> agentgate.ReleaseSessionRequest
-	4, // 3: agentgate.AgentGateD.HookEvent:input_type -> agentgate.HookEventRequest
-	6, // 4: agentgate.AgentGateD.ListActiveSessions:input_type -> agentgate.ListActiveSessionsRequest
-	1, // 5: agentgate.AgentGateD.AcquireSession:output_type -> agentgate.AcquireSessionResponse
-	3, // 6: agentgate.AgentGateD.ReleaseSession:output_type -> agentgate.ReleaseSessionResponse
-	5, // 7: agentgate.AgentGateD.HookEvent:output_type -> agentgate.HookEventResponse
-	7, // 8: agentgate.AgentGateD.ListActiveSessions:output_type -> agentgate.ListActiveSessionsResponse
-	5, // [5:9] is the sub-list for method output_type
-	1, // [1:5] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	9,  // 0: agentgate.ListActiveSessionsResponse.sessions:type_name -> agentgate.ActiveSession
+	0,  // 1: agentgate.RegistryEvent.kind:type_name -> agentgate.RegistryEvent.Kind
+	1,  // 2: agentgate.AgentGateD.AcquireSession:input_type -> agentgate.AcquireSessionRequest
+	3,  // 3: agentgate.AgentGateD.ReleaseSession:input_type -> agentgate.ReleaseSessionRequest
+	5,  // 4: agentgate.AgentGateD.HookEvent:input_type -> agentgate.HookEventRequest
+	7,  // 5: agentgate.AgentGateD.ListActiveSessions:input_type -> agentgate.ListActiveSessionsRequest
+	10, // 6: agentgate.AgentGateD.TriggerScan:input_type -> agentgate.TriggerScanRequest
+	12, // 7: agentgate.AgentGateD.SubscribeRegistry:input_type -> agentgate.SubscribeRegistryRequest
+	2,  // 8: agentgate.AgentGateD.AcquireSession:output_type -> agentgate.AcquireSessionResponse
+	4,  // 9: agentgate.AgentGateD.ReleaseSession:output_type -> agentgate.ReleaseSessionResponse
+	6,  // 10: agentgate.AgentGateD.HookEvent:output_type -> agentgate.HookEventResponse
+	8,  // 11: agentgate.AgentGateD.ListActiveSessions:output_type -> agentgate.ListActiveSessionsResponse
+	11, // 12: agentgate.AgentGateD.TriggerScan:output_type -> agentgate.TriggerScanResponse
+	13, // 13: agentgate.AgentGateD.SubscribeRegistry:output_type -> agentgate.RegistryEvent
+	8,  // [8:14] is the sub-list for method output_type
+	2,  // [2:8] is the sub-list for method input_type
+	2,  // [2:2] is the sub-list for extension type_name
+	2,  // [2:2] is the sub-list for extension extendee
+	0,  // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_daemon_proto_init() }
@@ -548,13 +812,14 @@ func file_daemon_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_daemon_proto_rawDesc), len(file_daemon_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   9,
+			NumEnums:      1,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_daemon_proto_goTypes,
 		DependencyIndexes: file_daemon_proto_depIdxs,
+		EnumInfos:         file_daemon_proto_enumTypes,
 		MessageInfos:      file_daemon_proto_msgTypes,
 	}.Build()
 	File_daemon_proto = out.File

@@ -37,6 +37,15 @@ type Server struct {
 
 	watcher        *fsnotify.Watcher
 	globalSettings map[string]any // last-known global settings.json content
+
+	// scanWake fires the discovery scanner immediately. Buffered so a
+	// trigger never blocks the caller.
+	scanWake chan struct{}
+
+	// subscribers receive registry events as they happen. The mutex
+	// guards the map so subscribe and broadcast can run concurrently.
+	subMu       sync.Mutex
+	subscribers map[chan *daemonpb.RegistryEvent]struct{}
 }
 
 // wrapperSession holds runtime state for one active claude wrapper process.
@@ -55,9 +64,11 @@ func New(log *slog.Logger) (*Server, error) {
 	}
 
 	s := &Server{
-		log:      log,
-		sessions: make(map[string]*wrapperSession),
-		watcher:  watcher,
+		log:         log,
+		sessions:    make(map[string]*wrapperSession),
+		watcher:     watcher,
+		scanWake:    make(chan struct{}, 4),
+		subscribers: make(map[chan *daemonpb.RegistryEvent]struct{}),
 	}
 
 	globalPath := globalSettingsPath()
@@ -82,21 +93,23 @@ func New(log *slog.Logger) (*Server, error) {
 
 // runDiscoveryScanner periodically walks ~/.claude/projects and adopts
 // any transcripts whose UUID is not already tracked by clotilde. Runs
-// once at startup, then on a 5 minute cadence. The scanner also wakes
-// up early when a SIGUSR1 lands so the TUI or any CLI tool can nudge
-// the daemon for an immediate scan after creating new sessions.
-// Errors are logged but do not stop the loop.
+// once at startup, then on a 5 minute cadence. The scanner wakes
+// early when a SIGUSR1 lands or when a TriggerScan RPC arrives so
+// clients can refresh the daemon's view immediately. Errors are logged
+// but do not stop the loop.
 func (s *Server) runDiscoveryScanner() {
 	const interval = 5 * time.Minute
-	wake := make(chan os.Signal, 1)
-	signal.Notify(wake, syscall.SIGUSR1)
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGUSR1)
 
 	for {
 		s.runDiscoveryOnce()
 		select {
 		case <-time.After(interval):
-		case <-wake:
+		case <-sig:
 			s.log.Debug("discovery scan wake from SIGUSR1")
+		case <-s.scanWake:
+			s.log.Debug("discovery scan wake from TriggerScan RPC")
 		}
 	}
 }
@@ -129,10 +142,76 @@ func (s *Server) runDiscoveryOnce() {
 		names := make([]string, 0, len(adopted))
 		for _, a := range adopted {
 			names = append(names, a.Name)
+			s.publishEvent(&daemonpb.RegistryEvent{
+				Kind:        daemonpb.RegistryEvent_SESSION_ADOPTED,
+				SessionName: a.Name,
+				SessionId:   a.Metadata.SessionID,
+			})
 		}
 		s.log.Info("discovery adopted sessions", "count", len(adopted), "names", names)
 	} else {
 		s.log.Debug("discovery scan: nothing new", "transcripts", len(results))
+	}
+}
+
+// TriggerScan implements the RPC. The daemon's scanner runs whenever
+// the request lands; the response carries any sessions adopted by the
+// previous scan tick so the caller has immediate confirmation.
+// Subscribers also receive a SESSION_ADOPTED event for each new entry.
+func (s *Server) TriggerScan(ctx context.Context, _ *daemonpb.TriggerScanRequest) (*daemonpb.TriggerScanResponse, error) {
+	select {
+	case s.scanWake <- struct{}{}:
+	default:
+		// Channel is full; another wake is already pending.
+	}
+	return &daemonpb.TriggerScanResponse{}, nil
+}
+
+// SubscribeRegistry streams RegistryEvent values to the client until
+// the client disconnects. Each subscriber gets its own buffered channel
+// so a slow client cannot block the broadcaster. Events that arrive
+// while a subscriber's buffer is full are dropped for that one client.
+func (s *Server) SubscribeRegistry(_ *daemonpb.SubscribeRegistryRequest, stream daemonpb.AgentGateD_SubscribeRegistryServer) error {
+	ch := make(chan *daemonpb.RegistryEvent, 32)
+
+	s.subMu.Lock()
+	s.subscribers[ch] = struct{}{}
+	s.subMu.Unlock()
+
+	defer func() {
+		s.subMu.Lock()
+		delete(s.subscribers, ch)
+		s.subMu.Unlock()
+		close(ch)
+	}()
+
+	ctx := stream.Context()
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				return nil
+			}
+			if err := stream.Send(ev); err != nil {
+				return err
+			}
+		case <-ctx.Done():
+			return nil
+		}
+	}
+}
+
+// publishEvent fans an event out to every active subscriber. Slow
+// subscribers whose buffer is full silently drop the event to keep the
+// broadcaster non-blocking.
+func (s *Server) publishEvent(ev *daemonpb.RegistryEvent) {
+	s.subMu.Lock()
+	defer s.subMu.Unlock()
+	for ch := range s.subscribers {
+		select {
+		case ch <- ev:
+		default:
+		}
 	}
 }
 

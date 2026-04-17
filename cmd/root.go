@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -184,6 +185,24 @@ func buildAppCallbacks(store session.Store, sessions []*session.Session) ui.AppC
 				}
 			}
 			return "-"
+		},
+		SubscribeRegistry: func() (<-chan ui.RegistryEvent, func(), error) {
+			raw, cancel, err := daemon.SubscribeRegistry(context.Background())
+			if err != nil {
+				return nil, nil, err
+			}
+			out := make(chan ui.RegistryEvent, 8)
+			go func() {
+				defer close(out)
+				for ev := range raw {
+					out <- ui.RegistryEvent{
+						Kind:        ev.GetKind().String(),
+						SessionName: ev.GetSessionName(),
+						SessionID:   ev.GetSessionId(),
+					}
+				}
+			}()
+			return out, cancel, nil
 		},
 		ExtractDetail: func(sess *session.Session) ui.SessionDetail {
 			model := "-"

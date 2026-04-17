@@ -63,6 +63,22 @@ type AppCallbacks struct {
 	ExtractModel  func(sess *session.Session) string
 	ViewContent   func(sess *session.Session) string
 	Store         session.Store
+	// SubscribeRegistry, when set, opens a long-lived subscription to
+	// the daemon's registry-event stream. Each event nudges the TUI to
+	// reload sessions from disk so adoptions land immediately instead
+	// of waiting for the polling watcher. The returned cancel function
+	// runs when the TUI exits. Errors are silently tolerated: the
+	// fallback poller still runs.
+	SubscribeRegistry func() (events <-chan RegistryEvent, cancel func(), err error)
+}
+
+// RegistryEvent is the UI-facing copy of the daemon RegistryEvent. The
+// ui package keeps its own type so the daemon's protobuf does not leak
+// into widget code.
+type RegistryEvent struct {
+	Kind        string
+	SessionName string
+	SessionID   string
 }
 
 // SessionDetail holds pre-extracted data for the details pane.
@@ -371,6 +387,16 @@ func (a *App) Run() error {
 	go a.runStoreWatcher(stopWatcher)
 	defer close(stopWatcher)
 
+	// Subscribe to daemon registry events so adoptions land
+	// immediately. Failure is tolerated: the polling watcher above
+	// still keeps the dashboard reasonably fresh.
+	if a.cb.SubscribeRegistry != nil {
+		if events, cancel, err := a.cb.SubscribeRegistry(); err == nil {
+			defer cancel()
+			go a.runRegistrySubscriber(events)
+		}
+	}
+
 	// Idle sweeper that regenerates stale session summaries one at a
 	// time while the user is inactive. Rate limited so it never floods
 	// the daemon or the upstream LLM.
@@ -486,6 +512,19 @@ func (a *App) noteInteraction() {
 	a.interactionMu.Lock()
 	a.lastInteraction = time.Now()
 	a.interactionMu.Unlock()
+}
+
+// runRegistrySubscriber drains the daemon event stream and pokes the
+// store watcher's interrupt path on every event. The reload runs on
+// the same code path as the polling watcher so concurrency stays
+// simple: the event loop owns all state mutations.
+func (a *App) runRegistrySubscriber(events <-chan RegistryEvent) {
+	for ev := range events {
+		_ = ev
+		if a.screen != nil {
+			_ = a.screen.PostEvent(tcell.NewEventInterrupt(a))
+		}
+	}
 }
 
 // runIdleSummarySweeper regenerates stale or missing session summaries
