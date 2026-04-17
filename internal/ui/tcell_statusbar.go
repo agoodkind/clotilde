@@ -55,7 +55,7 @@ func legendFor(m StatusMode) []TextSegment {
 	case StatusBrowse:
 		pairs = []kv{
 			{"↑↓", "scroll"}, {"enter", "resume"}, {"space", "detail"},
-			{"N", "new"}, {"1-5", "sort"}, {"/", "filter"}, {"q", "quit"},
+			{"N", "new"}, {"H", "hide/show"}, {"1-5", "sort"}, {"/", "filter"}, {"q", "quit"},
 		}
 	case StatusDetail:
 		pairs = []kv{
