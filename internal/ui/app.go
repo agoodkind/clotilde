@@ -153,6 +153,12 @@ type App struct {
 	// Caches
 	statsCache map[string]*transcript.CompactQuickStats
 	modelCache map[string]string
+	// exactTokenCache stores Claude API token counts keyed by transcript
+	// path. Populated by a background goroutine when ANTHROPIC_API_KEY is
+	// set. When a path has an entry the display switches off the "~"
+	// approximate prefix.
+	exactTokenCache map[string]int
+	exactTokenMu    sync.Mutex
 
 	// detailCache stores the fully-extracted SessionDetail keyed by session
 	// name. Populated off the UI goroutine by loadDetailAsync so repeat
@@ -213,8 +219,9 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 		cb:            cb,
 		sessions:      sessions,
 		mode:          StatusBrowse,
-		statsCache:    make(map[string]*transcript.CompactQuickStats),
-		modelCache:    make(map[string]string),
+		statsCache:      make(map[string]*transcript.CompactQuickStats),
+		modelCache:      make(map[string]string),
+		exactTokenCache: make(map[string]int),
 		detailCache:       make(map[string]SessionDetail),
 		detailLoading:     make(map[string]bool),
 		summaryRefreshing: make(map[string]bool),
@@ -237,6 +244,7 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 		a.trackSelection(row)
 	}
 	a.details = NewDetailsView()
+	a.details.FormatTokens = a.formatSessionTokens
 	a.status = &StatusBarWidget{Mode: StatusBrowse}
 
 	a.populateTable()
@@ -302,7 +310,7 @@ func (a *App) buildReturnPromptStats(sess *session.Session) []ReturnPromptStat {
 	}
 	if qs, ok := a.statsCache[sess.Metadata.TranscriptPath]; ok && qs != nil {
 		stats = append(stats,
-			ReturnPromptStat{Label: "Tokens", Value: "~" + fmtTokens(qs.EstimatedTokens)},
+			ReturnPromptStat{Label: "Tokens", Value: a.formatSessionTokens(sess, qs.EstimatedTokens)},
 			ReturnPromptStat{Label: "Messages", Value: fmtInt(qs.TotalEntries)},
 			ReturnPromptStat{Label: "Compactions", Value: fmtInt(qs.Compactions)},
 		)
@@ -618,7 +626,54 @@ func (a *App) PreWarmStats() {
 			a.statsCache[path] = &qsCopy
 		}
 		a.asyncRefresh()
+		a.refreshExactTokenCounts()
 	}()
+}
+
+// refreshExactTokenCounts asks the Claude API for an authoritative token
+// count per session. Runs only when ANTHROPIC_API_KEY is set so users
+// without a key keep the local tiktoken estimate. Results land in
+// exactTokenCache and the next redraw drops the "~" prefix for sessions
+// the API was able to count.
+func (a *App) refreshExactTokenCounts() {
+	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	if apiKey == "" {
+		return
+	}
+	go func() {
+		for _, sess := range a.sessions {
+			path := sess.Metadata.TranscriptPath
+			if path == "" {
+				continue
+			}
+			text := readTranscriptText(path)
+			if text == "" {
+				continue
+			}
+			n, err := transcript.CountTokensForText(apiKey, text)
+			if err != nil || n <= 0 {
+				continue
+			}
+			a.exactTokenMu.Lock()
+			a.exactTokenCache[path] = n
+			a.exactTokenMu.Unlock()
+			a.asyncRefresh()
+		}
+	}()
+}
+
+// readTranscriptText returns a flattened text body of the transcript
+// suitable for token counting. Only user and assistant text content
+// is included. Tool blocks and system entries are skipped because they
+// inflate token counts in ways that diverge from the in-context budget
+// the dashboard cares about. Errors return an empty string so the
+// caller skips this session quietly.
+func readTranscriptText(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 // asyncRefresh posts an event that triggers a redraw without blocking.
@@ -2124,6 +2179,23 @@ func sessionMessageCount(a *App, sess *session.Session) int {
 		return -1
 	}
 	return qs.TotalEntries
+}
+
+// formatSessionTokens renders the token count for a session, choosing
+// between an exact (no prefix) and an estimated ("~" prefix) display
+// based on whether the background API refresher has produced a Claude
+// API result for the session's transcript.
+func (a *App) formatSessionTokens(sess *session.Session, estimate int) string {
+	if sess == nil {
+		return fmtTokenCount(estimate, false)
+	}
+	a.exactTokenMu.Lock()
+	exactN, ok := a.exactTokenCache[sess.Metadata.TranscriptPath]
+	a.exactTokenMu.Unlock()
+	if ok {
+		return fmtTokenCount(exactN, true)
+	}
+	return fmtTokenCount(estimate, false)
 }
 
 // lastUsedTime returns the best available "last activity" timestamp for a
