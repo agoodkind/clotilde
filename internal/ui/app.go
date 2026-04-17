@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -122,6 +123,18 @@ type App struct {
 	statsCache map[string]*transcript.CompactQuickStats
 	modelCache map[string]string
 
+	// detailCache stores the fully-extracted SessionDetail keyed by session
+	// name. Populated off the UI goroutine by loadDetailAsync so repeat
+	// selections render instantly. detailLoading tracks sessions whose
+	// load is in flight, guarding against duplicate goroutines.
+	detailCache   map[string]SessionDetail
+	detailLoading map[string]bool
+	detailMu      sync.Mutex
+
+	// spinnerFrame increments on each redraw that is waiting for async
+	// data so the user sees motion in the details header.
+	spinnerFrame int
+
 	// Double click tracking
 	lastClickTime time.Time
 	lastClickRow  int
@@ -144,13 +157,15 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 		opt = opts[0]
 	}
 	a := &App{
-		cb:         cb,
-		sessions:   sessions,
-		mode:       StatusBrowse,
-		statsCache: make(map[string]*transcript.CompactQuickStats),
-		modelCache: make(map[string]string),
-		sortCol:    SortColUsed,
-		sortAsc:    false,
+		cb:            cb,
+		sessions:      sessions,
+		mode:          StatusBrowse,
+		statsCache:    make(map[string]*transcript.CompactQuickStats),
+		modelCache:    make(map[string]string),
+		detailCache:   make(map[string]SessionDetail),
+		detailLoading: make(map[string]bool),
+		sortCol:       SortColUsed,
+		sortAsc:       false,
 	}
 
 	// Seed visible indexes with all sessions, unsorted for now.
@@ -219,10 +234,16 @@ func (a *App) Run() error {
 	a.running = true
 	a.draw()
 
+	// Ticker that posts a spinner tick every 100ms. The handler only
+	// triggers a redraw when something is actually loading, so an idle
+	// dashboard does not waste CPU.
+	stopTicker := make(chan struct{})
+	go a.runSpinnerTicker(stopTicker)
+	defer close(stopTicker)
+
 	for a.running {
 		ev := a.screen.PollEvent()
 		if ev == nil {
-			// Screen finalized externally.
 			return nil
 		}
 		a.handleEvent(ev)
@@ -231,6 +252,37 @@ func (a *App) Run() error {
 		}
 	}
 	return nil
+}
+
+// spinnerTick is posted periodically while something is loading so the
+// UI can advance the spinner glyph.
+type spinnerTick struct{}
+
+// runSpinnerTicker posts a spinnerTick every 100ms until stop is closed.
+// The tick is cheap; handleEvent only repaints when data is actually
+// pending so this does not burn CPU on an idle dashboard.
+func (a *App) runSpinnerTicker(stop <-chan struct{}) {
+	t := time.NewTicker(100 * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			if a.screen == nil {
+				continue
+			}
+			_ = a.screen.PostEvent(tcell.NewEventInterrupt(spinnerTick{}))
+		}
+	}
+}
+
+// detailsLoadingNow reports whether the named session's details are being
+// fetched in a goroutine. Used to gate spinner repaints.
+func (a *App) detailsLoadingNow(name string) bool {
+	a.detailMu.Lock()
+	defer a.detailMu.Unlock()
+	return a.detailLoading[name]
 }
 
 // initScreen allocates a tcell screen and enables mouse + focus.
@@ -306,8 +358,23 @@ func (a *App) handleEvent(ev tcell.Event) {
 			a.screen.Sync()
 		}
 	case *tcell.EventInterrupt:
-		// Posted from background goroutines to request a redraw.
-		a.populateTable()
+		// Interrupts are posted from background goroutines. The Data
+		// payload tells us which cache to refresh.
+		switch d := e.Data().(type) {
+		case detailsReady:
+			// Only re-render the details pane if the user hasn't moved on.
+			if a.selected != nil && a.selected.Name == d.name {
+				a.populateDetails()
+			}
+		case spinnerTick:
+			a.spinnerFrame++
+			if a.selected != nil && a.detailsLoadingNow(a.selected.Name) {
+				a.populateDetails()
+			}
+		default:
+			// Legacy callers post a raw *App; treat as a generic refresh.
+			a.populateTable()
+		}
 	case *tcell.EventKey:
 		a.handleKey(e)
 	case *tcell.EventMouse:
@@ -459,6 +526,39 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 	if a.overlay != nil {
 		a.overlay.HandleEvent(e)
 		return
+	}
+
+	// Detail panes consume wheel events when the cursor is over them.
+	// Each sub-pane scrolls independently, so hit-test both rects.
+	if a.selected != nil && a.details != nil {
+		if a.details.LeftRect.Contains(x, y) {
+			if btns&tcell.WheelUp != 0 {
+				a.details.Left.Offset = imax(0, a.details.Left.Offset-3)
+				return
+			}
+			if btns&tcell.WheelDown != 0 {
+				a.details.Left.Offset += 3
+				return
+			}
+			if btns&tcell.Button1 != 0 {
+				a.details.SetFocus(DetailsFocusLeft)
+				return
+			}
+		}
+		if a.details.RightRect.Contains(x, y) {
+			if btns&tcell.WheelUp != 0 {
+				a.details.Right.Offset = imax(0, a.details.Right.Offset-3)
+				return
+			}
+			if btns&tcell.WheelDown != 0 {
+				a.details.Right.Offset += 3
+				return
+			}
+			if btns&tcell.Button1 != 0 {
+				a.details.SetFocus(DetailsFocusRight)
+				return
+			}
+		}
 	}
 
 	if a.tableRect.Contains(x, y) {
@@ -797,15 +897,73 @@ func (a *App) deselect() {
 	}
 }
 
+// populateDetails renders the details pane for the currently selected
+// session. If a full SessionDetail is already cached it paints synchronously.
+// Otherwise it paints a lightweight "loading" placeholder and kicks off a
+// background goroutine via loadDetailAsync. When the goroutine finishes, it
+// posts a tcell.EventInterrupt so the main loop repaints with the result.
 func (a *App) populateDetails() {
 	if a.selected == nil {
 		return
 	}
-	detail := SessionDetail{Model: a.modelCache[a.selected.Name]}
-	if a.cb.ExtractDetail != nil {
-		detail = a.cb.ExtractDetail(a.selected)
+	name := a.selected.Name
+
+	a.detailMu.Lock()
+	cached, ok := a.detailCache[name]
+	a.detailMu.Unlock()
+
+	if ok {
+		a.details.Set(a.selected, cached, a.statsCache)
+		return
 	}
-	a.details.Set(a.selected, detail, a.statsCache)
+
+	// Paint a fast placeholder so the UI is never blocked on disk I/O.
+	placeholder := SessionDetail{Model: a.modelCache[name]}
+	a.details.Set(a.selected, placeholder, a.statsCache)
+	a.details.Left.Title = " STATS   " + spinnerGlyph(a.spinnerFrame) + " loading "
+	a.details.Right.Title = " MESSAGES   " + spinnerGlyph(a.spinnerFrame) + " loading "
+
+	a.loadDetailAsync(a.selected)
+}
+
+// loadDetailAsync spawns a goroutine to call cb.ExtractDetail and stash the
+// result in detailCache. Duplicate calls for the same session are coalesced
+// via detailLoading. Completion posts an interrupt event to wake the loop.
+func (a *App) loadDetailAsync(sess *session.Session) {
+	if a.cb.ExtractDetail == nil {
+		return
+	}
+	name := sess.Name
+
+	a.detailMu.Lock()
+	if a.detailLoading[name] {
+		a.detailMu.Unlock()
+		return
+	}
+	a.detailLoading[name] = true
+	a.detailMu.Unlock()
+
+	go func() {
+		detail := a.cb.ExtractDetail(sess)
+		a.detailMu.Lock()
+		a.detailCache[name] = detail
+		delete(a.detailLoading, name)
+		a.detailMu.Unlock()
+		if a.screen != nil {
+			_ = a.screen.PostEvent(tcell.NewEventInterrupt(detailsReady{name: name}))
+		}
+	}()
+}
+
+// detailsReady signals that a background ExtractDetail call completed.
+// The main loop checks the selected session name against this payload so
+// that stale completions (user moved on) do not cause a flash repaint.
+type detailsReady struct{ name string }
+
+// spinnerGlyph returns a single rotating spinner character for frame n.
+func spinnerGlyph(n int) string {
+	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	return frames[n%len(frames)]
 }
 
 // ---------------- Actions ----------------
@@ -980,6 +1138,11 @@ func (a *App) refreshSessions() {
 	a.sessions = sessions
 	a.sortSessions()
 	a.populateTable()
+	// Invalidate cached details. The transcripts they were built from may
+	// have grown or changed during the just-finished suspend.
+	a.detailMu.Lock()
+	a.detailCache = make(map[string]SessionDetail)
+	a.detailMu.Unlock()
 	a.deselect()
 }
 

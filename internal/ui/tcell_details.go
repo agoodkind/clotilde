@@ -31,7 +31,9 @@ type DetailsView struct {
 	Right *TextBox
 	Focus DetailsFocus
 
-	Rect Rect
+	Rect      Rect
+	LeftRect  Rect // last-drawn rect for the left pane, used for mouse hit-testing
+	RightRect Rect // last-drawn rect for the right pane
 }
 
 // NewDetailsView constructs a details pane.
@@ -268,11 +270,13 @@ func (d *DetailsView) Draw(scr tcell.Screen, r Rect) {
 		return
 	}
 
-	d.Left.Draw(scr, Rect{X: inner.X, Y: inner.Y, W: leftW, H: inner.H})
+	d.LeftRect = Rect{X: inner.X, Y: inner.Y, W: leftW, H: inner.H}
+	d.RightRect = Rect{X: rightX, Y: inner.Y, W: rightW, H: inner.H}
+	d.Left.Draw(scr, d.LeftRect)
 	for y := inner.Y; y < inner.Y+inner.H; y++ {
 		scr.SetContent(inner.X+leftW, y, '│', nil, borderStyle)
 	}
-	d.Right.Draw(scr, Rect{X: rightX, Y: inner.Y, W: rightW, H: inner.H})
+	d.Right.Draw(scr, d.RightRect)
 
 	// Focus indicator: highlight the title bar of the focused pane by
 	// overwriting its first row with an inverted style.
