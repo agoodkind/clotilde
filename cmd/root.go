@@ -12,6 +12,7 @@ import (
 
 	"github.com/fgrehm/clotilde/internal/claude"
 	"github.com/fgrehm/clotilde/internal/config"
+	"github.com/fgrehm/clotilde/internal/daemon"
 	"github.com/fgrehm/clotilde/internal/outputstyle"
 	"github.com/fgrehm/clotilde/internal/session"
 	"github.com/fgrehm/clotilde/internal/transcript"
@@ -245,6 +246,11 @@ func startInteractiveSession(existing []*session.Session, basedir string) error 
 			_ = store.Update(result.Session)
 		}
 	}
+
+	// Tell the daemon a new session exists so its scanner refreshes
+	// its registry view immediately. The nudge is best-effort; the
+	// background tick still catches anything that slips through.
+	daemon.NudgeDiscoveryScan()
 
 	fmt.Println(ui.Success(fmt.Sprintf("Created session '%s' (%s)", result.Session.Name, result.Session.Metadata.SessionID)))
 	fmt.Println("\nStarting Claude Code...")

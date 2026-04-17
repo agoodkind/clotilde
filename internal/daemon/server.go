@@ -11,9 +11,11 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -80,14 +82,22 @@ func New(log *slog.Logger) (*Server, error) {
 
 // runDiscoveryScanner periodically walks ~/.claude/projects and adopts
 // any transcripts whose UUID is not already tracked by clotilde. Runs
-// once at startup, then on a 5 minute cadence. Errors are logged but do
-// not stop the loop. Auto-name and subagent transcripts are skipped at
-// the scan layer.
+// once at startup, then on a 5 minute cadence. The scanner also wakes
+// up early when a SIGUSR1 lands so the TUI or any CLI tool can nudge
+// the daemon for an immediate scan after creating new sessions.
+// Errors are logged but do not stop the loop.
 func (s *Server) runDiscoveryScanner() {
 	const interval = 5 * time.Minute
+	wake := make(chan os.Signal, 1)
+	signal.Notify(wake, syscall.SIGUSR1)
+
 	for {
 		s.runDiscoveryOnce()
-		time.Sleep(interval)
+		select {
+		case <-time.After(interval):
+		case <-wake:
+			s.log.Debug("discovery scan wake from SIGUSR1")
+		}
 	}
 }
 
