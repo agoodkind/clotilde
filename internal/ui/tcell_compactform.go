@@ -13,6 +13,10 @@ import (
 // It mirrors the legacy BubbleTea CompactChoices shape so cmd/compact can
 // keep its signature unchanged.
 type CompactChoices struct {
+	// UseBoundary mirrors the form's "Set boundary" checkbox. The
+	// caller skips boundary repositioning entirely when this is false
+	// so the user can request a strip-only compact run.
+	UseBoundary      bool
 	BoundaryPercent  int // percent of chain to keep VISIBLE after boundary, 1..100
 	StripToolResults bool
 	StripThinking    bool
@@ -94,9 +98,11 @@ func NewCompactForm(sessionName string, allLines []string, chainLines []int) *Co
 	}
 }
 
-// fields enumerates focusable controls in order. Tab cycles through these.
-// The slider field is only included when UseBoundary is true so Tab does
-// not stop on a hidden control.
+// fields enumerates focusable controls in order. Tab cycles through
+// these. The keep-last spinners are intentionally absent because they
+// adjust inline when the matching checkbox row has focus and the user
+// hits left or right; including them would force two presses of Tab to
+// reach the next checkbox.
 func (f *CompactForm) fields() []string {
 	base := []string{"chk_use_boundary"}
 	if f.UseBoundary {
@@ -104,17 +110,30 @@ func (f *CompactForm) fields() []string {
 	}
 	base = append(base,
 		"chk_tool_results",
-		"keep_tool_results",
 		"chk_thinking",
-		"keep_thinking",
 		"chk_images",
-		"keep_images",
 		"chk_large_inputs",
 		"btn_apply",
 		"btn_dry_run",
 		"btn_cancel",
 	)
 	return base
+}
+
+// keepFieldFor returns the keep-last counter that adjusts when the
+// given checkbox is focused, or "" when there is no associated
+// counter. Left and right arrows on a focused checkbox row mutate this
+// value through the adjust path.
+func (f *CompactForm) keepFieldFor(chk string) string {
+	switch chk {
+	case "chk_tool_results":
+		return "keep_tool_results"
+	case "chk_thinking":
+		return "keep_thinking"
+	case "chk_images":
+		return "keep_images"
+	}
+	return ""
 }
 
 // fieldIndex returns the position of name in fields(), or -1 if absent.
@@ -181,18 +200,21 @@ func (f *CompactForm) Draw(scr tcell.Screen, r Rect) {
 	drawString(scr, inner.X, y, StyleDefault.Foreground(ColorMuted).Bold(true).Underline(true),
 		"Strip options", inner.W)
 	y++
+	chkTool := f.focus == f.fieldIndex("chk_tool_results")
+	chkThink := f.focus == f.fieldIndex("chk_thinking")
+	chkImg := f.focus == f.fieldIndex("chk_images")
 	y += drawStripRow(scr, inner, y,
 		"Strip tool_result bodies (stubs)",
-		f.StripToolResults, f.focus == f.fieldIndex("chk_tool_results"),
-		f.KeepLastToolResults, f.focus == f.fieldIndex("keep_tool_results"))
+		f.StripToolResults, chkTool,
+		f.KeepLastToolResults, chkTool)
 	y += drawStripRow(scr, inner, y,
 		"Strip assistant thinking blocks",
-		f.StripThinking, f.focus == f.fieldIndex("chk_thinking"),
-		f.KeepLastThinking, f.focus == f.fieldIndex("keep_thinking"))
+		f.StripThinking, chkThink,
+		f.KeepLastThinking, chkThink)
 	y += drawStripRow(scr, inner, y,
 		"Strip image blocks (fix dimension errors)",
-		f.StripImages, f.focus == f.fieldIndex("chk_images"),
-		f.KeepLastImages, f.focus == f.fieldIndex("keep_images"))
+		f.StripImages, chkImg,
+		f.KeepLastImages, chkImg)
 	y += drawCheckbox(scr, inner, y, "Truncate tool_use inputs > 1 KB", f.StripLargeInputs, f.focus == f.fieldIndex("chk_large_inputs"))
 	y++
 
@@ -482,14 +504,19 @@ func (f *CompactForm) focusedField() string {
 	return fs[f.focus]
 }
 
-// adjust tweaks the slider or one of the keep-last spinners when its
-// field has focus. Returns true if the input was consumed.
+// adjust tweaks the slider when it has focus, or the keep-last
+// counter associated with the focused checkbox row. Tab navigation
+// stops on the checkbox row only; left and right arrows from that
+// row drive the spinner so reaching the next checkbox stays one
+// keystroke away.
 func (f *CompactForm) adjust(delta int) bool {
-	switch f.focusedField() {
-	case "slider":
+	field := f.focusedField()
+	if field == "slider" {
 		f.BoundaryPercent = clamp(f.BoundaryPercent+delta, 1, 100)
 		f.invalidateCache()
 		return true
+	}
+	switch f.keepFieldFor(field) {
 	case "keep_tool_results":
 		f.KeepLastToolResults = clamp(f.KeepLastToolResults+keepStep(delta), 0, 100)
 		return true
@@ -564,6 +591,7 @@ func (f *CompactForm) activate() bool {
 
 func (f *CompactForm) choices(applied, dryRun bool) CompactChoices {
 	return CompactChoices{
+		UseBoundary:         f.UseBoundary,
 		BoundaryPercent:     f.BoundaryPercent,
 		StripToolResults:    f.StripToolResults,
 		StripThinking:       f.StripThinking,
