@@ -90,7 +90,7 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail, sta
 
 	section("Identity")
 	kv("Model", detail.Model)
-	kv("Workspace", shortPath(sess.Metadata.WorkspaceRoot))
+	kv("Basedir", shortPath(sess.Metadata.WorkspaceRoot))
 	if sess.Metadata.WorkDir != "" && sess.Metadata.WorkDir != sess.Metadata.WorkspaceRoot {
 		kv("Work dir", shortPath(sess.Metadata.WorkDir))
 	}

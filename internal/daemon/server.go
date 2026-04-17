@@ -319,6 +319,10 @@ func (s *Server) updateSessionContext(payload hookEventPayload) {
 		return
 	}
 	sess.Metadata.Context = summary
+	// Stamp the message count so the TUI can detect when this summary
+	// becomes stale. Messages may have been filtered or truncated by
+	// the caller; an approximate count is fine for the staleness check.
+	sess.Metadata.ContextMessageCount = len(payload.Messages)
 	if err := store.Update(sess); err != nil {
 		s.log.Warn("context update: update failed", "session", payload.SessionName, "err", err)
 		return

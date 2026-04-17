@@ -26,6 +26,11 @@ type Metadata struct {
 	Context              string    `json:"context,omitempty"`
 	HasCustomOutputStyle bool      `json:"hasCustomOutputStyle,omitempty"`
 	WorkspaceRoot        string    `json:"workspaceRoot,omitempty"`
+
+	// ContextMessageCount is the message count at the moment Context was
+	// last generated. The TUI uses it to decide when the summary is stale
+	// and should be regenerated in the background.
+	ContextMessageCount int `json:"contextMessageCount,omitempty"`
 }
 
 // Settings represents Claude Code session-specific settings stored in settings.json.

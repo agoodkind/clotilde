@@ -46,6 +46,12 @@ type AppCallbacks struct {
 	RenameSession func(sess *session.Session) (string, error)
 	StartSession  func() error
 	ApplyCompact  func(sess *session.Session, choices CompactChoices) error
+	// RefreshSummary triggers a background regeneration of the session's
+	// Context field via the daemon. It should return quickly once the
+	// request is queued. The returned sessions callback (may be nil)
+	// fires once the updated metadata is persisted; the TUI uses it to
+	// redraw the affected row.
+	RefreshSummary func(sess *session.Session, onDone func(*session.Session)) error
 	ExtractDetail func(sess *session.Session) SessionDetail
 	ExtractModel  func(sess *session.Session) string
 	ViewContent   func(sess *session.Session) string
@@ -145,6 +151,10 @@ type App struct {
 	// data so the user sees motion in the details header.
 	spinnerFrame int
 
+	// summaryRefreshing tracks session names whose summary refresh is
+	// in flight, so repeated highlights do not spawn duplicate requests.
+	summaryRefreshing map[string]bool
+
 	// Double click tracking
 	lastClickTime time.Time
 	lastClickRow  int
@@ -176,8 +186,9 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 		mode:          StatusBrowse,
 		statsCache:    make(map[string]*transcript.CompactQuickStats),
 		modelCache:    make(map[string]string),
-		detailCache:   make(map[string]SessionDetail),
-		detailLoading: make(map[string]bool),
+		detailCache:       make(map[string]SessionDetail),
+		detailLoading:     make(map[string]bool),
+		summaryRefreshing: make(map[string]bool),
 		sortCol:       SortColUsed,
 		sortAsc:       false,
 	}
@@ -187,7 +198,7 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	a.sortSessions()
 
 	// Build widgets
-	a.table = NewTableWidget([]string{"NAME", "WORKSPACE", "MODEL", "CREATED", "LAST USED"})
+	a.table = NewTableWidget([]string{"NAME", "BASEDIR", "MODEL", "SUMMARY", "CREATED", "LAST USED"})
 	a.table.SortCol = int(a.sortCol)
 	a.table.SortAsc = a.sortAsc
 	a.table.OnActivate = func(row int) { a.resumeRow(row) }
@@ -400,6 +411,10 @@ func (a *App) handleEvent(ev tcell.Event) {
 			if a.selected != nil && a.detailsLoadingNow(a.selected.Name) {
 				a.populateDetails()
 			}
+		case summaryRefreshed:
+			// Table was already repopulated by maybeRefreshSummary. The
+			// interrupt exists to trigger a draw cycle from the event loop.
+			_ = d
 		default:
 			// Legacy callers post a raw *App; treat as a generic refresh.
 			a.populateTable()
@@ -847,13 +862,49 @@ func (a *App) rowFor(sess *session.Session) []TableCell {
 		modelStyle = dim
 		subStyle = dim
 	}
+	summary := shortSummary(sess.Metadata.Context, 40)
+	summaryStyle := StyleSubtext
+	if summary == "" {
+		summary = compactStyleEmpty
+		summaryStyle = StyleDefault.Foreground(ColorMuted).Dim(true)
+	}
+	if isEphemeralSession(sess) {
+		summaryStyle = StyleDefault.Foreground(ColorMuted).Dim(true)
+	}
 	return []TableCell{
 		{Text: sess.Name, Style: nameStyle},
 		{Text: shortPath(sess.Metadata.WorkspaceRoot), Style: subStyle},
 		{Text: model, Style: modelStyle},
+		{Text: summary, Style: summaryStyle},
 		{Text: sess.Metadata.Created.Format("Jan 02"), Style: subStyle},
 		{Text: util.FormatRelativeTime(sess.Metadata.LastAccessed), Style: subStyle},
 	}
+}
+
+// compactStyleEmpty is the placeholder shown in the SUMMARY column when
+// a session has not yet had its context generated.
+const compactStyleEmpty = "(no summary yet)"
+
+// shortSummary truncates a multi-line free-form context string into one
+// line bounded by maxRunes so it fits a table cell. It picks the first
+// non-blank line to avoid leading blank or decoration lines.
+func shortSummary(ctx string, maxRunes int) string {
+	s := strings.TrimSpace(ctx)
+	if s == "" {
+		return ""
+	}
+	// Collapse newlines to spaces and squash runs of whitespace.
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	for strings.Contains(s, "  ") {
+		s = strings.ReplaceAll(s, "  ", " ")
+	}
+	if maxRunes > 0 {
+		if rs := []rune(s); len(rs) > maxRunes {
+			s = string(rs[:maxRunes-1]) + "…"
+		}
+	}
+	return s
 }
 
 // rebuildVisible computes a.visibleIdx from a.sessions + a.filter.
@@ -922,12 +973,82 @@ func (a *App) currentSession() *session.Session {
 }
 
 func (a *App) trackSelection(row int) {
+	if row < 0 || row >= len(a.visibleIdx) {
+		return
+	}
+	sess := a.sessions[a.visibleIdx[row]]
 	// Keep details in sync if currently shown.
-	if a.selected != nil && row >= 0 && row < len(a.visibleIdx) {
-		a.selected = a.sessions[a.visibleIdx[row]]
+	if a.selected != nil {
+		a.selected = sess
 		a.populateDetails()
 	}
+	// Kick off a background summary refresh if the cached Context is
+	// stale. This runs whether or not the details pane is open, so the
+	// SUMMARY column stays fresh as the user moves through the list.
+	a.maybeRefreshSummary(sess)
 }
+
+// maybeRefreshSummary decides whether to request a new Context for sess and
+// dispatches the request through the daemon. It guards against duplicates
+// via summaryRefreshing, and only fires when the transcript has grown at
+// least 5 messages beyond the count recorded when Context was last set.
+// A session with no Context is always refreshed.
+func (a *App) maybeRefreshSummary(sess *session.Session) {
+	if sess == nil || a.cb.RefreshSummary == nil {
+		return
+	}
+	if sess.Metadata.IsIncognito || sess.Metadata.TranscriptPath == "" {
+		return
+	}
+	if a.summaryRefreshing[sess.Name] {
+		return
+	}
+
+	// How many user+assistant messages are currently in the transcript?
+	// Heuristic: use the EntriesInContext field from the cached quick stats
+	// when available; fall back to 0 (forces a refresh when Context is empty).
+	msgNow := 0
+	if qs, ok := a.statsCache[sess.Metadata.TranscriptPath]; ok && qs != nil {
+		msgNow = qs.TotalEntries
+	}
+
+	// Criteria for refresh:
+	//   1. No Context yet.
+	//   2. Transcript grew by >= 5 entries since last generation.
+	needs := false
+	switch {
+	case strings.TrimSpace(sess.Metadata.Context) == "":
+		needs = true
+	case msgNow > 0 && msgNow-sess.Metadata.ContextMessageCount >= 5:
+		needs = true
+	}
+	if !needs {
+		return
+	}
+
+	a.summaryRefreshing[sess.Name] = true
+	name := sess.Name
+	_ = a.cb.RefreshSummary(sess, func(updated *session.Session) {
+		a.summaryRefreshing[name] = false
+		if updated == nil {
+			return
+		}
+		// Splice the updated session in and re-render the table row.
+		for i := range a.sessions {
+			if a.sessions[i].Name == name {
+				a.sessions[i] = updated
+				break
+			}
+		}
+		a.populateTable()
+		if a.screen != nil {
+			_ = a.screen.PostEvent(tcell.NewEventInterrupt(summaryRefreshed{}))
+		}
+	})
+}
+
+// summaryRefreshed signals that a background summary update completed.
+type summaryRefreshed struct{}
 
 // ---------------- Selection / details ----------------
 

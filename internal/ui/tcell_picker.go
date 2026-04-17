@@ -106,7 +106,7 @@ type pickerView struct {
 func newPickerView(m *PickerModel) *pickerView {
 	v := &pickerView{
 		model: m,
-		table: NewTableWidget([]string{"NAME", "WORKSPACE", "CREATED", "LAST USED"}),
+		table: NewTableWidget([]string{"NAME", "BASEDIR", "CREATED", "LAST USED"}),
 		preview: &TextBox{
 			Wrap:       true,
 			TitleStyle: StyleMuted,
@@ -307,7 +307,7 @@ func defaultPickerPreview(sess *session.Session, statsCache map[string]*transcri
 		b = append(b, sess.Metadata.Context)
 	}
 	b = append(b, "")
-	b = append(b, fmt.Sprintf("Workspace:  %s", shortenPath(sess.Metadata.WorkspaceRoot)))
+	b = append(b, fmt.Sprintf("Basedir:    %s", shortenPath(sess.Metadata.WorkspaceRoot)))
 	if sess.Metadata.IsForkedSession {
 		b = append(b, fmt.Sprintf("Fork of:    %s", sess.Metadata.ParentSession))
 	}

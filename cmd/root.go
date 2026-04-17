@@ -106,6 +106,9 @@ func buildAppCallbacks(store session.Store, sessions []*session.Session) ui.AppC
 		ApplyCompact: func(sess *session.Session, choices ui.CompactChoices) error {
 			return applyCompactChoices(sess, choices)
 		},
+		RefreshSummary: func(sess *session.Session, onDone func(*session.Session)) error {
+			return refreshSessionSummary(store, sess, onDone)
+		},
 		StartSession: func() error {
 			existingNames := make([]string, len(sessions))
 			for i, s := range sessions {
