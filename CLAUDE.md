@@ -235,6 +235,16 @@ When deleting a session, remove:
 
 This ensures complete cleanup even after multiple `/clear` operations (and `/compact`, if Claude Code's behavior changes to create new UUIDs for compaction).
 
+### Remote Control (`--remote-control`)
+
+Sessions can opt into Claude Code's bridge so the running conversation is exposed at `https://claude.ai/code/<bridgeSessionId>`. Three layers cooperate:
+
+1. **Wrapper** (`internal/claude/pty_invoke.go`): when `RemoteControl` is on, claude runs inside a pty using `github.com/creack/pty`. The wrapper opens a per-session Unix socket at `$XDG_RUNTIME_DIR/clotilde/inject/<sessionId>.sock` (or `$TMPDIR/clotilde-inject/...` on macOS) and copies inbound bytes into the pty stdin, so daemon-mediated messages reach claude as if typed.
+2. **Daemon** (`internal/bridge/`, `internal/daemon/`): one `bridge.Watcher` per daemon process tails `~/.claude/sessions/<pid>.json` via fsnotify and emits `BRIDGE_OPENED` / `BRIDGE_CLOSED` on the existing registry stream. `transcript.Tailer` plus `transcriptHub` fan transcript lines out to multiple subscribers via the new `TailTranscript` server-side streaming RPC. `SendToSession` dials the wrapper's inject socket. `UpdateSessionSettings` and `UpdateGlobalSettings` are the daemon-authoritative write paths for per session / global config.
+3. **TUI** (`internal/ui/`): The dashboard shows an `RC` badge column, a "Remote ctrl" details row, an `RC×N` status bar badge, and "Open bridge in browser" / "Copy bridge URL" entries in the options popup. Press `S` to pin a session in the new "Sidecar" tab (`internal/ui/tcell_sidecar.go`), which subscribes to `TailTranscript` and posts user input through `SendToSession`. Press `G` on the Settings tab to flip the global default.
+
+CLI surface: `--remote-control` / `--no-remote-control` on `start|resume|fork|incognito`, `clotilde bridge ls|open <session>`, `clotilde send <session> "text"`. See `docs/remote-control.md` for the full feature description.
+
 ## Commands
 
 ```bash
