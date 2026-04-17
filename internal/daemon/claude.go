@@ -5,25 +5,43 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
-// findRealClaude locates the actual claude binary, skipping any agent-gate
-// wrapper that may be installed earlier in PATH.
+// cachedRealClaude memoizes the resolved binary path for the lifetime
+// of the daemon process. Re-Stat'ing every dir on every context update
+// triggered macOS TCC prompts when PATH happened to include a
+// protected directory like ~/Downloads.
+var (
+	cachedRealClaudePath string
+	cachedRealClaudeOnce sync.Once
+)
+
+// findRealClaude locates the actual claude binary. The result is
+// cached so we only walk the candidate directories once per daemon
+// process. Protected user directories (Downloads, Desktop, Documents)
+// are skipped so the search never triggers a macOS TCC consent prompt.
 func findRealClaude() (string, error) {
+	cachedRealClaudeOnce.Do(func() {
+		cachedRealClaudePath = locateRealClaude()
+	})
+	if cachedRealClaudePath == "" {
+		return "", fmt.Errorf("real claude binary not found in PATH (is it installed?)")
+	}
+	return cachedRealClaudePath, nil
+}
+
+func locateRealClaude() string {
 	self, err := os.Executable()
 	if err != nil {
-		return "", fmt.Errorf("failed to determine own path: %w", err)
+		return ""
 	}
-	self, err = filepath.EvalSymlinks(self)
+	resolvedSelf, err := filepath.EvalSymlinks(self)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve own path: %w", err)
+		return ""
 	}
-	selfDir := filepath.Dir(self)
+	selfDir := filepath.Dir(resolvedSelf)
 
-	// Build a search list: PATH first, then well-known install
-	// locations that launchd jobs may not inherit. The daemon runs
-	// under launchd with a minimal PATH so we need to look in places
-	// like ~/.local/bin and ~/.npm-global/bin explicitly.
 	dirs := filepath.SplitList(os.Getenv("PATH"))
 	home, _ := os.UserHomeDir()
 	if home != "" {
@@ -43,6 +61,9 @@ func findRealClaude() (string, error) {
 		if dir == "" {
 			continue
 		}
+		if isProtectedDir(dir, home) {
+			continue
+		}
 		candidate := filepath.Join(dir, "claude")
 		if _, err := os.Stat(candidate); err != nil {
 			continue
@@ -51,17 +72,31 @@ func findRealClaude() (string, error) {
 		if err != nil {
 			continue
 		}
-		// Skip if this resolves back to ourselves (wrapper installed as claude).
-		if resolved == self || filepath.Dir(resolved) == selfDir {
+		if resolved == resolvedSelf || filepath.Dir(resolved) == selfDir {
 			continue
 		}
-		// Skip if the candidate is another agent-gate binary (check binary name).
 		base := strings.ToLower(filepath.Base(resolved))
 		if base == "agent-gate" {
 			continue
 		}
-		return candidate, nil
+		return candidate
 	}
+	return ""
+}
 
-	return "", fmt.Errorf("real claude binary not found in PATH (is it installed?)")
+// isProtectedDir reports whether dir lives inside a macOS TCC-guarded
+// area. Stat-ing a file inside one of these directories triggers a
+// consent prompt for unsigned binaries, which the daemon hits
+// repeatedly when PATH happens to contain any of them.
+func isProtectedDir(dir, home string) bool {
+	if home == "" {
+		return false
+	}
+	for _, sub := range []string{"Downloads", "Desktop", "Documents", "Library"} {
+		base := filepath.Join(home, sub)
+		if dir == base || strings.HasPrefix(dir, base+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
