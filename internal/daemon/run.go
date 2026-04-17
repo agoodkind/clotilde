@@ -40,12 +40,6 @@ func Run(log *slog.Logger) error {
 	grpcServer := grpc.NewServer()
 	daemonpb.RegisterAgentGateDServer(grpcServer, srv)
 
-	// Wire idle timeout to graceful stop.
-	srv.SetShutdown(func() {
-		log.Info("graceful stop from idle timeout")
-		grpcServer.GracefulStop()
-	})
-
-	log.Info("daemon listening", "socket", socketPath, "idle_timeout", idleTimeout)
+	log.Info("daemon listening", "socket", socketPath)
 	return grpcServer.Serve(listener)
 }

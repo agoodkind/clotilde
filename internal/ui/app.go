@@ -46,6 +46,9 @@ type AppCallbacks struct {
 	RenameSession func(sess *session.Session) (string, error)
 	StartSession  func() error
 	ApplyCompact  func(sess *session.Session, choices CompactChoices) error
+	// SetBasedir rewrites the session's workspaceRoot field in metadata.
+	// newPath is already resolved by the caller; "" clears the field.
+	SetBasedir func(sess *session.Session, newPath string) error
 	// RefreshSummary triggers a background regeneration of the session's
 	// Context field via the daemon. It should return quickly once the
 	// request is queued. The returned sessions callback (may be nil)
@@ -212,7 +215,7 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	a.sortSessions()
 
 	// Build widgets
-	a.table = NewTableWidget([]string{"NAME", "BASEDIR", "MODEL", "SUMMARY", "LAST USED", "CREATED"})
+	a.table = NewTableWidget([]string{"NAME", "BASEDIR", "MODEL", "MSGS", "SUMMARY", "LAST USED", "CREATED"})
 	a.table.SortCol = int(a.sortCol)
 	a.table.SortAsc = a.sortAsc
 	a.table.OnActivate = func(row int) { a.resumeRow(row) }
@@ -334,6 +337,13 @@ func (a *App) Run() error {
 	go a.runStoreWatcher(stopWatcher)
 	defer close(stopWatcher)
 
+	// Idle sweeper that regenerates stale session summaries one at a
+	// time while the user is inactive. Rate limited so it never floods
+	// the daemon or the upstream LLM.
+	stopSweep := make(chan struct{})
+	go a.runIdleSummarySweeper(stopSweep)
+	defer close(stopSweep)
+
 	for a.running {
 		ev := a.screen.PollEvent()
 		if ev == nil {
@@ -442,6 +452,83 @@ func (a *App) noteInteraction() {
 	a.interactionMu.Lock()
 	a.lastInteraction = time.Now()
 	a.interactionMu.Unlock()
+}
+
+// runIdleSummarySweeper regenerates stale or missing session summaries
+// while the user is idle. It wakes periodically, checks for a long idle
+// window, picks one session whose Context looks outdated, and kicks off
+// the same RefreshSummary path used on highlight. The rate is one
+// candidate per sweep tick so the LLM workload stays low.
+func (a *App) runIdleSummarySweeper(stop <-chan struct{}) {
+	if a.cb.RefreshSummary == nil {
+		return
+	}
+	const tick = 15 * time.Second
+	const idleFor = 30 * time.Second
+	t := time.NewTicker(tick)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			if a.screen == nil {
+				continue
+			}
+			a.interactionMu.Lock()
+			lastAct := a.lastInteraction
+			a.interactionMu.Unlock()
+			if !lastAct.IsZero() && time.Since(lastAct) < idleFor {
+				continue
+			}
+			sess := a.pickStaleForSweep()
+			if sess == nil {
+				continue
+			}
+			a.maybeRefreshSummary(sess)
+		}
+	}
+}
+
+// pickStaleForSweep returns the first session whose Context looks stale
+// and whose refresh is not already in flight. Sessions without a
+// transcript, incognito sessions, and ephemeral test sessions are
+// skipped. Called only from the idle sweeper goroutine; the App fields
+// it touches are either read-mostly or guarded.
+func (a *App) pickStaleForSweep() *session.Session {
+	for _, s := range a.sessions {
+		if s == nil || s.Metadata.IsIncognito {
+			continue
+		}
+		if s.Metadata.TranscriptPath == "" {
+			continue
+		}
+		if isEphemeralSession(s) {
+			continue
+		}
+		if a.summaryRefreshing[s.Name] {
+			continue
+		}
+		ctx := strings.TrimSpace(s.Metadata.Context)
+		words := 0
+		if ctx != "" {
+			words = len(strings.Fields(ctx))
+		}
+		stale := ctx == "" || words > 6
+		if !stale {
+			// Also consider stale when the transcript has many more
+			// messages than the count stamped at last generation.
+			if qs, ok := a.statsCache[s.Metadata.TranscriptPath]; ok && qs != nil {
+				if qs.TotalEntries-s.Metadata.ContextMessageCount >= 20 {
+					stale = true
+				}
+			}
+		}
+		if stale {
+			return s
+		}
+	}
+	return nil
 }
 
 // detailsLoadingNow reports whether the named session's details are being
@@ -665,6 +752,19 @@ func (a *App) handleKey(e *tcell.EventKey) {
 			// the TUI is open.
 			a.refreshSessions()
 			return
+		case 'B':
+			// Edit the basedir for the selected row. An inline input
+			// opens pre-filled with the current value.
+			if a.selected != nil || a.table.Active {
+				sess := a.selected
+				if sess == nil && a.table.SelectedRow < len(a.visibleIdx) {
+					sess = a.sessions[a.visibleIdx[a.table.SelectedRow]]
+				}
+				if sess != nil {
+					a.openBasedirEditor(sess)
+				}
+			}
+			return
 		case 'H':
 			a.showEphemeral = !a.showEphemeral
 			a.rebuildVisible()
@@ -827,11 +927,22 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 		}
 		// Left click / double click
 		if btns&tcell.Button1 != 0 {
-			// Header click sorts
+			// Header click sorts. The column index matches the display
+			// order (NAME, BASEDIR, MODEL, MSGS, SUMMARY, LAST USED,
+			// CREATED). MSGS and SUMMARY do not have their own sort
+			// mode yet so clicks on those columns fall through.
 			if y == a.tableRect.Y {
-				col := a.table.ColAtX(x)
-				if col >= 0 && col < 5 {
-					a.toggleSort(SortColumn(col))
+				switch a.table.ColAtX(x) {
+				case 0:
+					a.toggleSort(SortColName)
+				case 1:
+					a.toggleSort(SortColWorkspace)
+				case 2:
+					a.toggleSort(SortColModel)
+				case 5:
+					a.toggleSort(SortColUsed)
+				case 6:
+					a.toggleSort(SortColCreated)
 				}
 				return
 			}
@@ -1036,10 +1147,20 @@ func (a *App) rowFor(sess *session.Session) []TableCell {
 	if isEphemeralSession(sess) {
 		summaryStyle = StyleDefault.Foreground(ColorMuted).Dim(true)
 	}
+	msgs := ""
+	if qs, ok := a.statsCache[sess.Metadata.TranscriptPath]; ok && qs != nil {
+		msgs = fmtInt(qs.TotalEntries)
+	}
+	msgStyle := subStyle
+	if msgs == "" {
+		msgs = "-"
+		msgStyle = StyleDefault.Foreground(ColorMuted).Dim(true)
+	}
 	return []TableCell{
 		{Text: sess.Name, Style: nameStyle},
 		{Text: shortPath(sess.Metadata.WorkspaceRoot), Style: subStyle},
 		{Text: model, Style: modelStyle},
+		{Text: msgs, Style: msgStyle},
 		{Text: summary, Style: summaryStyle},
 		{Text: util.FormatRelativeTime(sess.Metadata.LastAccessed), Style: subStyle},
 		{Text: sess.Metadata.Created.Format("Jan 02"), Style: subStyle},
@@ -1478,6 +1599,34 @@ func (a *App) openFilter() {
 		a.closeOverlay()
 	}
 	a.overlay = &InputOverlay{Input: input, Title: "Filter"}
+	a.mode = StatusFilter
+}
+
+// openBasedirEditor pops up an inline single-line input pre-filled with
+// the session's current workspace root. Submitting writes the new value
+// through the SetBasedir callback. An empty result clears the field.
+func (a *App) openBasedirEditor(sess *session.Session) {
+	if sess == nil {
+		return
+	}
+	current := sess.Metadata.WorkspaceRoot
+	input := NewTextInput("Basedir: ")
+	input.Text = current
+	input.CursorX = runeCount(current)
+	input.OnSubmit = func(s string) {
+		a.closeOverlay()
+		newPath := strings.TrimSpace(s)
+		if newPath == current {
+			return
+		}
+		if a.cb.SetBasedir != nil {
+			if err := a.cb.SetBasedir(sess, newPath); err == nil {
+				a.refreshSessions()
+			}
+		}
+	}
+	input.OnCancel = a.closeOverlay
+	a.overlay = &InputOverlay{Input: input, Title: "Edit basedir for " + sess.Name + " (empty clears)"}
 	a.mode = StatusFilter
 }
 

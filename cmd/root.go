@@ -106,6 +106,14 @@ func buildAppCallbacks(store session.Store, sessions []*session.Session) ui.AppC
 		ApplyCompact: func(sess *session.Session, choices ui.CompactChoices) error {
 			return applyCompactChoices(sess, choices)
 		},
+		SetBasedir: func(sess *session.Session, newPath string) error {
+			resolved, err := resolveBasedirArg(newPath)
+			if err != nil {
+				return err
+			}
+			sess.Metadata.WorkspaceRoot = resolved
+			return store.Update(sess)
+		},
 		RefreshSummary: func(sess *session.Session, onDone func(*session.Session)) error {
 			return refreshSessionSummary(store, sess, onDone)
 		},
@@ -252,6 +260,7 @@ func registerSubcommands(root *cobra.Command) {
 	root.AddCommand(newDeleteCmd())
 	root.AddCommand(newPruneEphemeralCmd())
 	root.AddCommand(newPruneEmptyCmd())
+	root.AddCommand(newSetBasedirCmd())
 	root.AddCommand(newExportCmd())
 	root.AddCommand(newSearchCmd())
 	root.AddCommand(newAdoptCmd())

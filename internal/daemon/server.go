@@ -25,8 +25,6 @@ import (
 	"github.com/fgrehm/clotilde/internal/session"
 )
 
-const idleTimeout = 5 * time.Minute
-
 // Server implements the AgentGateD gRPC service.
 type Server struct {
 	daemonpb.UnimplementedAgentGateDServer
@@ -37,11 +35,6 @@ type Server struct {
 
 	watcher        *fsnotify.Watcher
 	globalSettings map[string]any // last-known global settings.json content
-
-	// idleTimer fires when the daemon has had zero sessions for idleTimeout.
-	// Reset on every AcquireSession; stopped while sessions are active.
-	idleTimer *time.Timer
-	shutdown  func() // called when idle timer fires; set by Run()
 }
 
 // wrapperSession holds runtime state for one active claude wrapper process.
@@ -60,10 +53,9 @@ func New(log *slog.Logger) (*Server, error) {
 	}
 
 	s := &Server{
-		log:       log,
-		sessions:  make(map[string]*wrapperSession),
-		watcher:   watcher,
-		idleTimer: time.NewTimer(idleTimeout),
+		log:      log,
+		sessions: make(map[string]*wrapperSession),
+		watcher:  watcher,
 	}
 
 	globalPath := globalSettingsPath()
@@ -81,38 +73,8 @@ func New(log *slog.Logger) (*Server, error) {
 	}
 
 	go s.watchGlobalSettings()
-	go s.watchIdleTimeout()
 
 	return s, nil
-}
-
-// SetShutdown sets the function called when the idle timer fires.
-func (s *Server) SetShutdown(fn func()) {
-	s.mu.Lock()
-	s.shutdown = fn
-	s.mu.Unlock()
-}
-
-// watchIdleTimeout exits the daemon when the idle timer fires.
-func (s *Server) watchIdleTimeout() {
-	<-s.idleTimer.C
-
-	s.mu.RLock()
-	n := len(s.sessions)
-	fn := s.shutdown
-	s.mu.RUnlock()
-
-	if n > 0 {
-		// Sessions appeared between timer fire and check. Reset.
-		s.idleTimer.Reset(idleTimeout)
-		go s.watchIdleTimeout()
-		return
-	}
-
-	s.log.Info("idle timeout reached, shutting down", "timeout", idleTimeout)
-	if fn != nil {
-		fn()
-	}
 }
 
 // Close shuts down the watcher and cleans up all active session runtime dirs.
@@ -169,7 +131,6 @@ func (s *Server) AcquireSession(ctx context.Context, req *daemonpb.AcquireSessio
 
 	s.mu.Lock()
 	s.sessions[req.WrapperId] = sess
-	s.idleTimer.Stop()
 	s.mu.Unlock()
 
 	realClaude, err := findRealClaude()
@@ -202,9 +163,6 @@ func (s *Server) ReleaseSession(ctx context.Context, req *daemonpb.ReleaseSessio
 		delete(s.sessions, req.WrapperId)
 	}
 	remaining := len(s.sessions)
-	if remaining == 0 {
-		s.idleTimer.Reset(idleTimeout)
-	}
 	s.mu.Unlock()
 
 	if ok {
@@ -215,9 +173,6 @@ func (s *Server) ReleaseSession(ctx context.Context, req *daemonpb.ReleaseSessio
 			"model", sess.model,
 			"active_sessions", remaining,
 		)
-		if remaining == 0 {
-			s.log.Info("no active sessions, idle timer started", "timeout", idleTimeout)
-		}
 	} else {
 		s.log.Warn("release for unknown session", "wrapper_id", req.WrapperId)
 	}
