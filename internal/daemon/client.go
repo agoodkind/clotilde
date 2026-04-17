@@ -25,6 +25,83 @@ type Client struct {
 	rpc  daemonpb.AgentGateDClient
 }
 
+// NudgeDiscoveryScan sends SIGUSR1 to the running daemon so its scanner
+// wakes up and runs an immediate scan instead of waiting for the next
+// 5 minute tick. The function looks up the daemon by reading the launchd
+// pid file or by walking pgrep-style; failures are silent because the
+// nudge is purely an optimization.
+func NudgeDiscoveryScan() {
+	pid, err := findDaemonPID()
+	if err != nil || pid <= 0 {
+		return
+	}
+	_ = syscall.Kill(pid, syscall.SIGUSR1)
+}
+
+// findDaemonPID locates the running daemon's pid via launchctl. Returns
+// 0 with no error when the daemon is not registered.
+func findDaemonPID() (int, error) {
+	out, err := exec.Command("launchctl", "list", "io.goodkind.clotilde.daemon").Output()
+	if err != nil {
+		return 0, err
+	}
+	for _, line := range splitLines(string(out)) {
+		line = trimSpace(line)
+		if !startsWith(line, `"PID" = `) {
+			continue
+		}
+		raw := line[len(`"PID" = `):]
+		raw = trimRight(raw, ";")
+		raw = trimSpace(raw)
+		n, convErr := strconv.Atoi(raw)
+		if convErr != nil {
+			return 0, convErr
+		}
+		return n, nil
+	}
+	return 0, nil
+}
+
+// Tiny string helpers kept local so the daemon client does not depend
+// on strings just for this one nudge function.
+func splitLines(s string) []string {
+	var out []string
+	cur := ""
+	for _, r := range s {
+		if r == '\n' {
+			out = append(out, cur)
+			cur = ""
+			continue
+		}
+		cur += string(r)
+	}
+	if cur != "" {
+		out = append(out, cur)
+	}
+	return out
+}
+
+func trimSpace(s string) string {
+	for len(s) > 0 && (s[0] == ' ' || s[0] == '\t') {
+		s = s[1:]
+	}
+	for len(s) > 0 && (s[len(s)-1] == ' ' || s[len(s)-1] == '\t') {
+		s = s[:len(s)-1]
+	}
+	return s
+}
+
+func trimRight(s, suffix string) string {
+	for len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix {
+		s = s[:len(s)-len(suffix)]
+	}
+	return s
+}
+
+func startsWith(s, prefix string) bool {
+	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
+}
+
 // connect opens a connection to a running daemon and verifies it responds.
 func connect(ctx context.Context) (*Client, error) {
 	socketPath := config.DaemonSocketPath()
