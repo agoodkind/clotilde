@@ -186,13 +186,21 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail, sta
 // and a timestamp. Long bodies are wrapped by the parent TextBox because
 // its Wrap flag is on.
 func (d *DetailsView) buildRight(sess *session.Session, detail SessionDetail) [][]TextSegment {
-	msgs := detail.AllMessages
-	if len(msgs) == 0 && len(detail.Messages) > 0 {
-		msgs = detail.Messages
+	src := detail.AllMessages
+	if len(src) == 0 && len(detail.Messages) > 0 {
+		src = detail.Messages
 	}
 
-	if len(msgs) == 0 {
+	if len(src) == 0 {
 		return [][]TextSegment{{{Text: "  (no visible messages)", Style: StyleMuted}}}
+	}
+
+	// Latest message first so the user reads the most recent turn at the
+	// top without scrolling. We copy rather than reverse in place because
+	// the source slice is shared with the cache.
+	msgs := make([]DetailMessage, len(src))
+	for i, m := range src {
+		msgs[len(src)-1-i] = m
 	}
 
 	var out [][]TextSegment

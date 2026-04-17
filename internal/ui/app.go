@@ -300,7 +300,7 @@ func (a *App) buildReturnPromptStats(sess *session.Session) []ReturnPromptStat {
 	}
 	stats = append(stats,
 		ReturnPromptStat{Label: "Created", Value: sess.Metadata.Created.Format("2006-01-02 15:04")},
-		ReturnPromptStat{Label: "Last used", Value: util.FormatRelativeTime(sess.Metadata.LastAccessed)},
+		ReturnPromptStat{Label: "Last used", Value: util.FormatRelativeTime(lastUsedTime(sess))},
 	)
 	return stats
 }
@@ -1000,18 +1000,6 @@ func (a *App) draw() {
 	}
 	drawString(a.screen, 0, 0, StyleHeaderBar.Bold(true), left, w)
 
-	// Post-session banner: right-aligned hint in the header bar.
-	if a.returnBanner != "" {
-		banner := fmt.Sprintf(" Returning from %s  enter resume  q quit ", a.returnBanner)
-		bx := w - runeCount(banner)
-		if bx < runeCount(left)+2 {
-			bx = runeCount(left) + 2
-		}
-		if bx < w {
-			drawString(a.screen, bx, 0, StyleHeaderBar.Foreground(ColorAccent).Bold(true), banner, w-bx)
-		}
-	}
-
 	// Table
 	a.table.Draw(a.screen, a.tableRect)
 
@@ -1162,7 +1150,7 @@ func (a *App) rowFor(sess *session.Session) []TableCell {
 		{Text: model, Style: modelStyle},
 		{Text: msgs, Style: msgStyle},
 		{Text: summary, Style: summaryStyle},
-		{Text: util.FormatRelativeTime(sess.Metadata.LastAccessed), Style: subStyle},
+		{Text: util.FormatRelativeTime(lastUsedTime(sess)), Style: subStyle},
 		{Text: sess.Metadata.Created.Format("Jan 02"), Style: subStyle},
 	}
 }
@@ -1229,7 +1217,7 @@ func (a *App) sortSessions() {
 		case SortColCreated:
 			less = x.Metadata.Created.Before(y.Metadata.Created)
 		case SortColUsed:
-			less = x.Metadata.LastAccessed.Before(y.Metadata.LastAccessed)
+			less = lastUsedTime(x).Before(lastUsedTime(y))
 		}
 		if !a.sortAsc {
 			less = !less
@@ -1852,6 +1840,26 @@ func isEphemeralSession(sess *session.Session) bool {
 		return true
 	}
 	return false
+}
+
+// lastUsedTime returns the best available "last activity" timestamp for a
+// session. Transcript file mtime is preferred because it advances on every
+// message Claude appends, which is what the user actually means by "last
+// used". When the transcript is missing or unreadable the metadata's
+// LastAccessed timestamp serves as a fallback.
+func lastUsedTime(sess *session.Session) time.Time {
+	if sess == nil {
+		return time.Time{}
+	}
+	if p := sess.Metadata.TranscriptPath; p != "" {
+		if fi, err := os.Stat(p); err == nil {
+			t := fi.ModTime()
+			if t.After(sess.Metadata.LastAccessed) {
+				return t
+			}
+		}
+	}
+	return sess.Metadata.LastAccessed
 }
 
 // shortPath abbreviates a workspace path for display.
