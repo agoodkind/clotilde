@@ -248,6 +248,14 @@ func (d *DetailsView) Draw(scr tcell.Screen, r Rect) {
 		return
 	}
 
+	// Wipe the entire details rect first. The sub-panes each clear their
+	// own inner rects, but the one-column left and right margins plus the
+	// divider column are outside those rects. Without a full clear, stale
+	// pixels from the previous draw (for example table content before the
+	// user opened details, or old scrollbar glyphs when content length
+	// changed) leak into those margin columns.
+	clearRect(scr, r)
+
 	borderStyle := StyleDefault.Foreground(ColorBorder)
 	for x := r.X; x < r.X+r.W; x++ {
 		scr.SetContent(x, r.Y, '─', nil, borderStyle)

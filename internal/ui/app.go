@@ -608,8 +608,21 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 func (a *App) draw() {
 	a.layout()
 
+	// Clear the whole screen to the default style before redrawing. Each
+	// widget also clears its own rect, but the margins between rects (the
+	// two-column left and right gutters around the table, the row between
+	// the top of the details pane and the table, and so on) are no
+	// widget's responsibility. Without this wipe, stale runes from a
+	// previous frame linger in those gutters and the UI visibly corrupts
+	// the longer the user interacts with it.
+	w, h := a.screen.Size()
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			a.screen.SetContent(x, y, ' ', nil, tcell.StyleDefault)
+		}
+	}
+
 	// Header bar
-	w, _ := a.screen.Size()
 	fillRow(a.screen, 0, 0, w, StyleHeaderBar)
 	left := fmt.Sprintf(" clotilde  %d sessions", len(a.visibleIdx))
 	if a.hiddenCount > 0 {
