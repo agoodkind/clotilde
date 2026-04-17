@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -201,19 +203,58 @@ const previewCount = 10
 
 // printPreview writes a numbered list of previews with a short absolute
 // timestamp (YYYY-MM-DD HH:MM) alongside each message.
+// printPreview renders the post-boundary message preview in a compact,
+// terminal-friendly format. Long bodies are truncated to one line and
+// inline framing tags (task-id, tool-use-id, output-file, etc.) are
+// stripped so the user sees the actual prose. Without these guards
+// the dump is a wall of unreadable XML soup that obscures the chain
+// changes the command is trying to communicate.
 func printPreview(w io.Writer, heading string, previews []transcript.PreviewMessage) {
 	if len(previews) == 0 {
 		return
 	}
-	fmt.Fprintf(w, "%s\n", heading)
+	fmt.Fprintf(w, "\n%s\n", heading)
+	fmt.Fprintln(w, strings.Repeat("-", runeLen(heading)))
 	for i, p := range previews {
-		ts := "     --     "
+		ts := "    --    "
 		if !p.Timestamp.IsZero() {
-			ts = p.Timestamp.Local().Format("2006-01-02 15:04")
+			ts = p.Timestamp.Local().Format("01-02 15:04")
 		}
-		fmt.Fprintf(w, "  %2d. [%s] %s\n", i+1, ts, p.Text)
+		text := flattenPreviewText(p.Text)
+		if len(text) > 100 {
+			text = text[:97] + "..."
+		}
+		fmt.Fprintf(w, "  %2d. %s  %s\n", i+1, ts, text)
 	}
+	fmt.Fprintln(w)
 }
+
+// flattenPreviewText collapses the message body into a single readable
+// line. Common framing markers from Claude Code (task-notification,
+// task-id, tool-use-id, output-file, image references) are condensed to
+// short stand-ins because their full form is noisy and never carries
+// signal that a human reading the preview cares about.
+func flattenPreviewText(s string) string {
+	if s == "" {
+		return "(empty)"
+	}
+	s = previewTagRe.ReplaceAllString(s, "")
+	s = previewImageRe.ReplaceAllString(s, "[image]")
+	s = previewWhitespaceRe.ReplaceAllString(s, " ")
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "(framing only)"
+	}
+	return s
+}
+
+func runeLen(s string) int { return len([]rune(s)) }
+
+var (
+	previewTagRe        = regexp.MustCompile(`(?is)<(task-notification|task-id|tool-use-id|output-file|user-prompt-submit-hook|local-command[^>]*|command-name|command-message|command-args|system-reminder)\b[^>]*>.*?</[^>]+>|<[^>]+/>|</?[a-z][\w-]*[^>]*>`)
+	previewImageRe      = regexp.MustCompile(`(?i)\[image[^\]]*\]`)
+	previewWhitespaceRe = regexp.MustCompile(`\s+`)
+)
 
 func newCompactCmd() *cobra.Command {
 	cmd := &cobra.Command{
