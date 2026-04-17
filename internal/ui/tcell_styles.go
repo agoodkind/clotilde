@@ -30,8 +30,12 @@ var (
 	ColorModelHaiku  = tcell.Color114 // soft green
 
 	// Table
-	ColorHeaderBg   = tcell.Color60  // dusty lavender for the top brand bar
+	ColorHeaderBg   = tcell.Color61  // muted purple body header band
 	ColorHeaderFg   = tcell.Color231 // bright white text on the header
+	ColorTabBg      = tcell.Color99  // bright purple for the tab strip
+	ColorTabFg      = tcell.Color231 // bright white text on tabs
+	ColorTabActive  = tcell.Color231 // active tab background (inverted)
+	ColorTabActiveF = tcell.Color99  // active tab text matches strip color
 	ColorSelected   = tcell.Color237 // subtle selection highlight
 	ColorSelectedFg = tcell.Color255 // bright white
 	ColorBorder     = tcell.Color238 // thin border color
@@ -54,6 +58,8 @@ var (
 	StyleHeader     = tcell.StyleDefault.Foreground(ColorMuted).Bold(true).Underline(true)
 	StyleSelected   = tcell.StyleDefault.Foreground(ColorSelectedFg).Background(ColorSelected).Bold(true)
 	StyleHeaderBar  = tcell.StyleDefault.Background(ColorHeaderBg).Foreground(ColorHeaderFg)
+	StyleTabBar     = tcell.StyleDefault.Background(ColorTabBg).Foreground(ColorTabFg)
+	StyleTabActive  = tcell.StyleDefault.Background(ColorTabActive).Foreground(ColorTabActiveF).Bold(true)
 	StyleStatusBar  = tcell.StyleDefault.Background(ColorStatusBg).Foreground(ColorMuted)
 	StyleStatusBold = tcell.StyleDefault.Background(ColorStatusBg).Foreground(ColorText)
 )
