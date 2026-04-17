@@ -22,6 +22,11 @@ type CompactOptions struct {
 	// Previously this was coupled to StripToolResults; it is now an
 	// independent flag so callers can strip thinking without touching tools.
 	StripThinking bool
+	// StripImages removes image blocks (type=image) from message content.
+	// Useful when Claude Code refuses to load a session due to image
+	// dimension limits: "An image in the conversation exceeds the dimension
+	// limit for many-image requests (2000px)."
+	StripImages bool
 	// StripBefore only strips entries before this timestamp (zero = strip all).
 	StripBefore time.Time
 	// StripLargeBytes strips tool results and inputs larger than this (0 = use StripToolResults for all).
@@ -291,10 +296,13 @@ type StripStats struct {
 	ToolResults int // number of tool_result blocks whose body was replaced with a stub
 	LargeInputs int // number of tool_use input fields truncated for size
 	Thinking    int // number of thinking blocks removed
+	Images      int // number of image blocks removed
 }
 
 // Total is the sum of all per-type counts.
-func (s StripStats) Total() int { return s.ToolResults + s.LargeInputs + s.Thinking }
+func (s StripStats) Total() int {
+	return s.ToolResults + s.LargeInputs + s.Thinking + s.Images
+}
 
 // StripContent applies stripping rules to entries based on CompactOptions.
 // Returns the modified lines and a per-type breakdown of what was stripped.
@@ -361,6 +369,42 @@ func StripContent(allLines []string, chainLines []int, opts CompactOptions) ([]s
 
 			switch blockType {
 			case "tool_result":
+				// If asked to strip images, also dig into tool_result.content
+				// arrays and remove embedded image blocks (e.g. Read on a PNG).
+				if opts.StripImages {
+					if contentRaw, ok := b["content"]; ok {
+						var inner []json.RawMessage
+						if json.Unmarshal(contentRaw, &inner) == nil {
+							cleanedInner := make([]json.RawMessage, 0, len(inner))
+							droppedHere := 0
+							for _, ib := range inner {
+								var ibMap map[string]json.RawMessage
+								if json.Unmarshal(ib, &ibMap) != nil {
+									cleanedInner = append(cleanedInner, ib)
+									continue
+								}
+								var innerType string
+								json.Unmarshal(ibMap["type"], &innerType)
+								if innerType == "image" {
+									droppedHere++
+									continue
+								}
+								cleanedInner = append(cleanedInner, ib)
+							}
+							if droppedHere > 0 {
+								if len(cleanedInner) == 0 {
+									b["content"], _ = json.Marshal("[image stripped during compact]")
+								} else {
+									b["content"], _ = json.Marshal(cleanedInner)
+								}
+								newBlock, _ := json.Marshal(b)
+								content[i] = newBlock
+								modified = true
+								stats.Images += droppedHere
+							}
+						}
+					}
+				}
 				if !opts.StripToolResults && opts.StripLargeBytes == 0 {
 					continue
 				}
@@ -419,6 +463,13 @@ func StripContent(allLines []string, chainLines []int, opts CompactOptions) ([]s
 					content[i] = nil
 					modified = true
 					stats.Thinking++
+				}
+
+			case "image":
+				if opts.StripImages {
+					content[i] = nil
+					modified = true
+					stats.Images++
 				}
 			}
 		}

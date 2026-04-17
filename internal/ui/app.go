@@ -43,15 +43,27 @@ type AppCallbacks struct {
 }
 
 // SessionDetail holds pre-extracted data for the details pane.
+// Messages is the most-recent short list used in the original design;
+// AllMessages carries the full transcript for the scrollable right pane.
+// Tools ranks the top assistant tool uses for the stats pane.
 type SessionDetail struct {
-	Model    string
-	Messages []DetailMessage
+	Model       string
+	Messages    []DetailMessage // last N for quick peek (kept for backwards compat)
+	AllMessages []DetailMessage // full transcript, ordered oldest -> newest
+	Tools       []ToolUse       // descending by Count
 }
 
 // DetailMessage is a simplified message for display.
 type DetailMessage struct {
-	Role string
-	Text string
+	Role      string    // "user" or "assistant"
+	Text      string
+	Timestamp time.Time // zero when unknown
+}
+
+// ToolUse is a tool name and usage count inside a session.
+type ToolUse struct {
+	Name  string
+	Count int
 }
 
 // SortColumn identifies which column the table is sorted by.
@@ -263,9 +275,38 @@ func (a *App) handleKey(e *tcell.EventKey) {
 		return
 	}
 
+	// When a details sub-pane is focused, scroll keys go to that pane.
+	// Escape/Tab are handled globally below; action keys (r/v/s/d/c/etc.)
+	// still work from details focus to avoid mode confusion.
+	if a.detailsHasFocus() {
+		switch e.Key() {
+		case tcell.KeyUp, tcell.KeyDown, tcell.KeyPgUp, tcell.KeyPgDn,
+			tcell.KeyHome, tcell.KeyEnd:
+			a.details.HandleEvent(e)
+			return
+		case tcell.KeyRune:
+			if r := e.Rune(); r == 'j' || r == 'k' || r == 'g' || r == 'G' {
+				a.details.HandleEvent(e)
+				return
+			}
+		}
+	}
+
 	// Mode-specific shortcuts that must fire before the table consumes keys.
 	switch e.Key() {
+	case tcell.KeyTab, tcell.KeyBacktab:
+		// When the details pane is open, Tab cycles focus:
+		//   table -> details.left -> details.right -> table
+		// BackTab goes the other way.
+		if a.selected != nil {
+			a.cycleDetailsFocus(e.Key() == tcell.KeyBacktab)
+			return
+		}
 	case tcell.KeyEscape:
+		if a.detailsHasFocus() {
+			a.details.SetFocus(DetailsFocusNone)
+			return
+		}
 		if a.selected != nil {
 			a.deselect()
 			return
@@ -637,6 +678,42 @@ func (a *App) trackSelection(row int) {
 
 // ---------------- Selection / details ----------------
 
+// detailsHasFocus reports whether the details pane owns keyboard focus.
+func (a *App) detailsHasFocus() bool {
+	return a.selected != nil && a.details != nil && a.details.Focus != DetailsFocusNone
+}
+
+// cycleDetailsFocus advances focus through the three regions of the details
+// layout in order: table -> left pane -> right pane -> back to table.
+// If back is true, the cycle runs in reverse.
+func (a *App) cycleDetailsFocus(back bool) {
+	if a.details == nil {
+		return
+	}
+	cur := a.details.Focus
+	var next DetailsFocus
+	if back {
+		switch cur {
+		case DetailsFocusNone:
+			next = DetailsFocusRight
+		case DetailsFocusLeft:
+			next = DetailsFocusNone
+		case DetailsFocusRight:
+			next = DetailsFocusLeft
+		}
+	} else {
+		switch cur {
+		case DetailsFocusNone:
+			next = DetailsFocusLeft
+		case DetailsFocusLeft:
+			next = DetailsFocusRight
+		case DetailsFocusRight:
+			next = DetailsFocusNone
+		}
+	}
+	a.details.SetFocus(next)
+}
+
 func (a *App) openDetails(sess *session.Session) {
 	if sess == nil {
 		return
@@ -649,6 +726,9 @@ func (a *App) openDetails(sess *session.Session) {
 func (a *App) deselect() {
 	a.selected = nil
 	a.mode = StatusBrowse
+	if a.details != nil {
+		a.details.SetFocus(DetailsFocusNone)
+	}
 }
 
 func (a *App) populateDetails() {

@@ -104,16 +104,24 @@ func forEachTailLine(transcriptPath string, tailSize int, fn func(line []byte)) 
 
 // RecentMessage holds a single user or assistant message extracted from a transcript.
 type RecentMessage struct {
-	Role string // "user" or "assistant"
-	Text string // truncated content
+	Role      string    // "user" or "assistant"
+	Text      string    // truncated content
+	Timestamp time.Time // zero if absent or unparseable
+}
+
+// ToolUseCount is a <tool, count> pair used for transcript analytics.
+type ToolUseCount struct {
+	Name  string
+	Count int
 }
 
 // ExtractRecentMessages reads the tail of a transcript and returns the last n
 // user/assistant messages with their text content truncated to maxLen chars.
 func ExtractRecentMessages(transcriptPath string, n, maxLen int) []RecentMessage {
 	type msgEntry struct {
-		Type    string `json:"type"`
-		Message struct {
+		Type      string `json:"type"`
+		Timestamp string `json:"timestamp"`
+		Message   struct {
 			Content json.RawMessage `json:"content"`
 		} `json:"message"`
 	}
@@ -132,7 +140,6 @@ func ExtractRecentMessages(transcriptPath string, n, maxLen int) []RecentMessage
 		if text == "" {
 			return
 		}
-		// Strip system tags from user messages
 		if e.Type == "user" && strings.Contains(text, "<") {
 			if idx := strings.Index(text, "<system-reminder>"); idx >= 0 {
 				text = strings.TrimSpace(text[:idx])
@@ -147,13 +154,143 @@ func ExtractRecentMessages(transcriptPath string, n, maxLen int) []RecentMessage
 		if len(text) > maxLen {
 			text = text[:maxLen] + "..."
 		}
-		all = append(all, RecentMessage{Role: e.Type, Text: text})
+		var ts time.Time
+		if e.Timestamp != "" {
+			if parsed, err := time.Parse(time.RFC3339, e.Timestamp); err == nil {
+				ts = parsed
+			}
+		}
+		all = append(all, RecentMessage{Role: e.Type, Text: text, Timestamp: ts})
 	})
 
 	if len(all) > n {
 		all = all[len(all)-n:]
 	}
 	return all
+}
+
+// LoadAllMessages reads the full transcript and returns every non-empty
+// user/assistant message in order, each truncated to maxLen runes. Intended
+// for the details pane when a session is selected. Large transcripts may
+// produce a few thousand entries; at ~100 bytes each, that fits comfortably
+// in memory without pagination.
+func LoadAllMessages(transcriptPath string, maxLen int) []RecentMessage {
+	f, err := os.Open(transcriptPath)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024*1024), 4*1024*1024)
+
+	type msgEntry struct {
+		Type      string `json:"type"`
+		Timestamp string `json:"timestamp"`
+		Message   struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"message"`
+	}
+
+	var out []RecentMessage
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		var e msgEntry
+		if err := json.Unmarshal(line, &e); err != nil {
+			continue
+		}
+		if e.Type != "user" && e.Type != "assistant" {
+			continue
+		}
+		text := extractTextContent(e.Message.Content)
+		if text == "" {
+			continue
+		}
+		if e.Type == "user" {
+			if idx := strings.Index(text, "<system-reminder>"); idx >= 0 {
+				text = strings.TrimSpace(text[:idx])
+			}
+			if idx := strings.Index(text, "<local-command"); idx >= 0 {
+				text = strings.TrimSpace(text[:idx])
+			}
+		}
+		if text == "" {
+			continue
+		}
+		if maxLen > 0 {
+			if runes := []rune(text); len(runes) > maxLen {
+				text = string(runes[:maxLen]) + "..."
+			}
+		}
+		var ts time.Time
+		if e.Timestamp != "" {
+			if parsed, err := time.Parse(time.RFC3339, e.Timestamp); err == nil {
+				ts = parsed
+			}
+		}
+		out = append(out, RecentMessage{Role: e.Type, Text: text, Timestamp: ts})
+	}
+	return out
+}
+
+// ToolUseStats scans the full transcript and returns a descending count of
+// the top N tool names used by the assistant. Empty if none are present.
+func ToolUseStats(transcriptPath string, topN int) []ToolUseCount {
+	f, err := os.Open(transcriptPath)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024*1024), 4*1024*1024)
+
+	type entry struct {
+		Type    string `json:"type"`
+		Message struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"message"`
+	}
+	type block struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+	}
+
+	counts := make(map[string]int)
+	for scanner.Scan() {
+		var e entry
+		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil {
+			continue
+		}
+		if e.Type != "assistant" {
+			continue
+		}
+		var blocks []block
+		if err := json.Unmarshal(e.Message.Content, &blocks); err != nil {
+			continue
+		}
+		for _, b := range blocks {
+			if b.Type == "tool_use" && b.Name != "" {
+				counts[b.Name]++
+			}
+		}
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	out := make([]ToolUseCount, 0, len(counts))
+	for n, c := range counts {
+		out = append(out, ToolUseCount{Name: n, Count: c})
+	}
+	// Sort by count desc, then name asc
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && (out[j].Count > out[j-1].Count ||
+			(out[j].Count == out[j-1].Count && out[j].Name < out[j-1].Name)); j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+	if topN > 0 && len(out) > topN {
+		out = out[:topN]
+	}
+	return out
 }
 
 // extractTextContent pulls text from a message content field which may be

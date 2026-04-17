@@ -115,7 +115,9 @@ func runDashboard(cmd *cobra.Command, args []string) {
 				}
 			}
 
-			var msgs []ui.DetailMessage
+			var recentMsgs []ui.DetailMessage
+			var allMsgs []ui.DetailMessage
+			var tools []ui.ToolUse
 			if sess.Metadata.TranscriptPath != "" {
 				recent := claude.ExtractRecentMessages(sess.Metadata.TranscriptPath, 5, 150)
 				for _, m := range recent {
@@ -123,11 +125,23 @@ func runDashboard(cmd *cobra.Command, args []string) {
 					if text == "" || strings.HasPrefix(text, "<") || len(text) < 5 {
 						continue
 					}
-					msgs = append(msgs, ui.DetailMessage{Role: m.Role, Text: text})
+					recentMsgs = append(recentMsgs, ui.DetailMessage{Role: m.Role, Text: text, Timestamp: m.Timestamp})
+				}
+
+				// Full transcript for the scrollable right pane. Truncate each
+				// message to 1000 runes so the pane stays navigable; the full
+				// text is still available via `v` (view).
+				all := claude.LoadAllMessages(sess.Metadata.TranscriptPath, 1000)
+				for _, m := range all {
+					allMsgs = append(allMsgs, ui.DetailMessage{Role: m.Role, Text: m.Text, Timestamp: m.Timestamp})
+				}
+
+				for _, t := range claude.ToolUseStats(sess.Metadata.TranscriptPath, 8) {
+					tools = append(tools, ui.ToolUse{Name: t.Name, Count: t.Count})
 				}
 			}
 
-			return ui.SessionDetail{Model: model, Messages: msgs}
+			return ui.SessionDetail{Model: model, Messages: recentMsgs, AllMessages: allMsgs, Tools: tools}
 		},
 	}
 
@@ -418,6 +432,7 @@ func registerSubcommands(root *cobra.Command) {
 	root.AddCommand(newBenchEmbedCmd())
 	root.AddCommand(newCompactCmd())
 	root.AddCommand(newDeleteCmd())
+	root.AddCommand(newPruneEphemeralCmd())
 	root.AddCommand(newExportCmd())
 	root.AddCommand(newSearchCmd())
 	root.AddCommand(newAdoptCmd())
