@@ -228,15 +228,25 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	return a
 }
 
-// openReturnPrompt shows the compact two option overlay so the user can
-// Enter to resume or press Down then Enter to quit clotilde entirely.
+// openReturnPrompt shows the post-session modal with session stats and
+// three choices: Return to session, Go back to session list, Quit clotilde.
+// Quit is highlighted by default so a single Enter press exits.
 func (a *App) openReturnPrompt(sess *session.Session) {
-	prompt := &ReturnPrompt{SessionName: sess.Name}
+	prompt := &ReturnPrompt{
+		SessionName: sess.Name,
+		Stats:       a.buildReturnPromptStats(sess),
+		Index:       2, // Quit is the default highlighted option
+	}
 	prompt.OnResume = func() {
 		a.overlay = nil
+		a.returnBanner = sess.Name
 		if row := a.table.SelectedRow; row >= 0 && row < len(a.visibleIdx) {
 			a.resumeRow(row)
 		}
+	}
+	prompt.OnList = func() {
+		a.overlay = nil
+		a.returnBanner = sess.Name
 	}
 	prompt.OnQuit = func() {
 		a.overlay = nil
@@ -244,9 +254,46 @@ func (a *App) openReturnPrompt(sess *session.Session) {
 	}
 	prompt.OnCancel = func() {
 		a.overlay = nil
-		a.returnBanner = ""
+		a.returnBanner = sess.Name
 	}
 	a.overlay = prompt
+}
+
+// buildReturnPromptStats gathers the stat rows shown at the top of the
+// post-session modal. Values come from the session metadata and the quick
+// stats cache. Missing values are rendered as em-dash placeholders so the
+// modal layout stays stable.
+func (a *App) buildReturnPromptStats(sess *session.Session) []ReturnPromptStat {
+	dash := "- -"
+	stats := []ReturnPromptStat{
+		{Label: "Model", Value: valueOr(a.modelCache[sess.Name], dash)},
+		{Label: "Basedir", Value: shortPath(sess.Metadata.WorkspaceRoot)},
+	}
+	if qs, ok := a.statsCache[sess.Metadata.TranscriptPath]; ok && qs != nil {
+		stats = append(stats,
+			ReturnPromptStat{Label: "Tokens", Value: "~" + fmtTokens(qs.EstimatedTokens)},
+			ReturnPromptStat{Label: "Messages", Value: fmtInt(qs.TotalEntries)},
+			ReturnPromptStat{Label: "Compactions", Value: fmtInt(qs.Compactions)},
+		)
+	} else {
+		stats = append(stats,
+			ReturnPromptStat{Label: "Tokens", Value: dash},
+			ReturnPromptStat{Label: "Messages", Value: dash},
+		)
+	}
+	stats = append(stats,
+		ReturnPromptStat{Label: "Created", Value: sess.Metadata.Created.Format("2006-01-02 15:04")},
+		ReturnPromptStat{Label: "Last used", Value: util.FormatRelativeTime(sess.Metadata.LastAccessed)},
+	)
+	return stats
+}
+
+// valueOr returns v if it is non-empty and not a placeholder, else fallback.
+func valueOr(v, fallback string) string {
+	if v == "" || v == "-" {
+		return fallback
+	}
+	return v
 }
 
 // Run starts the event loop.
