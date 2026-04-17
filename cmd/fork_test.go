@@ -53,8 +53,8 @@ var _ = Describe("Fork Command", func() {
 		err = config.EnsureClotildeStructure(tempDir)
 		Expect(err).NotTo(HaveOccurred())
 
-		clotildeRoot = filepath.Join(tempDir, config.ClotildeDir)
-		store = session.NewFileStore(clotildeRoot)
+		clotildeRoot = config.GlobalDataDir()
+		store = session.NewFileStore(config.GlobalDataDir())
 
 		// Fake claude doesn't create transcripts, so pretend sessions are used
 		// to avoid empty session cleanup in most tests

@@ -3,7 +3,6 @@ package cmd_test
 import (
 	"io"
 	"os"
-	"path/filepath"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -16,10 +15,9 @@ import (
 
 var _ = Describe("List Command", func() {
 	var (
-		tempDir      string
-		clotildeRoot string
-		originalWd   string
-		store        session.Store
+		tempDir    string
+		originalWd string
+		store      session.Store
 	)
 
 	BeforeEach(func() {
@@ -39,8 +37,7 @@ var _ = Describe("List Command", func() {
 		err = config.EnsureClotildeStructure(tempDir)
 		Expect(err).NotTo(HaveOccurred())
 
-		clotildeRoot = filepath.Join(tempDir, config.ClotildeDir)
-		store = session.NewFileStore(clotildeRoot)
+		store = session.NewFileStore(config.GlobalDataDir())
 	})
 
 	AfterEach(func() {

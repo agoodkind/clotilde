@@ -17,7 +17,6 @@ import (
 var _ = Describe("Resume Command", func() {
 	var (
 		tempDir        string
-		clotildeRoot   string
 		originalWd     string
 		claudeArgsFile string
 		fakeClaudeDir  string
@@ -47,12 +46,14 @@ var _ = Describe("Resume Command", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 
-		// Initialize clotilde
-		err = config.EnsureClotildeStructure(tempDir)
-		Expect(err).NotTo(HaveOccurred())
-
-		clotildeRoot = filepath.Join(tempDir, config.ClotildeDir)
-		store = session.NewFileStore(clotildeRoot)
+		// Resume reads from the XDG global store (GlobalDataDir). The
+		// suite redirects XDG_DATA_HOME into the per test temp dir, so
+		// creating the session here via NewGlobalFileStore writes it
+		// where resume will look for it.
+		_ = config.EnsureClotildeStructure(tempDir)
+		gs, gerr := session.NewGlobalFileStore()
+		Expect(gerr).NotTo(HaveOccurred())
+		store = gs
 	})
 
 	AfterEach(func() {
@@ -141,14 +142,21 @@ var _ = Describe("Resume Command", func() {
 		Expect(args).NotTo(ContainSubstring("--settings"))
 	})
 
-	It("should return error for non-existent session", func() {
+	It("forwards an unknown name to claude as a raw --resume argument", func() {
+		// Clotilde now passes unknown names straight through to claude
+		// as "--resume <name>" so users can resume by UUID without
+		// first registering the session locally. The wrapper prints
+		// a note to stdout; claude receives exactly one positional.
 		rootCmd := cmd.NewRootCmd()
 		rootCmd.SetOut(io.Discard)
 		rootCmd.SetErr(io.Discard)
 		rootCmd.SetArgs([]string{"--claude-bin", filepath.Join(fakeClaudeDir, "claude"), "resume", "does-not-exist"})
 
 		err := rootCmd.Execute()
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("not found"))
+		Expect(err).NotTo(HaveOccurred())
+
+		args, readErr := testutil.ReadClaudeArgs(claudeArgsFile)
+		Expect(readErr).NotTo(HaveOccurred())
+		Expect(args).To(ContainSubstring("--resume does-not-exist"))
 	})
 })

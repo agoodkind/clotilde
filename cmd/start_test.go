@@ -51,7 +51,7 @@ var _ = Describe("Start Command", func() {
 		err = config.EnsureClotildeStructure(tempDir)
 		Expect(err).NotTo(HaveOccurred())
 
-		clotildeRoot = filepath.Join(tempDir, config.ClotildeDir)
+		clotildeRoot = config.GlobalDataDir()
 
 		// Fake claude doesn't create transcripts, so pretend sessions are used
 		// to avoid empty session cleanup in most tests
@@ -171,7 +171,7 @@ var _ = Describe("Start Command", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		// Verify session was cleaned up
-		store := session.NewFileStore(clotildeRoot)
+		store := session.NewFileStore(config.GlobalDataDir())
 		Expect(store.Exists("empty-session")).To(BeFalse())
 	})
 
@@ -188,7 +188,7 @@ var _ = Describe("Start Command", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		// Verify session still exists
-		store := session.NewFileStore(clotildeRoot)
+		store := session.NewFileStore(config.GlobalDataDir())
 		Expect(store.Exists("used-session")).To(BeTrue())
 	})
 
@@ -202,7 +202,7 @@ var _ = Describe("Start Command", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		// Verify a session was created with a date-prefixed name
-		store := session.NewFileStore(clotildeRoot)
+		store := session.NewFileStore(config.GlobalDataDir())
 		sessions, err := store.List()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(sessions).To(HaveLen(1))

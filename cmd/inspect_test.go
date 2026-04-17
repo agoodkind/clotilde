@@ -16,10 +16,9 @@ import (
 
 var _ = Describe("Inspect Command", func() {
 	var (
-		tempDir      string
-		clotildeRoot string
-		originalWd   string
-		store        session.Store
+		tempDir    string
+		originalWd string
+		store      session.Store
 	)
 
 	BeforeEach(func() {
@@ -49,8 +48,7 @@ var _ = Describe("Inspect Command", func() {
 		err = config.EnsureClotildeStructure(tempDir)
 		Expect(err).NotTo(HaveOccurred())
 
-		clotildeRoot = filepath.Join(tempDir, config.ClotildeDir)
-		store = session.NewFileStore(clotildeRoot)
+		store = session.NewFileStore(config.GlobalDataDir())
 	})
 
 	AfterEach(func() {

@@ -49,8 +49,8 @@ var _ = Describe("Delete Command", func() {
 		err = config.EnsureClotildeStructure(tempDir)
 		Expect(err).NotTo(HaveOccurred())
 
-		clotildeRoot = filepath.Join(tempDir, config.ClotildeDir)
-		store = session.NewFileStore(clotildeRoot)
+		clotildeRoot = config.GlobalDataDir()
+		store = session.NewFileStore(config.GlobalDataDir())
 	})
 
 	AfterEach(func() {

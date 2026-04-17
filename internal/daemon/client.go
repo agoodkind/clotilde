@@ -252,6 +252,14 @@ func searchString(s, sub string) bool {
 // Uses flock to prevent multiple processes from spawning the daemon
 // simultaneously.
 func ConnectOrStart(ctx context.Context) (*Client, error) {
+	// Tests and CI can disable the daemon entirely by setting
+	// CLOTILDE_DISABLE_DAEMON=1. The wrapper then behaves as if the
+	// daemon is unreachable, which gives the classic stdio path
+	// without settings injection, global sync, or context summary
+	// side effects.
+	if os.Getenv("CLOTILDE_DISABLE_DAEMON") != "" {
+		return nil, fmt.Errorf("daemon disabled by CLOTILDE_DISABLE_DAEMON")
+	}
 	// Fast path: daemon is already running.
 	if client, err := connect(ctx); err == nil {
 		return client, nil

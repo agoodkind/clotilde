@@ -77,7 +77,7 @@ var _ = Describe("Hook Commands", func() {
 		err = config.EnsureClotildeStructure(tempDir)
 		Expect(err).NotTo(HaveOccurred())
 
-		clotildeRoot = filepath.Join(tempDir, config.ClotildeDir)
+		clotildeRoot = config.GlobalDataDir()
 		store = session.NewFileStore(clotildeRoot)
 
 		// Override notify log dir for all hook tests

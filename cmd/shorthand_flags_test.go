@@ -43,11 +43,15 @@ var _ = Describe("Shorthand Flags", func() {
 		_, claudeArgsFile, err = testutil.CreateFakeClaude(fakeClaudeDir)
 		Expect(err).NotTo(HaveOccurred())
 
-		err = config.EnsureClotildeStructure(tempDir)
-		Expect(err).NotTo(HaveOccurred())
+		_ = config.EnsureClotildeStructure(tempDir)
 
-		clotildeRoot = filepath.Join(tempDir, config.ClotildeDir)
-		store = session.NewFileStore(clotildeRoot)
+		// Use the global XDG store. The suite redirects XDG_DATA_HOME
+		// into the test temp dir, so sessions land in a throwaway
+		// location and the CLI start command finds them.
+		clotildeRoot = config.GlobalDataDir()
+		gs, gerr := session.NewGlobalFileStore()
+		Expect(gerr).NotTo(HaveOccurred())
+		store = gs
 
 		// Fake claude doesn't create transcripts, so pretend sessions are used
 		claude.SessionUsedFunc = func(_ string, _ *session.Session) bool { return true }
