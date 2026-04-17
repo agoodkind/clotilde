@@ -218,7 +218,7 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	a.table = NewTableWidget([]string{"NAME", "BASEDIR", "MODEL", "MSGS", "SUMMARY", "LAST USED", "CREATED"})
 	a.table.SortCol = int(a.sortCol)
 	a.table.SortAsc = a.sortAsc
-	a.table.OnActivate = func(row int) { a.resumeRow(row) }
+	a.table.OnActivate = func(row int) { a.openSessionOptions(row) }
 	a.table.OnSelect = func(row int) {
 		a.trackSelection(row)
 	}
@@ -726,6 +726,13 @@ func (a *App) handleKey(e *tcell.EventKey) {
 			a.running = false
 			return
 		case '/':
+			// nvim-style: when a session is highlighted, "/" searches
+			// inside that session's transcript. With no selection it
+			// opens the table filter so the same key is always "find".
+			if sess := a.rowSession(); sess != nil {
+				a.openSearchForm()
+				return
+			}
 			a.openFilter()
 			return
 		case '1':
@@ -743,26 +750,18 @@ func (a *App) handleKey(e *tcell.EventKey) {
 		case '5':
 			a.toggleSort(SortColCreated)
 			return
+		// App-level shortcuts. We avoid binding lowercase letters that
+		// the table uses for nvim-style movement (h/j/k/l/g/G) so the
+		// movement keys fall through to the table widget below.
 		case 'N':
 			a.newSession()
 			return
 		case 'R':
-			// Manual refresh: reload sessions from disk. Useful after
-			// running `clotilde auto-name` from another terminal while
-			// the TUI is open.
 			a.refreshSessions()
 			return
 		case 'B':
-			// Edit the basedir for the selected row. An inline input
-			// opens pre-filled with the current value.
-			if a.selected != nil || a.table.Active {
-				sess := a.selected
-				if sess == nil && a.table.SelectedRow < len(a.visibleIdx) {
-					sess = a.sessions[a.visibleIdx[a.table.SelectedRow]]
-				}
-				if sess != nil {
-					a.openBasedirEditor(sess)
-				}
+			if sess := a.rowSession(); sess != nil {
+				a.openBasedirEditor(sess)
 			}
 			return
 		case 'H':
@@ -770,9 +769,9 @@ func (a *App) handleKey(e *tcell.EventKey) {
 			a.rebuildVisible()
 			a.populateTable()
 			return
-		case 'r':
-			if a.selected != nil || a.table.Active {
-				a.resumeRow(a.table.SelectedRow)
+		case 'O':
+			if sess := a.rowSession(); sess != nil {
+				a.openSessionOptionsFor(sess)
 			}
 			return
 		case 'v':
@@ -795,15 +794,15 @@ func (a *App) handleKey(e *tcell.EventKey) {
 				a.doFork()
 			}
 			return
-		case 'n':
-			if a.selected != nil {
-				a.doRename()
-			}
-			return
 		case 'c':
 			if a.selected != nil {
 				a.openCompactForm()
 			}
+			return
+		case '?':
+			// Help screen with the full keymap. Uses the options modal
+			// styling so it looks consistent with other overlays.
+			a.openHelpModal()
 			return
 		}
 	}
@@ -1588,6 +1587,147 @@ func (a *App) openFilter() {
 	}
 	a.overlay = &InputOverlay{Input: input, Title: "Filter"}
 	a.mode = StatusFilter
+}
+
+// openHelpModal shows the full keymap. Triggered by "?" anywhere in
+// the dashboard. The modal uses the same widget as the per-session
+// options popup, with disabled entries used for the static rows.
+func (a *App) openHelpModal() {
+	close := func() { a.closeOverlay() }
+	rows := []OptionsModalEntry{
+		{Label: "Movement (nvim-style)", Disabled: true},
+		{Label: "  j / ↓        next row", Disabled: true},
+		{Label: "  k / ↑        prev row", Disabled: true},
+		{Label: "  h / ←        scroll left", Disabled: true},
+		{Label: "  l / →        scroll right", Disabled: true},
+		{Label: "  g            top", Disabled: true},
+		{Label: "  G            bottom", Disabled: true},
+		{Label: "  PgUp/PgDn    page", Disabled: true},
+		{Label: "Actions", Disabled: true},
+		{Label: "  Enter / O    options for highlighted row", Disabled: true},
+		{Label: "  Space        toggle details pane", Disabled: true},
+		{Label: "  /            search transcript (or filter list)", Disabled: true},
+		{Label: "  v            view transcript", Disabled: true},
+		{Label: "  s            search transcript content", Disabled: true},
+		{Label: "  c            compact session", Disabled: true},
+		{Label: "  d            delete session", Disabled: true},
+		{Label: "  f            fork session", Disabled: true},
+		{Label: "Globals (Shift)", Disabled: true},
+		{Label: "  N            new session", Disabled: true},
+		{Label: "  R            refresh from disk", Disabled: true},
+		{Label: "  B            edit basedir", Disabled: true},
+		{Label: "  H            show/hide test sessions", Disabled: true},
+		{Label: "  1-5          sort by column", Disabled: true},
+		{Label: "  q / Esc      quit / cancel", Disabled: true},
+		{Label: "  ?            this help", Disabled: true},
+	}
+	modal := NewOptionsModal("Keyboard shortcuts", rows)
+	modal.OnCancel = close
+	a.overlay = modal
+}
+
+// rowSession returns the session under the table cursor regardless of
+// whether the details pane is currently showing it. Returns nil when no
+// row is highlighted.
+func (a *App) rowSession() *session.Session {
+	if a.selected != nil {
+		return a.selected
+	}
+	if a.table.SelectedRow < 0 || a.table.SelectedRow >= len(a.visibleIdx) {
+		return nil
+	}
+	return a.sessions[a.visibleIdx[a.table.SelectedRow]]
+}
+
+// openSessionOptions shows the per-session options popup for the row at
+// the given visible index. Used for table OnActivate (Enter or
+// double-click). A no-op when the row is out of range.
+func (a *App) openSessionOptions(row int) {
+	if row < 0 || row >= len(a.visibleIdx) {
+		return
+	}
+	a.openSessionOptionsFor(a.sessions[a.visibleIdx[row]])
+}
+
+// openSessionOptionsFor builds the options menu for the given session
+// and installs it as the active overlay. Resume is the default cursor
+// position so a user who just wants the old behavior types Enter twice.
+func (a *App) openSessionOptionsFor(sess *session.Session) {
+	if sess == nil {
+		return
+	}
+	close := func() { a.closeOverlay() }
+	entries := []OptionsModalEntry{
+		{
+			Label: "Resume",
+			Hint:  "load this session",
+			Action: func() {
+				close()
+				if a.cb.ResumeSession != nil {
+					a.suspendAndRun(func() { _ = a.cb.ResumeSession(sess) })
+					a.refreshSessions()
+				}
+			},
+		},
+		{
+			Label: "View transcript",
+			Hint:  "v",
+			Action: func() {
+				close()
+				a.viewSelected()
+			},
+			Disabled: a.cb.ViewContent == nil,
+		},
+		{
+			Label: "Edit basedir",
+			Hint:  "b",
+			Action: func() {
+				close()
+				a.openBasedirEditor(sess)
+			},
+		},
+		{
+			Label: "Rename",
+			Hint:  "edits the registry name",
+			Action: func() {
+				close()
+				if a.cb.RenameSession != nil {
+					_, _ = a.cb.RenameSession(sess)
+					a.refreshSessions()
+				}
+			},
+			Disabled: a.cb.RenameSession == nil,
+		},
+		{
+			Label: "Compact",
+			Hint:  "c",
+			Action: func() {
+				close()
+				a.openRichCompactForm(sess)
+			},
+		},
+		{
+			Label: "Fork",
+			Hint:  "f",
+			Action: func() {
+				close()
+				a.doFork()
+			},
+			Disabled: a.cb.ForkSession == nil,
+		},
+		{
+			Label: "Delete",
+			Hint:  "d",
+			Action: func() {
+				close()
+				a.openDeleteConfirm()
+			},
+			Disabled: a.cb.DeleteSession == nil,
+		},
+	}
+	modal := NewOptionsModal(sess.Name, entries)
+	modal.OnCancel = close
+	a.overlay = modal
 }
 
 // openBasedirEditor pops up an inline single-line input pre-filled with
