@@ -1,13 +1,15 @@
 .PHONY: help build test test-watch install clean lint fmt coverage vendor setup-hooks deadcode govulncheck audit sign notarize uninstall-launch-agent
 
-# Optional local overrides (signing creds, never committed — copy config.mk.example)
+# Optional local overrides (signing creds, never committed). Copy config.mk.example.
 -include config.mk
 
 # Build variables
 BASE_VERSION := $(shell cat VERSION 2>/dev/null || echo "0.0.0")
 GIT_TAG := $(shell git describe --exact-match --tags 2>/dev/null)
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+GIT_DIRTY := $(shell git diff --quiet && echo false || echo true)
 DATE := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+GKLOG_VPKG := goodkind.io/gklog/version
 
 # If building from a git tag, use it. Otherwise append -dev+timestamp
 ifeq ($(GIT_TAG),)
@@ -18,7 +20,11 @@ endif
 
 LDFLAGS := -X 'github.com/fgrehm/clotilde/cmd.version=$(VERSION)' \
            -X 'github.com/fgrehm/clotilde/cmd.commit=$(COMMIT)' \
-           -X 'github.com/fgrehm/clotilde/cmd.date=$(DATE)'
+           -X 'github.com/fgrehm/clotilde/cmd.date=$(DATE)' \
+           -X '$(GKLOG_VPKG).Commit=$(COMMIT)' \
+           -X '$(GKLOG_VPKG).Dirty=$(GIT_DIRTY)' \
+           -X '$(GKLOG_VPKG).BuildTime=$(DATE)' \
+           -X '$(GKLOG_VPKG).BinHash='
 
 # Default target
 help: ## Show this help message
@@ -77,7 +83,7 @@ fmt: ## Format code with gofumpt and goimports
 	@go tool golangci-lint fmt ./...
 	@echo "✓ Formatted"
 
-coverage: ## Generate test coverage report
+coverage: ## Generate coverage report
 	@echo "Generating coverage report..."
 	@go run github.com/onsi/ginkgo/v2/ginkgo -r --randomize-all --randomize-suites --cover --coverprofile=coverage.txt
 	@go tool cover -html=coverage.txt -o coverage.html
@@ -130,11 +136,11 @@ notarize: sign ## Sign and notarize binary for distribution (requires NOTARY_PRO
 	@echo "✓ Notarized dist/clotilde"
 else
 sign: build ## Sign binary (requires CERT_ID in config.mk)
-	@echo "⚠ CERT_ID not set in config.mk — skipping code signing"
+	@echo "⚠ CERT_ID not set in config.mk. Skipping code signing."
 	@echo "  Copy config.mk.example to config.mk and fill in your Developer ID"
 
 notarize: sign ## Sign and notarize binary (requires config.mk)
-	@echo "⚠ CERT_ID not set in config.mk — skipping notarization"
+	@echo "⚠ CERT_ID not set in config.mk. Skipping notarization."
 endif
 
 uninstall-launch-agent: ## Remove the clotilde daemon LaunchAgent
