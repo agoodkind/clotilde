@@ -283,41 +283,44 @@ func ToolUseStats(transcriptPath string, topN int) []ToolUseCount {
 	return out
 }
 
-// userNoise matches the framing tags Claude Code wraps around slash-command
-// invocations, hook output, and system reminders. These appear in user turns
-// as whole blocks and should be removed before display.
-//
-// Each pattern runs against a case-insensitive, multiline scan:
-//
-//	<command-name>...</command-name>
-//	<command-message>...</command-message>
-//	<command-args>...</command-args>
-//	<local-command-stdout>...</local-command-stdout>
-//	<local-command-stderr>...</local-command-stderr>
-//	<local-command-caveat>...</local-command-caveat>
-//	<system-reminder>...</system-reminder>
-//	<user-prompt-submit-hook>...</user-prompt-submit-hook>
-//	<bash-stdout>...</bash-stdout>
-//	<bash-stderr>...</bash-stderr>
-//	<task-notification>...</task-notification>
-//
-// A fallback also removes any remaining unclosed single-line tag of the same
-// families to catch malformed transcripts that truncated mid-block.
-var userNoise = regexp.MustCompile(
-	`(?is)<(command-name|command-message|command-args|` +
-		`local-command-stdout|local-command-stderr|local-command-caveat|` +
-		`system-reminder|user-prompt-submit-hook|task-notification|` +
-		`bash-stdout|bash-stderr)\b[^>]*>.*?</\1>`,
-)
+// userNoiseTags lists the XML-ish framing tags Claude Code wraps around
+// slash-command invocations, hook output, and system reminders. Each tag
+// gets its own compiled regexp because Go's regexp engine is RE2 and does
+// not support backreferences.
+var userNoiseTags = []string{
+	"command-name",
+	"command-message",
+	"command-args",
+	"local-command-stdout",
+	"local-command-stderr",
+	"local-command-caveat",
+	"system-reminder",
+	"user-prompt-submit-hook",
+	"task-notification",
+	"bash-stdout",
+	"bash-stderr",
+}
+
+// userNoisePatterns compiles one greedy-lazy tag matcher per tag name.
+// The flags are case-insensitive and dotall, so multi-line blocks match.
+var userNoisePatterns = func() []*regexp.Regexp {
+	out := make([]*regexp.Regexp, 0, len(userNoiseTags))
+	for _, t := range userNoiseTags {
+		out = append(out, regexp.MustCompile(`(?is)<`+t+`\b[^>]*>.*?</`+t+`>`))
+	}
+	return out
+}()
 
 // cleanUserText strips slash-command framing and system-reminder blocks from
 // a user message. The result is trimmed. An empty string means the message
 // consists entirely of framing noise and should be skipped by callers.
 func cleanUserText(s string) string {
-	s = userNoise.ReplaceAllString(s, "")
+	for _, re := range userNoisePatterns {
+		s = re.ReplaceAllString(s, "")
+	}
 	// Drop a leading unclosed tag that goes to the end of the message.
 	// This catches the live-truncation case where the transcript line was
-	// cut off mid-block. We only look at the first tag.
+	// cut off mid-block. Only the first tag is considered.
 	if idx := strings.Index(s, "<"); idx == 0 {
 		if end := strings.Index(s, ">"); end > 0 && end < 80 {
 			s = s[end+1:]
