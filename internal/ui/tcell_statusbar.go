@@ -24,6 +24,10 @@ const (
 type StatusBarWidget struct {
 	Mode     StatusMode
 	Position string // e.g. "Top", "Bot", "45%". Empty means nothing to show.
+	// BridgeCount surfaces the number of active claude --remote-control
+	// sessions. Rendered as a small RC×N badge on the right edge so
+	// the user always sees how many of their sessions are exposed.
+	BridgeCount int
 }
 
 // badgeFor returns the label and background color for a mode.
@@ -114,15 +118,46 @@ func (s *StatusBarWidget) Draw(scr tcell.Screen, r Rect) {
 		x += u
 	}
 
+	// Right aligned bridge indicator. Sits to the left of the
+	// position field when both are present.
+	rightX := r.X + r.W
+	if s.BridgeCount > 0 {
+		txt := " RC×" + itoa(s.BridgeCount) + " "
+		bx := rightX - runeCount(txt)
+		if bx > x {
+			drawString(scr, bx, r.Y, tcell.StyleDefault.Background(ColorSuccess).Foreground(tcell.ColorBlack).Bold(true), txt, rightX-bx)
+			rightX = bx
+		}
+	}
+
 	// Right aligned position
 	if s.Position != "" {
 		posStyle := StyleStatusBar.Foreground(ColorText).Bold(true)
 		txt := " " + s.Position + " "
-		rx := r.X + r.W - runeCount(txt)
+		rx := rightX - runeCount(txt)
 		if rx > x {
-			drawString(scr, rx, r.Y, posStyle, txt, r.X+r.W-rx)
+			drawString(scr, rx, r.Y, posStyle, txt, rightX-rx)
 		}
 	}
+}
+
+// itoa is a small wrapper over strconv to keep imports tidy.
+func itoa(n int) string {
+	if n < 0 {
+		return "?"
+	}
+	if n == 0 {
+		return "0"
+	}
+	const digits = "0123456789"
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = digits[n%10]
+		n /= 10
+	}
+	return string(buf[i:])
 }
 
 // HandleEvent does nothing (status bar is decorative).

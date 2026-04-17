@@ -1089,6 +1089,15 @@ func (a *App) handleKey(e *tcell.EventKey) {
 				a.editConfigFile(true)
 				return
 			}
+		case 'G':
+			if a.activeTab == 1 && a.cb.SetGlobalRemoteControl != nil {
+				cur := false
+				if a.cb.IsGlobalRemoteControlEnabled != nil {
+					cur = a.cb.IsGlobalRemoteControlEnabled()
+				}
+				_ = a.cb.SetGlobalRemoteControl(!cur)
+				return
+			}
 		case 'v':
 			if a.selected != nil {
 				a.viewSelected()
@@ -1351,6 +1360,9 @@ func (a *App) draw() {
 	// Status bar
 	a.status.Mode = a.mode
 	a.status.Position = a.positionTextFor()
+	a.bridgeMu.RLock()
+	a.status.BridgeCount = len(a.bridges)
+	a.bridgeMu.RUnlock()
 	a.status.Draw(a.screen, a.statusRect)
 
 	// Overlay on top
@@ -2144,11 +2156,14 @@ func (a *App) drawSettingsTab(r Rect) {
 		{label: "Daemon log", value: filepath.Join(home, ".local", "state", "clotilde", "clotilde.jsonl"), style: StyleSubtext},
 		{label: "Sessions root", value: filepath.Join(home, ".local", "share", "clotilde", "sessions"), style: StyleSubtext},
 		{},
+		{label: "Remote control default", value: a.globalRCStateLabel(), style: StyleSubtext},
+		{},
 		{label: "Actions", style: StyleDefault.Foreground(ColorAccent).Bold(true)},
 		{label: "  e  edit global config in $EDITOR", style: StyleSubtext},
 		{label: "  E  edit project config in $EDITOR", style: StyleSubtext},
+		{label: "  G  toggle remote control default for new sessions", style: StyleSubtext},
 		{label: "  R  reload config (handled by daemon watcher)", style: StyleSubtext},
-		{label: "  1  back to Sessions", style: StyleSubtext},
+		{label: "  1  back to Sessions  3  Sidecar", style: StyleSubtext},
 		{},
 		{label: "Tip", style: StyleDefault.Foreground(ColorAccent).Bold(true)},
 		{label: "  The daemon watches ~/.claude/settings.json and syncs across", style: StyleSubtext},
@@ -2170,6 +2185,18 @@ func (a *App) drawSettingsTab(r Rect) {
 		}
 		drawString(a.screen, r.X+2, r.Y+1+i, style, text, r.W-4)
 	}
+}
+
+// globalRCStateLabel returns a short string describing the current
+// global remote control default. Used in the Settings tab summary.
+func (a *App) globalRCStateLabel() string {
+	if a.cb.IsGlobalRemoteControlEnabled == nil {
+		return "(daemon offline)"
+	}
+	if a.cb.IsGlobalRemoteControlEnabled() {
+		return "on  (G to disable)"
+	}
+	return "off (G to enable)"
 }
 
 // configRowDescription returns a "<path> (status)" string where status
@@ -2216,9 +2243,22 @@ func (a *App) openHelpModal() {
 		{Label: "  R            refresh from disk", Disabled: true},
 		{Label: "  B            edit basedir", Disabled: true},
 		{Label: "  H            show/hide test sessions", Disabled: true},
-		{Label: "  1-5          sort by column", Disabled: true},
+		{Label: "  S            pin row in Sidecar tab", Disabled: true},
 		{Label: "  q / Esc      quit / cancel", Disabled: true},
 		{Label: "  ?            this help", Disabled: true},
+		{Label: "Tabs", Disabled: true},
+		{Label: "  1            Sessions tab", Disabled: true},
+		{Label: "  2            Settings tab", Disabled: true},
+		{Label: "  3            Sidecar tab (live remote control view)", Disabled: true},
+		{Label: "  !@#$%        sort columns 1..5", Disabled: true},
+		{Label: "Remote control", Disabled: true},
+		{Label: "  options menu Enable / Disable per session", Disabled: true},
+		{Label: "  options menu Open bridge in browser", Disabled: true},
+		{Label: "  options menu Copy bridge URL", Disabled: true},
+		{Label: "Settings tab", Disabled: true},
+		{Label: "  e            edit global config in $EDITOR", Disabled: true},
+		{Label: "  E            edit project config in $EDITOR", Disabled: true},
+		{Label: "  G            toggle global remote control default", Disabled: true},
 	}
 	modal := NewOptionsModal("Keyboard shortcuts", rows)
 	modal.OnCancel = close
