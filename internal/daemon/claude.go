@@ -20,8 +20,26 @@ func findRealClaude() (string, error) {
 	}
 	selfDir := filepath.Dir(self)
 
-	path := os.Getenv("PATH")
-	for _, dir := range filepath.SplitList(path) {
+	// Build a search list: PATH first, then well-known install
+	// locations that launchd jobs may not inherit. The daemon runs
+	// under launchd with a minimal PATH so we need to look in places
+	// like ~/.local/bin and ~/.npm-global/bin explicitly.
+	dirs := filepath.SplitList(os.Getenv("PATH"))
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		dirs = append(dirs,
+			filepath.Join(home, ".local", "bin"),
+			filepath.Join(home, ".npm-global", "bin"),
+			filepath.Join(home, "n", "bin"),
+			filepath.Join(home, ".volta", "bin"),
+		)
+	}
+	dirs = append(dirs,
+		"/usr/local/bin",
+		"/opt/homebrew/bin",
+	)
+
+	for _, dir := range dirs {
 		if dir == "" {
 			continue
 		}
