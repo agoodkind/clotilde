@@ -310,6 +310,7 @@ func registerSubcommands(root *cobra.Command) {
 	root.AddCommand(newDeleteCmd())
 	root.AddCommand(newPruneEphemeralCmd())
 	root.AddCommand(newPruneEmptyCmd())
+	root.AddCommand(newPruneAutonameCmd())
 	root.AddCommand(newSetBasedirCmd())
 	root.AddCommand(newExportCmd())
 	root.AddCommand(newSearchCmd())
