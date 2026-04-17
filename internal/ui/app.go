@@ -198,7 +198,7 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	a.sortSessions()
 
 	// Build widgets
-	a.table = NewTableWidget([]string{"NAME", "BASEDIR", "MODEL", "SUMMARY", "CREATED", "LAST USED"})
+	a.table = NewTableWidget([]string{"NAME", "BASEDIR", "MODEL", "SUMMARY", "LAST USED", "CREATED"})
 	a.table.SortCol = int(a.sortCol)
 	a.table.SortAsc = a.sortAsc
 	a.table.OnActivate = func(row int) { a.resumeRow(row) }
@@ -500,19 +500,25 @@ func (a *App) handleKey(e *tcell.EventKey) {
 			a.toggleSort(SortColName)
 			return
 		case '2':
-			a.toggleSort(SortColCreated)
-			return
-		case '3':
-			a.toggleSort(SortColUsed)
-			return
-		case '4':
 			a.toggleSort(SortColWorkspace)
 			return
-		case '5':
+		case '3':
 			a.toggleSort(SortColModel)
+			return
+		case '4':
+			a.toggleSort(SortColUsed)
+			return
+		case '5':
+			a.toggleSort(SortColCreated)
 			return
 		case 'N':
 			a.newSession()
+			return
+		case 'R':
+			// Manual refresh: reload sessions from disk. Useful after
+			// running `clotilde auto-name` from another terminal while
+			// the TUI is open.
+			a.refreshSessions()
 			return
 		case 'H':
 			a.showEphemeral = !a.showEphemeral
@@ -658,6 +664,14 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 		}
 		if btns&tcell.WheelDown != 0 {
 			a.table.ScrollDown(3)
+			return
+		}
+		if btns&tcell.WheelLeft != 0 {
+			a.table.ScrollLeft(6)
+			return
+		}
+		if btns&tcell.WheelRight != 0 {
+			a.table.ScrollRight(6)
 			return
 		}
 		// Left click / double click
@@ -876,8 +890,8 @@ func (a *App) rowFor(sess *session.Session) []TableCell {
 		{Text: shortPath(sess.Metadata.WorkspaceRoot), Style: subStyle},
 		{Text: model, Style: modelStyle},
 		{Text: summary, Style: summaryStyle},
-		{Text: sess.Metadata.Created.Format("Jan 02"), Style: subStyle},
 		{Text: util.FormatRelativeTime(sess.Metadata.LastAccessed), Style: subStyle},
+		{Text: sess.Metadata.Created.Format("Jan 02"), Style: subStyle},
 	}
 }
 
