@@ -30,7 +30,8 @@ var (
 	ColorModelHaiku  = tcell.Color114 // soft green
 
 	// Table
-	ColorHeaderBg   = tcell.Color236 // dark gray
+	ColorHeaderBg   = tcell.Color60  // dusty lavender for the top brand bar
+	ColorHeaderFg   = tcell.Color231 // bright white text on the header
 	ColorSelected   = tcell.Color237 // subtle selection highlight
 	ColorSelectedFg = tcell.Color255 // bright white
 	ColorBorder     = tcell.Color238 // thin border color
@@ -52,7 +53,7 @@ var (
 	StyleMuted      = tcell.StyleDefault.Foreground(ColorMuted)
 	StyleHeader     = tcell.StyleDefault.Foreground(ColorMuted).Bold(true).Underline(true)
 	StyleSelected   = tcell.StyleDefault.Foreground(ColorSelectedFg).Background(ColorSelected).Bold(true)
-	StyleHeaderBar  = tcell.StyleDefault.Background(ColorHeaderBg).Foreground(ColorText)
+	StyleHeaderBar  = tcell.StyleDefault.Background(ColorHeaderBg).Foreground(ColorHeaderFg)
 	StyleStatusBar  = tcell.StyleDefault.Background(ColorStatusBg).Foreground(ColorMuted)
 	StyleStatusBold = tcell.StyleDefault.Background(ColorStatusBg).Foreground(ColorText)
 )

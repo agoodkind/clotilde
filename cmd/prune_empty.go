@@ -28,7 +28,11 @@ type emptyPruneOptions struct {
 // accidentally gets swept.
 func defaultEmptyPrune() emptyPruneOptions {
 	return emptyPruneOptions{
-		MaxLines:   25,
+		// 40 lines is enough for six or seven user turns plus the
+		// JSONL envelope overhead. Combined with the zero
+		// real-assistant requirement it still cleanly separates live
+		// sessions from abandoned ones.
+		MaxLines:   40,
 		MinAge:     24 * time.Hour,
 		RequireNo:  true,
 		IncludeNil: true,

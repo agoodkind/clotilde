@@ -120,7 +120,9 @@ func installLaunchAgent(cmd *cobra.Command, clotildeBinary, homeDir string) erro
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
-	<false/>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>5</integer>
 	<key>StandardOutPath</key>
 	<string>%s</string>
 	<key>StandardErrorPath</key>
