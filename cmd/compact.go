@@ -7,12 +7,35 @@ import (
 	"os"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 
 	"github.com/fgrehm/clotilde/internal/session"
 	"github.com/fgrehm/clotilde/internal/transcript"
 	"github.com/fgrehm/clotilde/internal/ui"
+)
+
+// Lipgloss styles for compact CLI output. These drive the colored headers
+// and the bordered stats box; everything else stays plain text so that the
+// output remains grep-friendly when piped to a file.
+var (
+	compactStyleHeader = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("75")).Bold(true)
+	compactStyleMuted = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("245"))
+	compactStyleGood = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("114")).Bold(true)
+	compactStyleWarn = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("222")).Bold(true)
+	compactStyleBad = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("204")).Bold(true)
+	compactStyleLabel = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("252")).Bold(true)
+	compactStyleBox = lipgloss.NewStyle().
+				Border(lipgloss.NormalBorder()).
+				BorderForeground(lipgloss.Color("238")).
+				Padding(0, 1)
 )
 
 // transcriptStats captures the shape of a transcript at a point in time.
@@ -48,13 +71,25 @@ func snapshotStats(path string) (transcriptStats, error) {
 	return s, nil
 }
 
-// printStats prints a single snapshot under a label.
-func printStats(w io.Writer, label string, s transcriptStats) {
-	fmt.Fprintf(w, "%-8s lines=%-6d chain=%-6d bytes=%-10s tokens=%-8s boundaries=%d\n",
-		label+":", s.TotalLines, s.ChainLines, fmtBytes(s.Bytes), fmtTokens(s.Tokens), s.Boundaries)
+// kv pretty-prints "label value" with consistent alignment and colour.
+func kv(label, value string) string {
+	return compactStyleLabel.Render(fmt.Sprintf("%-11s", label)) + value
 }
 
-// printDelta prints a summary line describing before -> after with signed deltas.
+// printStats prints a single snapshot inside a styled stats block.
+func printStats(w io.Writer, label string, s transcriptStats) {
+	heading := compactStyleHeader.Render(label + ":")
+	body := fmt.Sprintf("%s %s %s %s %s %s %s %s %s %s",
+		compactStyleMuted.Render("lines"), fmt.Sprintf("%-6d", s.TotalLines),
+		compactStyleMuted.Render("chain"), fmt.Sprintf("%-6d", s.ChainLines),
+		compactStyleMuted.Render("bytes"), fmt.Sprintf("%-10s", fmtBytes(s.Bytes)),
+		compactStyleMuted.Render("tokens"), fmt.Sprintf("%-8s", fmtTokens(s.Tokens)),
+		compactStyleMuted.Render("boundaries"), fmt.Sprintf("%d", s.Boundaries))
+	fmt.Fprintf(w, "%-10s %s\n", heading, body)
+}
+
+// printDelta prints a before vs after summary line with signed, coloured deltas.
+// Savings (negative tokens/bytes) render green; growth renders red.
 func printDelta(w io.Writer, before, after transcriptStats) {
 	dLines := after.TotalLines - before.TotalLines
 	dChain := after.ChainLines - before.ChainLines
@@ -64,8 +99,63 @@ func printDelta(w io.Writer, before, after transcriptStats) {
 	if before.Tokens > 0 {
 		pct = float64(dTokens) / float64(before.Tokens) * 100
 	}
-	fmt.Fprintf(w, "Δ        lines=%+d chain=%+d bytes=%s tokens=%s (%+.1f%%)\n",
-		dLines, dChain, fmtBytesSigned(dBytes), fmtTokensSigned(dTokens), pct)
+	delta := compactStyleHeader.Render("Δ         ")
+	paintInt := func(n int, prefix string) string {
+		s := fmt.Sprintf("%s%+d", prefix, n)
+		if n < 0 {
+			return compactStyleGood.Render(s)
+		}
+		if n > 0 {
+			return compactStyleBad.Render(s)
+		}
+		return compactStyleMuted.Render(s)
+	}
+	paintBytes := func() string {
+		s := fmtBytesSigned(dBytes)
+		if dBytes < 0 {
+			return compactStyleGood.Render(s)
+		}
+		if dBytes > 0 {
+			return compactStyleBad.Render(s)
+		}
+		return compactStyleMuted.Render(s)
+	}
+	paintTokens := func() string {
+		s := fmtTokensSigned(dTokens)
+		if dTokens < 0 {
+			return compactStyleGood.Render(s)
+		}
+		if dTokens > 0 {
+			return compactStyleBad.Render(s)
+		}
+		return compactStyleMuted.Render(s)
+	}
+	pctStyle := compactStyleMuted
+	if pct < 0 {
+		pctStyle = compactStyleGood
+	} else if pct > 0 {
+		pctStyle = compactStyleBad
+	}
+	fmt.Fprintf(w, "%s %s %s %s %s %s %s %s %s %s\n",
+		delta,
+		compactStyleMuted.Render("lines"), paintInt(dLines, ""),
+		compactStyleMuted.Render("chain"), paintInt(dChain, ""),
+		compactStyleMuted.Render("bytes"), paintBytes(),
+		compactStyleMuted.Render("tokens"), paintTokens(),
+		pctStyle.Render(fmt.Sprintf("(%+.1f%%)", pct)))
+}
+
+// printHeader renders the session heading block at the top of a compact run.
+func printHeader(w io.Writer, sessionName, path string, dryRun bool) {
+	line := func(label, value string) string {
+		return compactStyleMuted.Render(fmt.Sprintf("%-12s", label)) + value
+	}
+	body := line("Session:", compactStyleHeader.Render(sessionName)) + "\n" +
+		line("Transcript:", compactStyleMuted.Render(path))
+	if dryRun {
+		body += "\n" + line("Mode:", compactStyleWarn.Render("DRY RUN  no writes"))
+	}
+	fmt.Fprintln(w, compactStyleBox.Render(body))
 }
 
 func fmtBytes(n int64) string {
@@ -221,12 +311,8 @@ Examples:
 				dryRun = choices.DryRun
 			}
 
-			// Header
-			fmt.Fprintf(out, "Session:    %s\n", sess.Name)
-			fmt.Fprintf(out, "Transcript: %s\n", path)
-			if dryRun {
-				fmt.Fprintln(out, "Mode:       DRY RUN (no writes)")
-			}
+			// Header (bordered box + coloured tokens)
+			printHeader(out, sess.Name, path, dryRun)
 			printStats(out, "Before", before)
 
 			// Existing boundaries for context
