@@ -294,14 +294,23 @@ func (d *DetailsView) Draw(scr tcell.Screen, r Rect) {
 	}
 	d.Right.Draw(scr, d.RightRect)
 
-	// Focus indicator: highlight the title bar of the focused pane by
-	// overwriting its first row with an inverted style.
-	if d.Focus == DetailsFocusLeft {
-		mark := " STATS ▸"
-		drawString(scr, inner.X, inner.Y, StyleDefault.Foreground(ColorAccent).Bold(true), mark, leftW)
-	} else if d.Focus == DetailsFocusRight {
-		mark := " MESSAGES ▸"
-		drawString(scr, rightX, inner.Y, StyleDefault.Foreground(ColorAccent).Bold(true), mark, rightW)
+	// Focus indicator: paint the entire top row of the focused pane in
+	// accent colors so the user always sees which pane consumes arrow
+	// keys. The non-focused pane keeps its muted title.
+	focusStyle := tcell.StyleDefault.Background(ColorAccent).Foreground(tcell.ColorBlack).Bold(true)
+	idleStyle := StyleSubtext.Bold(true)
+	switch d.Focus {
+	case DetailsFocusLeft:
+		fillRow(scr, inner.X, inner.Y, leftW, focusStyle)
+		drawString(scr, inner.X+1, inner.Y, focusStyle, "STATS  (focused, ↑↓ to scroll)", leftW-1)
+		drawString(scr, rightX+1, inner.Y, idleStyle, "MESSAGES  (tab to focus)", rightW-1)
+	case DetailsFocusRight:
+		fillRow(scr, rightX, inner.Y, rightW, focusStyle)
+		drawString(scr, rightX+1, inner.Y, focusStyle, "MESSAGES  (focused, ↑↓ to scroll)", rightW-1)
+		drawString(scr, inner.X+1, inner.Y, idleStyle, "STATS  (tab to focus)", leftW-1)
+	default:
+		drawString(scr, inner.X+1, inner.Y, idleStyle, "STATS  (tab to focus)", leftW-1)
+		drawString(scr, rightX+1, inner.Y, idleStyle, "MESSAGES  (tab to focus)", rightW-1)
 	}
 }
 
