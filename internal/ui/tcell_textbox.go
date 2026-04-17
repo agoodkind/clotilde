@@ -30,6 +30,14 @@ type TextBox struct {
 	// Rect last drawn.
 	Rect Rect
 
+	// ScrollbarRect is the last drawn scrollbar column (empty when no bar).
+	// Used by the parent App for click-to-jump and drag-to-scroll.
+	ScrollbarRect Rect
+
+	// totalLines records the full wrapped line count after the most recent
+	// draw. JumpToScrollbarY uses it to translate a track Y into an offset.
+	totalLines int
+
 	// Word wrap. If true, lines are wrapped on spaces to fit rect width.
 	Wrap bool
 
@@ -177,9 +185,32 @@ func (tb *TextBox) Draw(scr tcell.Screen, r Rect) {
 		}
 	}
 
+	tb.totalLines = len(lines)
 	if needsBar {
-		drawScrollbar(scr, r.X+r.W-1, contentY, rows, rows, len(lines), tb.Offset)
+		tb.ScrollbarRect = Rect{X: r.X + r.W - 1, Y: contentY, W: 1, H: rows}
+		drawScrollbar(scr, tb.ScrollbarRect.X, tb.ScrollbarRect.Y,
+			tb.ScrollbarRect.H, rows, len(lines), tb.Offset)
+	} else {
+		tb.ScrollbarRect = Rect{}
 	}
+}
+
+// JumpToScrollbarY maps an absolute screen Y inside the scrollbar track to
+// an offset. The parent App calls this on click or drag over the bar.
+func (tb *TextBox) JumpToScrollbarY(y int) {
+	if tb.ScrollbarRect.H <= 0 {
+		return
+	}
+	rel := y - tb.ScrollbarRect.Y
+	if rel < 0 {
+		rel = 0
+	}
+	if rel >= tb.ScrollbarRect.H {
+		rel = tb.ScrollbarRect.H - 1
+	}
+	maxOff := imax(0, tb.totalLines-tb.ScrollbarRect.H)
+	newOff := rel * maxOff / imax(1, tb.ScrollbarRect.H-1)
+	tb.Offset = clamp(newOff, 0, maxOff)
 }
 
 // HandleEvent handles scroll keys when focused.

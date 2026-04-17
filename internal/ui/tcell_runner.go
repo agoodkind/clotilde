@@ -27,7 +27,7 @@ func runOverlay(build func(done func()) Widget) error {
 		return fmt.Errorf("tcell Init: %w", err)
 	}
 	defer scr.Fini()
-	scr.EnableMouse(tcell.MouseButtonEvents)
+	scr.EnableMouse(tcell.MouseButtonEvents | tcell.MouseDragEvents)
 	scr.EnableFocus()
 	scr.Clear()
 
