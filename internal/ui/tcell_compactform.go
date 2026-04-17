@@ -104,8 +104,11 @@ func (f *CompactForm) fields() []string {
 	}
 	base = append(base,
 		"chk_tool_results",
+		"keep_tool_results",
 		"chk_thinking",
+		"keep_thinking",
 		"chk_images",
+		"keep_images",
 		"chk_large_inputs",
 		"btn_apply",
 		"btn_dry_run",
@@ -178,9 +181,18 @@ func (f *CompactForm) Draw(scr tcell.Screen, r Rect) {
 	drawString(scr, inner.X, y, StyleDefault.Foreground(ColorMuted).Bold(true).Underline(true),
 		"Strip options", inner.W)
 	y++
-	y += drawCheckbox(scr, inner, y, "Strip tool_result bodies (stubs)", f.StripToolResults, f.focus == f.fieldIndex("chk_tool_results"))
-	y += drawCheckbox(scr, inner, y, "Strip assistant thinking blocks", f.StripThinking, f.focus == f.fieldIndex("chk_thinking"))
-	y += drawCheckbox(scr, inner, y, "Strip image blocks (fix dimension errors)", f.StripImages, f.focus == f.fieldIndex("chk_images"))
+	y += drawStripRow(scr, inner, y,
+		"Strip tool_result bodies (stubs)",
+		f.StripToolResults, f.focus == f.fieldIndex("chk_tool_results"),
+		f.KeepLastToolResults, f.focus == f.fieldIndex("keep_tool_results"))
+	y += drawStripRow(scr, inner, y,
+		"Strip assistant thinking blocks",
+		f.StripThinking, f.focus == f.fieldIndex("chk_thinking"),
+		f.KeepLastThinking, f.focus == f.fieldIndex("keep_thinking"))
+	y += drawStripRow(scr, inner, y,
+		"Strip image blocks (fix dimension errors)",
+		f.StripImages, f.focus == f.fieldIndex("chk_images"),
+		f.KeepLastImages, f.focus == f.fieldIndex("keep_images"))
 	y += drawCheckbox(scr, inner, y, "Truncate tool_use inputs > 1 KB", f.StripLargeInputs, f.focus == f.fieldIndex("chk_large_inputs"))
 	y++
 
@@ -313,6 +325,28 @@ func drawSlider(scr tcell.Screen, x, y, w, pct int, focused bool) {
 		scr.SetContent(trackStart+filled, y, '>', nil, fillStyle)
 	}
 	scr.SetContent(trackEnd, y, ']', nil, trackStyle)
+}
+
+// drawStripRow renders a "[x] Label            keep last [n]" row. The
+// checkbox and the keep-last spinner each take their own focus slot.
+// keepFocus makes the spinner pulse when it has focus so the user sees
+// where the arrow keys will land.
+func drawStripRow(scr tcell.Screen, r Rect, y int, label string, checked, chkFocus bool, keep int, keepFocus bool) int {
+	drawCheckbox(scr, r, y, label, checked, chkFocus)
+
+	// Spinner sits on the right edge of the row.
+	spinner := fmt.Sprintf("keep last [%d]", keep)
+	style := StyleMuted
+	if keepFocus {
+		style = StyleDefault.Foreground(ColorAccent).Bold(true)
+		spinner = fmt.Sprintf("keep last [%d] ←→", keep)
+	}
+	spinX := r.X + r.W - runeCount(spinner)
+	if spinX < r.X+4 {
+		spinX = r.X + 4
+	}
+	drawString(scr, spinX, y, style, spinner, r.W)
+	return 1
 }
 
 // drawCheckbox paints "[x] label" or "[ ] label". Returns 1 (row count).
@@ -448,14 +482,35 @@ func (f *CompactForm) focusedField() string {
 	return fs[f.focus]
 }
 
-// adjust tweaks the slider when it has focus. Returns true if consumed.
+// adjust tweaks the slider or one of the keep-last spinners when its
+// field has focus. Returns true if the input was consumed.
 func (f *CompactForm) adjust(delta int) bool {
-	if f.focusedField() != "slider" {
-		return false
+	switch f.focusedField() {
+	case "slider":
+		f.BoundaryPercent = clamp(f.BoundaryPercent+delta, 1, 100)
+		f.invalidateCache()
+		return true
+	case "keep_tool_results":
+		f.KeepLastToolResults = clamp(f.KeepLastToolResults+keepStep(delta), 0, 100)
+		return true
+	case "keep_thinking":
+		f.KeepLastThinking = clamp(f.KeepLastThinking+keepStep(delta), 0, 100)
+		return true
+	case "keep_images":
+		f.KeepLastImages = clamp(f.KeepLastImages+keepStep(delta), 0, 100)
+		return true
 	}
-	f.BoundaryPercent = clamp(f.BoundaryPercent+delta, 1, 100)
-	f.invalidateCache()
-	return true
+	return false
+}
+
+// keepStep converts the slider's ±5 step to ±1 for the keep counters
+// because users typically want fine-grained control over the number of
+// blocks to preserve.
+func keepStep(d int) int {
+	if d > 0 {
+		return 1
+	}
+	return -1
 }
 
 // toggle flips the currently focused checkbox.
