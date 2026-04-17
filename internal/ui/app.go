@@ -14,6 +14,7 @@ package ui
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -851,6 +852,16 @@ func (a *App) handleKey(e *tcell.EventKey) {
 				a.openSessionOptionsFor(sess)
 			}
 			return
+		case 'e':
+			if a.activeTab == 1 {
+				a.editConfigFile(false)
+				return
+			}
+		case 'E':
+			if a.activeTab == 1 {
+				a.editConfigFile(true)
+				return
+			}
 		case 'v':
 			if a.selected != nil {
 				a.viewSelected()
@@ -1750,28 +1761,121 @@ func (a *App) openFilter() {
 	a.mode = StatusFilter
 }
 
-// drawSettingsTab renders the placeholder body for the Settings tab.
-// The real config editor lands in a follow-up; this stub keeps the tab
-// usable so the visual structure is in place.
+// editConfigFile suspends the TUI, opens the chosen config in the
+// user's $EDITOR (defaulting to vi), then resumes. The project flag
+// picks the per-project config; otherwise the global one. The file is
+// created with sensible defaults if it does not exist so the editor
+// always has something to open.
+func (a *App) editConfigFile(project bool) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	var path string
+	if project {
+		cwd, _ := os.Getwd()
+		path = filepath.Join(cwd, ".claude", "clotilde", "config.json")
+	} else {
+		path = filepath.Join(home, ".config", "clotilde", "config.toml")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		seed := "# clotilde config\n"
+		if filepath.Ext(path) == ".json" {
+			seed = "{}\n"
+		}
+		_ = os.WriteFile(path, []byte(seed), 0o644)
+	}
+
+	editor := os.Getenv("VISUAL")
+	if editor == "" {
+		editor = os.Getenv("EDITOR")
+	}
+	if editor == "" {
+		editor = "vi"
+	}
+	a.suspendAndRun(func() {
+		cmd := exec.Command(editor, path)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		_ = cmd.Run()
+	})
+}
+
+// drawSettingsTab renders the Settings tab body. It surfaces the active
+// config file paths, the resolved values, and the actions a user can
+// take. The body is read-mostly: editing happens in an external editor
+// invoked via the e shortcut so the dashboard does not have to ship a
+// full form widget for every config field.
 func (a *App) drawSettingsTab(r Rect) {
 	if r.W <= 0 || r.H <= 0 {
 		return
 	}
-	lines := []string{
-		"Settings",
-		"",
-		"Edit ~/.config/clotilde/config.toml or .claude/clotilde/config.json directly.",
-		"An in-TUI editor lands in a follow-up commit.",
-		"",
-		"Press 1 (or click the Sessions tab) to return.",
+
+	home, _ := os.UserHomeDir()
+	globalCfg := filepath.Join(home, ".config", "clotilde", "config.toml")
+	globalCfgJSON := filepath.Join(home, ".config", "clotilde", "config.json")
+	cwd, _ := os.Getwd()
+	projectCfg := filepath.Join(cwd, ".claude", "clotilde", "config.json")
+
+	type row struct {
+		label string
+		value string
+		style tcell.Style
 	}
-	for i, l := range lines {
-		style := StyleSubtext
-		if i == 0 {
-			style = StyleDefault.Foreground(ColorAccent).Bold(true)
+	rows := []row{
+		{label: "Settings", style: StyleDefault.Foreground(ColorAccent).Bold(true)},
+		{},
+		{label: "Global config", value: configRowDescription(globalCfg, globalCfgJSON), style: StyleSubtext},
+		{label: "Project config", value: configRowDescription(projectCfg), style: StyleSubtext},
+		{label: "Daemon log", value: filepath.Join(home, ".local", "state", "clotilde", "clotilde.jsonl"), style: StyleSubtext},
+		{label: "Sessions root", value: filepath.Join(home, ".local", "share", "clotilde", "sessions"), style: StyleSubtext},
+		{},
+		{label: "Actions", style: StyleDefault.Foreground(ColorAccent).Bold(true)},
+		{label: "  e  edit global config in $EDITOR", style: StyleSubtext},
+		{label: "  E  edit project config in $EDITOR", style: StyleSubtext},
+		{label: "  R  reload config (handled by daemon watcher)", style: StyleSubtext},
+		{label: "  1  back to Sessions", style: StyleSubtext},
+		{},
+		{label: "Tip", style: StyleDefault.Foreground(ColorAccent).Bold(true)},
+		{label: "  The daemon watches ~/.claude/settings.json and syncs across", style: StyleSubtext},
+		{label: "  active sessions. Edit the file from any editor; the dashboard", style: StyleSubtext},
+		{label: "  picks up changes automatically.", style: StyleSubtext},
+	}
+
+	for i, ln := range rows {
+		text := ln.label
+		if ln.value != "" {
+			text = fmt.Sprintf("%-16s %s", ln.label, ln.value)
 		}
-		drawString(a.screen, r.X+2, r.Y+1+i, style, l, r.W-4)
+		style := ln.style
+		if style == (tcell.Style{}) {
+			style = StyleSubtext
+		}
+		if i >= r.H-1 {
+			break
+		}
+		drawString(a.screen, r.X+2, r.Y+1+i, style, text, r.W-4)
 	}
+}
+
+// configRowDescription returns a "<path> (status)" string where status
+// is one of "exists" or "missing". Useful for surfacing the active
+// config files in the Settings tab without scattering os.Stat calls
+// across the draw code.
+func configRowDescription(paths ...string) string {
+	for _, p := range paths {
+		if _, err := os.Stat(p); err == nil {
+			return p + "  (exists)"
+		}
+	}
+	if len(paths) == 0 {
+		return ""
+	}
+	return paths[0] + "  (missing)"
 }
 
 // openHelpModal shows the full keymap. Triggered by "?" anywhere in
