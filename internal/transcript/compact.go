@@ -321,17 +321,23 @@ func (s StripStats) Total() int {
 // type the user asked to preserve.
 type keepSet map[int]map[int]bool
 
-// buildKeepSet walks the chain in reverse and marks the most recent n
-// blocks of blockType for preservation. When n is zero the return value
-// is an empty set so every block stays eligible for stripping.
-func buildKeepSet(allLines []string, chainLines []int, blockType string, n int) keepSet {
+// buildKeepSet walks the supplied line indexes in reverse and marks
+// the most recent n blocks of blockType for preservation. Pass
+// chainLines to scope the keep window to the active chain or pass
+// every line index in the file to scope it globally. When n is zero
+// the return value is an empty set so every block stays eligible for
+// stripping.
+func buildKeepSet(allLines []string, lineSet []int, blockType string, n int) keepSet {
 	out := keepSet{}
 	if n <= 0 {
 		return out
 	}
 	seen := 0
-	for i := len(chainLines) - 1; i >= 0 && seen < n; i-- {
-		ln := chainLines[i]
+	for i := len(lineSet) - 1; i >= 0 && seen < n; i-- {
+		ln := lineSet[i]
+		if ln < 0 || ln >= len(allLines) {
+			continue
+		}
 		line := allLines[ln]
 		var entry struct {
 			Message struct {
@@ -586,7 +592,149 @@ func StripContent(allLines []string, chainLines []int, opts CompactOptions) ([]s
 		}
 	}
 
+	// Image stripping must reach beyond the active chain. Claude Code
+	// reads the entire transcript when resuming a session and rejects
+	// the load when any image still exceeds the dimension limit, even
+	// if the offending entry sits before an old compaction boundary.
+	// The chain-only loop above never visited those lines, so a user
+	// who ran "strip images" still hit the resume error on the next
+	// launch. This pass walks every line in the file and applies the
+	// same image strip with a global keep-last window.
+	if opts.StripImages {
+		stripImagesEverywhere(allLines, result, &stats, opts.KeepLastImages, chainSet)
+	}
+
 	return result, stats
+}
+
+// stripImagesEverywhere strips image content from every line in the
+// transcript, not just the active chain. KeepLastImages, when non
+// zero, preserves the most recent N image blocks across the whole
+// file. Lines already rewritten by the chain pass live in result and
+// are picked up by this pass through that same buffer so chain-level
+// strips and global strips compose without double counting.
+func stripImagesEverywhere(allLines, result []string, stats *StripStats, keepN int, chainSet map[int]bool) {
+	all := make([]int, len(result))
+	for i := range result {
+		all[i] = i
+	}
+	keep := buildKeepSet(result, all, "image", keepN)
+
+	for ln := range result {
+		// Skip lines already handled by the chain pass to avoid
+		// double counting. The chain loop processed these and the
+		// resulting bytes already sit in result[ln].
+		if chainSet[ln] {
+			continue
+		}
+		line := result[ln]
+		if line == "" {
+			continue
+		}
+		var entry struct {
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal([]byte(line), &entry) != nil {
+			continue
+		}
+		var content []json.RawMessage
+		if json.Unmarshal(entry.Message.Content, &content) != nil {
+			continue
+		}
+		modified := false
+		for i, block := range content {
+			var b map[string]json.RawMessage
+			if json.Unmarshal(block, &b) != nil {
+				continue
+			}
+			var blockType string
+			json.Unmarshal(b["type"], &blockType)
+
+			switch blockType {
+			case "image":
+				if keepInSet(keep, ln, i) {
+					continue
+				}
+				content[i] = nil
+				modified = true
+				stats.Images++
+			case "tool_result":
+				if keepInSet(keep, ln, i) {
+					continue
+				}
+				inner := scrubInnerImages(b, &modified)
+				if inner > 0 {
+					stats.Images += inner
+					newBlock, _ := json.Marshal(b)
+					content[i] = newBlock
+				}
+			}
+		}
+		if !modified {
+			continue
+		}
+		cleaned := make([]json.RawMessage, 0, len(content))
+		for _, c := range content {
+			if c != nil {
+				cleaned = append(cleaned, c)
+			}
+		}
+		var full map[string]json.RawMessage
+		if json.Unmarshal([]byte(line), &full) != nil {
+			continue
+		}
+		var msg map[string]json.RawMessage
+		if json.Unmarshal(full["message"], &msg) != nil {
+			continue
+		}
+		msg["content"], _ = json.Marshal(cleaned)
+		full["message"], _ = json.Marshal(msg)
+		newLine, _ := json.Marshal(full)
+		result[ln] = string(newLine)
+	}
+}
+
+// scrubInnerImages walks a tool_result content array and removes any
+// embedded image blocks. Returns the number of image blocks removed.
+// modified is set to true when any rewrite happens so the caller can
+// decide whether to re-emit the line.
+func scrubInnerImages(b map[string]json.RawMessage, modified *bool) int {
+	contentRaw, ok := b["content"]
+	if !ok {
+		return 0
+	}
+	var inner []json.RawMessage
+	if json.Unmarshal(contentRaw, &inner) != nil {
+		return 0
+	}
+	cleanedInner := make([]json.RawMessage, 0, len(inner))
+	dropped := 0
+	for _, ib := range inner {
+		var ibMap map[string]json.RawMessage
+		if json.Unmarshal(ib, &ibMap) != nil {
+			cleanedInner = append(cleanedInner, ib)
+			continue
+		}
+		var t string
+		json.Unmarshal(ibMap["type"], &t)
+		if t == "image" {
+			dropped++
+			continue
+		}
+		cleanedInner = append(cleanedInner, ib)
+	}
+	if dropped == 0 {
+		return 0
+	}
+	if len(cleanedInner) == 0 {
+		b["content"], _ = json.Marshal("[image stripped during compact]")
+	} else {
+		b["content"], _ = json.Marshal(cleanedInner)
+	}
+	*modified = true
+	return dropped
 }
 
 // EstimateTokens estimates the token count for a set of chain entries using
