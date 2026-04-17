@@ -87,13 +87,15 @@ type App struct {
 	statusRect Rect
 
 	// Mode and state
-	mode       StatusMode
-	selected   *session.Session
-	sessions   []*session.Session
-	visibleIdx []int // indexes into sessions after filter
-	filter     string
-	sortCol    SortColumn
-	sortAsc    bool
+	mode          StatusMode
+	selected      *session.Session
+	sessions      []*session.Session
+	visibleIdx    []int // indexes into sessions after filter
+	filter        string
+	sortCol       SortColumn
+	sortAsc       bool
+	showEphemeral bool // when false (default), hide sessions from test/tmp workspaces
+	hiddenCount   int  // number of sessions hidden by the ephemeral filter
 
 	// Caches
 	statsCache map[string]*transcript.CompactQuickStats
@@ -306,6 +308,11 @@ func (a *App) handleKey(e *tcell.EventKey) {
 		case 'N':
 			a.newSession()
 			return
+		case 'H':
+			a.showEphemeral = !a.showEphemeral
+			a.rebuildVisible()
+			a.populateTable()
+			return
 		case 'r':
 			if a.selected != nil || a.table.Active {
 				a.resumeRow(a.table.SelectedRow)
@@ -410,6 +417,11 @@ func (a *App) draw() {
 	w, _ := a.screen.Size()
 	fillRow(a.screen, 0, 0, w, StyleHeaderBar)
 	left := fmt.Sprintf(" clotilde  %d sessions", len(a.visibleIdx))
+	if a.hiddenCount > 0 {
+		left += fmt.Sprintf("  (%d hidden, H to show)", a.hiddenCount)
+	} else if a.showEphemeral {
+		left += "  (showing test/tmp)"
+	}
 	if a.filter != "" {
 		left += fmt.Sprintf("  (filter: %q)", a.filter)
 	}
@@ -533,20 +545,34 @@ func (a *App) rowFor(sess *session.Session) []TableCell {
 	case strings.Contains(model, "haiku"):
 		modelStyle = StyleDefault.Foreground(ColorModelHaiku)
 	}
+	subStyle := StyleSubtext
+	// Dim ephemeral rows when they are being shown, so they are easy to ignore.
+	if isEphemeralSession(sess) {
+		dim := StyleDefault.Foreground(ColorMuted).Dim(true)
+		nameStyle = dim
+		modelStyle = dim
+		subStyle = dim
+	}
 	return []TableCell{
 		{Text: sess.Name, Style: nameStyle},
-		{Text: shortPath(sess.Metadata.WorkspaceRoot), Style: StyleSubtext},
+		{Text: shortPath(sess.Metadata.WorkspaceRoot), Style: subStyle},
 		{Text: model, Style: modelStyle},
-		{Text: sess.Metadata.Created.Format("Jan 02"), Style: StyleSubtext},
-		{Text: util.FormatRelativeTime(sess.Metadata.LastAccessed), Style: StyleSubtext},
+		{Text: sess.Metadata.Created.Format("Jan 02"), Style: subStyle},
+		{Text: util.FormatRelativeTime(sess.Metadata.LastAccessed), Style: subStyle},
 	}
 }
 
 // rebuildVisible computes a.visibleIdx from a.sessions + a.filter.
+// Also updates a.hiddenCount based on the ephemeral filter.
 func (a *App) rebuildVisible() {
 	a.visibleIdx = a.visibleIdx[:0]
+	a.hiddenCount = 0
 	f := strings.ToLower(a.filter)
 	for i, sess := range a.sessions {
+		if !a.showEphemeral && isEphemeralSession(sess) {
+			a.hiddenCount++
+			continue
+		}
 		if f != "" {
 			hay := strings.ToLower(sess.Name + " " + sess.Metadata.WorkspaceRoot + " " + sess.Metadata.Context)
 			if !strings.Contains(hay, f) {
@@ -911,6 +937,40 @@ func (i *InputOverlay) HandleEvent(ev tcell.Event) bool {
 }
 
 // ---------------- Shared helpers ----------------
+
+// isEphemeralSession reports whether a session looks like a leaked test
+// artifact or something rooted in a temp directory. These sessions pollute
+// the dashboard and almost always have no transcript or a `synthetic` model.
+//
+// Signals we look for in the workspace path:
+//   - /private/var/folders/... or /var/folders/... (macOS temp)
+//   - /tmp/... (Unix temp)
+//   - anything containing "/ginkgo" (Go test framework scratch dirs)
+//   - anything containing "/clotilde-" under a temp dir (our own tests)
+func isEphemeralSession(sess *session.Session) bool {
+	if sess == nil {
+		return false
+	}
+	ws := sess.Metadata.WorkspaceRoot
+	if ws == "" {
+		return false
+	}
+	tempPrefixes := []string{
+		"/private/var/folders/",
+		"/var/folders/",
+		"/tmp/",
+		"/private/tmp/",
+	}
+	for _, p := range tempPrefixes {
+		if strings.HasPrefix(ws, p) {
+			return true
+		}
+	}
+	if strings.Contains(ws, "/ginkgo") {
+		return true
+	}
+	return false
+}
 
 // shortPath abbreviates a workspace path for display.
 func shortPath(root string) string {
