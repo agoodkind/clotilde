@@ -25,17 +25,61 @@ type Client struct {
 	rpc  daemonpb.AgentGateDClient
 }
 
-// NudgeDiscoveryScan sends SIGUSR1 to the running daemon so its scanner
-// wakes up and runs an immediate scan instead of waiting for the next
-// 5 minute tick. The function looks up the daemon by reading the launchd
-// pid file or by walking pgrep-style; failures are silent because the
-// nudge is purely an optimization.
+// NudgeDiscoveryScan asks the daemon to run an immediate discovery
+// scan. The preferred path is the TriggerScan RPC because it carries
+// no privileges and works regardless of how the daemon was launched.
+// SIGUSR1 is the fallback for callers that already have a PID and
+// cannot or do not want to open a gRPC connection.
 func NudgeDiscoveryScan() {
+	if c, err := ConnectOrStart(context.Background()); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_, _ = c.rpc.TriggerScan(ctx, &daemonpb.TriggerScanRequest{})
+		c.conn.Close()
+		return
+	}
 	pid, err := findDaemonPID()
 	if err != nil || pid <= 0 {
 		return
 	}
 	_ = syscall.Kill(pid, syscall.SIGUSR1)
+}
+
+// SubscribeRegistry opens a long-lived stream of RegistryEvent values
+// from the daemon. The returned channel closes when the stream
+// terminates for any reason. Callers can stop subscribing by calling
+// the returned cancel function. The channel buffers a few events so a
+// slow consumer does not lose recent activity, but the daemon will
+// drop events once a per-subscriber buffer fills.
+func SubscribeRegistry(parent context.Context) (<-chan *daemonpb.RegistryEvent, context.CancelFunc, error) {
+	c, err := ConnectOrStart(parent)
+	if err != nil {
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithCancel(parent)
+	stream, err := c.rpc.SubscribeRegistry(ctx, &daemonpb.SubscribeRegistryRequest{})
+	if err != nil {
+		cancel()
+		c.conn.Close()
+		return nil, nil, err
+	}
+	out := make(chan *daemonpb.RegistryEvent, 8)
+	go func() {
+		defer close(out)
+		defer c.conn.Close()
+		for {
+			ev, err := stream.Recv()
+			if err != nil {
+				return
+			}
+			select {
+			case out <- ev:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, cancel, nil
 }
 
 // findDaemonPID locates the running daemon's pid via launchctl. Returns

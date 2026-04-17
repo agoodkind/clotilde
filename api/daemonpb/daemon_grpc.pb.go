@@ -23,6 +23,8 @@ const (
 	AgentGateD_ReleaseSession_FullMethodName     = "/agentgate.AgentGateD/ReleaseSession"
 	AgentGateD_HookEvent_FullMethodName          = "/agentgate.AgentGateD/HookEvent"
 	AgentGateD_ListActiveSessions_FullMethodName = "/agentgate.AgentGateD/ListActiveSessions"
+	AgentGateD_TriggerScan_FullMethodName        = "/agentgate.AgentGateD/TriggerScan"
+	AgentGateD_SubscribeRegistry_FullMethodName  = "/agentgate.AgentGateD/SubscribeRegistry"
 )
 
 // AgentGateDClient is the client API for AgentGateD service.
@@ -33,6 +35,8 @@ type AgentGateDClient interface {
 	ReleaseSession(ctx context.Context, in *ReleaseSessionRequest, opts ...grpc.CallOption) (*ReleaseSessionResponse, error)
 	HookEvent(ctx context.Context, in *HookEventRequest, opts ...grpc.CallOption) (*HookEventResponse, error)
 	ListActiveSessions(ctx context.Context, in *ListActiveSessionsRequest, opts ...grpc.CallOption) (*ListActiveSessionsResponse, error)
+	TriggerScan(ctx context.Context, in *TriggerScanRequest, opts ...grpc.CallOption) (*TriggerScanResponse, error)
+	SubscribeRegistry(ctx context.Context, in *SubscribeRegistryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[RegistryEvent], error)
 }
 
 type agentGateDClient struct {
@@ -83,6 +87,35 @@ func (c *agentGateDClient) ListActiveSessions(ctx context.Context, in *ListActiv
 	return out, nil
 }
 
+func (c *agentGateDClient) TriggerScan(ctx context.Context, in *TriggerScanRequest, opts ...grpc.CallOption) (*TriggerScanResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TriggerScanResponse)
+	err := c.cc.Invoke(ctx, AgentGateD_TriggerScan_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentGateDClient) SubscribeRegistry(ctx context.Context, in *SubscribeRegistryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[RegistryEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &AgentGateD_ServiceDesc.Streams[0], AgentGateD_SubscribeRegistry_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[SubscribeRegistryRequest, RegistryEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentGateD_SubscribeRegistryClient = grpc.ServerStreamingClient[RegistryEvent]
+
 // AgentGateDServer is the server API for AgentGateD service.
 // All implementations must embed UnimplementedAgentGateDServer
 // for forward compatibility.
@@ -91,6 +124,8 @@ type AgentGateDServer interface {
 	ReleaseSession(context.Context, *ReleaseSessionRequest) (*ReleaseSessionResponse, error)
 	HookEvent(context.Context, *HookEventRequest) (*HookEventResponse, error)
 	ListActiveSessions(context.Context, *ListActiveSessionsRequest) (*ListActiveSessionsResponse, error)
+	TriggerScan(context.Context, *TriggerScanRequest) (*TriggerScanResponse, error)
+	SubscribeRegistry(*SubscribeRegistryRequest, grpc.ServerStreamingServer[RegistryEvent]) error
 	mustEmbedUnimplementedAgentGateDServer()
 }
 
@@ -112,6 +147,12 @@ func (UnimplementedAgentGateDServer) HookEvent(context.Context, *HookEventReques
 }
 func (UnimplementedAgentGateDServer) ListActiveSessions(context.Context, *ListActiveSessionsRequest) (*ListActiveSessionsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListActiveSessions not implemented")
+}
+func (UnimplementedAgentGateDServer) TriggerScan(context.Context, *TriggerScanRequest) (*TriggerScanResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method TriggerScan not implemented")
+}
+func (UnimplementedAgentGateDServer) SubscribeRegistry(*SubscribeRegistryRequest, grpc.ServerStreamingServer[RegistryEvent]) error {
+	return status.Error(codes.Unimplemented, "method SubscribeRegistry not implemented")
 }
 func (UnimplementedAgentGateDServer) mustEmbedUnimplementedAgentGateDServer() {}
 func (UnimplementedAgentGateDServer) testEmbeddedByValue()                    {}
@@ -206,6 +247,35 @@ func _AgentGateD_ListActiveSessions_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentGateD_TriggerScan_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TriggerScanRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentGateDServer).TriggerScan(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentGateD_TriggerScan_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentGateDServer).TriggerScan(ctx, req.(*TriggerScanRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentGateD_SubscribeRegistry_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(SubscribeRegistryRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(AgentGateDServer).SubscribeRegistry(m, &grpc.GenericServerStream[SubscribeRegistryRequest, RegistryEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentGateD_SubscribeRegistryServer = grpc.ServerStreamingServer[RegistryEvent]
+
 // AgentGateD_ServiceDesc is the grpc.ServiceDesc for AgentGateD service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -229,7 +299,17 @@ var AgentGateD_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "ListActiveSessions",
 			Handler:    _AgentGateD_ListActiveSessions_Handler,
 		},
+		{
+			MethodName: "TriggerScan",
+			Handler:    _AgentGateD_TriggerScan_Handler,
+		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "SubscribeRegistry",
+			Handler:       _AgentGateD_SubscribeRegistry_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "daemon.proto",
 }

@@ -94,13 +94,20 @@ func HomeDir() (string, error) {
 	return os.UserHomeDir()
 }
 
-// WriteFile writes content to a file, creating parent directories if needed.
-// Returns an error if writing fails.
+// WriteFile writes content to a file, creating parent directories if
+// needed. The write is atomic from the reader's perspective: the
+// content lands in a sibling .tmp file first and is then renamed onto
+// the destination. Concurrent writers can still clobber each other on
+// the rename, but no reader ever sees a half-written metadata file.
 func WriteFile(path string, content []byte) error {
 	if err := ensureDirForFile(path); err != nil {
 		return err
 	}
-	return os.WriteFile(path, content, DefaultFileMode)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, content, DefaultFileMode); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // ReadFile reads the entire contents of a file.
