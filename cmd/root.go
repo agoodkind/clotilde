@@ -144,21 +144,14 @@ func buildAppCallbacks(store session.Store, sessions []*session.Session) ui.AppC
 			return refreshSessionSummary(store, sess, onDone)
 		},
 		StartSession: func() error {
-			existingNames := make([]string, len(sessions))
-			for i, s := range sessions {
-				existingNames[i] = s.Name
-			}
-			name := util.GenerateUniqueRandomName(existingNames)
-
-			result, err := createSession(SessionCreateParams{Name: name})
+			return startInteractiveSession(sessions, "")
+		},
+		StartSessionWithBasedir: func(basedir string) error {
+			resolved, err := resolveBasedirArg(basedir)
 			if err != nil {
-				return fmt.Errorf("failed to create session: %w", err)
+				return err
 			}
-
-			fmt.Println(ui.Success(fmt.Sprintf("Created session '%s' (%s)", result.Session.Name, result.Session.Metadata.SessionID)))
-			fmt.Println("\nStarting Claude Code...")
-
-			return claude.Start(result.ClotildeRoot, result.Session, result.SettingsFile, nil)
+			return startInteractiveSession(sessions, resolved)
 		},
 		ViewContent: func(sess *session.Session) string {
 			messages, err := loadSessionMessages(sess)
@@ -226,6 +219,37 @@ func buildAppCallbacks(store session.Store, sessions []*session.Session) ui.AppC
 			return ui.SessionDetail{Model: model, Messages: recentMsgs, AllMessages: allMsgs, Tools: tools}
 		},
 	}
+}
+
+// startInteractiveSession creates a new clotilde session and launches
+// claude. When basedir is non-empty it lands in WorkspaceRoot so the
+// dashboard groups the session with its project even if the launching
+// terminal sits in another directory.
+func startInteractiveSession(existing []*session.Session, basedir string) error {
+	existingNames := make([]string, len(existing))
+	for i, s := range existing {
+		existingNames[i] = s.Name
+	}
+	name := util.GenerateUniqueRandomName(existingNames)
+
+	result, err := createSession(SessionCreateParams{Name: name})
+	if err != nil {
+		return fmt.Errorf("failed to create session: %w", err)
+	}
+
+	if basedir != "" {
+		result.Session.Metadata.WorkspaceRoot = basedir
+		result.Session.Metadata.WorkDir = basedir
+		store, sErr := session.NewGlobalFileStore()
+		if sErr == nil {
+			_ = store.Update(result.Session)
+		}
+	}
+
+	fmt.Println(ui.Success(fmt.Sprintf("Created session '%s' (%s)", result.Session.Name, result.Session.Metadata.SessionID)))
+	fmt.Println("\nStarting Claude Code...")
+
+	return claude.Start(result.ClotildeRoot, result.Session, result.SettingsFile, nil)
 }
 
 func init() {
