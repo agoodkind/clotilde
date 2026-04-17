@@ -155,6 +155,20 @@ type App struct {
 	// in flight, so repeated highlights do not spawn duplicate requests.
 	summaryRefreshing map[string]bool
 
+	// lastInteraction records the last time a keyboard or mouse event
+	// was handled. The background session watcher consults it and skips
+	// a soft refresh when the user is mid-scroll or mid-click. The
+	// value is read and written only from the event-loop goroutine
+	// except for the watcher, which treats it as best-effort.
+	lastInteraction time.Time
+	interactionMu   sync.Mutex
+
+	// storeSnapshot is a fingerprint of the session store from the most
+	// recent watcher tick. When a newer snapshot differs, the watcher
+	// posts a refresh interrupt. Keeping the fingerprint avoids calling
+	// Store.List() twice when nothing changed.
+	storeSnapshot string
+
 	// Double click tracking
 	lastClickTime time.Time
 	lastClickRow  int
@@ -313,6 +327,13 @@ func (a *App) Run() error {
 	go a.runSpinnerTicker(stopTicker)
 	defer close(stopTicker)
 
+	// Watcher that polls the session store for changes every few seconds
+	// and signals the main loop when something changed. Skipped while
+	// the user is actively interacting.
+	stopWatcher := make(chan struct{})
+	go a.runStoreWatcher(stopWatcher)
+	defer close(stopWatcher)
+
 	for a.running {
 		ev := a.screen.PollEvent()
 		if ev == nil {
@@ -347,6 +368,80 @@ func (a *App) runSpinnerTicker(stop <-chan struct{}) {
 			_ = a.screen.PostEvent(tcell.NewEventInterrupt(spinnerTick{}))
 		}
 	}
+}
+
+// storeChanged is posted by the session watcher when the on-disk store
+// contents differ from the last snapshot. The main loop calls
+// softRefreshSessions in response, which preserves selection.
+type storeChanged struct{}
+
+// runStoreWatcher polls the session store every five seconds for changes.
+// A fingerprint of (name, metadata mtime) pairs acts as a change signal
+// so renames, deletes, and context updates all trigger a refresh. When a
+// change is seen and the user has been idle for at least two seconds, a
+// storeChanged interrupt is posted. Otherwise the refresh waits for the
+// next tick. This keeps the dashboard fresh without thrashing the UI
+// mid-scroll.
+func (a *App) runStoreWatcher(stop <-chan struct{}) {
+	if a.cb.Store == nil {
+		return
+	}
+	const pollEvery = 5 * time.Second
+	const idleGrace = 2 * time.Second
+	a.storeSnapshot = a.storeFingerprint()
+	t := time.NewTicker(pollEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			if a.screen == nil {
+				continue
+			}
+			fp := a.storeFingerprint()
+			if fp == a.storeSnapshot {
+				continue
+			}
+			// Check user activity. If a key or mouse event landed
+			// recently, defer to the next tick so the refresh does
+			// not reset a half-finished scroll or sort.
+			a.interactionMu.Lock()
+			lastAct := a.lastInteraction
+			a.interactionMu.Unlock()
+			if !lastAct.IsZero() && time.Since(lastAct) < idleGrace {
+				continue
+			}
+			a.storeSnapshot = fp
+			_ = a.screen.PostEvent(tcell.NewEventInterrupt(storeChanged{}))
+		}
+	}
+}
+
+// storeFingerprint returns a short string that summarizes the current
+// session store state. It is cheap to compute and changes whenever any
+// session is added, removed, or has its metadata file modified.
+func (a *App) storeFingerprint() string {
+	if a.cb.Store == nil {
+		return ""
+	}
+	sessions, err := a.cb.Store.List()
+	if err != nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, s := range sessions {
+		fmt.Fprintf(&b, "%s|%d|", s.Name, s.Metadata.LastAccessed.UnixNano())
+	}
+	return b.String()
+}
+
+// noteInteraction records the current time as the last user interaction.
+// Called from handleKey and handleMouse so the watcher can see activity.
+func (a *App) noteInteraction() {
+	a.interactionMu.Lock()
+	a.lastInteraction = time.Now()
+	a.interactionMu.Unlock()
 }
 
 // detailsLoadingNow reports whether the named session's details are being
@@ -462,6 +557,8 @@ func (a *App) handleEvent(ev tcell.Event) {
 			// Table was already repopulated by maybeRefreshSummary. The
 			// interrupt exists to trigger a draw cycle from the event loop.
 			_ = d
+		case storeChanged:
+			a.softRefreshSessions()
 		default:
 			// Legacy callers post a raw *App; treat as a generic refresh.
 			a.populateTable()
@@ -476,6 +573,7 @@ func (a *App) handleEvent(ev tcell.Event) {
 // handleKey dispatches keyboard events.
 // Global shortcuts (Ctrl+C) always apply. Overlays take priority over widgets.
 func (a *App) handleKey(e *tcell.EventKey) {
+	a.noteInteraction()
 	// Global: Ctrl+C always quits, regardless of focus.
 	if e.Key() == tcell.KeyCtrlC {
 		a.running = false
@@ -617,6 +715,12 @@ func (a *App) handleKey(e *tcell.EventKey) {
 // handleMouse dispatches mouse events via direct rect hit tests.
 // Overlays take priority. No InRect chain.
 func (a *App) handleMouse(e *tcell.EventMouse) {
+	// Only count buttoned events as interaction. Bare motion (no button)
+	// should not block the watcher because macOS delivers a lot of idle
+	// mouse-move events over the terminal window.
+	if e.Buttons() != 0 {
+		a.noteInteraction()
+	}
 	x, y := e.Position()
 	btns := e.Buttons()
 
@@ -923,7 +1027,7 @@ func (a *App) rowFor(sess *session.Session) []TableCell {
 		modelStyle = dim
 		subStyle = dim
 	}
-	summary := shortSummary(sess.Metadata.Context, 40)
+	summary := shortSummary(sess.Metadata.Context, 32)
 	summaryStyle := StyleSubtext
 	if summary == "" {
 		summary = compactStyleEmpty
@@ -1076,9 +1180,20 @@ func (a *App) maybeRefreshSummary(sess *session.Session) {
 	// Criteria for refresh:
 	//   1. No Context yet.
 	//   2. Transcript grew by >= 5 entries since last generation.
+	//   3. Stored Context is visibly too long. Earlier revisions of the
+	//      daemon prompt produced sentence-length summaries that no
+	//      longer fit the five-word column contract; treat anything
+	//      over six words as stale so a regeneration runs.
 	needs := false
+	ctx := strings.TrimSpace(sess.Metadata.Context)
+	wordCount := 0
+	if ctx != "" {
+		wordCount = len(strings.Fields(ctx))
+	}
 	switch {
-	case strings.TrimSpace(sess.Metadata.Context) == "":
+	case ctx == "":
+		needs = true
+	case wordCount > 6:
 		needs = true
 	case msgNow > 0 && msgNow-sess.Metadata.ContextMessageCount >= 5:
 		needs = true
@@ -1413,6 +1528,53 @@ func (a *App) refreshSessions() {
 	a.detailCache = make(map[string]SessionDetail)
 	a.detailMu.Unlock()
 	a.deselect()
+}
+
+// softRefreshSessions reloads from the store without discarding the current
+// selection, scroll position, filter, or details cache. Called by the
+// background watcher when it notices on-disk changes. The previously
+// selected session is re-located by name so renames carry through.
+func (a *App) softRefreshSessions() {
+	if a.cb.Store == nil {
+		return
+	}
+	sessions, err := a.cb.Store.List()
+	if err != nil {
+		return
+	}
+	// Remember what the user was looking at.
+	var selectedName string
+	if a.selected != nil {
+		selectedName = a.selected.Name
+	} else if a.table.Active && a.table.SelectedRow < len(a.visibleIdx) {
+		selectedName = a.sessions[a.visibleIdx[a.table.SelectedRow]].Name
+	}
+	prevOffset := a.table.Offset
+
+	a.sessions = sessions
+	a.sortSessions()
+	a.populateTable()
+
+	// Restore selection if the same name still exists.
+	if selectedName != "" {
+		for vi, idx := range a.visibleIdx {
+			if a.sessions[idx].Name == selectedName {
+				a.table.SelectedRow = vi
+				if a.selected != nil {
+					a.selected = a.sessions[idx]
+				}
+				break
+			}
+		}
+	}
+	a.table.Offset = prevOffset
+	if a.selected != nil {
+		// Refresh the details pane in case Context changed.
+		a.detailMu.Lock()
+		delete(a.detailCache, selectedName)
+		a.detailMu.Unlock()
+		a.populateDetails()
+	}
 }
 
 // suspendAndRun shuts down the screen, runs fn (which may launch claude),

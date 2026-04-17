@@ -313,8 +313,24 @@ func (s *Server) updateSessionContext(payload hookEventPayload) {
 	}
 
 	summary := strings.TrimSpace(string(output))
-	if summary == "" || len(summary) > 200 {
-		s.log.Warn("context update: bad summary", "session", payload.SessionName, "len", len(summary))
+	// Keep only the first line. Sonnet sometimes appends an explanation or
+	// a trailing sentence despite the prompt. We treat the first line as
+	// the label candidate.
+	if idx := strings.IndexAny(summary, "\r\n"); idx >= 0 {
+		summary = strings.TrimSpace(summary[:idx])
+	}
+	// Strip any surrounding quotes or trailing punctuation the model may add.
+	summary = strings.Trim(summary, " \t`\"'")
+	summary = strings.TrimRight(summary, ".!?")
+	// Reject anything that is not a short label. The column shows five
+	// words; we allow a little slack for punctuation but not a sentence.
+	words := strings.Fields(summary)
+	if len(summary) == 0 || len(summary) > 60 || len(words) > 7 {
+		s.log.Warn("context update: bad summary",
+			"session", payload.SessionName,
+			"len", len(summary),
+			"words", len(words),
+			"value", summary)
 		return
 	}
 
