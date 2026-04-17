@@ -25,6 +25,8 @@ const (
 	AgentGateD_ListActiveSessions_FullMethodName = "/agentgate.AgentGateD/ListActiveSessions"
 	AgentGateD_TriggerScan_FullMethodName        = "/agentgate.AgentGateD/TriggerScan"
 	AgentGateD_SubscribeRegistry_FullMethodName  = "/agentgate.AgentGateD/SubscribeRegistry"
+	AgentGateD_RenameSession_FullMethodName      = "/agentgate.AgentGateD/RenameSession"
+	AgentGateD_DeleteSession_FullMethodName      = "/agentgate.AgentGateD/DeleteSession"
 )
 
 // AgentGateDClient is the client API for AgentGateD service.
@@ -37,6 +39,8 @@ type AgentGateDClient interface {
 	ListActiveSessions(ctx context.Context, in *ListActiveSessionsRequest, opts ...grpc.CallOption) (*ListActiveSessionsResponse, error)
 	TriggerScan(ctx context.Context, in *TriggerScanRequest, opts ...grpc.CallOption) (*TriggerScanResponse, error)
 	SubscribeRegistry(ctx context.Context, in *SubscribeRegistryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[RegistryEvent], error)
+	RenameSession(ctx context.Context, in *RenameSessionRequest, opts ...grpc.CallOption) (*RenameSessionResponse, error)
+	DeleteSession(ctx context.Context, in *DeleteSessionRequest, opts ...grpc.CallOption) (*DeleteSessionResponse, error)
 }
 
 type agentGateDClient struct {
@@ -116,6 +120,26 @@ func (c *agentGateDClient) SubscribeRegistry(ctx context.Context, in *SubscribeR
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AgentGateD_SubscribeRegistryClient = grpc.ServerStreamingClient[RegistryEvent]
 
+func (c *agentGateDClient) RenameSession(ctx context.Context, in *RenameSessionRequest, opts ...grpc.CallOption) (*RenameSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RenameSessionResponse)
+	err := c.cc.Invoke(ctx, AgentGateD_RenameSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentGateDClient) DeleteSession(ctx context.Context, in *DeleteSessionRequest, opts ...grpc.CallOption) (*DeleteSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteSessionResponse)
+	err := c.cc.Invoke(ctx, AgentGateD_DeleteSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentGateDServer is the server API for AgentGateD service.
 // All implementations must embed UnimplementedAgentGateDServer
 // for forward compatibility.
@@ -126,6 +150,8 @@ type AgentGateDServer interface {
 	ListActiveSessions(context.Context, *ListActiveSessionsRequest) (*ListActiveSessionsResponse, error)
 	TriggerScan(context.Context, *TriggerScanRequest) (*TriggerScanResponse, error)
 	SubscribeRegistry(*SubscribeRegistryRequest, grpc.ServerStreamingServer[RegistryEvent]) error
+	RenameSession(context.Context, *RenameSessionRequest) (*RenameSessionResponse, error)
+	DeleteSession(context.Context, *DeleteSessionRequest) (*DeleteSessionResponse, error)
 	mustEmbedUnimplementedAgentGateDServer()
 }
 
@@ -153,6 +179,12 @@ func (UnimplementedAgentGateDServer) TriggerScan(context.Context, *TriggerScanRe
 }
 func (UnimplementedAgentGateDServer) SubscribeRegistry(*SubscribeRegistryRequest, grpc.ServerStreamingServer[RegistryEvent]) error {
 	return status.Error(codes.Unimplemented, "method SubscribeRegistry not implemented")
+}
+func (UnimplementedAgentGateDServer) RenameSession(context.Context, *RenameSessionRequest) (*RenameSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RenameSession not implemented")
+}
+func (UnimplementedAgentGateDServer) DeleteSession(context.Context, *DeleteSessionRequest) (*DeleteSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteSession not implemented")
 }
 func (UnimplementedAgentGateDServer) mustEmbedUnimplementedAgentGateDServer() {}
 func (UnimplementedAgentGateDServer) testEmbeddedByValue()                    {}
@@ -276,6 +308,42 @@ func _AgentGateD_SubscribeRegistry_Handler(srv interface{}, stream grpc.ServerSt
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AgentGateD_SubscribeRegistryServer = grpc.ServerStreamingServer[RegistryEvent]
 
+func _AgentGateD_RenameSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenameSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentGateDServer).RenameSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentGateD_RenameSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentGateDServer).RenameSession(ctx, req.(*RenameSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentGateD_DeleteSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentGateDServer).DeleteSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentGateD_DeleteSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentGateDServer).DeleteSession(ctx, req.(*DeleteSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentGateD_ServiceDesc is the grpc.ServiceDesc for AgentGateD service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -302,6 +370,14 @@ var AgentGateD_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "TriggerScan",
 			Handler:    _AgentGateD_TriggerScan_Handler,
+		},
+		{
+			MethodName: "RenameSession",
+			Handler:    _AgentGateD_RenameSession_Handler,
+		},
+		{
+			MethodName: "DeleteSession",
+			Handler:    _AgentGateD_DeleteSession_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

@@ -2046,10 +2046,7 @@ func (a *App) openSessionOptionsFor(sess *session.Session) {
 			Hint:  "edits the registry name",
 			Action: func() {
 				close()
-				if a.cb.RenameSession != nil {
-					_, _ = a.cb.RenameSession(sess)
-					a.refreshSessions()
-				}
+				a.openRenamePrompt(sess)
 			},
 			Disabled: a.cb.RenameSession == nil,
 		},
@@ -2083,6 +2080,44 @@ func (a *App) openSessionOptionsFor(sess *session.Session) {
 	modal := NewOptionsModal(sess.Name, entries)
 	modal.OnCancel = close
 	a.overlay = modal
+}
+
+// openRenamePrompt asks for the new session name via an inline input
+// and routes the rename through the daemon when the callback is set.
+// The wired callback hides whether the actual rename happened locally
+// or via gRPC; either way the dashboard refreshes from the store on
+// completion.
+func (a *App) openRenamePrompt(sess *session.Session) {
+	if sess == nil {
+		return
+	}
+	input := NewTextInput("New name: ")
+	input.Text = sess.Name
+	input.CursorX = runeCount(sess.Name)
+	input.OnSubmit = func(s string) {
+		a.closeOverlay()
+		newName := strings.TrimSpace(s)
+		if newName == "" || newName == sess.Name {
+			return
+		}
+		// Mutate the session's Name field so the callback wired in
+		// cmd/root.go can read both old and new values from the
+		// session struct without us widening the callback signature.
+		oldName := sess.Name
+		sess.Name = newName
+		if a.cb.RenameSession != nil {
+			if _, err := a.cb.RenameSession(sess); err != nil {
+				// Best-effort restore so a failed rename does not
+				// leave the in-memory session pointing at a name
+				// that does not exist on disk.
+				sess.Name = oldName
+			}
+		}
+		a.refreshSessions()
+	}
+	input.OnCancel = a.closeOverlay
+	a.overlay = &InputOverlay{Input: input, Title: "Rename session"}
+	a.mode = StatusFilter
 }
 
 // openBasedirEditor pops up an inline single-line input pre-filled with

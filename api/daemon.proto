@@ -11,6 +11,8 @@ service AgentGateD {
   rpc ListActiveSessions(ListActiveSessionsRequest) returns (ListActiveSessionsResponse);
   rpc TriggerScan(TriggerScanRequest) returns (TriggerScanResponse);
   rpc SubscribeRegistry(SubscribeRegistryRequest) returns (stream RegistryEvent);
+  rpc RenameSession(RenameSessionRequest) returns (RenameSessionResponse);
+  rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);
 }
 
 message AcquireSessionRequest {
@@ -67,8 +69,23 @@ message RegistryEvent {
     SESSION_ADOPTED = 1;
     SESSION_UPDATED = 2;
     SESSION_DELETED = 3;
+    SESSION_RENAMED = 4;
   }
   Kind kind = 1;
   string session_name = 2;
   string session_id = 3;
+  string old_name = 4;
 }
+
+message RenameSessionRequest {
+  string old_name = 1;
+  string new_name = 2;
+}
+
+message RenameSessionResponse {}
+
+message DeleteSessionRequest {
+  string name = 1;
+}
+
+message DeleteSessionResponse {}

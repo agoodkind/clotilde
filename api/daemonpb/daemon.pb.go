@@ -28,6 +28,7 @@ const (
 	RegistryEvent_SESSION_ADOPTED  RegistryEvent_Kind = 1
 	RegistryEvent_SESSION_UPDATED  RegistryEvent_Kind = 2
 	RegistryEvent_SESSION_DELETED  RegistryEvent_Kind = 3
+	RegistryEvent_SESSION_RENAMED  RegistryEvent_Kind = 4
 )
 
 // Enum value maps for RegistryEvent_Kind.
@@ -37,12 +38,14 @@ var (
 		1: "SESSION_ADOPTED",
 		2: "SESSION_UPDATED",
 		3: "SESSION_DELETED",
+		4: "SESSION_RENAMED",
 	}
 	RegistryEvent_Kind_value = map[string]int32{
 		"KIND_UNSPECIFIED": 0,
 		"SESSION_ADOPTED":  1,
 		"SESSION_UPDATED":  2,
 		"SESSION_DELETED":  3,
+		"SESSION_RENAMED":  4,
 	}
 )
 
@@ -638,6 +641,7 @@ type RegistryEvent struct {
 	Kind          RegistryEvent_Kind     `protobuf:"varint,1,opt,name=kind,proto3,enum=agentgate.RegistryEvent_Kind" json:"kind,omitempty"`
 	SessionName   string                 `protobuf:"bytes,2,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
 	SessionId     string                 `protobuf:"bytes,3,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	OldName       string                 `protobuf:"bytes,4,opt,name=old_name,json=oldName,proto3" json:"old_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -693,6 +697,181 @@ func (x *RegistryEvent) GetSessionId() string {
 	return ""
 }
 
+func (x *RegistryEvent) GetOldName() string {
+	if x != nil {
+		return x.OldName
+	}
+	return ""
+}
+
+type RenameSessionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OldName       string                 `protobuf:"bytes,1,opt,name=old_name,json=oldName,proto3" json:"old_name,omitempty"`
+	NewName       string                 `protobuf:"bytes,2,opt,name=new_name,json=newName,proto3" json:"new_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RenameSessionRequest) Reset() {
+	*x = RenameSessionRequest{}
+	mi := &file_daemon_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenameSessionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenameSessionRequest) ProtoMessage() {}
+
+func (x *RenameSessionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenameSessionRequest.ProtoReflect.Descriptor instead.
+func (*RenameSessionRequest) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *RenameSessionRequest) GetOldName() string {
+	if x != nil {
+		return x.OldName
+	}
+	return ""
+}
+
+func (x *RenameSessionRequest) GetNewName() string {
+	if x != nil {
+		return x.NewName
+	}
+	return ""
+}
+
+type RenameSessionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RenameSessionResponse) Reset() {
+	*x = RenameSessionResponse{}
+	mi := &file_daemon_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenameSessionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenameSessionResponse) ProtoMessage() {}
+
+func (x *RenameSessionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenameSessionResponse.ProtoReflect.Descriptor instead.
+func (*RenameSessionResponse) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{14}
+}
+
+type DeleteSessionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteSessionRequest) Reset() {
+	*x = DeleteSessionRequest{}
+	mi := &file_daemon_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteSessionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteSessionRequest) ProtoMessage() {}
+
+func (x *DeleteSessionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteSessionRequest.ProtoReflect.Descriptor instead.
+func (*DeleteSessionRequest) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *DeleteSessionRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type DeleteSessionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteSessionResponse) Reset() {
+	*x = DeleteSessionResponse{}
+	mi := &file_daemon_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteSessionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteSessionResponse) ProtoMessage() {}
+
+func (x *DeleteSessionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteSessionResponse.ProtoReflect.Descriptor instead.
+func (*DeleteSessionResponse) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{16}
+}
+
 var File_daemon_proto protoreflect.FileDescriptor
 
 const file_daemon_proto_rawDesc = "" +
@@ -730,17 +909,26 @@ const file_daemon_proto_rawDesc = "" +
 	"\x13TriggerScanResponse\x12#\n" +
 	"\radopted_count\x18\x01 \x01(\x05R\fadoptedCount\x12#\n" +
 	"\radopted_names\x18\x02 \x03(\tR\fadoptedNames\"\x1a\n" +
-	"\x18SubscribeRegistryRequest\"\xe1\x01\n" +
+	"\x18SubscribeRegistryRequest\"\x91\x02\n" +
 	"\rRegistryEvent\x121\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1d.agentgate.RegistryEvent.KindR\x04kind\x12!\n" +
 	"\fsession_name\x18\x02 \x01(\tR\vsessionName\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x03 \x01(\tR\tsessionId\"[\n" +
+	"session_id\x18\x03 \x01(\tR\tsessionId\x12\x19\n" +
+	"\bold_name\x18\x04 \x01(\tR\aoldName\"p\n" +
 	"\x04Kind\x12\x14\n" +
 	"\x10KIND_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fSESSION_ADOPTED\x10\x01\x12\x13\n" +
 	"\x0fSESSION_UPDATED\x10\x02\x12\x13\n" +
-	"\x0fSESSION_DELETED\x10\x032\x89\x04\n" +
+	"\x0fSESSION_DELETED\x10\x03\x12\x13\n" +
+	"\x0fSESSION_RENAMED\x10\x04\"L\n" +
+	"\x14RenameSessionRequest\x12\x19\n" +
+	"\bold_name\x18\x01 \x01(\tR\aoldName\x12\x19\n" +
+	"\bnew_name\x18\x02 \x01(\tR\anewName\"\x17\n" +
+	"\x15RenameSessionResponse\"*\n" +
+	"\x14DeleteSessionRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"\x17\n" +
+	"\x15DeleteSessionResponse2\xb1\x05\n" +
 	"\n" +
 	"AgentGateD\x12U\n" +
 	"\x0eAcquireSession\x12 .agentgate.AcquireSessionRequest\x1a!.agentgate.AcquireSessionResponse\x12U\n" +
@@ -748,7 +936,9 @@ const file_daemon_proto_rawDesc = "" +
 	"\tHookEvent\x12\x1b.agentgate.HookEventRequest\x1a\x1c.agentgate.HookEventResponse\x12a\n" +
 	"\x12ListActiveSessions\x12$.agentgate.ListActiveSessionsRequest\x1a%.agentgate.ListActiveSessionsResponse\x12L\n" +
 	"\vTriggerScan\x12\x1d.agentgate.TriggerScanRequest\x1a\x1e.agentgate.TriggerScanResponse\x12T\n" +
-	"\x11SubscribeRegistry\x12#.agentgate.SubscribeRegistryRequest\x1a\x18.agentgate.RegistryEvent0\x01B)Z'github.com/fgrehm/clotilde/api/daemonpbb\x06proto3"
+	"\x11SubscribeRegistry\x12#.agentgate.SubscribeRegistryRequest\x1a\x18.agentgate.RegistryEvent0\x01\x12R\n" +
+	"\rRenameSession\x12\x1f.agentgate.RenameSessionRequest\x1a .agentgate.RenameSessionResponse\x12R\n" +
+	"\rDeleteSession\x12\x1f.agentgate.DeleteSessionRequest\x1a .agentgate.DeleteSessionResponseB)Z'github.com/fgrehm/clotilde/api/daemonpbb\x06proto3"
 
 var (
 	file_daemon_proto_rawDescOnce sync.Once
@@ -763,7 +953,7 @@ func file_daemon_proto_rawDescGZIP() []byte {
 }
 
 var file_daemon_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_daemon_proto_goTypes = []any{
 	(RegistryEvent_Kind)(0),            // 0: agentgate.RegistryEvent.Kind
 	(*AcquireSessionRequest)(nil),      // 1: agentgate.AcquireSessionRequest
@@ -779,6 +969,10 @@ var file_daemon_proto_goTypes = []any{
 	(*TriggerScanResponse)(nil),        // 11: agentgate.TriggerScanResponse
 	(*SubscribeRegistryRequest)(nil),   // 12: agentgate.SubscribeRegistryRequest
 	(*RegistryEvent)(nil),              // 13: agentgate.RegistryEvent
+	(*RenameSessionRequest)(nil),       // 14: agentgate.RenameSessionRequest
+	(*RenameSessionResponse)(nil),      // 15: agentgate.RenameSessionResponse
+	(*DeleteSessionRequest)(nil),       // 16: agentgate.DeleteSessionRequest
+	(*DeleteSessionResponse)(nil),      // 17: agentgate.DeleteSessionResponse
 }
 var file_daemon_proto_depIdxs = []int32{
 	9,  // 0: agentgate.ListActiveSessionsResponse.sessions:type_name -> agentgate.ActiveSession
@@ -789,14 +983,18 @@ var file_daemon_proto_depIdxs = []int32{
 	7,  // 5: agentgate.AgentGateD.ListActiveSessions:input_type -> agentgate.ListActiveSessionsRequest
 	10, // 6: agentgate.AgentGateD.TriggerScan:input_type -> agentgate.TriggerScanRequest
 	12, // 7: agentgate.AgentGateD.SubscribeRegistry:input_type -> agentgate.SubscribeRegistryRequest
-	2,  // 8: agentgate.AgentGateD.AcquireSession:output_type -> agentgate.AcquireSessionResponse
-	4,  // 9: agentgate.AgentGateD.ReleaseSession:output_type -> agentgate.ReleaseSessionResponse
-	6,  // 10: agentgate.AgentGateD.HookEvent:output_type -> agentgate.HookEventResponse
-	8,  // 11: agentgate.AgentGateD.ListActiveSessions:output_type -> agentgate.ListActiveSessionsResponse
-	11, // 12: agentgate.AgentGateD.TriggerScan:output_type -> agentgate.TriggerScanResponse
-	13, // 13: agentgate.AgentGateD.SubscribeRegistry:output_type -> agentgate.RegistryEvent
-	8,  // [8:14] is the sub-list for method output_type
-	2,  // [2:8] is the sub-list for method input_type
+	14, // 8: agentgate.AgentGateD.RenameSession:input_type -> agentgate.RenameSessionRequest
+	16, // 9: agentgate.AgentGateD.DeleteSession:input_type -> agentgate.DeleteSessionRequest
+	2,  // 10: agentgate.AgentGateD.AcquireSession:output_type -> agentgate.AcquireSessionResponse
+	4,  // 11: agentgate.AgentGateD.ReleaseSession:output_type -> agentgate.ReleaseSessionResponse
+	6,  // 12: agentgate.AgentGateD.HookEvent:output_type -> agentgate.HookEventResponse
+	8,  // 13: agentgate.AgentGateD.ListActiveSessions:output_type -> agentgate.ListActiveSessionsResponse
+	11, // 14: agentgate.AgentGateD.TriggerScan:output_type -> agentgate.TriggerScanResponse
+	13, // 15: agentgate.AgentGateD.SubscribeRegistry:output_type -> agentgate.RegistryEvent
+	15, // 16: agentgate.AgentGateD.RenameSession:output_type -> agentgate.RenameSessionResponse
+	17, // 17: agentgate.AgentGateD.DeleteSession:output_type -> agentgate.DeleteSessionResponse
+	10, // [10:18] is the sub-list for method output_type
+	2,  // [2:10] is the sub-list for method input_type
 	2,  // [2:2] is the sub-list for extension type_name
 	2,  // [2:2] is the sub-list for extension extendee
 	0,  // [0:2] is the sub-list for field type_name
@@ -813,7 +1011,7 @@ func file_daemon_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_daemon_proto_rawDesc), len(file_daemon_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   13,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

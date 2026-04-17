@@ -45,6 +45,47 @@ func NudgeDiscoveryScan() {
 	_ = syscall.Kill(pid, syscall.SIGUSR1)
 }
 
+// RenameSessionViaDaemon asks the daemon to perform the rename. The
+// daemon owns the rename so subscribers get notified, and concurrent
+// callers do not race on the metadata.json move. Returns true when
+// the rename happened via the daemon, false (and an error) when the
+// daemon is unreachable so callers can fall back to a direct write.
+func RenameSessionViaDaemon(ctx context.Context, oldName, newName string) (bool, error) {
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer c.conn.Close()
+	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, err = c.rpc.RenameSession(rpcCtx, &daemonpb.RenameSessionRequest{
+		OldName: oldName,
+		NewName: newName,
+	})
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// DeleteSessionViaDaemon asks the daemon to drop a session from the
+// registry. Transcript and agent log cleanup remain the caller's job
+// because they touch per-project state outside the daemon's view.
+func DeleteSessionViaDaemon(ctx context.Context, name string) (bool, error) {
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer c.conn.Close()
+	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, err = c.rpc.DeleteSession(rpcCtx, &daemonpb.DeleteSessionRequest{Name: name})
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // SubscribeRegistry opens a long-lived stream of RegistryEvent values
 // from the daemon. The returned channel closes when the stream
 // terminates for any reason. Callers can stop subscribing by calling
