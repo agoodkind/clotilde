@@ -103,6 +103,9 @@ func buildAppCallbacks(store session.Store, sessions []*session.Session) ui.AppC
 		DeleteSession: func(sess *session.Session) error {
 			return deleteSession(sess, store)
 		},
+		ApplyCompact: func(sess *session.Session, choices ui.CompactChoices) error {
+			return applyCompactChoices(sess, choices)
+		},
 		StartSession: func() error {
 			existingNames := make([]string, len(sessions))
 			for i, s := range sessions {

@@ -10,6 +10,7 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 
+	"github.com/fgrehm/clotilde/internal/session"
 	"github.com/fgrehm/clotilde/internal/transcript"
 	"github.com/fgrehm/clotilde/internal/ui"
 )
@@ -420,6 +421,96 @@ Examples:
 	cmd.Flags().Bool("remove-last-boundary", false, "Remove the most recent compact boundary")
 
 	return cmd
+}
+
+// applyCompactChoices executes a compact with the given UI-generated choices.
+// Called from the main TUI's compact form. Mirrors the CLI pipeline: backup,
+// strip, then move boundary. Writes are skipped when DryRun is set.
+func applyCompactChoices(sess *session.Session, c ui.CompactChoices) error {
+	path := sess.Metadata.TranscriptPath
+	if path == "" {
+		return fmt.Errorf("session has no transcript path")
+	}
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("transcript not found: %w", err)
+	}
+	if !c.DryRun {
+		if _, err := transcript.BackupTranscript(path, sess.Name); err != nil {
+			return fmt.Errorf("pre-compact backup failed: %w", err)
+		}
+	}
+
+	// Strip phase.
+	if c.StripToolResults || c.StripThinking || c.StripImages || c.StripLargeInputs {
+		chain, _, all, err := transcript.WalkChain(path)
+		if err != nil {
+			return err
+		}
+		opts := transcript.CompactOptions{
+			StripToolResults: c.StripToolResults,
+			StripThinking:    c.StripThinking,
+			StripImages:      c.StripImages,
+		}
+		if c.StripLargeInputs {
+			opts.StripLargeBytes = 1024
+		}
+		newLines, _ := transcript.StripContent(all, chain, opts)
+		if !c.DryRun {
+			if err := writeLines(path, newLines); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Move boundary phase.
+	if c.BoundaryPercent > 0 && c.BoundaryPercent < 100 {
+		chain, _, all, err := transcript.WalkChain(path)
+		if err != nil {
+			return err
+		}
+		summary := "Conversation compacted."
+		existing := transcript.FindBoundaries(all)
+		if len(existing) > 0 {
+			lastB := existing[len(existing)-1]
+			if lastB+1 < len(all) {
+				var s struct {
+					Message struct {
+						Content string `json:"content"`
+					} `json:"message"`
+				}
+				if json.Unmarshal([]byte(all[lastB+1]), &s) == nil && s.Message.Content != "" {
+					summary = s.Message.Content
+				}
+			}
+			if !c.DryRun {
+				removed, rmErr := transcript.RemoveBoundary(all, lastB)
+				if rmErr != nil {
+					return fmt.Errorf("removing old boundary: %w", rmErr)
+				}
+				if err := writeLines(path, removed); err != nil {
+					return err
+				}
+				chain, _, all, err = transcript.WalkChain(path)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		targetStep := len(chain) - (len(chain) * c.BoundaryPercent / 100)
+		if targetStep < 1 {
+			targetStep = 1
+		}
+		newLines, insErr := transcript.InsertBoundary(all, chain, targetStep, summary)
+		if insErr != nil {
+			return fmt.Errorf("inserting boundary: %w", insErr)
+		}
+		if !c.DryRun {
+			if err := writeLines(path, newLines); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func writeLines(path string, lines []string) error {

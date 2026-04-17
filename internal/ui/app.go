@@ -44,6 +44,7 @@ type AppCallbacks struct {
 	ForkSession   func(sess *session.Session) error
 	RenameSession func(sess *session.Session) (string, error)
 	StartSession  func() error
+	ApplyCompact  func(sess *session.Session, choices CompactChoices) error
 	ExtractDetail func(sess *session.Session) SessionDetail
 	ExtractModel  func(sess *session.Session) string
 	ViewContent   func(sess *session.Session) string
@@ -910,26 +911,7 @@ func (a *App) openSearchForm() {
 }
 
 func (a *App) openCompactForm() {
-	sess := a.selected
-	if sess == nil {
-		return
-	}
-	m := &Modal{
-		Title: "Compact: " + sess.Name,
-		Body:  "Compaction form (tcell port). Tab switches, Enter applies, Esc cancels.",
-		Details: []string{
-			"This stub preserves keyboard flow while the rich form is reimplemented.",
-		},
-		Buttons:     []string{"Cancel", "Apply"},
-		ActiveIndex: 0,
-		Shortcuts:   map[rune]int{'y': 1, 'n': 0},
-	}
-	m.OnChoice = func(idx int) {
-		a.closeOverlay()
-		_ = idx
-	}
-	a.overlay = m
-	a.mode = StatusCompact
+	a.openRichCompactForm(a.selected)
 }
 
 func (a *App) openFilter() {
