@@ -13,7 +13,7 @@ import (
 const (
 	maxContextTokens = 1_000_000 // 1M token context window constant
 	sliderWidth      = 30        // character width of the progress bar
-	previewCount     = 5         // number of preview messages to show
+	previewCount     = 10        // number of preview messages to show
 )
 
 // focusField enumerates which UI field has keyboard focus.
@@ -55,7 +55,7 @@ type CompactModel struct {
 	// computed display values
 	estimatedTokens int
 	visibleEntries  int
-	previewMessages []string
+	previewMessages []transcript.PreviewMessage
 
 	// focus
 	focusField  int // focusSlider or focusOptions
@@ -301,8 +301,12 @@ func (m CompactModel) View() string {
 	if len(m.previewMessages) > 0 {
 		b.WriteString(BoldStyle.Render(fmt.Sprintf("First %d messages after boundary:", len(m.previewMessages))))
 		b.WriteString("\n")
-		for i, msg := range m.previewMessages {
-			b.WriteString(DimStyle.Render(fmt.Sprintf("  %d. %s", i+1, msg)))
+		for i, p := range m.previewMessages {
+			ts := "     --     "
+			if !p.Timestamp.IsZero() {
+				ts = p.Timestamp.Local().Format("2006-01-02 15:04")
+			}
+			b.WriteString(DimStyle.Render(fmt.Sprintf("  %2d. [%s] %s", i+1, ts, p.Text)))
 			b.WriteString("\n")
 		}
 	} else {

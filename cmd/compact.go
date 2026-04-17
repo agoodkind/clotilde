@@ -105,6 +105,25 @@ func fmtTokensSigned(n int) string {
 	return sign + fmtTokens(n)
 }
 
+// previewCount is how many user-message previews to show in compact output.
+const previewCount = 10
+
+// printPreview writes a numbered list of previews with a short absolute
+// timestamp (YYYY-MM-DD HH:MM) alongside each message.
+func printPreview(w io.Writer, heading string, previews []transcript.PreviewMessage) {
+	if len(previews) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "%s\n", heading)
+	for i, p := range previews {
+		ts := "     --     "
+		if !p.Timestamp.IsZero() {
+			ts = p.Timestamp.Local().Format("2006-01-02 15:04")
+		}
+		fmt.Fprintf(w, "  %2d. [%s] %s\n", i+1, ts, p.Text)
+	}
+}
+
 func newCompactCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "compact <session>",
@@ -254,13 +273,11 @@ Examples:
 				printStats(out, "After", after)
 				printDelta(out, before, after)
 
-				fmt.Fprintln(out, "\nFirst 5 user messages after removal:")
 				afterChain, _, afterAll, _ := transcript.WalkChain(path)
-				preview := transcript.PreviewMessages(afterAll, afterChain, 0, 5)
+				preview := transcript.PreviewMessages(afterAll, afterChain, 0, previewCount)
 				_ = chain
-				for i, msg := range preview {
-					fmt.Fprintf(out, "  %d. %s\n", i+1, msg)
-				}
+				fmt.Fprintln(out)
+				printPreview(out, fmt.Sprintf("First %d user messages after removal:", len(preview)), preview)
 				return nil
 			}
 
@@ -348,12 +365,9 @@ Examples:
 				fmt.Fprintf(out, "Moving boundary to %d%% visible (%d entries)...\n", moveBoundary, visibleCount)
 
 				// Preview lines after the proposed boundary
-				preview := transcript.PreviewMessages(all, chain, targetStep, 5)
+				preview := transcript.PreviewMessages(all, chain, targetStep, previewCount)
 				if len(preview) > 0 {
-					fmt.Fprintln(out, "First 5 user messages after new boundary:")
-					for i, msg := range preview {
-						fmt.Fprintf(out, "  %d. %s\n", i+1, msg)
-					}
+					printPreview(out, fmt.Sprintf("First %d user messages after new boundary:", len(preview)), preview)
 					fmt.Fprintln(out)
 				}
 
