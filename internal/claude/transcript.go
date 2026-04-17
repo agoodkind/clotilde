@@ -367,7 +367,7 @@ func ExtractLastModel(transcriptPath string) string {
 	err := forEachTailLine(transcriptPath, 128*1024, func(line []byte) {
 		var entry transcriptEntry
 		if err := json.Unmarshal(line, &entry); err == nil {
-			if entry.Type == "assistant" && entry.Message.Model != "" {
+			if entry.Type == "assistant" && isRealModel(entry.Message.Model) {
 				lastModel = entry.Message.Model
 			}
 		}
@@ -376,6 +376,14 @@ func ExtractLastModel(transcriptPath string) string {
 		return ""
 	}
 	return FormatModelFamily(lastModel)
+}
+
+// isRealModel reports whether a model string came from an actual API call.
+// Claude Code writes `<synthetic>` for assistant entries it injects locally
+// (interrupt notices, hook fallbacks, context refreshes). Those should not
+// pollute the model column in the session list.
+func isRealModel(m string) bool {
+	return m != "" && m != "<synthetic>"
 }
 
 // FormatModelFamily extracts the model family name from the full model ID.
@@ -414,7 +422,7 @@ func ExtractModelAndLastTime(transcriptPath string) (string, time.Time) {
 			if !e.Timestamp.IsZero() {
 				lastTime = e.Timestamp
 			}
-			if e.Type == "assistant" && e.Message.Model != "" {
+			if e.Type == "assistant" && isRealModel(e.Message.Model) {
 				lastModel = e.Message.Model
 			}
 		}
