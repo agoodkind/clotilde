@@ -384,11 +384,65 @@ func (s *Server) HookEvent(ctx context.Context, req *daemonpb.HookEventRequest) 
 
 	switch payload.Type {
 	case "update_context":
-		// Fire and forget — run in background goroutine
-		go s.updateSessionContext(payload)
+		// Throttle and de-duplicate. The same session can request a
+		// summary several times per minute when the wrapper acquires
+		// repeatedly. Each fired claude -p subprocess writes to
+		// ~/.claude.json which serialises with Claude Code's bridge
+		// session creation. Without the gate, /remote-control fails
+		// because the writes overlap. The gate enforces one in-flight
+		// summary per session and a five minute cool down between
+		// runs.
+		if s.tryStartContextUpdate(payload.SessionName) {
+			go func() {
+				defer s.finishContextUpdate(payload.SessionName)
+				s.updateSessionContext(payload)
+			}()
+		} else {
+			s.log.Debug("skip context update (throttled)", "session", payload.SessionName)
+		}
 	}
 
 	return &daemonpb.HookEventResponse{ExitCode: 0}, nil
+}
+
+// contextUpdateGate is the throttle and dedupe state for
+// updateSessionContext. inflight tracks per-session goroutines that
+// are already running; lastRun records when the most recent run for
+// each session finished so we can enforce a minimum gap before the
+// next call.
+var (
+	contextGateMu  sync.Mutex
+	contextLastRun = map[string]time.Time{}
+	contextRunning = map[string]bool{}
+)
+
+const contextUpdateMinGap = 5 * time.Minute
+
+// tryStartContextUpdate returns true when the caller is allowed to run
+// a fresh context update for this session. It marks the session as
+// running so concurrent calls return false.
+func (s *Server) tryStartContextUpdate(name string) bool {
+	contextGateMu.Lock()
+	defer contextGateMu.Unlock()
+	if contextRunning[name] {
+		return false
+	}
+	if last, ok := contextLastRun[name]; ok {
+		if time.Since(last) < contextUpdateMinGap {
+			return false
+		}
+	}
+	contextRunning[name] = true
+	return true
+}
+
+// finishContextUpdate clears the running flag and records when the run
+// finished so the cool down starts now.
+func (s *Server) finishContextUpdate(name string) {
+	contextGateMu.Lock()
+	defer contextGateMu.Unlock()
+	delete(contextRunning, name)
+	contextLastRun[name] = time.Now()
 }
 
 // updateSessionContext generates a one-sentence context summary via sonnet
