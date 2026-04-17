@@ -201,6 +201,54 @@ func (s *Server) SubscribeRegistry(_ *daemonpb.SubscribeRegistryRequest, stream 
 	}
 }
 
+// RenameSession is the daemon-side rename. The daemon owns the rename
+// so that no other process can simultaneously mutate the registry
+// while the rename is in flight. A SESSION_RENAMED event broadcasts
+// the change to every subscriber.
+func (s *Server) RenameSession(_ context.Context, req *daemonpb.RenameSessionRequest) (*daemonpb.RenameSessionResponse, error) {
+	if req.OldName == "" || req.NewName == "" {
+		return nil, status.Error(codes.InvalidArgument, "old_name and new_name are required")
+	}
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "store init: %v", err)
+	}
+	if err := store.Rename(req.OldName, req.NewName); err != nil {
+		return nil, status.Errorf(codes.Internal, "rename failed: %v", err)
+	}
+	s.publishEvent(&daemonpb.RegistryEvent{
+		Kind:        daemonpb.RegistryEvent_SESSION_RENAMED,
+		SessionName: req.NewName,
+		OldName:     req.OldName,
+	})
+	s.log.Info("session renamed via RPC", "old", req.OldName, "new", req.NewName)
+	return &daemonpb.RenameSessionResponse{}, nil
+}
+
+// DeleteSession is the daemon-side delete. It removes the session
+// metadata from the registry and broadcasts SESSION_DELETED so all
+// connected dashboards prune the row immediately. Transcript and
+// agent log cleanup live in the cmd layer because they reach into
+// per-project state outside the daemon's scope.
+func (s *Server) DeleteSession(_ context.Context, req *daemonpb.DeleteSessionRequest) (*daemonpb.DeleteSessionResponse, error) {
+	if req.Name == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
+	}
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "store init: %v", err)
+	}
+	if err := store.Delete(req.Name); err != nil {
+		return nil, status.Errorf(codes.Internal, "delete failed: %v", err)
+	}
+	s.publishEvent(&daemonpb.RegistryEvent{
+		Kind:        daemonpb.RegistryEvent_SESSION_DELETED,
+		SessionName: req.Name,
+	})
+	s.log.Info("session deleted via RPC", "name", req.Name)
+	return &daemonpb.DeleteSessionResponse{}, nil
+}
+
 // publishEvent fans an event out to every active subscriber. Slow
 // subscribers whose buffer is full silently drop the event to keep the
 // broadcaster non-blocking.

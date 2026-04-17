@@ -142,6 +142,21 @@ func buildAppCallbacks(store session.Store, sessions []*session.Session) ui.AppC
 		ApplyCompact: func(sess *session.Session, choices ui.CompactChoices) error {
 			return applyCompactChoices(sess, choices)
 		},
+		RenameSession: func(sess *session.Session) (string, error) {
+			// The TUI mutates sess.Name to the new value before
+			// calling. Pull the old name from the on-disk metadata
+			// because the in-memory copy may already be the new one.
+			newName := sess.Name
+			oldName := sess.Metadata.Name
+			if oldName == "" || oldName == newName {
+				return newName, nil
+			}
+			ok, derr := daemon.RenameSessionViaDaemon(context.Background(), oldName, newName)
+			if !ok {
+				return newName, fmt.Errorf("daemon rename failed: %w", derr)
+			}
+			return newName, nil
+		},
 		SetBasedir: func(sess *session.Session, newPath string) error {
 			resolved, err := resolveBasedirArg(newPath)
 			if err != nil {
@@ -471,8 +486,14 @@ func deleteSession(sess *session.Session, store session.Store) error {
 		}
 	}
 
-	// Delete session folder
-	if err := store.Delete(sess.Name); err != nil {
+	// Delete session folder. Prefer the daemon path so subscribers
+	// (open dashboards) get the SESSION_DELETED event immediately.
+	// Fall back to the direct store delete when the daemon is
+	// unreachable so the CLI still works without it.
+	if ok, derr := daemon.DeleteSessionViaDaemon(context.Background(), sess.Name); ok {
+		// Daemon handled the delete.
+		_ = derr
+	} else if err := store.Delete(sess.Name); err != nil {
 		return fmt.Errorf("failed to delete session: %w", err)
 	}
 
