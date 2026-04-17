@@ -72,7 +72,9 @@ func runDashboard(cmd *cobra.Command, args []string) {
 // runDiscoveryAdoption walks ~/.claude/projects and creates registry
 // entries for any transcript whose UUID is unknown. Errors are swallowed
 // because this runs as a best-effort startup task; the user only sees
-// the result indirectly through the dashboard listing.
+// the result indirectly through the dashboard listing. The daemon
+// gets a nudge afterwards so any session adopted here also enters the
+// daemon's view of the registry without waiting for the next tick.
 func runDiscoveryAdoption(store *session.FileStore) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -86,7 +88,13 @@ func runDiscoveryAdoption(store *session.FileStore) {
 	if err != nil {
 		return
 	}
-	_, _ = session.AdoptUnknown(store, results)
+	adopted, err := session.AdoptUnknown(store, results)
+	if err != nil {
+		return
+	}
+	if len(adopted) > 0 {
+		daemon.NudgeDiscoveryScan()
+	}
 }
 
 // runPostSessionDashboard shows the main tcell TUI after a session exits,
