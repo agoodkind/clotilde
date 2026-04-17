@@ -509,18 +509,26 @@ func EstimateTokens(allLines []string, chainLines []int) (int, error) {
 	return int(float64(totalTokens) * tokenMultiplier), nil
 }
 
+// PreviewMessage is a single user message preview with its timestamp.
+type PreviewMessage struct {
+	Timestamp time.Time // parsed from the entry; zero if the field was missing or unparseable
+	Text      string    // trimmed, truncated to ~120 chars
+}
+
 // PreviewMessages returns the first N user messages with text content
-// from a set of chain entries (after a given start step).
-func PreviewMessages(allLines []string, chainLines []int, startStep, count int) []string {
-	var messages []string
+// from a set of chain entries (after a given start step), along with their
+// timestamps.
+func PreviewMessages(allLines []string, chainLines []int, startStep, count int) []PreviewMessage {
+	var messages []PreviewMessage
 	for i := startStep; i < len(chainLines) && len(messages) < count; i++ {
 		ln := chainLines[i]
 		if ln < 0 || ln >= len(allLines) {
 			continue
 		}
 		var entry struct {
-			Type    string `json:"type"`
-			Message struct {
+			Type      string `json:"type"`
+			Timestamp string `json:"timestamp"`
+			Message   struct {
 				Role    string          `json:"role"`
 				Content json.RawMessage `json:"content"`
 			} `json:"message"`
@@ -561,7 +569,14 @@ func PreviewMessages(allLines []string, chainLines []int, startStep, count int) 
 		if len(text) > 120 {
 			text = text[:120] + "..."
 		}
-		messages = append(messages, text)
+
+		var ts time.Time
+		if entry.Timestamp != "" {
+			if parsed, err := time.Parse(time.RFC3339, entry.Timestamp); err == nil {
+				ts = parsed
+			}
+		}
+		messages = append(messages, PreviewMessage{Timestamp: ts, Text: text})
 	}
 	return messages
 }
