@@ -25,6 +25,11 @@ type TableWidget struct {
 	SelectedRow int  // 0 based data row index
 	Offset      int  // top visible data row index
 
+	// ScrollbarRect is the last drawn scrollbar region. Zero height when
+	// the table is not tall enough to need a bar. Used by the parent App
+	// for click-to-jump and drag-to-scroll hit tests.
+	ScrollbarRect Rect
+
 	// Sort state (visual only; caller toggles via SortCol/SortAsc)
 	SortCol int
 	SortAsc bool
@@ -161,8 +166,33 @@ func (t *TableWidget) Draw(scr tcell.Screen, r Rect) {
 	}
 
 	if needsBar {
-		drawScrollbar(scr, r.X+r.W-1, r.Y+1, vis, vis, len(t.Rows), t.Offset)
+		t.ScrollbarRect = Rect{X: r.X + r.W - 1, Y: r.Y + 1, W: 1, H: vis}
+		drawScrollbar(scr, t.ScrollbarRect.X, t.ScrollbarRect.Y,
+			t.ScrollbarRect.H, vis, len(t.Rows), t.Offset)
+	} else {
+		t.ScrollbarRect = Rect{}
 	}
+}
+
+// JumpToScrollbarY maps an absolute screen Y inside the scrollbar track to a
+// row offset. Used by the App to implement click-to-jump and drag.
+func (t *TableWidget) JumpToScrollbarY(y int) {
+	if t.ScrollbarRect.H <= 0 {
+		return
+	}
+	rel := y - t.ScrollbarRect.Y
+	if rel < 0 {
+		rel = 0
+	}
+	if rel >= t.ScrollbarRect.H {
+		rel = t.ScrollbarRect.H - 1
+	}
+	vis := t.ScrollbarRect.H
+	total := len(t.Rows)
+	maxOff := imax(0, total-vis)
+	// Map the click row across the track to a proportional offset.
+	newOff := rel * maxOff / imax(1, t.ScrollbarRect.H-1)
+	t.Offset = clamp(newOff, 0, maxOff)
 }
 
 // ensureVisible scrolls so SelectedRow is within the viewport.

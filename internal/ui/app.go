@@ -76,6 +76,16 @@ type ToolUse struct {
 	Count int
 }
 
+// scrollGrab identifies which scrollbar the user is currently dragging.
+type scrollGrab int
+
+const (
+	grabNone scrollGrab = iota
+	grabTable
+	grabDetailsLeft
+	grabDetailsRight
+)
+
 // SortColumn identifies which column the table is sorted by.
 type SortColumn int
 
@@ -138,6 +148,10 @@ type App struct {
 	// Double click tracking
 	lastClickTime time.Time
 	lastClickRow  int
+
+	// Scrollbar grab: which bar the user is currently dragging. Cleared
+	// when any button release happens (buttons == 0).
+	grab scrollGrab
 
 	// Event loop control
 	running bool
@@ -285,6 +299,21 @@ func (a *App) detailsLoadingNow(name string) bool {
 	return a.detailLoading[name]
 }
 
+// syncTableSelectionWithOffset moves the selected row to stay in the visible
+// window after a click-to-jump or drag on the table scrollbar. Without this
+// the highlight would vanish off screen as the viewport scrolled.
+func (a *App) syncTableSelectionWithOffset() {
+	if !a.table.Active {
+		return
+	}
+	vis := imax(1, a.table.Rect.H-1)
+	if a.table.SelectedRow < a.table.Offset {
+		a.table.SelectedRow = a.table.Offset
+	} else if a.table.SelectedRow >= a.table.Offset+vis {
+		a.table.SelectedRow = a.table.Offset + vis - 1
+	}
+}
+
 // initScreen allocates a tcell screen and enables mouse + focus.
 func (a *App) initScreen() error {
 	scr, err := tcell.NewScreen()
@@ -294,7 +323,7 @@ func (a *App) initScreen() error {
 	if err := scr.Init(); err != nil {
 		return fmt.Errorf("tcell Init: %w", err)
 	}
-	scr.EnableMouse(tcell.MouseButtonEvents)
+	scr.EnableMouse(tcell.MouseButtonEvents | tcell.MouseDragEvents)
 	scr.EnableFocus()
 	scr.Clear()
 	a.screen = scr
@@ -528,9 +557,54 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 		return
 	}
 
+	// Release clears any active scrollbar grab.
+	if btns == 0 {
+		a.grab = grabNone
+	}
+
+	// If the user is currently dragging a scrollbar, keep routing the
+	// mouse position to that widget until the button is released.
+	if a.grab != grabNone && btns&tcell.Button1 != 0 {
+		switch a.grab {
+		case grabTable:
+			a.table.JumpToScrollbarY(y)
+			a.syncTableSelectionWithOffset()
+		case grabDetailsLeft:
+			if a.details != nil {
+				a.details.Left.JumpToScrollbarY(y)
+			}
+		case grabDetailsRight:
+			if a.details != nil {
+				a.details.Right.JumpToScrollbarY(y)
+			}
+		}
+		return
+	}
+
+	// Click on the table scrollbar starts a grab and jumps.
+	if btns&tcell.Button1 != 0 && a.table.ScrollbarRect.Contains(x, y) {
+		a.grab = grabTable
+		a.table.JumpToScrollbarY(y)
+		a.syncTableSelectionWithOffset()
+		return
+	}
+
 	// Detail panes consume wheel events when the cursor is over them.
 	// Each sub-pane scrolls independently, so hit-test both rects.
 	if a.selected != nil && a.details != nil {
+		// Scrollbar click or drag start on either sub-pane.
+		if btns&tcell.Button1 != 0 && a.details.Left.ScrollbarRect.Contains(x, y) {
+			a.grab = grabDetailsLeft
+			a.details.SetFocus(DetailsFocusLeft)
+			a.details.Left.JumpToScrollbarY(y)
+			return
+		}
+		if btns&tcell.Button1 != 0 && a.details.Right.ScrollbarRect.Contains(x, y) {
+			a.grab = grabDetailsRight
+			a.details.SetFocus(DetailsFocusRight)
+			a.details.Right.JumpToScrollbarY(y)
+			return
+		}
 		if a.details.LeftRect.Contains(x, y) {
 			if btns&tcell.WheelUp != 0 {
 				a.details.Left.Offset = imax(0, a.details.Left.Offset-3)
