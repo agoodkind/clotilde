@@ -1,5 +1,5 @@
 // Package audit provides a shared slog.Logger that writes structured JSON
-// to ~/.local/state/clotilde/audit.jsonl. All processes (CLI, MCP server,
+// to ~/.local/state/clyde/audit.jsonl. All processes (CLI, MCP server,
 // daemon) write to the same file via rotating append writes.
 package audit
 
@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/fgrehm/clotilde/internal/config"
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/gklog"
 	gklogversion "goodkind.io/gklog/version"
 )
@@ -44,9 +44,4 @@ func stderrFallback(component string) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	})).With(slog.String("build", gklogversion.String())).With("component", component)
-}
-
-// LogPath returns the path to the audit log file.
-func LogPath() string {
-	return filepath.Join(config.DefaultStateDir(), auditFile)
 }
