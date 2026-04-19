@@ -31,28 +31,39 @@ type Usage struct {
 // Result is the non-streaming return shape: the joined assistant
 // text plus the usage counters from the result frame.
 type Result struct {
-	Text      string
-	ToolCalls []ToolCall
-	Usage     Usage
-	Stop      string // "tool_calls" when ToolCalls is non-empty, else "stop"
+	Text             string
+	ReasoningContent string
+	Refusal          string
+	ToolCalls        []ToolCall
+	Usage            Usage
+	Stop             string // "tool_calls" when ToolCalls is non-empty, else "stop" or "refusal"
 }
 
 // StreamResult is the streaming completion outcome after stdout closes.
 type StreamResult struct {
-	Usage     Usage
-	Stop      string
-	Text      string
-	ToolCalls []ToolCall
+	Usage            Usage
+	Stop             string
+	Text             string
+	ReasoningContent string
+	Refusal          string
+	ToolCalls        []ToolCall
+}
+
+// StreamEvent is one token of streamed assistant output for the Stream callback.
+type StreamEvent struct {
+	Kind string // "text" | "reasoning"
+	Text string
 }
 
 // claudeEvent mirrors the subset of `claude -p --output-format
 // stream-json` events the parser needs. Tolerant of unknown fields
 // so future CLI additions do not break parsing.
 type claudeEvent struct {
-	Type    string         `json:"type"`
-	Subtype string         `json:"subtype,omitempty"`
-	Message claudeMessage  `json:"message,omitempty"`
-	Usage   claudeRawUsage `json:"usage,omitempty"`
+	Type       string         `json:"type"`
+	Subtype    string         `json:"subtype,omitempty"`
+	Message    claudeMessage  `json:"message,omitempty"`
+	Usage      claudeRawUsage `json:"usage,omitempty"`
+	StopReason string         `json:"stop_reason,omitempty"`
 }
 
 type claudeMessage struct {
@@ -60,8 +71,9 @@ type claudeMessage struct {
 }
 
 type claudeContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	Thinking string `json:"thinking,omitempty"`
 }
 
 type claudeRawUsage struct {

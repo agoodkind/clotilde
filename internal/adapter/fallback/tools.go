@@ -2,9 +2,8 @@ package fallback
 
 import (
 	"bytes"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 )
@@ -167,14 +166,13 @@ func coerceArgumentsToJSONString(raw json.RawMessage) (string, error) {
 	return string(b), nil
 }
 
-func synthesizeCallID() string {
-	var rnd [6]byte
-	if _, err := rand.Read(rnd[:]); err != nil {
-		for i := range rnd {
-			rnd[i] = byte(i)
-		}
+// EnsureToolCallID returns id when non-empty; otherwise a deterministic
+// OpenAI-shaped tool_calls[].id (call_<requestID>_<index>).
+func EnsureToolCallID(id, reqID string, idx int) string {
+	if id != "" {
+		return id
 	}
-	return "call_" + hex.EncodeToString(rnd[:])
+	return fmt.Sprintf("call_%s_%d", reqID, idx)
 }
 
 // toolEnvelopeActive is true when tools are present and the model was
@@ -193,11 +191,19 @@ func mergeSystemPrompt(base string, toolsPreamble string) string {
 	return base + "\n\n" + toolsPreamble
 }
 
-func finalizeAssistantText(fullText string, r Request, usage Usage) Result {
+func finalizeAssistantText(fullText, reasoning string, r Request, usage Usage, apiStopReason string) Result {
 	out := Result{
-		Text:  fullText,
-		Usage: usage,
-		Stop:  "stop",
+		Text:             fullText,
+		ReasoningContent: reasoning,
+		Usage:            usage,
+		Stop:             "stop",
+	}
+	if strings.EqualFold(apiStopReason, "refusal") {
+		out.Refusal = fullText
+		out.Text = ""
+		out.ReasoningContent = ""
+		out.Stop = "refusal"
+		return out
 	}
 	if !toolEnvelopeActive(r) {
 		return out
@@ -214,7 +220,7 @@ func finalizeAssistantText(fullText string, r Request, usage Usage) Result {
 		return out
 	}
 	for i := range calls {
-		calls[i].ID = synthesizeCallID()
+		calls[i].ID = EnsureToolCallID(calls[i].ID, r.RequestID, i)
 	}
 	slog.Debug("fallback.tools.envelope_parsed",
 		"request_id", r.RequestID,

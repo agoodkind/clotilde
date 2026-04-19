@@ -178,8 +178,10 @@ func TestStreamHappyPath(t *testing.T) {
 	sr, err := c.Stream(context.Background(), Request{
 		Model:    "haiku",
 		Messages: []Message{{Role: "user", Content: "hi"}},
-	}, func(delta string) error {
-		deltas = append(deltas, delta)
+	}, func(ev StreamEvent) error {
+		if ev.Kind == "text" {
+			deltas = append(deltas, ev.Text)
+		}
 		return nil
 	})
 	if err != nil {

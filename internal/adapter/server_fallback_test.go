@@ -49,13 +49,9 @@ func buildServer(t *testing.T, fallbackBinary string, opts ...func(*config.Adapt
 	t.Helper()
 	scratch := t.TempDir()
 	cfg := config.AdapterConfig{
-		Enabled:      true,
-		DefaultModel: "fb-haiku",
-		Impersonation: config.AdapterImpersonation{
-			BetaHeader:         "x",
-			UserAgent:          "y",
-			SystemPromptPrefix: "z",
-		},
+		Enabled:        true,
+		DefaultModel:   "fb-haiku",
+		ClientIdentity: validClientIdentity(),
 		Families: map[string]config.AdapterFamily{
 			"haiku-4-5": {
 				Model:           "claude-haiku-4-5-20251001",
@@ -98,7 +94,7 @@ func buildServer(t *testing.T, fallbackBinary string, opts ...func(*config.Adapt
 	deps := Deps{
 		ScratchDir: func() string { return scratch },
 	}
-	srv, err := New(cfg, deps, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv, err := New(cfg, config.LoggingConfig{}, deps, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

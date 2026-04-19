@@ -67,7 +67,7 @@ func (c *Client) Collect(ctx context.Context, r Request) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	text, usage, parseErr := collectStreamJSON(stdout)
+	text, reasoning, usage, stopReason, parseErr := collectStreamJSON(stdout)
 	waitErr := wait()
 	if parseErr != nil {
 		return Result{}, parseErr
@@ -75,24 +75,24 @@ func (c *Client) Collect(ctx context.Context, r Request) (Result, error) {
 	if waitErr != nil {
 		return Result{}, fmt.Errorf("claude -p exited: %w", waitErr)
 	}
-	return finalizeAssistantText(text, r, usage), nil
+	return finalizeAssistantText(text, reasoning, r, usage, stopReason), nil
 }
 
-// Stream runs `claude -p` and invokes onDelta with each text chunk
-// in arrival order when toolEnvelopeActive(r) is false.
+// Stream runs `claude -p` and invokes onEvent with each text or reasoning
+// fragment in arrival order when toolEnvelopeActive(r) is false.
 //
-// When toolEnvelopeActive(r) is true, stdout text is buffered instead
-// of streaming deltas because partial JSON envelopes interleaved with
+// When toolEnvelopeActive(r) is true, stdout is buffered instead of
+// streaming deltas because partial JSON envelopes interleaved with
 // prose break OpenAI clients that expect discrete tool_calls deltas.
 // The caller should emit synthetic stream chunks after Stream returns.
-func (c *Client) Stream(ctx context.Context, r Request, onDelta func(string) error) (StreamResult, error) {
+func (c *Client) Stream(ctx context.Context, r Request, onEvent func(StreamEvent) error) (StreamResult, error) {
 	cctx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
 	defer cancel()
 	stdout, wait, err := c.spawn(cctx, r)
 	if err != nil {
 		return StreamResult{}, err
 	}
-	fullText, usage, parseErr := streamStreamJSON(stdout, r, onDelta)
+	fullText, fullReasoning, usage, stopReason, parseErr := streamStreamJSON(stdout, r, onEvent)
 	waitErr := wait()
 	if parseErr != nil {
 		return StreamResult{Usage: usage}, parseErr
@@ -100,12 +100,14 @@ func (c *Client) Stream(ctx context.Context, r Request, onDelta func(string) err
 	if waitErr != nil {
 		return StreamResult{Usage: usage}, fmt.Errorf("claude -p exited: %w", waitErr)
 	}
-	res := finalizeAssistantText(fullText, r, usage)
+	res := finalizeAssistantText(fullText, fullReasoning, r, usage, stopReason)
 	return StreamResult{
-		Usage:     res.Usage,
-		Stop:      res.Stop,
-		Text:      res.Text,
-		ToolCalls: res.ToolCalls,
+		Usage:            res.Usage,
+		Stop:             res.Stop,
+		Text:             res.Text,
+		ReasoningContent: res.ReasoningContent,
+		Refusal:          res.Refusal,
+		ToolCalls:        res.ToolCalls,
 	}, nil
 }
 

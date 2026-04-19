@@ -7,17 +7,26 @@ import (
 	"goodkind.io/clyde/internal/config"
 )
 
+func validClientIdentity() config.AdapterClientIdentity {
+	return config.AdapterClientIdentity{
+		BetaHeader:              "x",
+		UserAgent:               "y",
+		SystemPromptPrefix:      "z",
+		StainlessPackageVersion: "0",
+		StainlessRuntime:        "node",
+		StainlessRuntimeVersion: "v0",
+		CCVersion:               "1.0.0",
+		CCEntrypoint:            "ci",
+	}
+}
+
 // baseConfig returns an AdapterConfig that passes the
 // non-fallback portion of NewRegistry validation. Tests layer
 // AdapterFallback fields on top to exercise the new validator.
 func baseConfig() config.AdapterConfig {
 	return config.AdapterConfig{
-		DefaultModel: "clyde-haiku-4-5",
-		Impersonation: config.AdapterImpersonation{
-			BetaHeader:         "x",
-			UserAgent:          "y",
-			SystemPromptPrefix: "z",
-		},
+		DefaultModel:   "clyde-haiku-4-5",
+		ClientIdentity: validClientIdentity(),
 		Families: map[string]config.AdapterFamily{
 			"haiku-4-5": {
 				Model:           "claude-haiku-4-5-20251001",
@@ -30,6 +39,18 @@ func baseConfig() config.AdapterConfig {
 				},
 			},
 		},
+	}
+}
+
+func TestNewRegistryDirectOAuthRequiresOAuthBlock(t *testing.T) {
+	cfg := baseConfig()
+	cfg.DirectOAuth = true
+	_, err := NewRegistry(cfg)
+	if err == nil {
+		t.Fatal("expected error when direct_oauth without [adapter.oauth]")
+	}
+	if !strings.Contains(err.Error(), "token_url") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

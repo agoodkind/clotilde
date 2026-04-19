@@ -99,7 +99,8 @@ func (s *Server) handleFallback(w http.ResponseWriter, r *http.Request, req Chat
 
 	started := time.Now()
 	if req.Stream {
-		return s.streamFallback(w, r, fbReq, model, reqID, started, escalate)
+		includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
+		return s.streamFallback(w, r, fbReq, model, reqID, started, escalate, includeUsage)
 	}
 	return s.collectFallback(w, r.Context(), fbReq, model, reqID, started, jsonSpec, escalate)
 }
@@ -122,7 +123,7 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 		return nil
 	}
 	finalText := result.Text
-	if jsonSpec.Mode != "" {
+	if jsonSpec.Mode != "" && result.Refusal == "" {
 		coerced := CoerceJSON(result.Text)
 		if LooksLikeJSON(coerced) {
 			finalText = coerced
@@ -134,12 +135,18 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 		TotalTokens:      result.Usage.TotalTokens,
 	}
 	msg := ChatMessage{Role: "assistant"}
-	if len(result.ToolCalls) > 0 {
+	if result.ReasoningContent != "" {
+		msg.ReasoningContent = result.ReasoningContent
+	}
+	if result.Refusal != "" {
+		msg.Refusal = result.Refusal
+		msg.Content = json.RawMessage("null")
+	} else if len(result.ToolCalls) > 0 {
 		msg.ToolCalls = make([]ToolCall, len(result.ToolCalls))
 		for i, tc := range result.ToolCalls {
 			msg.ToolCalls[i] = ToolCall{
 				Index: i,
-				ID:    tc.ID,
+				ID:    fallback.EnsureToolCallID(tc.ID, reqID, i),
 				Type:  "function",
 				Function: ToolCallFunction{
 					Name:      tc.Name,
@@ -155,6 +162,7 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 	} else {
 		msg.Content = json.RawMessage(strconv.Quote(finalText))
 	}
+	fr := finishreason.FromAnthropicNonStream(result.Stop)
 	resp := ChatResponse{
 		ID:                reqID,
 		Object:            "chat.completion",
@@ -164,7 +172,7 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 		Choices: []ChatChoice{{
 			Index:        0,
 			Message:      msg,
-			FinishReason: finishreason.FromAnthropicNonStream(result.Stop),
+			FinishReason: fr,
 		}},
 		Usage: &usage,
 	}
@@ -174,6 +182,7 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 		slog.String("request_id", reqID),
 		slog.String("alias", model.Alias),
 		slog.String("cli_model", req.Model),
+		slog.String("finish_reason", fr),
 		slog.Int("tokens_in", usage.PromptTokens),
 		slog.Int("tokens_out", usage.CompletionTokens),
 		slog.Int64("duration_ms", time.Since(started).Milliseconds()),
@@ -188,7 +197,7 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 // chunks; after the subprocess exits, this handler emits synthetic
 // deltas (role, tool_calls, finish_reason) that match OpenAI
 // clients. Plain tool_choice "none" keeps live text deltas.
-func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fallback.Request, model ResolvedModel, reqID string, started time.Time, escalate bool) error {
+func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fallback.Request, model ResolvedModel, reqID string, started time.Time, escalate bool, includeUsage bool) error {
 	sw, err := newSSEWriter(w)
 	if err != nil {
 		if escalate {
@@ -198,8 +207,10 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 		return nil
 	}
 
+	sw.writeSSEHeaders()
+
 	created := time.Now().Unix()
-	firstText := true
+	firstDelta := true
 
 	emit := func(chunk StreamChunk) error {
 		return sw.emitStreamChunk(systemFingerprint, chunk)
@@ -209,24 +220,32 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 	var sr fallback.StreamResult
 	var streamErr error
 	if bufferedTools {
-		sr, streamErr = s.fb.Stream(r.Context(), req, func(string) error { return nil })
+		sr, streamErr = s.fb.Stream(r.Context(), req, func(fallback.StreamEvent) error { return nil })
 	} else {
-		sr, streamErr = s.fb.Stream(r.Context(), req, func(delta string) error {
-			chunk := StreamChunk{
+		sr, streamErr = s.fb.Stream(r.Context(), req, func(ev fallback.StreamEvent) error {
+			delta := StreamDelta{}
+			switch ev.Kind {
+			case "text":
+				delta.Content = ev.Text
+			case "reasoning":
+				delta.ReasoningContent = ev.Text
+			default:
+				return nil
+			}
+			if firstDelta {
+				delta.Role = "assistant"
+				firstDelta = false
+			}
+			return emit(StreamChunk{
 				ID:      reqID,
 				Object:  "chat.completion.chunk",
 				Created: created,
 				Model:   model.Alias,
 				Choices: []StreamChoice{{
 					Index: 0,
-					Delta: StreamDelta{Content: delta},
+					Delta: delta,
 				}},
-			}
-			if firstText {
-				chunk.Choices[0].Delta.Role = "assistant"
-				firstText = false
-			}
-			return emit(chunk)
+			})
 		})
 	}
 	if streamErr != nil {
@@ -241,21 +260,39 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 			return streamErr
 		}
 	}
-	sw.writeSSEHeaders()
+
+	finalFinish := finishreason.FromAnthropicNonStream(sr.Stop)
 
 	if bufferedTools {
 		if len(sr.ToolCalls) > 0 {
-			_ = emit(StreamChunk{
-				ID:      reqID,
-				Object:  "chat.completion.chunk",
-				Created: created,
-				Model:   model.Alias,
-				Choices: []StreamChoice{{
-					Index: 0,
-					Delta: StreamDelta{Role: "assistant"},
-				}},
-			})
+			if rc := strings.TrimSpace(sr.ReasoningContent); rc != "" {
+				_ = emit(StreamChunk{
+					ID:      reqID,
+					Object:  "chat.completion.chunk",
+					Created: created,
+					Model:   model.Alias,
+					Choices: []StreamChoice{{
+						Index: 0,
+						Delta: StreamDelta{
+							Role:             "assistant",
+							ReasoningContent: rc,
+						},
+					}},
+				})
+			} else {
+				_ = emit(StreamChunk{
+					ID:      reqID,
+					Object:  "chat.completion.chunk",
+					Created: created,
+					Model:   model.Alias,
+					Choices: []StreamChoice{{
+						Index: 0,
+						Delta: StreamDelta{Role: "assistant"},
+					}},
+				})
+			}
 			for i, tc := range sr.ToolCalls {
+				tid := fallback.EnsureToolCallID(tc.ID, reqID, i)
 				_ = emit(StreamChunk{
 					ID:      reqID,
 					Object:  "chat.completion.chunk",
@@ -266,7 +303,7 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 						Delta: StreamDelta{
 							ToolCalls: []ToolCall{{
 								Index: i,
-								ID:    tc.ID,
+								ID:    tid,
 								Type:  "function",
 								Function: ToolCallFunction{
 									Name:      tc.Name,
@@ -278,6 +315,7 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 				})
 			}
 			toolFinish := "tool_calls"
+			finalFinish = toolFinish
 			_ = emit(StreamChunk{
 				ID:      reqID,
 				Object:  "chat.completion.chunk",
@@ -290,6 +328,10 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 				}},
 			})
 		} else {
+			d := StreamDelta{Role: "assistant", Content: sr.Text}
+			if rc := strings.TrimSpace(sr.ReasoningContent); rc != "" {
+				d.ReasoningContent = rc
+			}
 			_ = emit(StreamChunk{
 				ID:      reqID,
 				Object:  "chat.completion.chunk",
@@ -297,13 +339,11 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 				Model:   model.Alias,
 				Choices: []StreamChoice{{
 					Index: 0,
-					Delta: StreamDelta{
-						Role:    "assistant",
-						Content: sr.Text,
-					},
+					Delta: d,
 				}},
 			})
-			plainFinish := finishreason.FromAnthropicNonStream(sr.Stop)
+			pf := finishreason.FromAnthropicNonStream(sr.Stop)
+			finalFinish = pf
 			_ = emit(StreamChunk{
 				ID:      reqID,
 				Object:  "chat.completion.chunk",
@@ -312,12 +352,13 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 				Choices: []StreamChoice{{
 					Index:        0,
 					Delta:        StreamDelta{},
-					FinishReason: &plainFinish,
+					FinishReason: &pf,
 				}},
 			})
 		}
-	} else {
-		finishReason := finishreason.FromAnthropicNonStream(sr.Stop)
+	} else if strings.EqualFold(sr.Stop, "refusal") {
+		rf := finishreason.FromAnthropicNonStream(sr.Stop)
+		finalFinish = rf
 		_ = emit(StreamChunk{
 			ID:      reqID,
 			Object:  "chat.completion.chunk",
@@ -326,7 +367,21 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 			Choices: []StreamChoice{{
 				Index:        0,
 				Delta:        StreamDelta{},
-				FinishReason: &finishReason,
+				FinishReason: &rf,
+			}},
+		})
+	} else {
+		fr := finishreason.FromAnthropicNonStream(sr.Stop)
+		finalFinish = fr
+		_ = emit(StreamChunk{
+			ID:      reqID,
+			Object:  "chat.completion.chunk",
+			Created: created,
+			Model:   model.Alias,
+			Choices: []StreamChoice{{
+				Index:        0,
+				Delta:        StreamDelta{},
+				FinishReason: &fr,
 			}},
 		})
 	}
@@ -336,21 +391,23 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 		CompletionTokens: sr.Usage.CompletionTokens,
 		TotalTokens:      sr.Usage.TotalTokens,
 	}
-	// Always emit usage (matches the OAuth path for parity).
-	_ = emit(StreamChunk{
-		ID:      reqID,
-		Object:  "chat.completion.chunk",
-		Created: created,
-		Model:   model.Alias,
-		Choices: []StreamChoice{},
-		Usage:   &finalUsage,
-	})
+	if includeUsage {
+		_ = emit(StreamChunk{
+			ID:      reqID,
+			Object:  "chat.completion.chunk",
+			Created: created,
+			Model:   model.Alias,
+			Choices: []StreamChoice{},
+			Usage:   &finalUsage,
+		})
+	}
 	_ = sw.writeStreamDone()
 	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.chat.completed",
 		slog.String("backend", "fallback"),
 		slog.String("request_id", reqID),
 		slog.String("alias", model.Alias),
 		slog.String("cli_model", req.Model),
+		slog.String("finish_reason", finalFinish),
 		slog.Int("tokens_in", finalUsage.PromptTokens),
 		slog.Int("tokens_out", finalUsage.CompletionTokens),
 		slog.Int64("duration_ms", time.Since(started).Milliseconds()),
