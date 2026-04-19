@@ -2,7 +2,7 @@
 
 **Last Updated:** 2025-11-28
 
-This document details how Claude Code's `--settings` flag and multi-layer settings system works, based on empirical testing. Understanding this is critical for Clotilde's session management design.
+This document details how Claude Code's `--settings` flag and multi-layer settings system works, based on empirical testing. Understanding this is critical for Clyde's session management design.
 
 ## Table of Contents
 
@@ -11,7 +11,7 @@ This document details how Claude Code's `--settings` flag and multi-layer settin
 - [Model Selection Behavior](#model-selection-behavior)
 - [Permission Behavior](#permission-behavior)
 - [Permission Resolution Algorithm](#permission-resolution-algorithm)
-- [Implications for Clotilde](#implications-for-clotilde)
+- [Implications for Clyde](#implications-for-clyde)
 - [Detailed Test Results](#detailed-test-results)
 
 ---
@@ -88,7 +88,7 @@ Users can create custom styles in:
 - User level: `~/.claude/output-styles/<name>.md`
 - Project level: `.claude/output-styles/<name>.md`
 
-Subdirectories work: `.claude/output-styles/clotilde/session-name.md` → `"outputStyle": "clotilde/session-name"`
+Subdirectories work: `.claude/output-styles/clyde/session-name.md` → `"outputStyle": "clyde/session-name"`
 
 Custom styles automatically appear in the interactive `/output-style` menu.
 
@@ -137,7 +137,7 @@ cat .claude/settings.local.json
 # Result: {"outputStyle": "Learning"}
 ```
 
-### Implications for Clotilde
+### Implications for Clyde
 
 ✅ **Session-specific output styles work perfectly** via CLI `--settings` precedence
 ✅ **User can override with `/output-style`** and it saves to `.claude/settings.local.json`
@@ -147,20 +147,20 @@ cat .claude/settings.local.json
 **Example workflow:**
 ```bash
 # Session with custom style
-clotilde start session-a --output-style "Be concise"
-# → sessions/session-a/settings.json: {"outputStyle": "clotilde/session-a"}
-# → .claude/output-styles/clotilde/session-a.md created
+clyde start session-a --output-style "Be concise"
+# → sessions/session-a/settings.json: {"outputStyle": "clyde/session-a"}
+# → .claude/output-styles/clyde/session-a.md created
 
 # User changes style during session
 /output-style → Learning
 # → .claude/settings.local.json: {"outputStyle": "Learning"}
 
 # Resume session-a
-clotilde resume session-a
-# → Still uses "clotilde/session-a" (CLI --settings wins) ✅
+clyde resume session-a
+# → Still uses "clyde/session-a" (CLI --settings wins) ✅
 
 # Start session without explicit style
-clotilde start session-b
+clyde start session-b
 # → Uses "Learning" from .claude/settings.local.json (fallback) ✅
 ```
 
@@ -234,7 +234,7 @@ For each tool request:
 
 ---
 
-## Implications for Clotilde
+## Implications for Clyde
 
 ### What Works Perfectly
 
@@ -494,7 +494,7 @@ This should:
 - ❌ Never saves to `.claude/settings.json`
 - ❌ Never saves to global `~/.claude/settings.json`
 
-**Implication for Clotilde:** Cannot use `--settings` to isolate session permissions. All sessions in the same directory will share `.claude/settings.local.json` approvals!
+**Implication for Clyde:** Cannot use `--settings` to isolate session permissions. All sessions in the same directory will share `.claude/settings.local.json` approvals!
 
 ### Merging Behavior
 
@@ -558,9 +558,9 @@ For each tool request:
 
 **Key takeaway:** `deny` acts as a blacklist that cannot be overridden.
 
-### Implications for Clotilde
+### Implications for Clyde
 
-**Current design assumption:** Each session has isolated settings in `.claude/clotilde/sessions/<name>/settings.json`
+**Current design assumption:** Each session has isolated settings in `.claude/clyde/sessions/<name>/settings.json`
 
 **Reality check:**
 
@@ -623,7 +623,7 @@ For each tool request:
 3. **CLI settings are read-only:** Approvals never save back to `--settings` file
 4. **Local always writable:** `.claude/settings.local.json` is always created/updated for approvals
 
-### Recommended Approach for Clotilde
+### Recommended Approach for Clyde
 
 Based on these findings:
 

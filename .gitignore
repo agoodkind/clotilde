@@ -28,8 +28,6 @@ coverage.txt
 go.work
 go.work.sum
 
-# Build artifacts
-clotilde
 
 # Exported sessions
 /*.html
@@ -44,6 +42,6 @@ config.mk
 .claude/settings.local.json
 CLAUDE.local.md
 
-# Clotilde (ephemeral per-user session management)
-.claude/clotilde/
-.claude/output-styles/clotilde/
+
+# Reverse-engineering and decompile artifacts (large, regenerable)
+research/

@@ -1,6 +1,6 @@
-# Clotilde Documentation
+# Clyde Documentation
 
-In-depth documentation for understanding Clotilde's design and the underlying Claude Code behavior.
+In-depth documentation for understanding Clyde's design and the underlying Claude Code behavior.
 
 ## Documents
 
@@ -10,4 +10,4 @@ Current limitations and future ideas.
 
 ### [Claude Settings Behavior](claude-settings-behavior.md)
 
-Analysis of how Claude Code's settings system works: multi-layer resolution, model selection precedence, permission merging, and why approvals always save to `.claude/settings.local.json`. Essential context for understanding Clotilde's session isolation design.
+Analysis of how Claude Code's settings system works: multi-layer resolution, model selection precedence, permission merging, and why approvals always save to `.claude/settings.local.json`. Essential context for understanding Clyde's session isolation design.
