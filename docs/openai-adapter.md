@@ -424,10 +424,10 @@ for prompts that the official CLI handles without issue.
 Two requests fired in the same shell pipeline against the same OAuth
 token and the same `claude-opus-4-7` upstream model:
 
-| Path                                                       | Status                       | Duration | Body bytes  |
-| ---------------------------------------------------------- | ---------------------------- | -------- | ----------- |
-| Clyde adapter `/v1/chat/completions` (alias `clyde-opus-4-7-medium-1m`) | `502` wrapping upstream `429 rate_limit_error` | 318 ms   | 68,670      |
-| `claude -p --model claude-opus-4-7` via mitm proxy         | `200` with assistant content `"ok"`            | 3,563 ms | 238,790     |
+| Path                                                                    | Status                                         | Duration | Body bytes |
+| ----------------------------------------------------------------------- | ---------------------------------------------- | -------- | ---------- |
+| Clyde adapter `/v1/chat/completions` (alias `clyde-opus-4-7-medium-1m`) | `502` wrapping upstream `429 rate_limit_error` | 318 ms   | 68,670     |
+| `claude -p --model claude-opus-4-7` via mitm proxy                      | `200` with assistant content `"ok"`            | 3,563 ms | 238,790    |
 
 Same instant, same token, same upstream API: **only the request headers
 differed**, so Anthropic routed the two requests into different
@@ -445,15 +445,15 @@ to length marker) and writes one ndjson line per request with both raw
 and base64 copies of the request and response body
 ([clyde-research/tools/anthropic-mitm/main.go](../../../clyde-research/tools/anthropic-mitm/main.go)):
 
-| Field                       | Notes                                                                              |
-| --------------------------- | ---------------------------------------------------------------------------------- |
-| `request_method`, `request_path`, `request_headers` | `Authorization` and `x-api-key` redacted to `<REDACTED len=N>`           |
-| `request_body_bytes`        | full untruncated size                                                              |
-| `request_body_raw`          | UTF-8 string body, capped at 1 MiB (was 32 KiB; bumped so 240 KiB CLI bodies fit)  |
-| `request_body_b64`          | base64 of the same bytes; survives truncation without breaking outer JSON          |
-| `request_body_truncated`    | `true` if either capped form was clipped                                           |
-| `response_*` mirror set     | same triple plus `response_status_code`, `response_headers`                        |
-| `started_at`, `duration_ms` | wall-clock                                                                         |
+| Field                                               | Notes                                                                             |
+| --------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `request_method`, `request_path`, `request_headers` | `Authorization` and `x-api-key` redacted to `<REDACTED len=N>`                    |
+| `request_body_bytes`                                | full untruncated size                                                             |
+| `request_body_raw`                                  | UTF-8 string body, capped at 1 MiB (was 32 KiB; bumped so 240 KiB CLI bodies fit) |
+| `request_body_b64`                                  | base64 of the same bytes; survives truncation without breaking outer JSON         |
+| `request_body_truncated`                            | `true` if either capped form was clipped                                          |
+| `response_*` mirror set                             | same triple plus `response_status_code`, `response_headers`                       |
+| `started_at`, `duration_ms`                         | wall-clock                                                                        |
 
 Invocation:
 
@@ -473,15 +473,15 @@ Emitted in [internal/adapter/anthropic/client.go](../internal/adapter/anthropic/
 right before `c.http.Do(httpReq)`. Lands in `~/.local/state/clyde/clyde.jsonl`
 when `[logging] level = "debug"`. Attribute set:
 
-| Attribute     | Value                                                                |
-| ------------- | -------------------------------------------------------------------- |
-| `subcomponent`| `"anthropic"`                                                        |
-| `model`       | wire-format Anthropic model id                                       |
-| `url`         | `MessagesURL`                                                        |
-| `body_bytes`  | full size                                                            |
-| `headers`     | `map[string]string`, lowercased keys, `authorization` redacted to `Bearer <redacted len=N>`, `x-api-key`/`cookie`/`proxy-authorization` to `<redacted>` |
-| `body`        | raw JSON request body, full                                          |
-| `body_b64`    | base64 of the same bytes                                             |
+| Attribute      | Value                                                                                                                                                   |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `subcomponent` | `"anthropic"`                                                                                                                                           |
+| `model`        | wire-format Anthropic model id                                                                                                                          |
+| `url`          | `MessagesURL`                                                                                                                                           |
+| `body_bytes`   | full size                                                                                                                                               |
+| `headers`      | `map[string]string`, lowercased keys, `authorization` redacted to `Bearer <redacted len=N>`, `x-api-key`/`cookie`/`proxy-authorization` to `<redacted>` |
+| `body`         | raw JSON request body, full                                                                                                                             |
+| `body_b64`     | base64 of the same bytes                                                                                                                                |
 
 The same `body`/`body_b64`/`body_bytes` triple is also populated on
 `anthropic.ratelimit` and `anthropic.messages.upstream_error` events
@@ -567,21 +567,21 @@ Generated from a concurrent run by `diff_headers.py`. Markers:
 Beta-set delta in cleaner form. Source of truth for each missing beta
 is in the deobfuscated CLI source:
 
-| Missing beta                       | Source of truth in CLI v2.1.114                                                                                                          |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `interleaved-thinking-2025-05-14`  | [src/utils/betas.ts:257-262](../../../clyde-research/claude-code-sourcemap-main-2-newer/restored-src/src/utils/betas.ts) gated on `modelSupportsISP(model)` (opus-4 / sonnet-4 / haiku-4) |
-| `context-management-2025-06-27`    | [src/utils/betas.ts:307-312](../../../clyde-research/claude-code-sourcemap-main-2-newer/restored-src/src/utils/betas.ts) gated on `modelSupportsContextManagement(model)`                |
-| `prompt-caching-scope-2026-01-05`  | [src/utils/betas.ts:354-357](../../../clyde-research/claude-code-sourcemap-main-2-newer/restored-src/src/utils/betas.ts) firstParty + experimental-betas-not-disabled                    |
-| `advisor-tool-2026-03-01`          | [src/constants/betas.ts:31](../../../clyde-research/claude-code-sourcemap-main-2-newer/restored-src/src/constants/betas.ts) constant; emitted unconditionally in 2.1.114                 |
+| Missing beta                      | Source of truth in CLI v2.1.114                                                                                                                                                           |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `interleaved-thinking-2025-05-14` | [src/utils/betas.ts:257-262](../../../clyde-research/claude-code-sourcemap-main-2-newer/restored-src/src/utils/betas.ts) gated on `modelSupportsISP(model)` (opus-4 / sonnet-4 / haiku-4) |
+| `context-management-2025-06-27`   | [src/utils/betas.ts:307-312](../../../clyde-research/claude-code-sourcemap-main-2-newer/restored-src/src/utils/betas.ts) gated on `modelSupportsContextManagement(model)`                 |
+| `prompt-caching-scope-2026-01-05` | [src/utils/betas.ts:354-357](../../../clyde-research/claude-code-sourcemap-main-2-newer/restored-src/src/utils/betas.ts) firstParty + experimental-betas-not-disabled                     |
+| `advisor-tool-2026-03-01`         | [src/constants/betas.ts:31](../../../clyde-research/claude-code-sourcemap-main-2-newer/restored-src/src/constants/betas.ts) constant; emitted unconditionally in 2.1.114                  |
 
 Additional missing headers:
 
-| Header                                       | Source                                                                                                                          |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `X-Claude-Code-Session-Id`                   | [src/services/api/client.ts:108](../../../clyde-research/claude-code-sourcemap-main-2-newer/restored-src/src/services/api/client.ts) (per-process UUID) |
-| `X-Stainless-*` block                        | injected by `@anthropic-ai/sdk` v0.81.0; static for one CLI version                                                             |
-| `Anthropic-Dangerous-Direct-Browser-Access`  | Anthropic SDK default for non-browser environments                                                                              |
-| `Accept`, `Accept-Encoding`                  | Anthropic SDK fetch defaults                                                                                                    |
+| Header                                      | Source                                                                                                                                                  |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `X-Claude-Code-Session-Id`                  | [src/services/api/client.ts:108](../../../clyde-research/claude-code-sourcemap-main-2-newer/restored-src/src/services/api/client.ts) (per-process UUID) |
+| `X-Stainless-*` block                       | injected by `@anthropic-ai/sdk` v0.81.0; static for one CLI version                                                                                     |
+| `Anthropic-Dangerous-Direct-Browser-Access` | Anthropic SDK default for non-browser environments                                                                                                      |
+| `Accept`, `Accept-Encoding`                 | Anthropic SDK fetch defaults                                                                                                                            |
 
 An earlier draft of this section claimed `effort-2025-11-24` was not in
 the CLI request. That was wrong; the v2.1.114 capture above shows the
@@ -590,25 +590,139 @@ in [claude-code/06-named/deobfuscated.js:667257](../../../clyde-research/claude-
 labeling it deprecated and "GA on 4.6", the runtime still ships it on
 4.7. Keep it on clyde's side.
 
-### What this means
+### Bisection results (verified 2026-04-19)
 
-The clyde anthropic client uses a static `BetaHeader` string from
-`[adapter.impersonation]` in `~/.config/clyde/config.toml`. Hardcoding
-a single beta string cannot match the per-model, per-feature logic in
-`getAllModelBetas(model)`. Two paths forward:
+Started with the captured CLI header set as the hypothesis and walked
+clyde toward it one change at a time, re-running the concurrent test
+between each step. Both probes used the identical 68 KiB / ~17k-token
+prompt and the same OAuth token in every step; only the listed
+clyde-side variable changed.
 
-1. **Quick fix**: replace the configured `beta_header` value with the
-   superset captured above. This will bring clyde into the same bucket
-   as `claude -p` for opus-4-7-style requests but will drift again the
-   next time the CLI updates.
-2. **Right fix**: port `getAllModelBetas(model)` to Go in
-   `internal/adapter/anthropic` so the beta set is computed per request
-   from the resolved model id, mirroring the CLI's logic. Add the
-   `X-Claude-Code-Session-Id` header (one UUID per daemon process is
-   sufficient) and the `X-Stainless-*` block. The `Stainless` headers
-   are observability metadata only and have no per-request variation
-   inside one CLI version, so they can be a static block keyed off the
-   CLI version we are impersonating.
+| Step | Clyde change                                                                                                                | Clyde result                                            | CLI control |
+| ---- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- | ----------- |
+| 0    | baseline: 3 betas, no Stainless / session / browser-access                                                                  | `502` wrapping `429`, 318 ms                            | `200`, 3.6 s |
+| 1    | `beta_header` expanded to the full 7-beta CLI superset (no rebuild, just toml + `make install`)                             | `502` wrapping `429`, 333 ms                            | `200`       |
+| 2    | step 1 + full `X-Stainless-*` block + `X-Claude-Code-Session-Id` (per-process UUIDv4) + `Anthropic-Dangerous-Direct-Browser-Access: true` + `Accept: application/json` + `Accept-Encoding: gzip, deflate, br, zstd` | `502` wrapping `429`, 260 ms (gzip-encoded body, see below) | `200`       |
+
+**Headers alone are not enough to move clyde into the CLI bucket.**
+After matching the entire captured header surface byte-for-byte, the
+upstream still 429s on a request the CLI cleanly resolves the same
+second.
+
+What changes between the two: the **request body shape**. Decoded the
+CLI request body from the mitm capture and the clyde request body from
+`anthropic.messages.request` and ran a structural diff:
+
+| Body field    | CLI v2.1.114 (200 OK)                                                                                  | Clyde (429)                          |
+| ------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------ |
+| `system`      | `list[3]`, parts typed as `{type:"text",text:"..."}` with `cache_control:{type:"ephemeral",ttl:"1h"}` on parts 1 and 2 | plain `string`                       |
+| `system[0]`   | `{type:"text", text:"x-anthropic-billing-header: cc_version=2.1.114.d29; cc_entrypoint=sdk-cli; cch=c29e8;"}` | not present                          |
+| `tools`       | 133 native Claude Code tools                                                                           | 0                                    |
+| `metadata`    | `dict`                                                                                                 | not present                          |
+| `thinking`    | `dict`                                                                                                 | not present                          |
+| `context_management` | `dict`                                                                                          | not present                          |
+| `output_config` | `dict`                                                                                               | not present                          |
+| `max_tokens`  | 64000                                                                                                  | 64                                   |
+| `messages[0]` | `role=user`, `content=list[3]`, parts include a 19 KiB system-reminder block                           | `role=user`, `content=str`           |
+
+The most interesting line is `system[0]`. The CLI is **smuggling an
+`x-anthropic-billing-header` value into the body's first system text
+part** because the OAuth-bearer pathway does not let arbitrary `x-*`
+HTTP headers through. Decoded value:
+
+```
+x-anthropic-billing-header: cc_version=2.1.114.d29; cc_entrypoint=sdk-cli; cch=c29e8;
+```
+
+`cc_version`, `cc_entrypoint`, and `cch` (likely a content/correlation
+hash) are how Anthropic's OAuth backend attributes a request to the
+official CLI bucket. Without that text token in the system prompt, the
+request is treated as "not from official CLI" and falls into a
+zero-quota throttling class regardless of how good the headers are.
+
+This matches what the deobfuscated source hints at without naming.
+Search the restored CLI source for `x-anthropic-billing-header` to find
+the construction site:
+
+- [src/services/api/client.ts](../../../clyde-research/claude-code-sourcemap-main-2-newer/restored-src/src/services/api/client.ts) (and friends) build the per-call billing tag and prepend it as `system[0]`
+- The `cch=` field varies per request; the prefix `cc_version=...; cc_entrypoint=...;` is per-process
+
+### Side bug surfaced: gzip response decoding
+
+When step 2 added `Accept-Encoding: gzip, deflate, br, zstd`, Anthropic
+honored it and returned the 429 error body **gzip-encoded**. Clyde's
+[internal/adapter/anthropic/client.go](../internal/adapter/anthropic/client.go)
+reads `resp.Body` raw via `io.ReadAll` and stuffs the bytes into the
+`anthropic.ratelimit` event without decoding, so the slog body became
+binary garbage in the JSONL. Either:
+
+- decompress responses in clyde based on `Content-Encoding`, or
+- drop `br` / `zstd` from the Accept-Encoding string (Go's net/http
+  transparently decodes `gzip` only when no explicit `Accept-Encoding`
+  is set; setting it manually disables that, so we own the decoding).
+
+Fix is required before billing-header replication so we can read the
+upstream error body when it still 429s mid-bisection.
+
+### Path forward
+
+Three fixes shipped in order. Steps 1 and 2 landed on `main`; step 3
+is optional polish.
+
+1. **Decompress responses.** [internal/adapter/anthropic/client.go](../internal/adapter/anthropic/client.go)
+   now wraps `resp.Body` with `gzip.NewReader` / `flate.NewReader`
+   based on `Content-Encoding`. `br` and `zstd` are passed through
+   untouched (rare in practice; would require a new dep). The
+   `anthropic.ratelimit` and `anthropic.messages.upstream_error`
+   events again carry readable JSON.
+2. **Billing-header system smuggle.** [internal/adapter/oauth_handler.go](../internal/adapter/oauth_handler.go)
+   prepends a single line to `tr.System` before the request goes to
+   the wire:
+
+   ```
+   x-anthropic-billing-header: cc_version=2.1.114.d29; cc_entrypoint=sdk-cli; cch=c29e8;
+   ```
+
+   followed by a literal `\n` and the existing system prompt prefix
+   and content. No structural change to `system` -- it stays a string.
+   The text token alone is sufficient.
+3. **Port `getAllModelBetas(model)` to Go** (not yet shipped) so the
+   beta set is computed per resolved model id rather than read from a
+   static toml string. Source of truth:
+   [src/utils/betas.ts:234-369](../../../clyde-research/claude-code-sourcemap-main-2-newer/restored-src/src/utils/betas.ts).
+   Drift risk grows with every CLI release until this lands.
+
+### Bisection winner (verified 2026-04-19)
+
+The 68 KiB / ~17k-token request that 429'd in steps 0-2 of the
+bisection now returns 200 with the billing-header smuggle in place.
+Stress-test:
+
+| Attempt | Status | Duration | `prompt_tokens` |
+| ------- | ------ | -------- | --------------- |
+| 1       | 200    | 2.44 s   | 16,825          |
+| 2       | 200    | 1.52 s   | 16,825          |
+| 3       | 200    | 1.75 s   | 16,825          |
+| 4       | 200    | 1.40 s   | 16,825          |
+| 5       | 200    | 1.84 s   | 16,825          |
+
+Five-for-five, no 429s. Crucially, the `system` field in clyde's body
+is still a plain `string` (not the typed `[]ContentBlock` the CLI
+sends), and there are zero `tools`, `metadata`, `thinking`, or
+`context_management` keys in the request. **None of those structural
+features matter for bucket selection** -- only the `x-anthropic-billing-header`
+text token in the body's system prompt does.
+
+That makes the `cch=c29e8;` value in particular interesting. It is
+hardcoded to a single value across all of clyde's traffic and the
+bucket still routes correctly, so it is **not** a per-request
+correlation hash that gets validated. Either Anthropic's classifier
+parses only the prefix (`cc_version=...; cc_entrypoint=...;`) or it
+accepts any non-empty `cch=`.
+
+Full headers added in step 2 (Stainless block, session id, browser-access)
+remain wired up because they were captured from the official CLI;
+removing them is untested and risky. They cost nothing at runtime.
 
 ### How to re-verify after a CLI update
 

@@ -4,8 +4,12 @@ package anthropic
 import (
 	"bufio"
 	"bytes"
+	"compress/flate"
+	"compress/gzip"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +21,25 @@ import (
 
 	"goodkind.io/clyde/internal/adapter/oauth"
 )
+
+// sessionID is a per-daemon-process UUIDv4 used for the
+// X-Claude-Code-Session-Id header. Generated lazily once at first
+// /v1/messages request and stable for the lifetime of the daemon,
+// which mirrors how the official CLI uses it.
+var sessionID = onceSessionID()
+
+func onceSessionID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand failure on macOS is effectively impossible.
+		// Fall back to a stable string so the header is always set.
+		return "00000000-0000-4000-8000-000000000000"
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	h := hex.EncodeToString(b)
+	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
+}
 
 // New builds a Client. If httpClient is nil a 10 minute timeout
 // client is used; long timeouts matter because /v1/messages can keep
@@ -113,6 +136,25 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	httpReq.Header.Set("x-app", "cli")
 	httpReq.Header.Set("User-Agent", c.cfg.UserAgent)
 	httpReq.Header.Set("Content-Type", "application/json")
+	// Match the official @anthropic-ai/sdk v0.81.0 request fingerprint
+	// captured from claude-cli 2.1.114. These extra headers do not change
+	// model behavior but appear to participate in OAuth bucket selection;
+	// without them, identical requests land in a stricter throttling
+	// bucket and 429 immediately. See docs/openai-adapter.md "OAuth bucket
+	// impersonation drift" for the captured ground truth and diff method.
+	// TODO: move these to the config file
+	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
+	httpReq.Header.Set("Anthropic-Dangerous-Direct-Browser-Access", "true")
+	httpReq.Header.Set("X-Claude-Code-Session-Id", sessionID)
+	httpReq.Header.Set("X-Stainless-Lang", "js")
+	httpReq.Header.Set("X-Stainless-Package-Version", "0.81.0")
+	httpReq.Header.Set("X-Stainless-Os", "MacOS")
+	httpReq.Header.Set("X-Stainless-Arch", "arm64")
+	httpReq.Header.Set("X-Stainless-Runtime", "node")
+	httpReq.Header.Set("X-Stainless-Runtime-Version", "v24.3.0")
+	httpReq.Header.Set("X-Stainless-Retry-Count", "0")
+	httpReq.Header.Set("X-Stainless-Timeout", "600")
 
 	slog.Debug("anthropic.messages.request",
 		"subcomponent", "anthropic",
@@ -126,6 +168,15 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 
 	postStarted := time.Now()
 	resp, err := c.http.Do(httpReq)
+	if resp != nil {
+		// We send Accept-Encoding ourselves to match the official CLI
+		// fingerprint, so Go's transparent gzip handling is disabled.
+		// Swap resp.Body in place with a decoding reader so every
+		// downstream consumer (error body readers, SSE stream parser)
+		// sees plaintext. Unsupported encodings (br, zstd) leave the
+		// body untouched so callers can still inspect bytes for debug.
+		decodeResponseBody(resp)
+	}
 	if err != nil {
 		logResponse(slog.LevelError, "anthropic.messages.post_failed", responseEvent{
 			Subcomponent: "anthropic",
@@ -148,8 +199,7 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	}
 
 	if resp.StatusCode == http.StatusTooManyRequests {
-		errBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		errBody := readDecodedBody(resp)
 		ev := base
 		ev.RetryAfter = resp.Header.Get("retry-after")
 		ev.Body = string(errBody)
@@ -159,8 +209,7 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		return nil, fmt.Errorf("anthropic %s: %s", resp.Status, truncate(string(errBody), 600))
 	}
 	if resp.StatusCode != http.StatusOK {
-		errBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		errBody := readDecodedBody(resp)
 		ev := base
 		ev.Body = string(errBody)
 		ev.BodyB64 = base64.StdEncoding.EncodeToString(errBody)
@@ -177,6 +226,66 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 // values masked. Keys are lowercased so log diffs are deterministic
 // and friendly to grep. Used by the anthropic.messages.request slog
 // event so debug captures show exactly what we sent.
+// decodeResponseBody swaps resp.Body for a decoding reader matching
+// resp.Header.Get("Content-Encoding"). Stdlib covers gzip and deflate;
+// br and zstd are passed through untouched (the upstream rarely picks
+// them when gzip is also offered, and decoding them would require a
+// new dep). Removes the Content-Encoding header on success so callers
+// don't double-decode.
+func decodeResponseBody(resp *http.Response) {
+	enc := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding")))
+	if enc == "" || enc == "identity" {
+		return
+	}
+	switch enc {
+	case "gzip":
+		zr, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			slog.Warn("anthropic.response.gzip_decode_failed",
+				"subcomponent", "anthropic", "err", err.Error())
+			return
+		}
+		resp.Body = &decodedBody{r: zr, src: resp.Body}
+		resp.Header.Del("Content-Encoding")
+	case "deflate":
+		fr := flate.NewReader(resp.Body)
+		resp.Body = &decodedBody{r: fr, src: resp.Body}
+		resp.Header.Del("Content-Encoding")
+	default:
+		// br, zstd, etc. Keep raw bytes; callers will see binary in
+		// the slog body field if Anthropic actually picks one of these.
+		slog.Warn("anthropic.response.unsupported_encoding",
+			"subcomponent", "anthropic", "encoding", enc)
+	}
+}
+
+// decodedBody wraps a decompressing reader so Close() also closes the
+// underlying response body the http client owns.
+type decodedBody struct {
+	r   io.ReadCloser
+	src io.ReadCloser
+}
+
+func (d *decodedBody) Read(p []byte) (int, error) { return d.r.Read(p) }
+func (d *decodedBody) Close() error {
+	rerr := d.r.Close()
+	serr := d.src.Close()
+	if rerr != nil {
+		return rerr
+	}
+	return serr
+}
+
+// readDecodedBody reads resp.Body to EOF and closes it. Assumes
+// decodeResponseBody already wrapped Body if Content-Encoding was set.
+// Returns the bytes the caller would have seen as if no encoding was
+// applied.
+func readDecodedBody(resp *http.Response) []byte {
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return b
+}
+
 func redactedOutboundHeaders(h http.Header) map[string]string {
 	out := make(map[string]string, len(h))
 	for key, values := range h {

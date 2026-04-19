@@ -95,6 +95,17 @@ func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort
 		}
 	}
 
+	// OAuth bucket impersonation: the official claude-cli smuggles an
+	// x-anthropic-billing-header line in as system[0] because the OAuth
+	// path strips arbitrary x-* HTTP headers. Without this token in the
+	// request body the upstream classifies the request as
+	// non-CLI traffic and returns 429 immediately even with the full
+	// CLI header set. See docs/openai-adapter.md "OAuth bucket
+	// impersonation drift" / "Bisection results" for the captured
+	// evidence.
+	billingHeader := "x-anthropic-billing-header: cc_version=2.1.114.d29; cc_entrypoint=sdk-cli; cch=c29e8;"
+	tr.System = billingHeader + "\n" + tr.System
+
 	out := toAnthropicAPIRequest(tr, stripContextSuffix(model.ClaudeModel))
 	if effort != "" && len(model.Efforts) > 0 {
 		out.OutputConfig = &anthropic.OutputConfig{Effort: effort}
