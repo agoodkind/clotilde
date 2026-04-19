@@ -3,7 +3,6 @@ package tooltrans
 import (
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
@@ -23,6 +22,7 @@ type StreamTranslator struct {
 	pendingInputTokens int
 	lastStopReason     string
 	lastOutputTokens   int
+	visibleText        strings.Builder
 }
 
 // NewStreamTranslator builds per-request stream state.
@@ -100,8 +100,12 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 			})
 			return []OpenAIStreamChunk{ch}, false, "", nil, nil
 		case "thinking":
-			slog.Debug("tooltrans.thinking.dropped", "block_index", ev.Index)
 			t.currentBlockType = "thinking"
+			if !t.seenRole {
+				t.seenRole = true
+				ch := t.baseChunk(OpenAIStreamDelta{Role: "assistant"})
+				return []OpenAIStreamChunk{ch}, false, "", nil, nil
+			}
 		default:
 			t.currentBlockType = ev.ContentBlock.Type
 		}
@@ -121,6 +125,7 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 		switch ev.Delta.Type {
 		case "text_delta":
 			delta := OpenAIStreamDelta{Content: ev.Delta.Text}
+			t.visibleText.WriteString(ev.Delta.Text)
 			if !t.seenRole {
 				delta.Role = "assistant"
 				t.seenRole = true
@@ -143,8 +148,13 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 			})
 			return []OpenAIStreamChunk{ch}, false, "", nil, nil
 		case "thinking_delta":
-			slog.Debug("tooltrans.thinking.delta_dropped", "block_index", ev.Index)
-			return nil, false, "", nil, nil
+			delta := OpenAIStreamDelta{ReasoningContent: ev.Delta.Thinking}
+			if !t.seenRole {
+				delta.Role = "assistant"
+				t.seenRole = true
+			}
+			ch := t.baseChunk(delta)
+			return []OpenAIStreamChunk{ch}, false, "", nil, nil
 		default:
 			return nil, false, "", nil, nil
 		}
@@ -179,7 +189,11 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 			CompletionTokens: t.lastOutputTokens,
 			TotalTokens:      t.pendingInputTokens + t.lastOutputTokens,
 		}
-		return nil, true, reason, u, nil
+		var extra []OpenAIStreamChunk
+		if t.lastStopReason == "refusal" && t.visibleText.Len() > 0 {
+			extra = append(extra, t.baseChunk(OpenAIStreamDelta{Refusal: t.visibleText.String()}))
+		}
+		return extra, true, reason, u, nil
 
 	case "ping":
 		return nil, false, "", nil, nil

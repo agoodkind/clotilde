@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -13,11 +14,10 @@ import (
 	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
-// handleOAuth fulfils a chat completion using the direct
-// anthropic.Client (Bearer auth against /v1/messages). It mirrors
-// the shape of the streaming and non-streaming responses produced
-// by the legacy `claude -p` path so OpenAI-compatible clients see
-// no observable difference between backends.
+// handleOAuth fulfils a chat completion using the direct HTTP
+// anthropic.Client (Bearer token from the oauth manager). Streaming
+// and non-streaming responses mirror the fallback CLI path shape for
+// OpenAI-compatible clients.
 //
 // When escalate is true the function returns a non-nil error
 // without writing the response on transport failures, letting the
@@ -54,14 +54,15 @@ func (s *Server) handleOAuth(w http.ResponseWriter, r *http.Request, req ChatReq
 
 	started := time.Now()
 	if req.Stream {
-		return s.streamOAuth(w, r, anthReq, model, reqID, started, escalate)
+		includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
+		return s.streamOAuth(w, r, anthReq, model, reqID, started, escalate, includeUsage)
 	}
 	return s.collectOAuth(w, r.Context(), anthReq, model, reqID, started, jsonSpec, escalate)
 }
 
-// buildAnthropicWire maps the OpenAI chat request to an Anthropic /v1/messages
-// body via tooltrans, then applies thinking and effort knobs that are not part
-// of the OpenAI wire shape.
+// buildAnthropicWire maps the OpenAI chat request to a native messages body
+// via tooltrans, then applies thinking and effort knobs that are not part of
+// the OpenAI wire shape.
 func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort string, jsonSpec JSONResponseSpec) (anthropic.Request, error) {
 	raw, err := json.Marshal(req)
 	if err != nil {
@@ -95,29 +96,22 @@ func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort
 		}
 	}
 
-	// OAuth bucket impersonation: the official claude-cli smuggles an
-	// x-anthropic-billing-header line in as system[0] because the OAuth
-	// path strips arbitrary x-* HTTP headers. Without this token in the
-	// request body the upstream classifies the request as
-	// non-CLI traffic and returns 429 immediately even with the full
-	// CLI header set.
-	//
-	// The version suffix on cc_version is a SHA256-derived 3-char
-	// fingerprint of (salt + sample-of-first-user-message + version) per
-	// the CLI's fingerprint.ts. Recompute it per request using the same
-	// algorithm so the value stays valid if/when Anthropic enforces the
-	// hash on the OAuth path.
-	//
-	// See docs/openai-adapter.md "OAuth bucket impersonation drift" /
-	// "Bisection results" for the captured evidence and full algorithm.
+	// Body-side billing line: required by the upstream identity check.
 	cliVersion := anthropic.VersionFromUserAgent(s.anthr.UserAgent())
 	if cliVersion == "" {
-		cliVersion = "2.1.114"
+		cliVersion = s.anthr.CCVersion()
 	}
-	billingHeader := anthropic.BuildAttributionHeader(firstUserMessageText(tr.Messages), cliVersion, "sdk-cli")
-	tr.System = billingHeader + "\n" + tr.System
+	entry := s.anthr.CCEntrypoint()
+	billingHeader := anthropic.BuildAttributionHeader(cliVersion, entry)
+	// CLYDE_PROBE_BILLING mutates the billing line for debugging.
+	billingHeader = mutateBillingForProbe(billingHeader, cliVersion, entry)
+	if billingHeader != "" {
+		tr.System = billingHeader + "\n" + tr.System
+	}
 
 	out := toAnthropicAPIRequest(tr, stripContextSuffix(model.ClaudeModel))
+	// Per-model anthropic-beta extras from configured suffix map.
+	out.ExtraBetas = derivePerRequestBetas(model, s.cfg.ClientIdentity.PerContextBetas)
 	if effort != "" && len(model.Efforts) > 0 {
 		out.OutputConfig = &anthropic.OutputConfig{Effort: effort}
 	}
@@ -193,11 +187,10 @@ func toAnthropicAPIRequest(tr tooltrans.AnthRequest, claudeModel string) anthrop
 	}
 }
 
-// streamEventToTranslatorSSE maps decoded Anthropic stream signals to the JSON
+// streamEventToTranslatorSSE maps decoded native stream signals to the JSON
 // payloads tooltrans.StreamTranslator.HandleEvent expects for SSE event names
-// (content_block_start, content_block_delta, content_block_stop). Anthropic's
-// client decodes raw SSE first; this layer re-encodes the subset the
-// translator consumes.
+// (content_block_start, content_block_delta, content_block_stop). Raw SSE is
+// decoded first; this layer re-encodes the subset the translator consumes.
 func streamEventToTranslatorSSE(ev anthropic.StreamEvent) (eventName string, payload []byte, ok bool) {
 	switch ev.Kind {
 	case "text":
@@ -310,7 +303,7 @@ func streamEventToTranslatorSSE(ev anthropic.StreamEvent) (eventName string, pay
 	}
 }
 
-// runOAuthTranslatorStream drives tooltrans.StreamTranslator from Anthropic
+// runOAuthTranslatorStream drives tooltrans.StreamTranslator from decoded
 // StreamEvents. Both collect and stream paths share this; collect buffers
 // chunks while stream writes SSE frames.
 func (s *Server) runOAuthTranslatorStream(
@@ -395,9 +388,14 @@ func (s *Server) runOAuthTranslatorStream(
 		}
 	}
 
-	_, _, finishReason, _, err := tr.HandleEvent("message_stop", []byte("{}"))
+	stopChunks, _, finishReason, _, err := tr.HandleEvent("message_stop", []byte("{}"))
 	if err != nil {
 		return anthUsage, streamStopReason, "", err
+	}
+	for _, ch := range stopChunks {
+		if err := emit(ch); err != nil {
+			return anthUsage, streamStopReason, "", err
+		}
 	}
 	return anthUsage, streamStopReason, finishReason, nil
 }
@@ -408,7 +406,7 @@ func (s *Server) collectOAuth(w http.ResponseWriter, ctx context.Context, req an
 		buf = append(buf, ch)
 		return nil
 	}
-	anthUsage, _, finishReason, err := s.runOAuthTranslatorStream(ctx, req, model, reqID, emit)
+	anthUsage, anthStopReason, finishReason, err := s.runOAuthTranslatorStream(ctx, req, model, reqID, emit)
 	if err != nil {
 		s.log.LogAttrs(ctx, slog.LevelError, "adapter.chat.failed",
 			slog.String("backend", "anthropic"),
@@ -429,13 +427,14 @@ func (s *Server) collectOAuth(w http.ResponseWriter, ctx context.Context, req an
 		CompletionTokens: anthUsage.OutputTokens,
 		TotalTokens:      anthUsage.InputTokens + anthUsage.OutputTokens,
 	}
-	resp := mergeOAuthStreamChunks(reqID, model.Alias, buf, u, finishReason, jsonSpec)
+	resp := mergeOAuthStreamChunks(reqID, model.Alias, buf, u, finishReason, jsonSpec, anthStopReason)
 	writeJSON(w, http.StatusOK, resp)
 	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.completed",
 		slog.String("backend", "anthropic"),
 		slog.String("request_id", reqID),
 		slog.String("alias", model.Alias),
 		slog.String("model", req.Model),
+		slog.String("finish_reason", finishReason),
 		slog.Int("tokens_in", u.PromptTokens),
 		slog.Int("tokens_out", u.CompletionTokens),
 		slog.Int64("duration_ms", time.Since(started).Milliseconds()),
@@ -449,7 +448,7 @@ func (s *Server) collectOAuth(w http.ResponseWriter, ctx context.Context, req an
 // the function commits and never escalates (the response headers
 // are already flushed and the dispatcher cannot retry without
 // confusing the OpenAI client).
-func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthropic.Request, model ResolvedModel, reqID string, started time.Time, escalate bool) error {
+func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthropic.Request, model ResolvedModel, reqID string, started time.Time, escalate bool, includeUsage bool) error {
 	sw, err := newSSEWriter(w)
 	if err != nil {
 		if escalate {
@@ -458,6 +457,12 @@ func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthrop
 		writeError(w, http.StatusInternalServerError, "no_flusher", err.Error())
 		return nil
 	}
+
+	// Flush SSE headers immediately so clients (e.g. Cursor) get a
+	// response committal before we wait for the upstream's first byte.
+	// Large prompts spend ~1-3s on TTFT; without an early flush, strict
+	// streaming clients close the connection on timeout.
+	sw.writeSSEHeaders()
 
 	emit := func(chunk StreamChunk) error {
 		return sw.emitStreamChunk(systemFingerprint, chunk)
@@ -501,7 +506,7 @@ func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthrop
 		CompletionTokens: anthUsage.OutputTokens,
 		TotalTokens:      anthUsage.InputTokens + anthUsage.OutputTokens,
 	}
-	if req.Stream {
+	if includeUsage {
 		_ = emit(StreamChunk{
 			ID:      reqID,
 			Object:  "chat.completion.chunk",
@@ -518,6 +523,7 @@ func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthrop
 		slog.String("request_id", reqID),
 		slog.String("alias", model.Alias),
 		slog.String("model", req.Model),
+		slog.String("finish_reason", fr),
 		slog.Int("tokens_in", finalUsage.PromptTokens),
 		slog.Int("tokens_out", finalUsage.CompletionTokens),
 		slog.Int64("duration_ms", time.Since(started).Milliseconds()),
@@ -526,38 +532,115 @@ func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthrop
 	return nil
 }
 
-// stripContextSuffix removes the [1m] suffix the registry uses to
-// distinguish 1M context Claude snapshots from their 200k siblings.
-// Anthropic's API takes only the bare model id.
+// mutateBillingForProbe applies CLYDE_PROBE_BILLING for debugging.
+// canonical includes cc_version, cc_entrypoint, and cch. Returns ""
+// to omit the line entirely.
+func mutateBillingForProbe(canonical, cliVersion, ccEntrypoint string) string {
+	mode := strings.TrimSpace(os.Getenv("CLYDE_PROBE_BILLING"))
+	if mode == "" {
+		return canonical
+	}
+	const prefix = "x-anthropic-billing-header: "
+	switch mode {
+	case "omit":
+		return ""
+	case "wrong_fp":
+		return prefix + "cc_version=" + cliVersion + ".zzz; cc_entrypoint=" + ccEntrypoint + "; cch=00000;"
+	case "omit_fp":
+		return prefix + "cc_version=" + cliVersion + "; cc_entrypoint=" + ccEntrypoint + "; cch=00000;"
+	case "bad_entrypoint":
+		fp := extractFingerprint(canonical)
+		cchVal := extractBillingCCH(canonical)
+		if cchVal == "" {
+			cchVal = "00000"
+		}
+		return prefix + "cc_version=" + cliVersion + "." + fp + "; cc_entrypoint=garbage; cch=" + cchVal + ";"
+	case "omit_entrypoint":
+		fp := extractFingerprint(canonical)
+		cchVal := extractBillingCCH(canonical)
+		if cchVal == "" {
+			cchVal = "00000"
+		}
+		return prefix + "cc_version=" + cliVersion + "." + fp + "; cch=" + cchVal + ";"
+	case "cch_zero":
+		return replaceBillingCCH(canonical, "00000")
+	case "cch_z":
+		return replaceBillingCCH(canonical, "ZZZZZ")
+	case "cch_long":
+		return replaceBillingCCH(canonical, strings.Repeat("a", 32))
+	default:
+		// Unknown mode: ship canonical so a typo doesn't silently
+		// drop the bucket signal.
+		return canonical
+	}
+}
+
+// replaceBillingCCH swaps the value after `cch=` up to the next `;`.
+func replaceBillingCCH(line, newVal string) string {
+	const marker = "cch="
+	before, after, ok := strings.Cut(line, marker)
+	if !ok {
+		return line + " cch=" + newVal + ";"
+	}
+	_, tail, ok2 := strings.Cut(after, ";")
+	if !ok2 {
+		return before + marker + newVal
+	}
+	return before + marker + newVal + ";" + tail
+}
+
+// extractBillingCCH returns the cch hex token or "" if absent.
+func extractBillingCCH(line string) string {
+	const marker = "cch="
+	_, after, ok := strings.Cut(line, marker)
+	if !ok {
+		return ""
+	}
+	val, _, _ := strings.Cut(after, ";")
+	return val
+}
+
+// extractFingerprint returns the 3-char fp suffix from a canonical
+// billing line. Tolerates absence by returning "".
+func extractFingerprint(line string) string {
+	const verPrefix = "cc_version="
+	_, rest, ok := strings.Cut(line, verPrefix)
+	if !ok {
+		return ""
+	}
+	verPart, _, ok2 := strings.Cut(rest, ";")
+	if !ok2 {
+		return ""
+	}
+	dot := strings.LastIndexByte(verPart, '.')
+	if dot < 0 {
+		return ""
+	}
+	return verPart[dot+1:]
+}
+
+func derivePerRequestBetas(model ResolvedModel, perCtx map[string]string) []string {
+	if len(perCtx) == 0 {
+		return nil
+	}
+	var out []string
+	for suffix, beta := range perCtx {
+		if beta == "" {
+			continue
+		}
+		if strings.Contains(model.ClaudeModel, suffix) {
+			out = append(out, beta)
+		}
+	}
+	return out
+}
+
+// stripContextSuffix removes a bracketed wire suffix from the model id.
 func stripContextSuffix(model string) string {
 	if i := strings.Index(model, "["); i > 0 {
 		return model[:i]
 	}
 	return model
-}
-
-// firstUserMessageText returns the concatenated text of the first
-// user-role message's text content blocks, or "" if there is no user
-// message or it has no text. Used to seed the attribution-header
-// fingerprint, which the official CLI computes from the first user
-// message body. See internal/adapter/anthropic/fingerprint.go.
-func firstUserMessageText(messages []tooltrans.AnthMessage) string {
-	for _, m := range messages {
-		if m.Role != "user" {
-			continue
-		}
-		var b strings.Builder
-		for _, block := range m.Content {
-			if block.Type == "text" && block.Text != "" {
-				if b.Len() > 0 {
-					b.WriteByte('\n')
-				}
-				b.WriteString(block.Text)
-			}
-		}
-		return b.String()
-	}
-	return ""
 }
 
 // anthropicMaxTokens picks a max_tokens value: caller-supplied when

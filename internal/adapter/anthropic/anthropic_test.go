@@ -16,12 +16,12 @@ func (staticToken) Token(ctx context.Context) (string, error) {
 	return "test-token", nil
 }
 
-type rewriteAnthropicHost struct {
+type rewriteMessagesHost struct {
 	serverURL *url.URL
 	inner     http.RoundTripper
 }
 
-func (t *rewriteAnthropicHost) RoundTrip(req *http.Request) (*http.Response, error) {
+func (t *rewriteMessagesHost) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.URL.Host == "REDACTED-UPSTREAM" && strings.HasPrefix(req.URL.Path, "/v1/messages") {
 		if t.inner == nil {
 			t.inner = http.DefaultTransport
@@ -200,14 +200,21 @@ func TestStreamEvents_fixtureSSE(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hc := &http.Client{Transport: &rewriteAnthropicHost{serverURL: srvURL}}
+	hc := &http.Client{Transport: &rewriteMessagesHost{serverURL: srvURL}}
 	cli := &Client{
-		http: hc,
+		http:  hc,
 		oauth: &staticToken{},
 		cfg: Config{
-		BetaHeader:         "REDACTED-OAUTH-BETA",
-		UserAgent:          "anthropic-test/0",
-		SystemPromptPrefix: "",
+			MessagesURL:             "https://REDACTED-UPSTREAM/v1/messages",
+			OAuthAnthropicVersion:   "2023-06-01",
+			BetaHeader:              "REDACTED-OAUTH-BETA",
+			UserAgent:               "anthropic-test/0",
+			SystemPromptPrefix:      "",
+			StainlessPackageVersion: "0",
+			StainlessRuntime:        "node",
+			StainlessRuntimeVersion: "v0",
+			CCVersion:               "1.0.0",
+			CCEntrypoint:            "test",
 		},
 	}
 

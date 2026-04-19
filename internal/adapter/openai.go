@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
@@ -11,9 +12,9 @@ import (
 // the adapter never silently drops a parameter the caller depends
 // on.
 //
-// Tool calling, vision (image content parts), and logprobs are now
-// fully wired on the Anthropic backend, passed through verbatim on
-// shunts, and (for tools) prompt-injected on the claude -p fallback.
+// Tool calling, vision (image content parts), and logprobs are wired on
+// the direct HTTP backend, passed through verbatim on shunts, and (for
+// tools) prompt-injected on the claude -p fallback.
 // audio content parts are rejected with 400 on every backend; vision
 // is rejected on fallback. logprobs handling is config-driven via
 // [adapter.logprobs] (reject vs drop per backend) and forwarded
@@ -49,12 +50,54 @@ type ChatRequest struct {
 	Metadata         json.RawMessage `json:"metadata,omitempty"`
 }
 
-// Tool is one entry in the OpenAI request.tools array. Today the
-// only `type` is `"function"`; any other value is rejected at
-// translation time with a clear error.
+// Tool is one entry in the OpenAI request.tools array.
+// Decoder accepts OpenAI canonical and native-messages tool wire shapes
+// and normalizes both into OpenAI canonical form.
 type Tool struct {
 	Type     string             `json:"type"`
 	Function ToolFunctionSchema `json:"function"`
+}
+
+func (t *Tool) UnmarshalJSON(raw []byte) error {
+	type rawTool struct {
+		Type        string              `json:"type"`
+		Function    *ToolFunctionSchema `json:"function"`
+		Name        string              `json:"name"`
+		Description string              `json:"description"`
+		InputSchema json.RawMessage     `json:"input_schema"`
+	}
+
+	var w rawTool
+	if err := json.Unmarshal(raw, &w); err != nil {
+		return err
+	}
+
+	if w.Function != nil {
+		if w.Type != "" && w.Type != "function" {
+			return fmt.Errorf("tool has unsupported type %q", w.Type)
+		}
+		t.Type = "function"
+		t.Function = *w.Function
+		return nil
+	}
+
+	if w.Name == "" {
+		return fmt.Errorf("tool missing function schema")
+	}
+	switch w.Type {
+	case "", "function", "custom":
+		// acceptable native alternate shape
+	default:
+		return fmt.Errorf("tool has unsupported type %q", w.Type)
+	}
+
+	t.Type = "function"
+	t.Function = ToolFunctionSchema{
+		Name:        w.Name,
+		Description: w.Description,
+		Parameters:  w.InputSchema,
+	}
+	return nil
 }
 
 // ToolFunctionSchema is the function definition inside a Tool.
@@ -82,12 +125,26 @@ type Function struct {
 // on ToolCalls (assistant-emitted) and ToolCallID (the linkage on
 // a role:"tool" reply).
 type ChatMessage struct {
-	Role       string          `json:"role"`
-	Content    json.RawMessage `json:"content,omitempty"`
-	Name       string          `json:"name,omitempty"`
-	ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
-	Refusal    string          `json:"refusal,omitempty"`
+	Role             string              `json:"role"`
+	Content          json.RawMessage     `json:"content,omitempty"`
+	Name             string              `json:"name,omitempty"`
+	ToolCalls        []ToolCall          `json:"tool_calls,omitempty"`
+	ToolCallID       string              `json:"tool_call_id,omitempty"`
+	ReasoningContent string              `json:"reasoning_content,omitempty"`
+	Refusal          string              `json:"refusal,omitempty"`
+	Annotations      []MessageAnnotation `json:"annotations,omitempty"`
+}
+
+// MessageAnnotation is one OpenAI chat completion message annotation (for example url_citation).
+type MessageAnnotation struct {
+	Type        string       `json:"type"`
+	URLCitation *URLCitation `json:"url_citation,omitempty"`
+}
+
+// URLCitation is the citation payload for a url_citation annotation.
+type URLCitation struct {
+	URL   string `json:"url"`
+	Title string `json:"title,omitempty"`
 }
 
 // ToolCall is one assistant-emitted function call. ID is the
@@ -129,7 +186,7 @@ type ImageURLPart struct {
 
 // AudioInputRef carries an inline base64 audio payload from a
 // content-parts message. The adapter rejects audio with 400 on
-// every backend today (Anthropic /v1/messages does not accept
+// every backend today; the direct messages path does not accept
 // audio input on the message content array as of this writing).
 type AudioInputRef struct {
 	Data   string `json:"data"`
@@ -205,10 +262,11 @@ type StreamChoice struct {
 // index sets ID + Type + Function.Name; subsequent chunks append
 // to Function.Arguments.
 type StreamDelta struct {
-	Role      string     `json:"role,omitempty"`
-	Content   string     `json:"content,omitempty"`
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
-	Refusal   string     `json:"refusal,omitempty"`
+	Role             string     `json:"role,omitempty"`
+	Content          string     `json:"content,omitempty"`
+	ReasoningContent string     `json:"reasoning_content,omitempty"`
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+	Refusal          string     `json:"refusal,omitempty"`
 }
 
 // Usage matches the OpenAI token accounting shape.
@@ -226,13 +284,15 @@ type ModelsResponse struct {
 
 // ModelEntry is one row in the models listing.
 type ModelEntry struct {
-	ID          string   `json:"id"`
-	Object      string   `json:"object"`
-	OwnedBy     string   `json:"owned_by"`
-	Context     int      `json:"context_window,omitempty"`
-	Efforts     []string `json:"supported_efforts,omitempty"`
-	Backend     string   `json:"backend,omitempty"`
-	ClaudeModel string   `json:"claude_model,omitempty"`
+	ID            string   `json:"id"`
+	Object        string   `json:"object"`
+	OwnedBy       string   `json:"owned_by"`
+	Context       int      `json:"context_window,omitempty"`
+	ContextLength int      `json:"context_length,omitempty"`
+	MaxModelLen   int      `json:"max_model_len,omitempty"`
+	Efforts       []string `json:"supported_efforts,omitempty"`
+	Backend       string   `json:"backend,omitempty"`
+	ClaudeModel   string   `json:"claude_model,omitempty"`
 }
 
 // ErrorResponse is the error envelope the adapter returns.
@@ -252,7 +312,7 @@ type ErrorBody struct {
 // string. OpenAI permits either a plain string or an array of
 // content parts; the adapter accepts both and drops non text parts
 // with a placeholder so the ordering survives. Used by the legacy
-// runner / fallback prompt path; the Anthropic translator uses
+// runner / fallback prompt path; the native translator uses
 // NormalizeContent instead so it can keep image parts intact.
 func FlattenContent(raw json.RawMessage) string {
 	parts, kind := NormalizeContent(raw)
@@ -287,7 +347,7 @@ func FlattenContent(raw json.RawMessage) string {
 
 // ContentKind discriminates the wire shape NormalizeContent saw.
 // Translators use this so a string-shaped message stays a string on
-// the way out (some Anthropic features only accept the string form).
+// the way out (some features only accept the string form).
 type ContentKind int
 
 const (

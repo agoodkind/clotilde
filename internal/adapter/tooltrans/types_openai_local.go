@@ -63,12 +63,26 @@ type OpenAIFunction struct {
 
 // OpenAIMessage is one chat message.
 type OpenAIMessage struct {
-	Role       string           `json:"role"`
-	Content    json.RawMessage  `json:"content,omitempty"`
-	Name       string           `json:"name,omitempty"`
-	ToolCalls  []OpenAIToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string           `json:"tool_call_id,omitempty"`
-	Refusal    string           `json:"refusal,omitempty"`
+	Role             string                    `json:"role"`
+	Content          json.RawMessage           `json:"content,omitempty"`
+	Name             string                    `json:"name,omitempty"`
+	ToolCalls        []OpenAIToolCall          `json:"tool_calls,omitempty"`
+	ToolCallID       string                    `json:"tool_call_id,omitempty"`
+	ReasoningContent string                    `json:"reasoning_content,omitempty"`
+	Refusal          string                    `json:"refusal,omitempty"`
+	Annotations      []OpenAIMessageAnnotation `json:"annotations,omitempty"`
+}
+
+// OpenAIMessageAnnotation mirrors OpenAI message.annotations[] entries.
+type OpenAIMessageAnnotation struct {
+	Type        string             `json:"type"`
+	URLCitation *OpenAIURLCitation `json:"url_citation,omitempty"`
+}
+
+// OpenAIURLCitation is the url_citation object for an annotation.
+type OpenAIURLCitation struct {
+	URL   string `json:"url"`
+	Title string `json:"title,omitempty"`
 }
 
 // OpenAIToolCall is one assistant-emitted tool call.
@@ -85,13 +99,22 @@ type OpenAIToolCallFunction struct {
 	Arguments string `json:"arguments,omitempty"`
 }
 
-// OpenAIContentPart is one element of a content-parts array.
+// OpenAIContentPart is one element of a content-parts array. The
+// ToolUseID/Content/ID/Name/Input fields capture Anthropic-style
+// "tool_result" and "tool_use" parts that some clients (Cursor) embed
+// inside user/assistant messages instead of using OpenAI's standard
+// role:"tool" + assistant.tool_calls wire shape.
 type OpenAIContentPart struct {
-	Type     string               `json:"type"`
-	Text     string               `json:"text,omitempty"`
-	ImageURL *OpenAIImageURLPart  `json:"image_url,omitempty"`
-	Audio    *OpenAIAudioInputRef `json:"input_audio,omitempty"`
-	Refusal  string               `json:"refusal,omitempty"`
+	Type      string               `json:"type"`
+	Text      string               `json:"text,omitempty"`
+	ImageURL  *OpenAIImageURLPart  `json:"image_url,omitempty"`
+	Audio     *OpenAIAudioInputRef `json:"input_audio,omitempty"`
+	Refusal   string               `json:"refusal,omitempty"`
+	ToolUseID string               `json:"tool_use_id,omitempty"`
+	Content   json.RawMessage      `json:"content,omitempty"`
+	ID        string               `json:"id,omitempty"`
+	Name      string               `json:"name,omitempty"`
+	Input     json.RawMessage      `json:"input,omitempty"`
 }
 
 // OpenAIImageURLPart is the inner object for image_url parts.
@@ -166,10 +189,11 @@ type OpenAIStreamChoice struct {
 
 // OpenAIStreamDelta is the incremental message body.
 type OpenAIStreamDelta struct {
-	Role      string           `json:"role,omitempty"`
-	Content   string           `json:"content,omitempty"`
-	ToolCalls []OpenAIToolCall `json:"tool_calls,omitempty"`
-	Refusal   string           `json:"refusal,omitempty"`
+	Role             string           `json:"role,omitempty"`
+	Content          string           `json:"content,omitempty"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	ToolCalls        []OpenAIToolCall `json:"tool_calls,omitempty"`
+	Refusal          string           `json:"refusal,omitempty"`
 }
 
 // OpenAIUsage matches OpenAI token accounting.

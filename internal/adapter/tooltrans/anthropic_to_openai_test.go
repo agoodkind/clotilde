@@ -110,7 +110,7 @@ func TestStreamToolTranslator(t *testing.T) {
 	}
 }
 
-func TestStreamThinkingDropped(t *testing.T) {
+func TestStreamThinkingForwardsReasoningContent(t *testing.T) {
 	t.Parallel()
 	tr := NewStreamTranslator("chatcmpl-th", "alias")
 	chunks, _, _, _, err := tr.HandleEvent("content_block_delta", []byte(`{
@@ -121,7 +121,10 @@ func TestStreamThinkingDropped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(chunks) != 0 {
-		t.Fatalf("expected no chunks, got %d", len(chunks))
+	if len(chunks) != 1 {
+		t.Fatalf("want 1 chunk, got %d", len(chunks))
+	}
+	if chunks[0].Choices[0].Delta.ReasoningContent != "x" {
+		t.Fatalf("reasoning_content = %q", chunks[0].Choices[0].Delta.ReasoningContent)
 	}
 }

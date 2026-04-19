@@ -1,10 +1,10 @@
 // Package finishreason maps Anthropic stop_reason values to OpenAI finish_reason.
-// Non-stream and stream paths differ: unknown reasons pass through on non-stream
-// and normalize to "stop" on stream.
+// Unknown Anthropic reasons map to "stop" (non-stream) or "stop" (stream),
+// except "refusal" which maps to "content_filter".
 package finishreason
 
 // FromAnthropicNonStream maps Anthropic stop_reason to OpenAI finish_reason for
-// collect and non-streaming paths. Unknown values pass through unchanged.
+// collect and non-streaming paths. Unknown values normalize to "stop".
 func FromAnthropicNonStream(s string) string {
 	switch s {
 	case "end_turn", "stop_sequence", "":
@@ -13,8 +13,10 @@ func FromAnthropicNonStream(s string) string {
 		return "length"
 	case "tool_use":
 		return "tool_calls"
+	case "refusal":
+		return "content_filter"
 	default:
-		return s
+		return "stop"
 	}
 }
 
@@ -26,6 +28,8 @@ func FromAnthropicStream(s string) string {
 		return "length"
 	case "tool_use":
 		return "tool_calls"
+	case "refusal":
+		return "content_filter"
 	case "end_turn", "stop_sequence", "":
 		return "stop"
 	default:

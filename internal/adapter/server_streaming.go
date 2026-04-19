@@ -77,7 +77,7 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, req ChatRequ
 		return sw.emitStreamChunk(systemFingerprint, chunk)
 	}
 
-	usage, err := TranslateStream(stdout, model.Alias, reqID, sink)
+	usage, finishReason, err := TranslateStream(stdout, model.Alias, reqID, sink)
 	if err != nil {
 		s.log.LogAttrs(r.Context(), slog.LevelWarn, "stream translate error",
 			slog.String("request_id", reqID),
@@ -99,6 +99,7 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, req ChatRequ
 	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.chat.completed",
 		slog.String("request_id", reqID),
 		slog.String("model", model.Alias),
+		slog.String("finish_reason", finishReason),
 		slog.Int("prompt_tokens", usage.PromptTokens),
 		slog.Int("completion_tokens", usage.CompletionTokens),
 		slog.Int64("duration_ms", time.Since(started).Milliseconds()),

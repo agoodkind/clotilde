@@ -84,6 +84,7 @@ type AnthSSEMessageWrap struct {
 type AnthSSEDelta struct {
 	Type         string `json:"type"`
 	Text         string `json:"text,omitempty"`
+	Thinking     string `json:"thinking,omitempty"`
 	PartialJSON  string `json:"partial_json,omitempty"`
 	StopReason   string `json:"stop_reason,omitempty"`
 	StopSequence string `json:"stop_sequence,omitempty"`

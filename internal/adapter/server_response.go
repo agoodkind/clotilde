@@ -14,8 +14,10 @@ type toolAccSlot struct {
 	id, typ, name, args string
 }
 
-func mergeOAuthStreamChunks(reqID, modelAlias string, chunks []tooltrans.OpenAIStreamChunk, u Usage, finishReason string, jsonSpec JSONResponseSpec) ChatResponse {
+func mergeOAuthStreamChunks(reqID, modelAlias string, chunks []tooltrans.OpenAIStreamChunk, u Usage, finishReason string, jsonSpec JSONResponseSpec, anthropicStopReason string) ChatResponse {
 	var text strings.Builder
+	var reasoning strings.Builder
+	var refusalText strings.Builder
 	toolAcc := make(map[int]*toolAccSlot)
 	for _, ch := range chunks {
 		if len(ch.Choices) == 0 {
@@ -23,6 +25,8 @@ func mergeOAuthStreamChunks(reqID, modelAlias string, chunks []tooltrans.OpenAIS
 		}
 		delta := ch.Choices[0].Delta
 		text.WriteString(delta.Content)
+		reasoning.WriteString(delta.ReasoningContent)
+		refusalText.WriteString(delta.Refusal)
 		for _, tc := range delta.ToolCalls {
 			slot := toolAcc[tc.Index]
 			if slot == nil {
@@ -53,6 +57,14 @@ func mergeOAuthStreamChunks(reqID, modelAlias string, chunks []tooltrans.OpenAIS
 	msg := ChatMessage{
 		Role:    "assistant",
 		Content: json.RawMessage(strconv.Quote(outText)),
+	}
+	if reasoning.Len() > 0 {
+		msg.ReasoningContent = reasoning.String()
+	}
+	if refusalText.Len() > 0 {
+		msg.Refusal = refusalText.String()
+	} else if strings.EqualFold(anthropicStopReason, "refusal") && strings.TrimSpace(outText) != "" {
+		msg.Refusal = outText
 	}
 	var order []int
 	for k := range toolAcc {

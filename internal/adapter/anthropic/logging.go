@@ -20,10 +20,7 @@ type rateLimitAttr struct {
 	Value string
 }
 
-// rateLimitAttrs extracts every anthropic-ratelimit-* response header
-// as typed pairs. These are how Anthropic surfaces remaining quota
-// and reset windows; capture them on every response so we can
-// correlate 429s with the bucket state that produced them.
+// rateLimitAttrs extracts vendor rate-limit headers as typed pairs for logging.
 func rateLimitAttrs(h http.Header) []rateLimitAttr {
 	attrs := make([]rateLimitAttr, 0, 8)
 	for key, values := range h {

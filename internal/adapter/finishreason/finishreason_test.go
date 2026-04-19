@@ -2,9 +2,9 @@ package finishreason
 
 import "testing"
 
-func TestFromAnthropicNonStreamPassthroughUnknown(t *testing.T) {
-	if got := FromAnthropicNonStream("custom_stop"); got != "custom_stop" {
-		t.Fatalf("non-stream unknown: got %q", got)
+func TestFromAnthropicNonStreamUnknownBecomesStop(t *testing.T) {
+	if got := FromAnthropicNonStream("custom_stop"); got != "stop" {
+		t.Fatalf("non-stream unknown: got %q want stop", got)
 	}
 }
 
@@ -35,5 +35,14 @@ func TestFromAnthropicStreamKnown(t *testing.T) {
 	}
 	if got := FromAnthropicStream("tool_use"); got != "tool_calls" {
 		t.Fatalf("got %q", got)
+	}
+	if got := FromAnthropicStream("refusal"); got != "content_filter" {
+		t.Fatalf("refusal: got %q want content_filter", got)
+	}
+}
+
+func TestFromAnthropicNonStreamRefusal(t *testing.T) {
+	if got := FromAnthropicNonStream("refusal"); got != "content_filter" {
+		t.Fatalf("got %q want content_filter", got)
 	}
 }

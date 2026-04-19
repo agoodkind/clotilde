@@ -21,9 +21,10 @@ func streamChunkFromTooltrans(och tooltrans.OpenAIStreamChunk) StreamChunk {
 		sc := StreamChoice{
 			Index: c.Index,
 			Delta: StreamDelta{
-				Role:    c.Delta.Role,
-				Content: c.Delta.Content,
-				Refusal: c.Delta.Refusal,
+				Role:             c.Delta.Role,
+				Content:          c.Delta.Content,
+				ReasoningContent: c.Delta.ReasoningContent,
+				Refusal:          c.Delta.Refusal,
 			},
 		}
 		if c.Logprobs != nil {

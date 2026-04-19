@@ -7,6 +7,8 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	"goodkind.io/clyde/internal/adapter/finishreason"
 )
 
 // claudeEvent is one line of claude -p --output-format stream-json.
@@ -18,6 +20,7 @@ type claudeEvent struct {
 	Message      claudeMessage `json:"message,omitempty"`
 	TotalCostUSD float64       `json:"total_cost_usd,omitempty"`
 	Usage        claudeUsage   `json:"usage,omitempty"`
+	StopReason   string        `json:"stop_reason,omitempty"`
 }
 
 type claudeMessage struct {
@@ -25,8 +28,9 @@ type claudeMessage struct {
 }
 
 type claudeContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	Thinking string `json:"thinking,omitempty"`
 }
 
 type claudeUsage struct {
@@ -42,9 +46,10 @@ type StreamSink func(chunk StreamChunk) error
 // TranslateStream reads newline delimited claude stream-json from r
 // and forwards OpenAI style chunks into sink. It returns the final
 // usage counts so the caller can emit a closing usage frame when the
-// client requested it. TranslateStream does not write [DONE]; that
+// client requested it, and the mapped finish_reason for logging.
+// TranslateStream does not write [DONE]; that
 // is the HTTP layer's job because only it owns the writer.
-func TranslateStream(r io.Reader, modelAlias, completionID string, sink StreamSink) (Usage, error) {
+func TranslateStream(r io.Reader, modelAlias, completionID string, sink StreamSink) (Usage, string, error) {
 	sc := bufio.NewScanner(r)
 	buf := make([]byte, 0, 1<<20)
 	sc.Buffer(buf, 8<<20)
@@ -52,6 +57,7 @@ func TranslateStream(r io.Reader, modelAlias, completionID string, sink StreamSi
 	firstText := true
 	var usage Usage
 	created := time.Now().Unix()
+	var apiStopReason string
 
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
@@ -65,25 +71,49 @@ func TranslateStream(r io.Reader, modelAlias, completionID string, sink StreamSi
 		switch ev.Type {
 		case "assistant":
 			for _, c := range ev.Message.Content {
-				if c.Type != "text" || c.Text == "" {
-					continue
-				}
-				chunk := StreamChunk{
-					ID:      completionID,
-					Object:  "chat.completion.chunk",
-					Created: created,
-					Model:   modelAlias,
-					Choices: []StreamChoice{{
-						Index: 0,
-						Delta: StreamDelta{Content: c.Text},
-					}},
-				}
-				if firstText {
-					chunk.Choices[0].Delta.Role = "assistant"
-					firstText = false
-				}
-				if err := sink(chunk); err != nil {
-					return usage, err
+				switch c.Type {
+				case "text":
+					if c.Text == "" {
+						continue
+					}
+					chunk := StreamChunk{
+						ID:      completionID,
+						Object:  "chat.completion.chunk",
+						Created: created,
+						Model:   modelAlias,
+						Choices: []StreamChoice{{
+							Index: 0,
+							Delta: StreamDelta{Content: c.Text},
+						}},
+					}
+					if firstText {
+						chunk.Choices[0].Delta.Role = "assistant"
+						firstText = false
+					}
+					if err := sink(chunk); err != nil {
+						return usage, "", err
+					}
+				case "thinking":
+					if c.Thinking == "" {
+						continue
+					}
+					chunk := StreamChunk{
+						ID:      completionID,
+						Object:  "chat.completion.chunk",
+						Created: created,
+						Model:   modelAlias,
+						Choices: []StreamChoice{{
+							Index: 0,
+							Delta: StreamDelta{ReasoningContent: c.Thinking},
+						}},
+					}
+					if firstText {
+						chunk.Choices[0].Delta.Role = "assistant"
+						firstText = false
+					}
+					if err := sink(chunk); err != nil {
+						return usage, "", err
+					}
 				}
 			}
 		case "result":
@@ -92,13 +122,17 @@ func TranslateStream(r io.Reader, modelAlias, completionID string, sink StreamSi
 				CompletionTokens: ev.Usage.OutputTokens,
 				TotalTokens:      ev.Usage.InputTokens + ev.Usage.OutputTokens,
 			}
+			apiStopReason = ev.StopReason
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return usage, fmt.Errorf("stream scan: %w", err)
+		return usage, "", fmt.Errorf("stream scan: %w", err)
 	}
 
-	stop := "stop"
+	fr := finishreason.FromAnthropicNonStream(apiStopReason)
+	if fr == "" {
+		fr = "stop"
+	}
 	sink(StreamChunk{
 		ID:      completionID,
 		Object:  "chat.completion.chunk",
@@ -107,11 +141,11 @@ func TranslateStream(r io.Reader, modelAlias, completionID string, sink StreamSi
 		Choices: []StreamChoice{{
 			Index:        0,
 			Delta:        StreamDelta{},
-			FinishReason: &stop,
+			FinishReason: &fr,
 		}},
 	})
 
-	return usage, nil
+	return usage, fr, nil
 }
 
 // CollectStream is the non streaming path. It drains the claude

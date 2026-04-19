@@ -30,9 +30,12 @@ func TestTranslateStreamEmitsAssistantDeltasAndFinish(t *testing.T) {
 		chunks = append(chunks, c)
 		return nil
 	}
-	usage, err := TranslateStream(strings.NewReader(fixtureStream), "clyde-opus-4-7-high-1m", "chatcmpl-test", sink)
+	usage, finishReason, err := TranslateStream(strings.NewReader(fixtureStream), "clyde-opus-4-7-high-1m", "chatcmpl-test", sink)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if finishReason != "stop" {
+		t.Fatalf("finishReason = %q want stop", finishReason)
 	}
 	if len(chunks) < 3 {
 		t.Fatalf("want at least 3 chunks, got %d", len(chunks))

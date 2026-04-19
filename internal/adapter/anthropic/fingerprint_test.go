@@ -1,40 +1,10 @@
 package anthropic
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
-
-func TestComputeFingerprint(t *testing.T) {
-	// Known vectors generated from the Python oracle (/tmp/fp_oracle.py)
-	// which mirrors the CLI's TS implementation. The first vector is the
-	// CLI capture from 2026-04-19: the prompt produced
-	// `cc_version=2.1.114.d29` over the wire, and the algorithm above
-	// recomputes "d29" from the same first user message.
-	bigPrompt := "Repeat back the word ok. Context: " + strings.Repeat("Lorem ipsum dolor sit amet, consectetur adipiscing elit. ", 600)
-
-	cases := []struct {
-		name    string
-		message string
-		version string
-		want    string
-	}{
-		{"cli_capture_v2.1.114", bigPrompt, "2.1.114", "d29"},
-		{"hello", "hello", "2.1.114", "7be"},
-		{"empty", "", "2.1.114", "069"},
-		{"short_5_chars", "12345", "2.1.114", "27e"},
-		{"short_prompt", "Repeat back the word ok.", "2.1.114", "d29"},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := computeFingerprint(tc.message, tc.version)
-			if got != tc.want {
-				t.Fatalf("fingerprint(%q, %q) = %q want %q", truncateForLog(tc.message), tc.version, got, tc.want)
-			}
-		})
-	}
-}
 
 func TestVersionFromUserAgent(t *testing.T) {
 	cases := []struct {
@@ -58,17 +28,39 @@ func TestVersionFromUserAgent(t *testing.T) {
 	}
 }
 
-func TestBuildAttributionHeader(t *testing.T) {
-	got := BuildAttributionHeader("Repeat back the word ok.", "2.1.114", "sdk-cli")
-	want := "x-anthropic-billing-header: cc_version=2.1.114.d29; cc_entrypoint=sdk-cli;"
-	if got != want {
-		t.Fatalf("got %q\nwant %q", got, want)
+func TestBuildAttributionHeaderShape(t *testing.T) {
+	// Wire shape from mitm: cc_version=<semver>.<3hex>; cc_entrypoint=...; cch=<5hex>;
+	re := regexp.MustCompile(`^x-anthropic-billing-header: cc_version=\d+\.\d+\.\d+\.[0-9a-f]{3}; cc_entrypoint=sdk-cli; cch=[0-9a-f]{5};$`)
+	for range 20 {
+		got := BuildAttributionHeader("2.1.114", "sdk-cli")
+		if !re.MatchString(got) {
+			t.Fatalf("unexpected shape: %q", got)
+		}
 	}
 }
 
-func truncateForLog(s string) string {
-	if len(s) <= 40 {
-		return s
+func TestBuildAttributionHeaderRandomSuffixes(t *testing.T) {
+	seen := map[string]struct{}{}
+	for range 30 {
+		line := BuildAttributionHeader("1.0.0", "sdk-cli")
+		// Two calls should usually differ (extremely unlikely collision).
+		seen[line] = struct{}{}
 	}
-	return s[:40] + "..."
+	if len(seen) < 2 {
+		t.Fatalf("expected variation across calls, got %d unique of 30", len(seen))
+	}
+}
+
+func TestRandomHexDeterministicLength(t *testing.T) {
+	for _, n := range []int{1, 2, 3, 4, 5, 6} {
+		h := randomHex(n)
+		if len(h) != n {
+			t.Fatalf("randomHex(%d) len=%d", n, len(h))
+		}
+		for _, r := range h {
+			if !strings.ContainsRune("0123456789abcdef", r) {
+				t.Fatalf("non-hex in %q", h)
+			}
+		}
+	}
 }
