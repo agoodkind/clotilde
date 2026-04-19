@@ -1,0 +1,156 @@
+package adapter
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"io"
+	"strings"
+	"time"
+)
+
+// claudeEvent is one line of claude -p --output-format stream-json.
+// Only the fields the adapter uses are decoded; everything else is
+// tolerated so future claude additions do not break parsing.
+type claudeEvent struct {
+	Type         string        `json:"type"`
+	Subtype      string        `json:"subtype,omitempty"`
+	Message      claudeMessage `json:"message,omitempty"`
+	TotalCostUSD float64       `json:"total_cost_usd,omitempty"`
+	Usage        claudeUsage   `json:"usage,omitempty"`
+}
+
+type claudeMessage struct {
+	Content []claudeContent `json:"content"`
+}
+
+type claudeContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type claudeUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+}
+
+// StreamSink receives one translated chunk at a time. The HTTP
+// handler passes a function that writes the SSE frame. The
+// translator also emits a synthetic terminal chunk.
+type StreamSink func(chunk StreamChunk) error
+
+// TranslateStream reads newline delimited claude stream-json from r
+// and forwards OpenAI style chunks into sink. It returns the final
+// usage counts so the caller can emit a closing usage frame when the
+// client requested it. TranslateStream does not write [DONE]; that
+// is the HTTP layer's job because only it owns the writer.
+func TranslateStream(r io.Reader, modelAlias, completionID string, sink StreamSink) (Usage, error) {
+	sc := bufio.NewScanner(r)
+	buf := make([]byte, 0, 1<<20)
+	sc.Buffer(buf, 8<<20)
+
+	firstText := true
+	var usage Usage
+	created := time.Now().Unix()
+
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		var ev claudeEvent
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			continue
+		}
+		switch ev.Type {
+		case "assistant":
+			for _, c := range ev.Message.Content {
+				if c.Type != "text" || c.Text == "" {
+					continue
+				}
+				chunk := StreamChunk{
+					ID:      completionID,
+					Object:  "chat.completion.chunk",
+					Created: created,
+					Model:   modelAlias,
+					Choices: []StreamChoice{{
+						Index: 0,
+						Delta: StreamDelta{Content: c.Text},
+					}},
+				}
+				if firstText {
+					chunk.Choices[0].Delta.Role = "assistant"
+					firstText = false
+				}
+				if err := sink(chunk); err != nil {
+					return usage, err
+				}
+			}
+		case "result":
+			usage = Usage{
+				PromptTokens:     ev.Usage.InputTokens,
+				CompletionTokens: ev.Usage.OutputTokens,
+				TotalTokens:      ev.Usage.InputTokens + ev.Usage.OutputTokens,
+			}
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return usage, fmt.Errorf("stream scan: %w", err)
+	}
+
+	stop := "stop"
+	sink(StreamChunk{
+		ID:      completionID,
+		Object:  "chat.completion.chunk",
+		Created: created,
+		Model:   modelAlias,
+		Choices: []StreamChoice{{
+			Index:        0,
+			Delta:        StreamDelta{},
+			FinishReason: &stop,
+		}},
+	})
+
+	return usage, nil
+}
+
+// CollectStream is the non streaming path. It drains the claude
+// output, joins every assistant text chunk, and returns the
+// accumulated message plus the usage counts.
+func CollectStream(r io.Reader) (string, Usage, error) {
+	sc := bufio.NewScanner(r)
+	buf := make([]byte, 0, 1<<20)
+	sc.Buffer(buf, 8<<20)
+
+	var sb strings.Builder
+	var usage Usage
+
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		var ev claudeEvent
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			continue
+		}
+		switch ev.Type {
+		case "assistant":
+			for _, c := range ev.Message.Content {
+				if c.Type == "text" {
+					sb.WriteString(c.Text)
+				}
+			}
+		case "result":
+			usage = Usage{
+				PromptTokens:     ev.Usage.InputTokens,
+				CompletionTokens: ev.Usage.OutputTokens,
+				TotalTokens:      ev.Usage.InputTokens + ev.Usage.OutputTokens,
+			}
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return sb.String(), usage, fmt.Errorf("collect scan: %w", err)
+	}
+	return sb.String(), usage, nil
+}

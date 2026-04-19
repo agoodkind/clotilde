@@ -1,0 +1,331 @@
+package tooltrans
+
+import (
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/url"
+	"strings"
+)
+
+// TranslateRequest maps an OpenAI-shaped chat request to Anthropic /v1/messages fields.
+func TranslateRequest(req OpenAIRequest, systemPrefix string, maxTokens int) (AnthRequest, error) {
+	var systemPieces []string
+	var out []AnthMessage
+
+	for msgIdx, msg := range req.Messages {
+		switch msg.Role {
+		case "system", "developer":
+			t := flattenContent(msg.Content)
+			if strings.TrimSpace(t) != "" {
+				systemPieces = append(systemPieces, t)
+			}
+		case "user":
+			blocks, err := openAIMessageToUserBlocks(msgIdx, msg)
+			if err != nil {
+				return AnthRequest{}, err
+			}
+			if len(blocks) == 0 {
+				continue
+			}
+			out = append(out, AnthMessage{Role: "user", Content: blocks})
+		case "assistant":
+			blocks, err := openAIMessageToAssistantBlocks(msgIdx, msg)
+			if err != nil {
+				return AnthRequest{}, err
+			}
+			if len(blocks) == 0 && len(msg.ToolCalls) == 0 {
+				continue
+			}
+			out = append(out, AnthMessage{Role: "assistant", Content: blocks})
+		case "tool", "function":
+			result := flattenContent(msg.Content)
+			if result == "" {
+				result = " "
+			}
+			out = append(out, AnthMessage{
+				Role: "user",
+				Content: []AnthContentBlock{{
+					Type:          "tool_result",
+					ToolUseID:     msg.ToolCallID,
+					ResultContent: result,
+				}},
+			})
+		default:
+			return AnthRequest{}, fmt.Errorf("unsupported message role %q", msg.Role)
+		}
+	}
+
+	out = mergeConsecutiveSameRole(out)
+
+	systemJoined := strings.Join(systemPieces, "\n\n")
+	systemStr := joinSystem(systemPrefix, systemJoined)
+
+	tools, err := translateTools(req)
+	if err != nil {
+		return AnthRequest{}, err
+	}
+
+	toolChoice, err := translateToolChoice(req.ToolChoice)
+	if err != nil {
+		return AnthRequest{}, err
+	}
+
+	if req.ParallelTools != nil && !*req.ParallelTools {
+		if toolChoice == nil {
+			toolChoice = &AnthToolChoice{Type: "auto"}
+		}
+		toolChoice.DisableParallelToolUse = true
+	}
+
+	toolNames := make([]string, 0, len(tools))
+	for _, t := range tools {
+		toolNames = append(toolNames, t.Name)
+	}
+	choiceType := ""
+	choiceName := ""
+	if toolChoice != nil {
+		choiceType = toolChoice.Type
+		choiceName = toolChoice.Name
+	}
+	slog.Info("tooltrans.translated",
+		"component", "tooltrans",
+		"model", req.Model,
+		"system_len", len(systemStr),
+		"message_count", len(out),
+		"tool_count", len(tools),
+		"tool_names", toolNames,
+		"tool_choice_type", choiceType,
+		"tool_choice_name", choiceName,
+		"stream", req.Stream,
+	)
+
+	return AnthRequest{
+		Model:      req.Model,
+		System:     systemStr,
+		Messages:   out,
+		MaxTokens:  maxTokens,
+		Tools:      tools,
+		ToolChoice: toolChoice,
+		Stream:     req.Stream,
+	}, nil
+}
+
+func joinSystem(prefix, collected string) string {
+	collected = strings.TrimSpace(collected)
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return collected
+	}
+	if collected == "" {
+		return prefix
+	}
+	if strings.HasPrefix(collected, prefix) {
+		return collected
+	}
+	return prefix + "\n\n" + collected
+}
+
+func mergeConsecutiveSameRole(in []AnthMessage) []AnthMessage {
+	if len(in) <= 1 {
+		return in
+	}
+	out := make([]AnthMessage, 0, len(in))
+	cur := in[0]
+	for i := 1; i < len(in); i++ {
+		next := in[i]
+		if next.Role == cur.Role {
+			cur.Content = append(cur.Content, next.Content...)
+			continue
+		}
+		out = append(out, cur)
+		cur = next
+	}
+	out = append(out, cur)
+	return out
+}
+
+func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBlock, error) {
+	parts, _ := normalizeContent(msg.Content)
+	var blocks []AnthContentBlock
+	for partIdx, p := range parts {
+		switch p.Type {
+		case "text":
+			if p.Text == "" {
+				continue
+			}
+			blocks = append(blocks, AnthContentBlock{Type: "text", Text: p.Text})
+		case "image_url":
+			if p.ImageURL == nil {
+				continue
+			}
+			src, err := imageURLToSource(p.ImageURL.URL)
+			if err != nil {
+				return nil, err
+			}
+			blocks = append(blocks, AnthContentBlock{Type: "image", Source: src})
+		case "input_audio":
+			return nil, fmt.Errorf("%w: message %d part %d", ErrAudioUnsupported, msgIdx, partIdx)
+		case "refusal":
+			if p.Refusal == "" {
+				continue
+			}
+			blocks = append(blocks, AnthContentBlock{Type: "text", Text: p.Refusal})
+		default:
+			blocks = append(blocks, AnthContentBlock{Type: "text", Text: "[" + p.Type + "]"})
+		}
+	}
+	return blocks, nil
+}
+
+func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBlock, error) {
+	parts, _ := normalizeContent(msg.Content)
+	var blocks []AnthContentBlock
+	for partIdx, p := range parts {
+		switch p.Type {
+		case "text":
+			if p.Text == "" {
+				continue
+			}
+			blocks = append(blocks, AnthContentBlock{Type: "text", Text: p.Text})
+		case "image_url":
+			if p.ImageURL == nil {
+				continue
+			}
+			src, err := imageURLToSource(p.ImageURL.URL)
+			if err != nil {
+				return nil, err
+			}
+			blocks = append(blocks, AnthContentBlock{Type: "image", Source: src})
+		case "input_audio":
+			return nil, fmt.Errorf("%w: message %d part %d", ErrAudioUnsupported, msgIdx, partIdx)
+		case "refusal":
+			if p.Refusal == "" {
+				continue
+			}
+			blocks = append(blocks, AnthContentBlock{Type: "text", Text: p.Refusal})
+		default:
+			continue
+		}
+	}
+	for _, tc := range msg.ToolCalls {
+		raw := toolCallArgumentsJSON(tc.Function.Arguments)
+		blocks = append(blocks, AnthContentBlock{
+			Type:  "tool_use",
+			ID:    tc.ID,
+			Name:  tc.Function.Name,
+			Input: raw,
+		})
+	}
+	return blocks, nil
+}
+
+func imageURLToSource(rawURL string) (*AnthImageSource, error) {
+	if strings.HasPrefix(rawURL, "data:") {
+		media, data, err := parseDataURI(rawURL)
+		if err != nil {
+			return nil, err
+		}
+		return &AnthImageSource{Type: "base64", MediaType: media, Data: data}, nil
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("unsupported image url scheme: %q", u.Scheme)
+	}
+	return &AnthImageSource{Type: "url", URL: rawURL}, nil
+}
+
+func parseDataURI(s string) (mediaType string, data string, err error) {
+	const prefix = "data:"
+	if !strings.HasPrefix(s, prefix) {
+		return "", "", fmt.Errorf("not a data uri")
+	}
+	rest := strings.TrimPrefix(s, prefix)
+	comma := strings.Index(rest, ",")
+	if comma < 0 {
+		return "", "", fmt.Errorf("invalid data uri: missing comma")
+	}
+	meta := rest[:comma]
+	payload := rest[comma+1:]
+	parts := strings.Split(meta, ";")
+	if len(parts) == 0 || parts[0] == "" {
+		mediaType = "application/octet-stream"
+	} else {
+		mediaType = parts[0]
+	}
+	isBase64 := false
+	for _, p := range parts[1:] {
+		if p == "base64" {
+			isBase64 = true
+		}
+	}
+	if !isBase64 {
+		return "", "", fmt.Errorf("data uri must be base64-encoded for images")
+	}
+	return mediaType, payload, nil
+}
+
+func translateTools(req OpenAIRequest) ([]AnthTool, error) {
+	var out []AnthTool
+	for _, t := range req.Tools {
+		if t.Type != "" && t.Type != "function" {
+			return nil, ErrUnknownToolType
+		}
+		out = append(out, AnthTool{
+			Name:        t.Function.Name,
+			Description: t.Function.Description,
+			InputSchema: t.Function.Parameters,
+		})
+	}
+	for _, f := range req.Functions {
+		out = append(out, AnthTool{
+			Name:        f.Name,
+			Description: f.Description,
+			InputSchema: f.Parameters,
+		})
+	}
+	return out, nil
+}
+
+func toolCallArgumentsJSON(arguments string) json.RawMessage {
+	s := strings.TrimSpace(arguments)
+	if s == "" {
+		return json.RawMessage("{}")
+	}
+	return json.RawMessage(arguments)
+}
+
+func translateToolChoice(raw json.RawMessage) (*AnthToolChoice, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		switch s {
+		case "none":
+			return &AnthToolChoice{Type: "none"}, nil
+		case "auto":
+			return &AnthToolChoice{Type: "auto"}, nil
+		case "required":
+			return &AnthToolChoice{Type: "any"}, nil
+		default:
+			return &AnthToolChoice{Type: "auto"}, nil
+		}
+	}
+	var obj struct {
+		Type     string `json:"type"`
+		Function struct {
+			Name string `json:"name"`
+		} `json:"function"`
+	}
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, err
+	}
+	if obj.Type == "function" {
+		return &AnthToolChoice{Type: "tool", Name: obj.Function.Name}, nil
+	}
+	return &AnthToolChoice{Type: "auto"}, nil
+}
