@@ -7,7 +7,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/fgrehm/clotilde/internal/session"
+	"goodkind.io/clyde/internal/session"
 )
 
 var _ = Describe("ScanProjects", func() {
@@ -88,8 +88,8 @@ var _ = Describe("AdoptUnknown", func() {
 
 	BeforeEach(func() {
 		projectsRoot = GinkgoT().TempDir()
-		clotildeRoot := GinkgoT().TempDir()
-		store = session.NewFileStore(clotildeRoot)
+		clydeRoot := GinkgoT().TempDir()
+		store = session.NewFileStore(clydeRoot)
 	})
 
 	writeTranscript := func(uuid, cwd string) string {

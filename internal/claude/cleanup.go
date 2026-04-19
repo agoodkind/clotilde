@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/fgrehm/clotilde/internal/util"
+	"goodkind.io/clyde/internal/util"
 )
 
 // DeletedFiles contains information about files deleted during cleanup.
@@ -17,9 +17,9 @@ type DeletedFiles struct {
 }
 
 // DeleteSessionData removes Claude Code transcript and agent logs for a session.
-// If transcriptPath is provided, uses it directly. Otherwise computes it from clotildeRoot.
+// If transcriptPath is provided, uses it directly. Otherwise computes it from clydeRoot.
 // Returns DeletedFiles with info about what was deleted.
-func DeleteSessionData(clotildeRoot, sessionID, transcriptPath string) (*DeletedFiles, error) {
+func DeleteSessionData(clydeRoot, sessionID, transcriptPath string) (*DeletedFiles, error) {
 	deleted := &DeletedFiles{
 		Transcript: []string{},
 		AgentLogs:  []string{},
@@ -40,7 +40,7 @@ func DeleteSessionData(clotildeRoot, sessionID, transcriptPath string) (*Deleted
 		claudeProjectDir = filepath.Dir(transcriptPath)
 	} else {
 		// Fall back to computing the path
-		projectDir := ProjectDir(clotildeRoot)
+		projectDir := ProjectDir(clydeRoot)
 		homeDir, err := util.HomeDir()
 		if err != nil {
 			return deleted, fmt.Errorf("failed to get home directory: %w", err)

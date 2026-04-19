@@ -13,22 +13,12 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
 
-	"github.com/fgrehm/clotilde/internal/config"
+	"goodkind.io/clyde/internal/config"
 )
 
 // Client abstracts the LLM backend for conversation search.
 type Client interface {
 	Complete(ctx context.Context, prompt string) (string, error)
-}
-
-// NewClient creates a search client from config (used for chunk search).
-func NewClient(cfg config.SearchConfig) Client {
-	switch cfg.Backend {
-	case "local":
-		return newLocalClient(cfg.Local)
-	default:
-		return newClaudeClient(cfg.Claude)
-	}
 }
 
 // NewClientForModel is the exported form of newClientForModel for use outside this package.
@@ -110,7 +100,7 @@ func (c *localClient) Complete(ctx context.Context, prompt string) (string, erro
 		log.Error("llm request failed",
 			"model", c.model,
 			"duration", elapsed.Round(time.Millisecond),
-			"err", err,
+			slog.Any("err", err),
 		)
 		return "", fmt.Errorf("local LLM request failed: %w", err)
 	}

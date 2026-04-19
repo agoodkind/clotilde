@@ -19,7 +19,7 @@ type DiscoveryResult struct {
 	WorkspaceRoot  string
 	Entrypoint     string
 	FirstEntryTime time.Time
-	IsAutoName     bool // SDK-CLI invocation that looks like a clotilde auto-name call
+	IsAutoName     bool // SDK-CLI invocation that looks like a clyde auto-name call
 	IsSubagent     bool // file lives in a subagents/ directory
 }
 
@@ -28,6 +28,37 @@ type DiscoveryResult struct {
 type AdoptedSession struct {
 	Name     string
 	Metadata Metadata
+}
+
+// scratchDirSuffixes lists workspace-root path fragments produced by
+// clyde-internal subprocess invocations. Discovery skips any
+// transcript whose cwd matches one of these so the user's session
+// list never fills with adapter or context-summary noise.
+var scratchDirSuffixes = []string{
+	"/Library/Caches/clotilde/context-scratch",
+	"/.cache/clotilde/context-scratch",
+	"/Library/Caches/clotilde/adapter-scratch",
+	"/.cache/clotilde/adapter-scratch",
+	"/Library/Caches/clyde/context-scratch",
+	"/.cache/clyde/context-scratch",
+	"/Library/Caches/clyde/adapter-scratch",
+	"/.cache/clyde/adapter-scratch",
+}
+
+// isClydeScratch reports whether path looks like a clyde owned
+// scratch directory used to anchor internal claude -p calls. The
+// match is suffix based so it works whether the user's home is at
+// /Users/foo or /home/foo or anywhere else.
+func isClydeScratch(path string) bool {
+	if path == "" {
+		return false
+	}
+	for _, s := range scratchDirSuffixes {
+		if strings.HasSuffix(path, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // transcriptHeader is the minimum subset we need from the first entry of a
@@ -98,7 +129,7 @@ func readTranscriptHeader(path string) (DiscoveryResult, bool) {
 		if err := json.Unmarshal(line, &h); err != nil {
 			continue
 		}
-		// queue-operation entries come first in clotilde-wrapped sessions
+		// queue-operation entries come first in clyde-wrapped sessions
 		// and carry the auto-name prompt as their content. They never
 		// have a cwd or entrypoint so they cannot stand alone.
 		if h.Type == "queue-operation" {
@@ -134,7 +165,7 @@ func readTranscriptHeader(path string) (DiscoveryResult, bool) {
 	return dr, true
 }
 
-// looksLikeAutoNamePrompt heuristically detects the prompts clotilde
+// looksLikeAutoNamePrompt heuristically detects the prompts clyde
 // dispatches to haiku for session naming. The prompt always asks for a
 // kebab-case label and includes the words "kebab-case" and "Output ONLY".
 func looksLikeAutoNamePrompt(content string) bool {
@@ -162,6 +193,9 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 	var adopted []AdoptedSession
 	for _, r := range results {
 		if r.IsAutoName || r.IsSubagent {
+			continue
+		}
+		if isClydeScratch(r.WorkspaceRoot) {
 			continue
 		}
 		if r.SessionID == "" {

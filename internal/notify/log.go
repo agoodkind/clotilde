@@ -8,7 +8,7 @@ import (
 
 // LogDir is the directory where event JSONL files are written.
 // Overridable in tests.
-var LogDir = "/tmp/clotilde"
+var LogDir = "/tmp/clyde"
 
 // LogEvent appends rawJSON as a line to <LogDir>/<sessionID>.events.jsonl.
 // Creates the log directory if it doesn't exist. No-op if sessionID is empty.

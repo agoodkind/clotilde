@@ -314,6 +314,11 @@ var userNoisePatterns = func() []*regexp.Regexp {
 // cleanUserText strips slash-command framing and system-reminder blocks from
 // a user message. The result is trimmed. An empty string means the message
 // consists entirely of framing noise and should be skipped by callers.
+//
+// Hook-feedback lines emitted by Claude Code (Stop, PreToolUse, PostToolUse)
+// land in the transcript as plain user-text messages without tag wrappers.
+// They are pure tooling noise from the human's perspective, so the cleaner
+// strips lines that begin with the documented hook-feedback prefixes too.
 func cleanUserText(s string) string {
 	for _, re := range userNoisePatterns {
 		s = re.ReplaceAllString(s, "")
@@ -325,6 +330,23 @@ func cleanUserText(s string) string {
 		if end := strings.Index(s, ">"); end > 0 && end < 80 {
 			s = s[end+1:]
 		}
+	}
+	// Drop any line that is purely hook-feedback noise. The hook system
+	// writes one line per feedback event, so filtering line-by-line keeps
+	// real user text intact when it accidentally sits next to a feedback line.
+	if strings.Contains(s, "hook feedback:") {
+		var keep []string
+		for _, line := range strings.Split(s, "\n") {
+			t := strings.TrimSpace(line)
+			if strings.HasPrefix(t, "Stop hook feedback:") ||
+				strings.HasPrefix(t, "PreToolUse hook feedback:") ||
+				strings.HasPrefix(t, "PostToolUse hook feedback:") ||
+				strings.HasPrefix(t, "UserPromptSubmit hook feedback:") {
+				continue
+			}
+			keep = append(keep, line)
+		}
+		s = strings.Join(keep, "\n")
 	}
 	return strings.TrimSpace(s)
 }
@@ -353,29 +375,6 @@ func extractTextContent(raw json.RawMessage) string {
 		}
 	}
 	return ""
-}
-
-// ExtractLastModel reads the transcript and returns the last model used.
-// Returns the model family name (e.g. "sonnet", "opus", "haiku") or empty string if not found.
-//
-// For large transcripts, only the last 128KB is read. Assistant entries that
-// record message.model are typically small, so the most recent one will almost
-// always be within the tail. A single assistant response larger than 128KB would
-// be missed, but that is an accepted tradeoff for the performance benefit.
-func ExtractLastModel(transcriptPath string) string {
-	var lastModel string
-	err := forEachTailLine(transcriptPath, 128*1024, func(line []byte) {
-		var entry transcriptEntry
-		if err := json.Unmarshal(line, &entry); err == nil {
-			if entry.Type == "assistant" && isRealModel(entry.Message.Model) {
-				lastModel = entry.Message.Model
-			}
-		}
-	})
-	if err != nil {
-		return ""
-	}
-	return FormatModelFamily(lastModel)
 }
 
 // isRealModel reports whether a model string came from an actual API call.

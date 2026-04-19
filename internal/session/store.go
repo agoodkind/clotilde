@@ -10,8 +10,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/fgrehm/clotilde/internal/config"
-	"github.com/fgrehm/clotilde/internal/util"
+	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/util"
 )
 
 // Compile-time check that FileStore implements Store.
@@ -70,13 +70,13 @@ type Store interface {
 
 // FileStore implements Store using the filesystem.
 type FileStore struct {
-	clotildeRoot string
+	clydeRoot string
 }
 
 // NewFileStore creates a new FileStore.
-func NewFileStore(clotildeRoot string) *FileStore {
+func NewFileStore(clydeRoot string) *FileStore {
 	return &FileStore{
-		clotildeRoot: clotildeRoot,
+		clydeRoot: clydeRoot,
 	}
 }
 
@@ -86,12 +86,12 @@ func NewGlobalFileStore() (*FileStore, error) {
 	if err := config.EnsureGlobalSessionsDir(); err != nil {
 		return nil, fmt.Errorf("failed to create global sessions directory: %w", err)
 	}
-	return &FileStore{clotildeRoot: config.GlobalDataDir()}, nil
+	return &FileStore{clydeRoot: config.GlobalDataDir()}, nil
 }
 
 // List returns all sessions, sorted by lastAccessed (most recent first).
 func (fs *FileStore) List() ([]*Session, error) {
-	sessionsDir := config.GetSessionsDir(fs.clotildeRoot)
+	sessionsDir := config.GetSessionsDir(fs.clydeRoot)
 
 	entries, err := os.ReadDir(sessionsDir)
 	if err != nil {
@@ -146,7 +146,7 @@ func (fs *FileStore) Get(name string) (*Session, error) {
 		return nil, err
 	}
 
-	sessionDir := config.GetSessionDir(fs.clotildeRoot, name)
+	sessionDir := config.GetSessionDir(fs.clydeRoot, name)
 	if !util.DirExists(sessionDir) {
 		return nil, fmt.Errorf("session '%s' not found", name)
 	}
@@ -234,8 +234,8 @@ func (fs *FileStore) Rename(oldName, newName string) error {
 		return fmt.Errorf("session '%s' already exists", newName)
 	}
 
-	oldDir := config.GetSessionDir(fs.clotildeRoot, oldName)
-	newDir := config.GetSessionDir(fs.clotildeRoot, newName)
+	oldDir := config.GetSessionDir(fs.clydeRoot, oldName)
+	newDir := config.GetSessionDir(fs.clydeRoot, newName)
 	if err := os.Rename(oldDir, newDir); err != nil {
 		return fmt.Errorf("rename session directory: %w", err)
 	}
@@ -276,7 +276,7 @@ func (fs *FileStore) Create(session *Session) error {
 		return fmt.Errorf("session '%s' already exists", session.Name)
 	}
 
-	sessionDir := config.GetSessionDir(fs.clotildeRoot, session.Name)
+	sessionDir := config.GetSessionDir(fs.clydeRoot, session.Name)
 	if err := util.EnsureDir(sessionDir); err != nil {
 		return fmt.Errorf("failed to create session directory: %w", err)
 	}
@@ -299,7 +299,7 @@ func (fs *FileStore) Update(session *Session) error {
 		return fmt.Errorf("session '%s' not found", session.Name)
 	}
 
-	sessionDir := config.GetSessionDir(fs.clotildeRoot, session.Name)
+	sessionDir := config.GetSessionDir(fs.clydeRoot, session.Name)
 	metadataPath := filepath.Join(sessionDir, metadataFile)
 	if err := util.WriteJSON(metadataPath, session.Metadata); err != nil {
 		return fmt.Errorf("failed to update session metadata: %w", err)
@@ -318,13 +318,13 @@ func (fs *FileStore) Delete(name string) error {
 		return fmt.Errorf("session '%s' not found", name)
 	}
 
-	sessionDir := config.GetSessionDir(fs.clotildeRoot, name)
+	sessionDir := config.GetSessionDir(fs.clydeRoot, name)
 	return util.RemoveAll(sessionDir)
 }
 
 // Exists checks if a session exists.
 func (fs *FileStore) Exists(name string) bool {
-	sessionDir := config.GetSessionDir(fs.clotildeRoot, name)
+	sessionDir := config.GetSessionDir(fs.clydeRoot, name)
 	return util.DirExists(sessionDir)
 }
 
@@ -334,7 +334,7 @@ func (fs *FileStore) LoadSettings(name string) (*Settings, error) {
 		return nil, err
 	}
 
-	sessionDir := config.GetSessionDir(fs.clotildeRoot, name)
+	sessionDir := config.GetSessionDir(fs.clydeRoot, name)
 	settingsPath := filepath.Join(sessionDir, settingsFile)
 
 	if !util.FileExists(settingsPath) {
@@ -359,7 +359,7 @@ func (fs *FileStore) SaveSettings(name string, settings *Settings) error {
 		return fmt.Errorf("session '%s' not found", name)
 	}
 
-	sessionDir := config.GetSessionDir(fs.clotildeRoot, name)
+	sessionDir := config.GetSessionDir(fs.clydeRoot, name)
 	settingsPath := filepath.Join(sessionDir, settingsFile)
 
 	return util.WriteJSON(settingsPath, settings)

@@ -35,7 +35,7 @@ func TestWatcherInitialScanPicksUpExistingBridges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	defer Close(w)
 
 	got := drainEvents(w.Events(), 200*time.Millisecond)
 	if len(got) != 1 {
@@ -58,7 +58,7 @@ func TestWatcherEmitsCloseOnRemove(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	defer Close(w)
 
 	path := filepath.Join(dir, "555.json")
 	if err := os.WriteFile(path, []byte(`{"pid":555,"sessionId":"sid","bridgeSessionId":"session_aaa"}`), 0o600); err != nil {
@@ -96,7 +96,7 @@ func TestWatcherIgnoresFilesWithoutBridgeID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	defer Close(w)
 
 	got := drainEvents(w.Events(), 200*time.Millisecond)
 	if len(got) != 0 {
@@ -110,7 +110,7 @@ func TestSnapshotReflectsCurrentBridges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	defer Close(w)
 
 	if err := os.WriteFile(filepath.Join(dir, "1.json"), []byte(`{"pid":1,"sessionId":"a","bridgeSessionId":"session_a"}`), 0o600); err != nil {
 		t.Fatal(err)

@@ -5,16 +5,16 @@ import (
 	"strings"
 )
 
-// ProjectDir converts a clotilde root path to Claude Code's project directory format.
+// ProjectDir converts a clyde root path to Claude Code's project directory format.
 // Claude Code stores project data in ~/.claude/projects/<encoded-path>/
 // where the path is encoded by replacing / and . with -
 //
 // Example:
 //
-//	/home/user/project/.claude/clotilde -> ~/.claude/projects/-home-user-project
-func ProjectDir(clotildeRoot string) string {
-	// Get the project root (parent of .claude/clotilde)
-	projectRoot := filepath.Dir(filepath.Dir(clotildeRoot))
+//	/home/user/project/.claude/clyde -> ~/.claude/projects/-home-user-project
+func ProjectDir(clydeRoot string) string {
+	// Get the project root (parent of .claude/clyde)
+	projectRoot := filepath.Dir(filepath.Dir(clydeRoot))
 
 	// Convert path: replace / and . with -
 	encoded := strings.ReplaceAll(projectRoot, "/", "-")
@@ -25,7 +25,7 @@ func ProjectDir(clotildeRoot string) string {
 
 // TranscriptPath returns the path to a session's transcript file in Claude's storage.
 // Format: ~/.claude/projects/<project-dir>/<session-id>.jsonl
-func TranscriptPath(homeDir, clotildeRoot, sessionID string) string {
-	projectDir := ProjectDir(clotildeRoot)
+func TranscriptPath(homeDir, clydeRoot, sessionID string) string {
+	projectDir := ProjectDir(clydeRoot)
 	return filepath.Join(homeDir, ".claude", "projects", projectDir, sessionID+".jsonl")
 }

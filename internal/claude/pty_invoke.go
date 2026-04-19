@@ -1,6 +1,6 @@
 // PTY wrapper for sessions launched with remote control.
 //
-// When a session opts into remote control, clotilde owns claude's
+// When a session opts into remote control, clyde owns claude's
 // stdio so external clients (the dashboard sidecar, the daemon's
 // SendToSession RPC) can inject text into claude as if the user
 // typed it. The wrapper opens a per session Unix socket and copies
@@ -25,7 +25,7 @@ import (
 	"github.com/creack/pty"
 	"golang.org/x/term"
 
-	"github.com/fgrehm/clotilde/internal/daemon"
+	"goodkind.io/clyde/internal/daemon"
 )
 
 // invokeInteractivePTY runs claude inside a pty. The terminal is put
@@ -40,7 +40,7 @@ func invokeInteractivePTY(args []string, env map[string]string, workDir, session
 	// per session settings and the wrapper id flow consistently.
 	ctx := context.Background()
 	wrapperID := fmt.Sprintf("%d", os.Getpid())
-	sessionName := env["CLOTILDE_SESSION_NAME"]
+	sessionName := env["CLYDE_SESSION_NAME"]
 	client, err := daemon.ConnectOrStart(ctx)
 	if err == nil {
 		if resp, acqErr := client.AcquireSession(wrapperID, sessionName); acqErr == nil {
@@ -138,9 +138,9 @@ func injectSocketPathFor(sessionID string) string {
 // avoid an import cycle between claude and daemon.
 func injectSocketDir() string {
 	if xdg := os.Getenv("XDG_RUNTIME_DIR"); xdg != "" {
-		return filepath.Join(xdg, "clotilde", "inject")
+		return filepath.Join(xdg, "clyde", "inject")
 	}
-	return filepath.Join(os.TempDir(), "clotilde-inject")
+	return filepath.Join(os.TempDir(), "clyde-inject")
 }
 
 // openInjectListener removes any stale socket from a previous run

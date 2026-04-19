@@ -6,26 +6,26 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/fgrehm/clotilde/internal/claude"
+	"goodkind.io/clyde/internal/claude"
 )
 
 var _ = Describe("Paths", func() {
 	Describe("ProjectDir", func() {
 		It("should encode project path correctly", func() {
-			clotildeRoot := "/home/user/project/.claude/clotilde"
-			encoded := claude.ProjectDir(clotildeRoot)
+			clydeRoot := "/home/user/project/.claude/clyde"
+			encoded := claude.ProjectDir(clydeRoot)
 			Expect(encoded).To(Equal("-home-user-project"))
 		})
 
 		It("should handle paths with dots", func() {
-			clotildeRoot := "/home/user/my.project/.claude/clotilde"
-			encoded := claude.ProjectDir(clotildeRoot)
+			clydeRoot := "/home/user/my.project/.claude/clyde"
+			encoded := claude.ProjectDir(clydeRoot)
 			Expect(encoded).To(Equal("-home-user-my-project"))
 		})
 
 		It("should handle nested paths", func() {
-			clotildeRoot := "/home/user/projects/foo/bar/.claude/clotilde"
-			encoded := claude.ProjectDir(clotildeRoot)
+			clydeRoot := "/home/user/projects/foo/bar/.claude/clyde"
+			encoded := claude.ProjectDir(clydeRoot)
 			Expect(encoded).To(Equal("-home-user-projects-foo-bar"))
 		})
 	})
@@ -33,10 +33,10 @@ var _ = Describe("Paths", func() {
 	Describe("TranscriptPath", func() {
 		It("should generate correct transcript path", func() {
 			homeDir := "/home/user"
-			clotildeRoot := "/home/user/project/.claude/clotilde"
+			clydeRoot := "/home/user/project/.claude/clyde"
 			sessionID := "550e8400-e29b-41d4-a716-446655440000"
 
-			path := claude.TranscriptPath(homeDir, clotildeRoot, sessionID)
+			path := claude.TranscriptPath(homeDir, clydeRoot, sessionID)
 			expected := filepath.Join(homeDir, ".claude", "projects", "-home-user-project", sessionID+".jsonl")
 			Expect(path).To(Equal(expected))
 		})

@@ -7,19 +7,20 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/fgrehm/clotilde/internal/claude"
+	"goodkind.io/clyde/internal/claude"
+	"goodkind.io/clyde/internal/config"
 )
 
 var _ = Describe("Cleanup", func() {
 	var (
 		tempDir      string
-		clotildeRoot string
+		clydeRoot string
 		projectDir   string
 	)
 
 	BeforeEach(func() {
 		tempDir = GinkgoT().TempDir()
-		clotildeRoot = filepath.Join(tempDir, ".claude", "clotilde")
+		clydeRoot = filepath.Join(tempDir, config.ClydeDir)
 		projectDir = filepath.Join(tempDir, ".claude", "projects", "test-project")
 
 		// Create project directory
@@ -36,7 +37,7 @@ var _ = Describe("Cleanup", func() {
 			Expect(transcriptPath).To(BeAnExistingFile())
 
 			// Delete session data with transcript path
-			deleted, err := claude.DeleteSessionData(clotildeRoot, "session-uuid-123", transcriptPath)
+			deleted, err := claude.DeleteSessionData(clydeRoot, "session-uuid-123", transcriptPath)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify transcript was deleted
@@ -63,7 +64,7 @@ var _ = Describe("Cleanup", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			// Delete session data
-			deleted, err := claude.DeleteSessionData(clotildeRoot, "session-uuid-456", transcriptPath)
+			deleted, err := claude.DeleteSessionData(clydeRoot, "session-uuid-456", transcriptPath)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify transcript was deleted
@@ -83,7 +84,7 @@ var _ = Describe("Cleanup", func() {
 		It("should handle missing transcript file gracefully", func() {
 			// Delete session data for non-existent transcript
 			transcriptPath := filepath.Join(projectDir, "non-existent.jsonl")
-			deleted, err := claude.DeleteSessionData(clotildeRoot, "session-uuid-789", transcriptPath)
+			deleted, err := claude.DeleteSessionData(clydeRoot, "session-uuid-789", transcriptPath)
 
 			// Should not error even though file doesn't exist
 			Expect(err).NotTo(HaveOccurred())
@@ -92,7 +93,7 @@ var _ = Describe("Cleanup", func() {
 		})
 
 		It("should fall back to computed path if transcript path is empty", func() {
-			// Create project directory matching clotildeRoot encoding
+			// Create project directory matching clydeRoot encoding
 			// For this test, we won't create actual files, just verify it doesn't error
 			deleted, err := claude.DeleteSessionData(tempDir, "test-session-id", "")
 

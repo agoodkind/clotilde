@@ -6,7 +6,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/fgrehm/clotilde/internal/session"
+	"goodkind.io/clyde/internal/session"
 )
 
 var _ = Describe("Session", func() {
@@ -22,24 +22,6 @@ var _ = Describe("Session", func() {
 			Expect(s.Metadata.SessionID).To(Equal(sessionID))
 			Expect(s.Metadata.Created).To(BeTemporally("~", time.Now(), time.Second))
 			Expect(s.Metadata.LastAccessed).To(BeTemporally("~", time.Now(), time.Second))
-			Expect(s.Metadata.IsForkedSession).To(BeFalse())
-			Expect(s.Metadata.ParentSession).To(BeEmpty())
-		})
-	})
-
-	Describe("NewIncognitoSession", func() {
-		It("should create an incognito session with IsIncognito set to true", func() {
-			name := "incognito-session"
-			sessionID := "550e8400-e29b-41d4-a716-446655440000"
-
-			s := session.NewIncognitoSession(name, sessionID)
-
-			Expect(s.Name).To(Equal(name))
-			Expect(s.Metadata.Name).To(Equal(name))
-			Expect(s.Metadata.SessionID).To(Equal(sessionID))
-			Expect(s.Metadata.Created).To(BeTemporally("~", time.Now(), time.Second))
-			Expect(s.Metadata.LastAccessed).To(BeTemporally("~", time.Now(), time.Second))
-			Expect(s.Metadata.IsIncognito).To(BeTrue())
 			Expect(s.Metadata.IsForkedSession).To(BeFalse())
 			Expect(s.Metadata.ParentSession).To(BeEmpty())
 		})

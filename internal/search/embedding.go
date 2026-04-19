@@ -9,8 +9,8 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 
-	"github.com/fgrehm/clotilde/internal/config"
-	"github.com/fgrehm/clotilde/internal/transcript"
+	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/transcript"
 )
 
 const (
@@ -79,7 +79,7 @@ func (e *embeddingFilter) filterChunks(ctx context.Context, query string, chunks
 	queryEmbStart := time.Now()
 	queryEmb, err := e.embed(ctx, []string{query})
 	if err != nil {
-		log.Warn("embedding query failed, skipping pre-filter", "err", err)
+		log.Warn("embedding query failed, skipping pre-filter", slog.Any("err", err))
 		return chunks, nil // fall back to no filtering
 	}
 	log.Debug("embedding: query embedded", "duration", time.Since(queryEmbStart).Round(time.Millisecond))
@@ -88,7 +88,7 @@ func (e *embeddingFilter) filterChunks(ctx context.Context, query string, chunks
 	chunksEmbStart := time.Now()
 	chunkEmbs, err := e.embed(ctx, chunkTexts)
 	if err != nil {
-		log.Warn("embedding chunks failed, skipping pre-filter", "err", err)
+		log.Warn("embedding chunks failed, skipping pre-filter", slog.Any("err", err))
 		return chunks, nil
 	}
 	log.Debug("embedding: chunks embedded", "chunks", len(chunkTexts), "duration", time.Since(chunksEmbStart).Round(time.Millisecond))
@@ -126,23 +126,6 @@ func (e *embeddingFilter) filterChunks(ctx context.Context, query string, chunks
 
 	return filtered, nil
 }
-
-// EmbedTexts embeds a slice of texts using the given model against the given
-// OpenAI-compatible base URL. Used by the bench-embed command.
-func EmbedTexts(ctx context.Context, baseURL, token, model string, texts []string) ([][]float64, error) {
-	opts := []option.RequestOption{option.WithBaseURL(baseURL + "/v1")}
-	if token != "" {
-		opts = append(opts, option.WithAPIKey(token))
-	} else {
-		opts = append(opts, option.WithAPIKey("not-needed"))
-	}
-	c := openai.NewClient(opts...)
-	f := &embeddingFilter{client: &c, model: model}
-	return f.embed(ctx, texts)
-}
-
-// CosineSimilarity is the exported form of cosineSimilarity.
-func CosineSimilarity(a, b []float64) float64 { return cosineSimilarity(a, b) }
 
 // embed returns embeddings for the given texts.
 func (e *embeddingFilter) embed(ctx context.Context, texts []string) ([][]float64, error) {

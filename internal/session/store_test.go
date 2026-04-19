@@ -7,25 +7,25 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/fgrehm/clotilde/internal/config"
-	"github.com/fgrehm/clotilde/internal/session"
-	"github.com/fgrehm/clotilde/internal/util"
+	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/session"
+	"goodkind.io/clyde/internal/util"
 )
 
 var _ = Describe("FileStore", func() {
 	var (
-		tempDir      string
-		clotildeRoot string
-		store        *session.FileStore
+		tempDir   string
+		clydeRoot string
+		store     *session.FileStore
 	)
 
 	BeforeEach(func() {
 		tempDir = GinkgoT().TempDir()
-		clotildeRoot = filepath.Join(tempDir, config.ClotildeDir)
-		err := config.EnsureClotildeStructure(tempDir)
+		clydeRoot = filepath.Join(tempDir, config.ClydeDir)
+		err := util.EnsureDir(filepath.Join(clydeRoot, config.SessionsDir))
 		Expect(err).NotTo(HaveOccurred())
 
-		store = session.NewFileStore(clotildeRoot)
+		store = session.NewFileStore(clydeRoot)
 	})
 
 	Describe("Create and Get", func() {
@@ -215,7 +215,7 @@ var _ = Describe("FileStore", func() {
 			err := store.Create(s)
 			Expect(err).NotTo(HaveOccurred())
 
-			sessionDir := config.GetSessionDir(clotildeRoot, "test-session")
+			sessionDir := config.GetSessionDir(clydeRoot, "test-session")
 			settingsPath := filepath.Join(sessionDir, "settings.json")
 
 			Expect(util.FileExists(settingsPath)).To(BeFalse())

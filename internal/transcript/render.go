@@ -11,12 +11,6 @@ func RenderPlainText(messages []Message) string {
 	return renderMessages(messages, -1)
 }
 
-// RenderPlainTextIndexed formats messages with a global index offset so the
-// LLM can reference specific messages by index in follow-up tool calls.
-func RenderPlainTextIndexed(messages []Message, startIndex int) string {
-	return renderMessages(messages, startIndex)
-}
-
 func renderMessages(messages []Message, startIndex int) string {
 	var b strings.Builder
 	for i, m := range messages {

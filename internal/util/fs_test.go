@@ -7,7 +7,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/fgrehm/clotilde/internal/util"
+	"goodkind.io/clyde/internal/util"
 )
 
 var _ = Describe("EnsureDir", func() {
@@ -88,57 +88,6 @@ var _ = Describe("DirExists", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(util.DirExists(testFile)).To(BeFalse())
-	})
-})
-
-var _ = Describe("CopyFile", func() {
-	var tempDir string
-
-	BeforeEach(func() {
-		tempDir = GinkgoT().TempDir()
-	})
-
-	It("should copy a file", func() {
-		srcFile := filepath.Join(tempDir, "source.txt")
-		dstFile := filepath.Join(tempDir, "dest.txt")
-
-		content := []byte("test content")
-		err := os.WriteFile(srcFile, content, 0o644)
-		Expect(err).NotTo(HaveOccurred())
-
-		err = util.CopyFile(srcFile, dstFile)
-		Expect(err).NotTo(HaveOccurred())
-
-		readContent, err := os.ReadFile(dstFile)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(readContent).To(Equal(content))
-	})
-
-	It("should create parent directories if needed", func() {
-		srcFile := filepath.Join(tempDir, "source.txt")
-		dstFile := filepath.Join(tempDir, "nested", "dir", "dest.txt")
-
-		err := os.WriteFile(srcFile, []byte("test"), 0o644)
-		Expect(err).NotTo(HaveOccurred())
-
-		err = util.CopyFile(srcFile, dstFile)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(util.FileExists(dstFile)).To(BeTrue())
-	})
-
-	It("should preserve file permissions", func() {
-		srcFile := filepath.Join(tempDir, "source.txt")
-		dstFile := filepath.Join(tempDir, "dest.txt")
-
-		err := os.WriteFile(srcFile, []byte("test"), 0o600)
-		Expect(err).NotTo(HaveOccurred())
-
-		err = util.CopyFile(srcFile, dstFile)
-		Expect(err).NotTo(HaveOccurred())
-
-		srcInfo, _ := os.Stat(srcFile)
-		dstInfo, _ := os.Stat(dstFile)
-		Expect(dstInfo.Mode()).To(Equal(srcInfo.Mode()))
 	})
 })
 

@@ -7,21 +7,22 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/fgrehm/clotilde/internal/claude"
-	"github.com/fgrehm/clotilde/internal/session"
+	"goodkind.io/clyde/internal/claude"
+	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/session"
 )
 
 var _ = Describe("defaultSessionUsed", func() {
 	var (
 		tempDir      string
-		clotildeRoot string
+		clydeRoot string
 	)
 
 	BeforeEach(func() {
 		tempDir = GinkgoT().TempDir()
-		// Create a clotilde root that maps to a predictable project dir
-		clotildeRoot = filepath.Join(tempDir, "project", ".claude", "clotilde")
-		err := os.MkdirAll(clotildeRoot, 0o755)
+		// Create a clyde root that maps to a predictable project dir
+		clydeRoot = filepath.Join(tempDir, "project", config.ClydeDir)
+		err := os.MkdirAll(clydeRoot, 0o755)
 		Expect(err).NotTo(HaveOccurred())
 
 		// Reset to default implementation
@@ -36,7 +37,7 @@ var _ = Describe("defaultSessionUsed", func() {
 		sess := &session.Session{
 			Metadata: session.Metadata{SessionID: ""},
 		}
-		Expect(claude.SessionUsedFunc(clotildeRoot, sess)).To(BeFalse())
+		Expect(claude.SessionUsedFunc(clydeRoot, sess)).To(BeFalse())
 	})
 
 	It("should use TranscriptPath from metadata when available", func() {
@@ -55,7 +56,7 @@ var _ = Describe("defaultSessionUsed", func() {
 				TranscriptPath: transcriptPath,
 			},
 		}
-		Expect(claude.SessionUsedFunc(clotildeRoot, sess)).To(BeTrue())
+		Expect(claude.SessionUsedFunc(clydeRoot, sess)).To(BeTrue())
 	})
 
 	It("should return false when metadata TranscriptPath does not exist", func() {
@@ -65,7 +66,7 @@ var _ = Describe("defaultSessionUsed", func() {
 				TranscriptPath: filepath.Join(tempDir, "nonexistent", "test-uuid.jsonl"),
 			},
 		}
-		Expect(claude.SessionUsedFunc(clotildeRoot, sess)).To(BeFalse())
+		Expect(claude.SessionUsedFunc(clydeRoot, sess)).To(BeFalse())
 	})
 
 	It("should prefer metadata TranscriptPath over computed path", func() {
@@ -73,7 +74,7 @@ var _ = Describe("defaultSessionUsed", func() {
 		homeDir, err := os.UserHomeDir()
 		Expect(err).NotTo(HaveOccurred())
 
-		projectDir := claude.ProjectDir(clotildeRoot)
+		projectDir := claude.ProjectDir(clydeRoot)
 		computedDir := filepath.Join(homeDir, ".claude", "projects", projectDir)
 		err = os.MkdirAll(computedDir, 0o755)
 		Expect(err).NotTo(HaveOccurred())
@@ -92,6 +93,6 @@ var _ = Describe("defaultSessionUsed", func() {
 		}
 		// Should return false because it uses metadata path (which doesn't exist),
 		// NOT the computed path (which does exist)
-		Expect(claude.SessionUsedFunc(clotildeRoot, sess)).To(BeFalse())
+		Expect(claude.SessionUsedFunc(clydeRoot, sess)).To(BeFalse())
 	})
 })

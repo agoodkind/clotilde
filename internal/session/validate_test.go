@@ -4,7 +4,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/fgrehm/clotilde/internal/session"
+	"goodkind.io/clyde/internal/session"
 )
 
 var _ = Describe("ValidateName", func() {

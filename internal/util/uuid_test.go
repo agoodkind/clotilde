@@ -4,7 +4,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/fgrehm/clotilde/internal/util"
+	"goodkind.io/clyde/internal/util"
 )
 
 var _ = Describe("GenerateUUID", func() {

@@ -2,7 +2,6 @@ package util
 
 import (
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 )
@@ -40,30 +39,6 @@ func DirExists(path string) bool {
 		return false
 	}
 	return pathInfo.IsDir()
-}
-
-// CopyFile copies a file from src to dst.
-// Creates parent directories if they don't exist.
-// Returns an error if copy fails.
-func CopyFile(src, dst string) error {
-	if err := ensureDirForFile(dst); err != nil {
-		return err
-	}
-
-	srcFileInfo, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-	if !srcFileInfo.Mode().IsRegular() {
-		return errors.New("source is not a regular file")
-	}
-
-	bytesRead, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(dst, bytesRead, srcFileInfo.Mode())
 }
 
 // ReadJSON reads a JSON file and unmarshals it into the provided interface.

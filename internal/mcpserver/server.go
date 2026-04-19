@@ -1,4 +1,4 @@
-// Package mcpserver exposes clotilde session tools as an MCP server (stdio transport).
+// Package mcpserver exposes clyde session tools as an MCP server (stdio transport).
 // Claude Code connects to this process and can search/list/view sessions as tools.
 package mcpserver
 
@@ -18,12 +18,12 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/fgrehm/clotilde/internal/audit"
-	"github.com/fgrehm/clotilde/internal/config"
-	"github.com/fgrehm/clotilde/internal/search"
-	"github.com/fgrehm/clotilde/internal/session"
-	"github.com/fgrehm/clotilde/internal/transcript"
-	"github.com/fgrehm/clotilde/internal/util"
+	"goodkind.io/clyde/internal/audit"
+	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/search"
+	"goodkind.io/clyde/internal/session"
+	"goodkind.io/clyde/internal/transcript"
+	"goodkind.io/clyde/internal/util"
 )
 
 // resultCache stores search results in memory so callers can reference them by ID
@@ -81,18 +81,18 @@ func Serve(ctx context.Context) error {
 	defer cleanup()
 	slog.SetDefault(log)
 
-	s := server.NewMCPServer("clotilde", "0.13.0-dev")
+	s := server.NewMCPServer("clyde", "0.13.0-dev")
 
 	// --- Prompts (slash commands) ---
 
 	s.AddPrompt(
 		mcp.Prompt{
-			Name:        "clotilde",
-			Description: "Get started with clotilde session management. Lists available tools and explains how to use them.",
+			Name:        "clyde",
+			Description: "Get started with clyde session management. Lists available tools and explains how to use them.",
 		},
 		func(ctx context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 			return &mcp.GetPromptResult{
-				Description: "clotilde session management",
+				Description: "clyde session management",
 				Messages: []mcp.PromptMessage{
 					{
 						Role:    mcp.RoleUser,
@@ -106,15 +106,15 @@ func Serve(ctx context.Context) error {
 	// --- Tools ---
 
 	s.AddTool(
-		mcp.NewTool("clotilde_list_sessions",
-			mcp.WithDescription("List all clotilde sessions with their names, workspaces, models, and context. Use this to find sessions before searching."),
+		mcp.NewTool("clyde_list_sessions",
+			mcp.WithDescription("List all clyde sessions with their names, workspaces, models, and context. Use this to find sessions before searching."),
 			mcp.WithBoolean("all", mcp.Description("Show all sessions across all workspaces (default: current workspace only).")),
 		),
 		handleListSessions,
 	)
 
 	s.AddTool(
-		mcp.NewTool("clotilde_get_conversation",
+		mcp.NewTool("clyde_get_conversation",
 			mcp.WithDescription("Get the plain text conversation from a session. Returns user and assistant messages without tool call details."),
 			mcp.WithString("session_name", mcp.Required(), mcp.Description("Session name to retrieve.")),
 			mcp.WithNumber("last_n", mcp.Description("Only return the last N messages (default: all).")),
@@ -123,7 +123,7 @@ func Serve(ctx context.Context) error {
 	)
 
 	s.AddTool(
-		mcp.NewTool("clotilde_get_context",
+		mcp.NewTool("clyde_get_context",
 			mcp.WithDescription("Get messages around a specific point in a session's conversation. Use after search to expand context around a match. Provide either a timestamp or message_index to center on."),
 			mcp.WithString("session_name", mcp.Required(), mcp.Description("Session name.")),
 			mcp.WithString("timestamp", mcp.Description("ISO timestamp to center on (e.g. '2026-04-12 15:04'). Finds nearest message.")),
@@ -135,7 +135,7 @@ func Serve(ctx context.Context) error {
 	)
 
 	s.AddTool(
-		mcp.NewTool("clotilde_search_conversation",
+		mcp.NewTool("clyde_search_conversation",
 			mcp.WithDescription("Search a session's conversation history for where a topic was discussed. Returns matching messages with context and a result_id for follow-up analysis. Always start with 'quick' (embedding only, ~20s). Escalate only when quick results are insufficient."),
 			mcp.WithString("session_name", mcp.Required(), mcp.Description("Session name to search.")),
 			mcp.WithString("query", mcp.Required(), mcp.Description("What to search for (natural language).")),
@@ -145,9 +145,9 @@ func Serve(ctx context.Context) error {
 	)
 
 	s.AddTool(
-		mcp.NewTool("clotilde_analyze_results",
-			mcp.WithDescription("Run an LLM analysis pass over the results from a previous clotilde_search_conversation call. Use the result_id returned by search. The LLM will synthesize, extract, or summarize based on your prompt. Avoids re-running the search."),
-			mcp.WithString("result_id", mcp.Required(), mcp.Description("The result_id returned by clotilde_search_conversation.")),
+		mcp.NewTool("clyde_analyze_results",
+			mcp.WithDescription("Run an LLM analysis pass over the results from a previous clyde_search_conversation call. Use the result_id returned by search. The LLM will synthesize, extract, or summarize based on your prompt. Avoids re-running the search."),
+			mcp.WithString("result_id", mcp.Required(), mcp.Description("The result_id returned by clyde_search_conversation.")),
 			mcp.WithString("prompt", mcp.Required(), mcp.Description("What to extract or analyze from the search results (e.g. 'List every frustration instance with timestamp and verbatim quote').")),
 		),
 		handleAnalyzeResults,
@@ -341,8 +341,8 @@ func handleSearchConversation(ctx context.Context, req mcp.CallToolRequest) (*mc
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "result_id: %s (pass to clotilde_analyze_results for follow-up analysis)\n\n", resultID)
-	sb.WriteString(fmt.Sprintf("Use clotilde_get_context with session_name=%q and message_index=N to expand around any result.\n\n", name))
+	fmt.Fprintf(&sb, "result_id: %s (pass to clyde_analyze_results for follow-up analysis)\n\n", resultID)
+	sb.WriteString(fmt.Sprintf("Use clyde_get_context with session_name=%q and message_index=N to expand around any result.\n\n", name))
 	for _, r := range results {
 		if r.Summary != "" {
 			fmt.Fprintf(&sb, "**Found:** %s\n\n", r.Summary)
@@ -455,17 +455,17 @@ func loadMessages(name string) ([]transcript.Message, error) {
 	if root == "" {
 		root, _ = config.FindProjectRoot()
 	}
-	clotildeRoot := root + "/.claude/clotilde"
+	clydeRoot := root + "/.claude/clyde"
 
 	var paths []string
 	for _, prevID := range sess.Metadata.PreviousSessionIDs {
 		if prevID != "" {
-			paths = append(paths, claudeTranscriptPath(homeDir, clotildeRoot, prevID))
+			paths = append(paths, claudeTranscriptPath(homeDir, clydeRoot, prevID))
 		}
 	}
 	current := sess.Metadata.TranscriptPath
 	if current == "" && sess.Metadata.SessionID != "" {
-		current = claudeTranscriptPath(homeDir, clotildeRoot, sess.Metadata.SessionID)
+		current = claudeTranscriptPath(homeDir, clydeRoot, sess.Metadata.SessionID)
 	}
 	if current != "" {
 		paths = append(paths, current)
@@ -487,10 +487,10 @@ func loadMessages(name string) ([]transcript.Message, error) {
 	return allMessages, nil
 }
 
-func claudeTranscriptPath(homeDir, clotildeRoot, sessionID string) string {
-	projectRoot := clotildeRoot
-	if strings.HasSuffix(projectRoot, "/.claude/clotilde") {
-		projectRoot = strings.TrimSuffix(projectRoot, "/.claude/clotilde")
+func claudeTranscriptPath(homeDir, clydeRoot, sessionID string) string {
+	projectRoot := clydeRoot
+	if strings.HasSuffix(projectRoot, "/.claude/clyde") {
+		projectRoot = strings.TrimSuffix(projectRoot, "/.claude/clyde")
 	}
 	encoded := strings.ReplaceAll(projectRoot, "/", "-")
 	encoded = strings.ReplaceAll(encoded, ".", "-")

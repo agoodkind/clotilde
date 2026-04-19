@@ -5,7 +5,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/fgrehm/clotilde/internal/session"
+	"goodkind.io/clyde/internal/session"
 )
 
 func FuzzValidateName(f *testing.F) {

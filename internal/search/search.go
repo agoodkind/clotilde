@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fgrehm/clotilde/internal/config"
-	"github.com/fgrehm/clotilde/internal/transcript"
+	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/transcript"
 	"goodkind.io/lmctl"
 )
 
@@ -24,17 +24,6 @@ const (
 type Result struct {
 	Messages []transcript.Message
 	Summary  string // LLM's description of what matched
-}
-
-// Search finds conversation messages matching a query using the configured LLM backend.
-// Uses "quick" (embedding-only) depth by default for fast results.
-func Search(ctx context.Context, messages []transcript.Message, query string, cfg config.SearchConfig) ([]Result, error) {
-	return SearchWithDepth(ctx, messages, query, cfg, "quick")
-}
-
-// SearchWithLog is like SearchWithDepth but accepts an explicit logger.
-func SearchWithLog(ctx context.Context, log *slog.Logger, messages []transcript.Message, query string, cfg config.SearchConfig, depth string) ([]Result, error) {
-	return searchInternal(ctx, log, messages, query, cfg, depth)
 }
 
 // SearchWithDepth finds conversation messages with a configurable search depth.
@@ -128,7 +117,7 @@ func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript
 				lmctl.WithMaxMemoryGB(cfg.Local.MaxMemoryGB),
 				lmctl.WithWarmup(cfg.Local.URL, cfg.Local.Token),
 			); err != nil {
-				log.Warn("model load failed, skipping layer", "model", layer.Model, "err", err)
+				log.Warn("model load failed, skipping layer", "model", layer.Model, slog.Any("err", err))
 				continue
 			}
 			currentModel = layer.Model

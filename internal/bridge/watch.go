@@ -102,8 +102,11 @@ func (w *Watcher) Snapshot() []Bridge {
 	return out
 }
 
-// Close stops the loop and releases the fsnotify handle.
-func (w *Watcher) Close() {
+// Close releases the fsnotify handle and waits for the watch loop to finish.
+func Close(w *Watcher) {
+	if w == nil {
+		return
+	}
 	select {
 	case <-w.stop:
 		return

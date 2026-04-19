@@ -67,13 +67,6 @@ func NewSession(name, sessionID string) *Session {
 	}
 }
 
-// NewIncognitoSession creates a new incognito session that will auto-delete on exit.
-func NewIncognitoSession(name, sessionID string) *Session {
-	sess := NewSession(name, sessionID)
-	sess.Metadata.IsIncognito = true
-	return sess
-}
-
 // UpdateLastAccessed updates the lastAccessed timestamp to now.
 func (s *Session) UpdateLastAccessed() {
 	s.Metadata.LastAccessed = time.Now()
