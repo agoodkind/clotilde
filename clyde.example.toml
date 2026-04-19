@@ -1,0 +1,134 @@
+# Reference [adapter] stanza for ~/.config/clyde/config.toml.
+#
+# This file is the canonical capability matrix as empirically
+# validated against the account's accessible models on 2026-04-18.
+# It is the only place in the clyde repo that holds these values;
+# the adapter loads them from the user's toml at runtime and refuses
+# to start when [adapter.families] or [adapter.impersonation] is
+# missing.
+#
+# Bootstrap:
+#   cat clyde.example.toml >> ~/.config/clyde/config.toml
+#   $EDITOR ~/.config/clyde/config.toml
+#   launchctl kickstart -k gui/$UID/io.goodkind.clyde
+#
+# Drift notes:
+#   - beta_header: high drift, append-mostly. Anthropic ships new
+#     dated tokens with feature drops (e.g. effort-2025-11-24).
+#   - user_agent: medium drift. Tracks real CLI releases; under-
+#     version routes you to a stricter quota bucket.
+#   - system_prompt_prefix: low drift, catastrophic when wrong.
+#     Silently demotes the request out of the Claude Code OAuth
+#     bucket without an error. Verify against the live CLI before
+#     editing.
+
+[logging]
+level = "debug"
+
+[adapter]
+enabled = true
+direct_oauth = true
+default_model = "clyde-opus-4-7-high-1m"
+
+[adapter.impersonation]
+beta_header = "REDACTED-OAUTH-BETA,REDACTED-CC-BETA,effort-2025-11-24"
+user_agent = "REDACTED-UA"
+system_prompt_prefix = "REDACTED-SYSTEM-PREFIX"
+
+# Per-backend handling of the OpenAI logprobs / top_logprobs
+# request fields. "reject" returns 400 when the caller sets
+# logprobs; "drop" silently strips the field. Shunts always
+# pass through verbatim regardless of this stanza.
+[adapter.logprobs]
+anthropic = "reject"
+fallback  = "reject"
+
+# opus-4-7: low/medium/high/max effort, all four thinking modes,
+# 200k and 1M context. Empirically the highest-capability family on
+# the account. Verified 2026-04-18.
+[adapter.families.opus-4-7]
+model = "claude-opus-4-7"
+supports_tools = true
+supports_vision = true
+efforts = ["low", "medium", "high", "max"]
+thinking_modes = ["default", "adaptive", "enabled", "disabled"]
+max_output_tokens = 32000
+contexts = [
+  { tokens = 200000,  alias_suffix = "",   wire_suffix = "" },
+  { tokens = 1000000, alias_suffix = "1m", wire_suffix = "[1m]" },
+]
+
+# sonnet-4-6: same effort + thinking matrix as opus-4-7, single
+# 200k context. Verified 2026-04-18.
+[adapter.families.sonnet-4-6]
+model = "claude-sonnet-4-6"
+supports_tools = true
+supports_vision = true
+efforts = ["low", "medium", "high", "max"]
+thinking_modes = ["default", "adaptive", "enabled", "disabled"]
+max_output_tokens = 64000
+contexts = [
+  { tokens = 200000, alias_suffix = "", wire_suffix = "" },
+]
+
+# haiku-4-5: server rejects effort
+# (`400 This model does not support the effort parameter`) and
+# adaptive thinking. Enabled and disabled thinking work; default
+# omits the block. Verified 2026-04-18.
+[adapter.families.haiku-4-5]
+model = "claude-haiku-4-5-20251001"
+supports_tools = true
+supports_vision = true
+efforts = []
+thinking_modes = ["default", "enabled", "disabled"]
+max_output_tokens = 16000
+contexts = [
+  { tokens = 200000, alias_suffix = "", wire_suffix = "" },
+]
+
+# Optional fallback layer. The adapter can drive the local
+# `claude` CLI in `-p --output-format stream-json` mode either
+# explicitly (alias bound to backend = "fallback") or as an
+# escalation when the direct-OAuth path errors. Disabled in
+# this reference. Set enabled = true and pick a trigger to opt
+# in. There are no defaults: every field below is required when
+# enabled = true and NewRegistry refuses to start the listener
+# with a partial configuration.
+#
+# Drift notes:
+#   - cli_aliases: medium drift. The CLI's accepted short names
+#     ("opus", "sonnet", "haiku") are stable across point releases
+#     but new families need a new mapping.
+#   - timeout: low drift. 120s comfortably covers a long
+#     reasoning turn. Bump for max-effort opus runs.
+#   - suppress_hook_env: leave on. The two env vars short-circuit
+#     SessionStart -> daemon -> claude -p recursion.
+[adapter.fallback]
+enabled            = false
+trigger            = "on_oauth_failure"   # "explicit" | "on_oauth_failure" | "both"
+binary             = ""                   # empty -> use the daemon's resolver
+timeout            = "120s"
+max_concurrent     = 2
+allowed_families   = ["opus-4-7", "sonnet-4-6", "haiku-4-5"]
+scratch_subdir     = "fallback"
+stream_passthrough = true
+drop_unsupported   = true                 # silently ignore reasoning_effort / thinking
+suppress_hook_env  = true                 # avoid SessionStart -> daemon recursion
+failure_escalation = "fallback_error"     # which error to return when the fallback also fails
+
+# claude -p uses short family names that don't match the
+# Anthropic wire ids the OAuth path sends. Map every family
+# slug listed in allowed_families above.
+[adapter.fallback.cli_aliases]
+opus-4-7   = "opus"
+sonnet-4-6 = "sonnet"
+haiku-4-5  = "haiku"
+
+# Optional: forward Anthropic-bound requests to an OpenAI
+# shaped shunt instead of (or before) `claude -p`. Off here.
+# Useful for a "spillover to a paid OpenAI account when my
+# Claude.ai bucket is exhausted" pattern. Requires a matching
+# entry in [adapter.shunts.<name>].
+[adapter.fallback.forward_to_shunt]
+enabled = false
+shunt   = ""

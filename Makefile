@@ -1,4 +1,4 @@
-.PHONY: help build test test-watch install clean lint fmt coverage vendor setup-hooks deadcode govulncheck audit sign notarize uninstall-launch-agent
+.PHONY: help build test test-watch install install-launch-agent install-hook clean lint fmt coverage setup-hooks deadcode govulncheck audit sign notarize uninstall-launch-agent uninstall-hook slog-audit
 
 # Optional local overrides (signing creds, never committed). Copy config.mk.example.
 -include config.mk
@@ -10,7 +10,6 @@ COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 GIT_DIRTY := $(shell git diff --quiet && echo false || echo true)
 DATE := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 GKLOG_VPKG := goodkind.io/gklog/version
-
 # If building from a git tag, use it. Otherwise append -dev+timestamp
 ifeq ($(GIT_TAG),)
 	VERSION := $(BASE_VERSION)-dev+$(shell date -u +"%Y%m%d%H%M%S")
@@ -18,10 +17,7 @@ else
 	VERSION := $(patsubst v%,%,$(GIT_TAG))
 endif
 
-LDFLAGS := -X 'github.com/fgrehm/clotilde/cmd.version=$(VERSION)' \
-           -X 'github.com/fgrehm/clotilde/cmd.commit=$(COMMIT)' \
-           -X 'github.com/fgrehm/clotilde/cmd.date=$(DATE)' \
-           -X '$(GKLOG_VPKG).Commit=$(COMMIT)' \
+LDFLAGS := -X '$(GKLOG_VPKG).Commit=$(COMMIT)' \
            -X '$(GKLOG_VPKG).Dirty=$(GIT_DIRTY)' \
            -X '$(GKLOG_VPKG).BuildTime=$(DATE)' \
            -X '$(GKLOG_VPKG).BinHash='
@@ -38,11 +34,11 @@ setup-hooks: ## Configure git hooks
 	@chmod +x .githooks/*
 	@echo "✓ Git hooks configured"
 
-build: ## Build the clotilde binary
-	@echo "Building clotilde..."
+build: ## Build the clyde binary
+	@echo "Building clyde..."
 	@mkdir -p dist
-	@go build -ldflags "$(LDFLAGS)" -o dist/clotilde .
-	@echo "✓ Built to dist/clotilde"
+	@go build -ldflags "$(LDFLAGS)" -o dist/clyde ./cmd/clyde
+	@echo "✓ Built to dist/clyde"
 
 test: ## Run tests with Ginkgo
 	@go run github.com/onsi/ginkgo/v2/ginkgo -r --randomize-all --randomize-suites --fail-on-pending --race
@@ -51,20 +47,58 @@ test-watch: ## Run tests in watch mode
 	@echo "Starting test watch mode..."
 	@go run github.com/onsi/ginkgo/v2/ginkgo watch -r
 
-LAUNCH_AGENT_LABEL := io.goodkind.clotilde.daemon
+LAUNCH_AGENT_LABEL := io.goodkind.clyde.daemon
 LAUNCH_AGENT_PLIST := $(HOME)/Library/LaunchAgents/$(LAUNCH_AGENT_LABEL).plist
+LAUNCH_AGENT_TEMPLATE := packaging/macos/io.goodkind.clyde.daemon.plist.in
+DAEMON_LOG := $(HOME)/Library/Logs/clyde-daemon.log
+CLYDE_BIN := $(HOME)/.local/bin/clyde
 UID := $(shell id -u)
 
-install: build ## Install clotilde to ~/.local/bin and restart daemon via launchd
+install: build ## Install clyde to ~/.local/bin and restart daemon via launchd
 	@mkdir -p "$(HOME)/.local/bin"
-	@ln -sf "$(CURDIR)/dist/clotilde" "$(HOME)/.local/bin/clotilde"
+	@ln -sf "$(CURDIR)/dist/clyde" "$(CLYDE_BIN)"
 	@if [ -f "$(LAUNCH_AGENT_PLIST)" ]; then \
-		launchctl bootout gui/$(UID)/$(LAUNCH_AGENT_LABEL) 2>/dev/null; true; \
-		launchctl bootstrap gui/$(UID) "$(LAUNCH_AGENT_PLIST)" 2>/dev/null; true; \
-		echo "✓ Installed to ~/.local/bin/clotilde (daemon restarted via launchd)"; \
+		launchctl bootout gui/$(UID)/$(LAUNCH_AGENT_LABEL) 2>/dev/null || true; \
+		sleep 1; \
+		launchctl bootstrap gui/$(UID) "$(LAUNCH_AGENT_PLIST)" || { echo "launchctl bootstrap failed; daemon NOT running"; exit 1; }; \
+		echo "✓ Installed to $(CLYDE_BIN) (daemon restarted via launchd)"; \
 	else \
-		-pkill -f "clotilde daemon" 2>/dev/null; true; \
-		echo "✓ Installed to ~/.local/bin/clotilde (run 'clotilde setup' to register LaunchAgent)"; \
+		-pkill -f "clyde daemon" 2>/dev/null; true; \
+		echo "✓ Installed to $(CLYDE_BIN) (run 'make install-launch-agent' to register LaunchAgent)"; \
+	fi
+
+install-launch-agent: ## Render and install the daemon LaunchAgent (runs OAuth refresh + adapter + prune in-process)
+	@mkdir -p "$(HOME)/Library/LaunchAgents" "$(HOME)/Library/Logs"
+	@touch "$(DAEMON_LOG)"
+	@sed -e 's|@@CLYDE_BIN@@|$(CLYDE_BIN)|g' \
+	     -e 's|@@HOME@@|$(HOME)|g' \
+	     -e 's|@@LOG_PATH@@|$(DAEMON_LOG)|g' \
+	     "$(LAUNCH_AGENT_TEMPLATE)" > "$(LAUNCH_AGENT_PLIST)"
+	@launchctl bootout gui/$(UID)/$(LAUNCH_AGENT_LABEL) 2>/dev/null; true
+	@launchctl bootstrap gui/$(UID) "$(LAUNCH_AGENT_PLIST)"
+	@echo "✓ LaunchAgent installed: $(LAUNCH_AGENT_PLIST)"
+	@echo "  Logs: $(DAEMON_LOG)"
+
+install-hook: ## Register the SessionStart hook in ~/.claude/settings.json
+	@mkdir -p "$(HOME)/.claude"
+	@touch "$(HOME)/.claude/settings.json"
+	@if [ ! -s "$(HOME)/.claude/settings.json" ]; then echo '{}' > "$(HOME)/.claude/settings.json"; fi
+	@cp "$(HOME)/.claude/settings.json" "$(HOME)/.claude/settings.json.bak.$$(date +%s)"
+	@jq --arg cmd "$(CLYDE_BIN) hook sessionstart" \
+		'.hooks = (.hooks // {}) | .hooks.SessionStart = (.hooks.SessionStart // []) | \
+		 .hooks.SessionStart = (.hooks.SessionStart | map(select(.hooks[0].command != $$cmd))) + \
+		 [{matcher: "*", hooks: [{type: "command", command: $$cmd}]}]' \
+		"$(HOME)/.claude/settings.json" > "$(HOME)/.claude/settings.json.tmp"
+	@mv "$(HOME)/.claude/settings.json.tmp" "$(HOME)/.claude/settings.json"
+	@echo "✓ SessionStart hook registered in ~/.claude/settings.json"
+
+uninstall-hook: ## Remove the SessionStart hook from ~/.claude/settings.json
+	@if [ -f "$(HOME)/.claude/settings.json" ]; then \
+		jq --arg cmd "$(CLYDE_BIN) hook sessionstart" \
+			'if .hooks.SessionStart then .hooks.SessionStart |= map(select(.hooks[0].command != $$cmd)) else . end' \
+			"$(HOME)/.claude/settings.json" > "$(HOME)/.claude/settings.json.tmp" && \
+		mv "$(HOME)/.claude/settings.json.tmp" "$(HOME)/.claude/settings.json"; \
+		echo "✓ SessionStart hook removed"; \
 	fi
 
 clean: ## Remove build artifacts
@@ -89,8 +123,11 @@ coverage: ## Generate coverage report
 	@go tool cover -html=coverage.txt -o coverage.html
 	@echo "✓ Coverage report generated: coverage.html"
 
-deadcode: ## Check for unreachable functions
-	@output=$$(go tool deadcode ./...) || exit 1; \
+deadcode: build ## Check for unreachable functions
+	@if ! output=$$(go tool deadcode ./...); then \
+		echo "go tool deadcode failed"; \
+		exit 1; \
+	fi; \
 	filtered=$$(echo "$$output" | grep -v \
 		-e 'cmd/root.go:.*NewRootCmd' \
 		-e 'internal/testutil/claude.go:.*CreateFakeClaude' \
@@ -106,34 +143,31 @@ deadcode: ## Check for unreachable functions
 govulncheck: ## Run vulnerability check
 	@go tool govulncheck ./...
 
+slog-audit: ## Fail when banned logging patterns slip into production code (see docs/SLOG.md)
+	@./scripts/slog-audit.sh
+
 audit: ## Run complexity and vulnerability checks (informational)
 	@echo "=== Cyclomatic complexity (>15) ==="
-	@go tool gocyclo -over 15 -ignore 'vendor/' . || true
+	@go tool gocyclo -over 15 .
 	@echo ""
 	@echo "=== Vulnerability check ==="
 	@go tool govulncheck ./... || true
 
-vendor: ## Update vendored dependencies
-	@echo "Vendoring dependencies..."
-	@go mod tidy
-	@go mod vendor
-	@echo "✓ Dependencies vendored"
-
 ifdef CERT_ID
 sign: build ## Sign binary with Developer ID Application certificate
-	@echo "Signing dist/clotilde..."
-	@codesign -s "$(CERT_ID)" -f --options runtime --timestamp dist/clotilde
-	@echo "✓ Signed dist/clotilde"
+	@echo "Signing dist/clyde..."
+	@codesign -s "$(CERT_ID)" -f --options runtime --timestamp dist/clyde
+	@echo "✓ Signed dist/clyde"
 
 notarize: sign ## Sign and notarize binary for distribution (requires NOTARY_PROFILE in config.mk)
 	@echo "Creating notarization zip..."
-	@ditto -c -k --keepParent dist/clotilde dist/clotilde-notarize.zip
+	@ditto -c -k --keepParent dist/clyde dist/clyde-notarize.zip
 	@echo "Submitting for notarization (waiting)..."
-	@xcrun notarytool submit dist/clotilde-notarize.zip \
+	@xcrun notarytool submit dist/clyde-notarize.zip \
 		--keychain-profile "$(NOTARY_PROFILE)" \
 		--wait
-	@rm dist/clotilde-notarize.zip
-	@echo "✓ Notarized dist/clotilde"
+	@rm dist/clyde-notarize.zip
+	@echo "✓ Notarized dist/clyde"
 else
 sign: build ## Sign binary (requires CERT_ID in config.mk)
 	@echo "⚠ CERT_ID not set in config.mk. Skipping code signing."
@@ -143,7 +177,7 @@ notarize: sign ## Sign and notarize binary (requires config.mk)
 	@echo "⚠ CERT_ID not set in config.mk. Skipping notarization."
 endif
 
-uninstall-launch-agent: ## Remove the clotilde daemon LaunchAgent
+uninstall-launch-agent: ## Remove the clyde daemon LaunchAgent
 	@launchctl bootout gui/$(UID)/$(LAUNCH_AGENT_LABEL) 2>/dev/null; true
 	@rm -f "$(LAUNCH_AGENT_PLIST)"
 	@echo "✓ LaunchAgent removed"

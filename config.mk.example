@@ -10,5 +10,5 @@ TEAM_ID = YOUR_TEAM_ID_HERE
 # Keychain profile for notarytool (store with: xcrun notarytool store-credentials "ACPASSWORD")
 NOTARY_PROFILE = ACPASSWORD
 
-# Bundle ID for the clotilde daemon LaunchAgent
-BUNDLE_ID = io.goodkind.clotilde
+# Bundle ID for the clyde daemon LaunchAgent
+BUNDLE_ID = io.goodkind.clyde
