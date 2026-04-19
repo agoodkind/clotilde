@@ -1,22 +1,20 @@
 syntax = "proto3";
 
-package agentgate;
+package clyde.v1;
 
-option go_package = "github.com/fgrehm/clotilde/api/daemonpb";
-
-service AgentGateD {
+service ClydeService {
   rpc AcquireSession(AcquireSessionRequest) returns (AcquireSessionResponse);
   rpc ReleaseSession(ReleaseSessionRequest) returns (ReleaseSessionResponse);
   rpc HookEvent(HookEventRequest) returns (HookEventResponse);
   rpc ListActiveSessions(ListActiveSessionsRequest) returns (ListActiveSessionsResponse);
   rpc TriggerScan(TriggerScanRequest) returns (TriggerScanResponse);
-  rpc SubscribeRegistry(SubscribeRegistryRequest) returns (stream RegistryEvent);
+  rpc SubscribeRegistry(SubscribeRegistryRequest) returns (stream SubscribeRegistryResponse);
   rpc RenameSession(RenameSessionRequest) returns (RenameSessionResponse);
   rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);
   rpc UpdateSessionSettings(UpdateSessionSettingsRequest) returns (UpdateSessionSettingsResponse);
   rpc UpdateGlobalSettings(UpdateGlobalSettingsRequest) returns (UpdateGlobalSettingsResponse);
   rpc ListBridges(ListBridgesRequest) returns (ListBridgesResponse);
-  rpc TailTranscript(TailTranscriptRequest) returns (stream TranscriptLine);
+  rpc TailTranscript(TailTranscriptRequest) returns (stream TailTranscriptResponse);
   rpc SendToSession(SendToSessionRequest) returns (SendToSessionResponse);
 }
 
@@ -68,15 +66,15 @@ message TriggerScanResponse {
 
 message SubscribeRegistryRequest {}
 
-message RegistryEvent {
+message SubscribeRegistryResponse {
   enum Kind {
     KIND_UNSPECIFIED = 0;
-    SESSION_ADOPTED = 1;
-    SESSION_UPDATED = 2;
-    SESSION_DELETED = 3;
-    SESSION_RENAMED = 4;
-    BRIDGE_OPENED = 5;
-    BRIDGE_CLOSED = 6;
+    KIND_SESSION_ADOPTED = 1;
+    KIND_SESSION_UPDATED = 2;
+    KIND_SESSION_DELETED = 3;
+    KIND_SESSION_RENAMED = 4;
+    KIND_BRIDGE_OPENED = 5;
+    KIND_BRIDGE_CLOSED = 6;
   }
   Kind kind = 1;
   string session_name = 2;
@@ -109,8 +107,8 @@ message Settings {
 message UpdateSessionSettingsRequest {
   string name = 1;
   Settings settings = 2;
-  // Field names from Settings to apply. Empty mask means apply all
-  // non zero fields. Listing remote_control alone toggles just that
+  // Field names from Settings to apply. An empty mask applies every
+  // non zero field. Listing remote_control alone toggles just that
   // value without overwriting model or anything else.
   repeated string update_mask = 3;
 }
@@ -143,11 +141,11 @@ message ListBridgesResponse {
 
 message TailTranscriptRequest {
   string session_id = 1;
-  // start_at_offset = 0 means stream future lines only.
+  // start_at_offset = 0 streams future lines only.
   int64 start_at_offset = 2;
 }
 
-message TranscriptLine {
+message TailTranscriptResponse {
   int64 byte_offset = 1;
   string raw_jsonl = 2;
   string role = 3;
