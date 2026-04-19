@@ -1,18 +1,15 @@
 package config
 
 import (
-	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
-	"github.com/fgrehm/clotilde/internal/util"
+	"goodkind.io/clyde/internal/util"
 )
 
 const (
-	// ClotildeDir is the directory name for clotilde within .claude/
-	ClotildeDir = ".claude/clotilde"
+	// ClydeDir is the directory name for clyde within .claude/
+	ClydeDir = ".claude/clyde"
 
 	// SessionsDir is the subdirectory for sessions
 	SessionsDir = "sessions"
@@ -21,83 +18,25 @@ const (
 	ConfigFile = "config.json"
 )
 
-// FindClotildeRoot searches for the .claude/clotilde directory by walking up
-// from the current working directory. Returns the absolute path to the
-// .claude/clotilde directory, or an error if not found.
-func FindClotildeRoot() (string, error) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-	return ClotildeRootFromPath(cwd)
-}
-
-// ClotildeRootFromPath searches for .claude/clotilde starting from the given path.
-// Returns the absolute path to the .claude/clotilde directory, or an error if not found.
-// Note: unlike ProjectRootFromPath, this does NOT stop at $HOME. If .claude/clotilde
-// was already created at ~ (e.g., from before the walk-up fix), we still need to find
-// it so users can list/delete those sessions.
-func ClotildeRootFromPath(startPath string) (string, error) {
-	absPath, err := filepath.Abs(startPath)
-	if err != nil {
-		return "", err
-	}
-
-	currentPath := absPath
-	for {
-		clotildePath := filepath.Join(currentPath, ClotildeDir)
-		info, err := os.Stat(clotildePath)
-		if err == nil && info.IsDir() {
-			return clotildePath, nil
-		}
-
-		// Move up to parent directory
-		parentPath := filepath.Dir(currentPath)
-		if parentPath == currentPath {
-			// Reached filesystem root
-			return "", errors.New(".claude/clotilde not found in directory tree")
-		}
-		currentPath = parentPath
-	}
-}
-
-// GetSessionsDir returns the path to the sessions directory within the clotilde root.
-func GetSessionsDir(clotildeRoot string) string {
-	return filepath.Join(clotildeRoot, SessionsDir)
+// GetSessionsDir returns the path to the sessions directory within the clyde root.
+func GetSessionsDir(clydeRoot string) string {
+	return filepath.Join(clydeRoot, SessionsDir)
 }
 
 // GetSessionDir returns the path to a specific session directory.
-func GetSessionDir(clotildeRoot, sessionName string) string {
-	return filepath.Join(GetSessionsDir(clotildeRoot), sessionName)
-}
-
-// GetConfigPath returns the path to the config.json file.
-func GetConfigPath(clotildeRoot string) string {
-	return filepath.Join(clotildeRoot, ConfigFile)
+func GetSessionDir(clydeRoot, sessionName string) string {
+	return filepath.Join(GetSessionsDir(clydeRoot), sessionName)
 }
 
 // GlobalConfigPath returns the path to the global config file.
-// Respects $XDG_CONFIG_HOME if set, otherwise uses ~/.config/clotilde/config.json.
+// Respects $XDG_CONFIG_HOME if set, otherwise uses ~/.config/clyde/config.json.
 func GlobalConfigPath() string {
 	configHome := os.Getenv("XDG_CONFIG_HOME")
 	if configHome == "" {
 		home, _ := os.UserHomeDir()
 		configHome = filepath.Join(home, ".config")
 	}
-	return filepath.Join(configHome, "clotilde", ConfigFile)
-}
-
-// EnsureClotildeStructure creates the .claude/clotilde directory structure
-// at the given path if it doesn't exist.
-func EnsureClotildeStructure(projectRoot string) error {
-	return EnsureSessionsDir(projectRoot)
-}
-
-// EnsureSessionsDir creates .claude/clotilde/sessions/ at the given project root.
-// Creates all parent directories as needed.
-func EnsureSessionsDir(projectRoot string) error {
-	sessionsPath := filepath.Join(projectRoot, ClotildeDir, SessionsDir)
-	return os.MkdirAll(sessionsPath, 0o755)
+	return filepath.Join(configHome, "clyde", ConfigFile)
 }
 
 // FindProjectRoot determines the project root directory.
@@ -145,42 +84,15 @@ func ProjectRootFromPath(startPath string) string {
 	return absPath
 }
 
-// FindOrCreateClotildeRoot finds or creates the .claude/clotilde directory for the
-// current project. It resolves the project root first (which stops at $HOME), then
-// checks if .claude/clotilde exists there. This avoids the bug where an existing
-// ~/.claude/clotilde (from legacy usage) would shadow the correct project-local root.
-func FindOrCreateClotildeRoot() (string, error) {
-	projectRoot, err := FindProjectRoot()
-	if err != nil {
-		return "", err
-	}
-
-	clotildeRoot := filepath.Join(projectRoot, ClotildeDir)
-	if info, statErr := os.Stat(clotildeRoot); statErr == nil {
-		if !info.IsDir() {
-			return "", fmt.Errorf("%s exists and is not a directory", clotildeRoot)
-		}
-		return clotildeRoot, nil
-	} else if !os.IsNotExist(statErr) {
-		return "", fmt.Errorf("failed to stat clotilde root %s: %w", clotildeRoot, statErr)
-	}
-
-	if err := EnsureSessionsDir(projectRoot); err != nil {
-		return "", fmt.Errorf("failed to create clotilde structure: %w", err)
-	}
-
-	return clotildeRoot, nil
-}
-
-// GlobalCacheDir returns the global cache directory for clotilde.
-// Respects $XDG_CACHE_HOME if set, otherwise uses ~/.cache/clotilde.
+// GlobalCacheDir returns the global cache directory for clyde.
+// Respects $XDG_CACHE_HOME if set, otherwise uses ~/.cache/clyde.
 func GlobalCacheDir() string {
 	cacheHome := os.Getenv("XDG_CACHE_HOME")
 	if cacheHome == "" {
 		home, _ := os.UserHomeDir()
 		cacheHome = filepath.Join(home, ".cache")
 	}
-	return filepath.Join(cacheHome, "clotilde")
+	return filepath.Join(cacheHome, "clyde")
 }
 
 // SearchResultCacheDir returns the directory where search result caches are stored.
@@ -193,29 +105,15 @@ func EnsureSearchResultCacheDir() error {
 	return os.MkdirAll(SearchResultCacheDir(), 0o755)
 }
 
-// GlobalDataDir returns the global data directory for clotilde.
-// Respects $XDG_DATA_HOME if set, otherwise uses ~/.local/share/clotilde.
+// GlobalDataDir returns the global data directory for clyde.
+// Respects $XDG_DATA_HOME if set, otherwise uses ~/.local/share/clyde.
 func GlobalDataDir() string {
 	dataHome := os.Getenv("XDG_DATA_HOME")
 	if dataHome == "" {
 		home, _ := os.UserHomeDir()
 		dataHome = filepath.Join(home, ".local", "share")
 	}
-	return filepath.Join(dataHome, "clotilde")
-}
-
-// GlobalBackupsDir returns the directory where compact operations stash
-// pre-change copies of transcript files. Respects $XDG_DATA_HOME.
-// Layout:
-//
-//	$XDG_DATA_HOME/clotilde/backups/<session-name>/<timestamp>-<uuid>.jsonl
-func GlobalBackupsDir() string {
-	return filepath.Join(GlobalDataDir(), "backups")
-}
-
-// EnsureGlobalBackupsDir creates the backups root if it does not exist.
-func EnsureGlobalBackupsDir() error {
-	return os.MkdirAll(GlobalBackupsDir(), 0o755)
+	return filepath.Join(dataHome, "clyde")
 }
 
 // GlobalSessionsDir returns the path to the global sessions directory.
@@ -228,33 +126,10 @@ func EnsureGlobalSessionsDir() error {
 	return os.MkdirAll(GlobalSessionsDir(), 0o755)
 }
 
-// GlobalOutputStyleRoot returns the "clotilde root" used when computing output style
+// GlobalOutputStyleRoot returns the "clyde root" used when computing output style
 // paths that live in ~/.claude/output-styles/. The extra path component ensures
 // filepath.Join(root, "..", "output-styles") resolves to ~/.claude/output-styles/.
 func GlobalOutputStyleRoot() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".claude", "clotilde")
-}
-
-// DecodeProjectDir reverses Claude Code's project directory encoding.
-// Claude encodes /Users/alex/Sites/myproject as -Users-alex-Sites-myproject.
-// This returns the original absolute path, or "" if the input is empty.
-func DecodeProjectDir(encoded string) string {
-	if encoded == "" {
-		return ""
-	}
-	// The encoding replaces / with - and . with -.
-	// We can only reliably recover / (leading - is always /).
-	// Split on - and rejoin with /, skipping the empty first element from the leading -.
-	parts := strings.Split(encoded, "-")
-	if len(parts) < 2 {
-		return ""
-	}
-	return "/" + strings.Join(parts[1:], "/")
-}
-
-// IsInitialized checks if clotilde is initialized in the current directory tree.
-func IsInitialized() bool {
-	_, err := FindClotildeRoot()
-	return err == nil
+	return filepath.Join(home, ".claude", "clyde")
 }

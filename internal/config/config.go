@@ -1,13 +1,361 @@
 package config
 
-// Config represents the clotilde configuration.
+import "time"
+
+// Config represents the clyde configuration.
 type Config struct {
 	// Defaults are applied to all sessions unless overridden
 	Defaults Defaults `json:"defaults,omitempty" toml:"defaults,omitempty"`
 	// Profiles is a map of named session profiles
 	Profiles map[string]Profile `json:"profiles,omitempty" toml:"profiles,omitempty"`
+	// Logging configures process-wide runtime behavior.
+	Logging LoggingConfig `json:"logging,omitempty" toml:"logging,omitempty"`
 	// Search configures the conversation search LLM backend
 	Search SearchConfig `json:"search,omitempty" toml:"search,omitempty"`
+	// Adapter configures the OpenAI compatible HTTP adapter mounted
+	// inside the daemon process.
+	Adapter AdapterConfig `json:"adapter,omitempty" toml:"adapter,omitempty"`
+	// WebApp configures the optional remote dashboard mounted by the
+	// daemon. The dashboard exposes a small HTML form plus a JSON API
+	// for spawning new remote control sessions and lists every active
+	// bridge URL. Pair with cloudflared to expose securely.
+	WebApp WebAppConfig `json:"webApp,omitempty" toml:"web_app,omitempty"`
+	// Prune configures the daemon's periodic session pruning loop.
+	// Disabled by default so existing installs see no behavior change
+	// until the user opts in.
+	Prune PruneConfig `json:"prune,omitempty" toml:"prune,omitempty"`
+	// OAuth configures the daemon's background Anthropic OAuth token
+	// refresher. The refresher keeps a warm access token in the keychain
+	// so the adapter direct-OAuth path almost never has to refresh
+	// inline.
+	OAuth OAuthConfig `json:"oauth,omitempty" toml:"oauth,omitempty"`
+	// Labeler configures the per-session topic labeler that writes a
+	// short bookmark-style label into Metadata.Context. The previous
+	// implementation shelled out to `claude -p --model sonnet`, which
+	// recursed through the SessionStart hook chain and fanned out
+	// uncontrollably. The shellout has been ripped out; this struct
+	// is the wiring point for the eventual rewrite against the
+	// in-process adapter. Disabled by default until then.
+	Labeler LabelerConfig `json:"labeler,omitempty" toml:"labeler,omitempty"`
+}
+
+// LoggingConfig carries global logging settings.
+type LoggingConfig struct {
+	Level string `json:"level,omitempty" toml:"level,omitempty"`
+}
+
+// LabelerConfig drives the (currently stubbed) session topic labeler.
+// Enabled is the only knob today; turning it on without a working
+// adapter implementation is a no-op and emits a warning log.
+type LabelerConfig struct {
+	Enabled bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
+}
+
+// PruneConfig drives the daemon's periodic session pruning loop. The
+// pruner is opt-in. When Enabled the daemon ticks every Interval and
+// runs the kinds set to true. Defaults are conservative: ephemeral
+// and empty are safe to auto-prune; autoname is left off because that
+// pruner is untested at scale.
+type PruneConfig struct {
+	Enabled        bool          `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	Interval       time.Duration `json:"interval,omitempty" toml:"interval,omitempty"`
+	Ephemeral      bool          `json:"ephemeral,omitempty" toml:"ephemeral,omitempty"`
+	Empty          bool          `json:"empty,omitempty" toml:"empty,omitempty"`
+	Autoname       bool          `json:"autoname,omitempty" toml:"autoname,omitempty"`
+	EmptyMaxLines  int           `json:"emptyMaxLines,omitempty" toml:"empty_max_lines,omitempty"`
+	EmptyMinAge    time.Duration `json:"emptyMinAge,omitempty" toml:"empty_min_age,omitempty"`
+	AutonameMinAge time.Duration `json:"autonameMinAge,omitempty" toml:"autoname_min_age,omitempty"`
+}
+
+// OAuthConfig drives the daemon's background OAuth refresh goroutine.
+// The refresher is opt-out (default on) because the adapter's
+// direct-OAuth path depends on a warm access token. Disabled is a
+// pointer so we can distinguish "not set" (use default: enabled) from
+// an explicit "disabled = true" in TOML.
+type OAuthConfig struct {
+	// Disabled, when explicitly true, turns the background refresher
+	// off. The adapter's inline refresh still works as a safety net.
+	// Default behavior (nil or false) is enabled.
+	Disabled *bool `json:"disabled,omitempty" toml:"disabled,omitempty"`
+	// Interval between refresh attempts. Default 30 minutes (well
+	// below the 8 hour OAuth access token lifetime so a single missed
+	// tick never causes inline-refresh churn).
+	Interval time.Duration `json:"interval,omitempty" toml:"interval,omitempty"`
+}
+
+// IsEnabled reports whether the background OAuth refresher should
+// run. Defaults to true unless the user explicitly set Disabled to
+// true in their config.
+func (o OAuthConfig) IsEnabled() bool {
+	if o.Disabled != nil && *o.Disabled {
+		return false
+	}
+	return true
+}
+
+// WebAppConfig configures the optional in daemon web dashboard.
+type WebAppConfig struct {
+	// Enabled toggles the listener.
+	Enabled bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	// Host defaults to 127.0.0.1.
+	Host string `json:"host,omitempty" toml:"host,omitempty"`
+	// Port defaults to 11435.
+	Port int `json:"port,omitempty" toml:"port,omitempty"`
+	// RequireToken, when set, demands matching bearer auth on every
+	// request. CLYDE_WEBAPP_TOKEN env override applies.
+	RequireToken string `json:"requireToken,omitempty" toml:"require_token,omitempty"`
+	// ClydeBinary is the path used to spawn new sessions when the
+	// dashboard's "Start" button is invoked. Empty falls back to the
+	// daemon's resolved executable name.
+	ClydeBinary string `json:"clydeBinary,omitempty" toml:"clyde_binary,omitempty"`
+}
+
+// AdapterConfig configures the OpenAI compatible HTTP server folded
+// into the clyde daemon monolith. A single launchd entry boots the
+// daemon plus this adapter. The default model, port, and per model
+// effort matrix live here. User defined entries under Models let
+// callers add custom aliases without recompiling.
+type AdapterConfig struct {
+	// Enabled toggles the HTTP listener. Default is false so the
+	// daemon stays headless until the user opts in.
+	Enabled bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	// Host defaults to 127.0.0.1 (loopback only).
+	Host string `json:"host,omitempty" toml:"host,omitempty"`
+	// Port defaults to 11434 (shared with Ollama conventions).
+	Port int `json:"port,omitempty" toml:"port,omitempty"`
+	// DefaultModel is the fallback when a request does not name one.
+	DefaultModel string `json:"defaultModel,omitempty" toml:"default_model,omitempty"`
+	// MaxConcurrent caps the number of in flight claude subprocesses.
+	MaxConcurrent int `json:"maxConcurrent,omitempty" toml:"max_concurrent,omitempty"`
+	// RequireToken, when set, demands a matching bearer token on
+	// every request. The env var CLYDE_ADAPTER_TOKEN overrides.
+	RequireToken string `json:"requireToken,omitempty" toml:"require_token,omitempty"`
+	// Models lets users add or override adapter model entries.
+	// Keys are the public (OpenAI style or real Claude) aliases the
+	// client sends. Values name the backend and its tuning knobs.
+	Models map[string]AdapterModel `json:"models,omitempty" toml:"models,omitempty"`
+	// Shunts lets users forward specific aliases to an upstream
+	// OpenAI compatible endpoint. Useful for the blunt gpt-4o pass
+	// through so local tools keep working even when the user wants
+	// real OpenAI for a given alias.
+	Shunts map[string]AdapterShunt `json:"shunts,omitempty" toml:"shunts,omitempty"`
+	// FallbackShunt names an entry in Shunts that will receive any
+	// request whose model alias is not registered. The original model
+	// string is preserved on the way out so the upstream can route it
+	// itself. Empty disables fallback and unknown aliases 400.
+	FallbackShunt string `json:"fallbackShunt,omitempty" toml:"fallback_shunt,omitempty"`
+	// DirectOAuth, when true, routes Claude backend requests straight
+	// at https://REDACTED-UPSTREAM/v1/messages using the user's
+	// Claude.ai OAuth token from the local keychain. This bypasses
+	// the `claude -p` subprocess entirely so no per-call session
+	// transcripts get written under ~/.claude/projects/ and the
+	// adapter avoids the ~150ms node startup cost. Default false to
+	// preserve the legacy shellout path until users opt in. Requires
+	// `claude /login` to have populated the keychain.
+	DirectOAuth bool `json:"directOauth,omitempty" toml:"direct_oauth,omitempty"`
+	// Impersonation carries the three Anthropic Claude Code identity
+	// signals (anthropic-beta, User-Agent, system prompt prefix) the
+	// adapter sends on every /v1/messages call so requests land in
+	// the higher-quota Claude Code OAuth bucket. There are no
+	// compiled-in defaults: NewRegistry rejects an empty
+	// Impersonation. The repo-root `clyde.example.toml` carries a
+	// validated reference stanza users copy into their config.
+	Impersonation AdapterImpersonation `json:"impersonation,omitempty" toml:"impersonation,omitempty"`
+	// Logprobs configures per-backend handling of the OpenAI
+	// logprobs / top_logprobs request fields. Anthropic does not
+	// emit logprobs and `claude -p` does not either; shunts may.
+	// There is no compiled-in default. When either backend key is
+	// set, NewRegistry requires both keys and rejects unknown values.
+	Logprobs AdapterLogprobs `json:"logprobs,omitempty" toml:"logprobs,omitempty"`
+	// Families declares the per-family Claude capability matrix the
+	// registry expands into the public alias set at load time. Keyed
+	// by a stable family slug (e.g. "opus-4-7", "sonnet-4-6",
+	// "haiku-4-5"). Empty disables direct-OAuth model resolution.
+	Families map[string]AdapterFamily `json:"families,omitempty" toml:"families,omitempty"`
+	// Fallback configures an optional `claude -p` driven fallback
+	// layer the adapter can dispatch to either explicitly (alias
+	// has backend = "fallback") or on direct-OAuth failure. There
+	// are no compiled-in defaults: when Fallback.Enabled is true,
+	// NewRegistry validates every field and rejects partial
+	// configurations.
+	Fallback AdapterFallback `json:"fallback,omitempty" toml:"fallback,omitempty"`
+}
+
+// AdapterLogprobs picks the per-backend behavior. Each value is
+// one of "reject" (return 400 when caller sets logprobs) or
+// "drop" (silently strip the field before forwarding). Shunts
+// always pass through verbatim regardless of this stanza.
+type AdapterLogprobs struct {
+	Anthropic string `json:"anthropic,omitempty" toml:"anthropic,omitempty"`
+	Fallback  string `json:"fallback,omitempty" toml:"fallback,omitempty"`
+}
+
+// AdapterFallback configures the optional `claude -p` driven third
+// backend. Disabled by default. When enabled, every field is
+// required: the registry refuses to start the listener with a
+// partial configuration. See docs/openai-adapter.md for the
+// trigger semantics and which OpenAI fields are silently dropped.
+type AdapterFallback struct {
+	// Enabled toggles the entire fallback subsystem. When false,
+	// NewRegistry skips all validation below.
+	Enabled bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	// Trigger picks when the fallback fires. One of:
+	//   "explicit"          - only when an alias resolves to
+	//                         backend = "fallback".
+	//   "on_oauth_failure"  - only when a direct-OAuth request
+	//                         errors.
+	//   "both"              - explicit aliases plus oauth-failure
+	//                         escalation.
+	Trigger string `json:"trigger,omitempty" toml:"trigger,omitempty"`
+	// Binary is an explicit path to the `claude` CLI. Empty falls
+	// back to the daemon's resolver (deps.ResolveClaude).
+	Binary string `json:"binary,omitempty" toml:"binary,omitempty"`
+	// Timeout is the per-request wall clock as a duration string
+	// ("120s", "2m"). Required when Enabled.
+	Timeout string `json:"timeout,omitempty" toml:"timeout,omitempty"`
+	// MaxConcurrent caps in-flight `claude -p` subprocesses with a
+	// pool separate from the OAuth semaphore. Required when Enabled.
+	MaxConcurrent int `json:"maxConcurrent,omitempty" toml:"max_concurrent,omitempty"`
+	// AllowedFamilies whitelists which family slugs the fallback
+	// will service. Required (non-empty) when Enabled. Slugs must
+	// exist in cfg.Families.
+	AllowedFamilies []string `json:"allowedFamilies,omitempty" toml:"allowed_families,omitempty"`
+	// ScratchSubdir is appended to deps.ScratchDir for the cwd of
+	// every spawned `claude -p`. Required (non-empty) when Enabled
+	// so transcripts land somewhere the discovery scanner skips.
+	ScratchSubdir string `json:"scratchSubdir,omitempty" toml:"scratch_subdir,omitempty"`
+	// StreamPassthrough, when true, parses `claude -p` stream-json
+	// stdout into OpenAI SSE chunks and honors req.Stream. When
+	// false, req.Stream = true returns 400.
+	StreamPassthrough bool `json:"streamPassthrough,omitempty" toml:"stream_passthrough,omitempty"`
+	// DropUnsupported silently ignores OpenAI request fields the
+	// CLI cannot honor (reasoning_effort, thinking) and emits a
+	// debug log instead of returning 400.
+	DropUnsupported bool `json:"dropUnsupported,omitempty" toml:"drop_unsupported,omitempty"`
+	// SuppressHookEnv, when true, sets CLYDE_DISABLE_DAEMON=1 and
+	// CLYDE_SUPPRESS_HOOKS=1 on the spawned subprocess so the
+	// SessionStart hook chain does not recurse back into the
+	// daemon. Recommended on.
+	SuppressHookEnv bool `json:"suppressHookEnv,omitempty" toml:"suppress_hook_env,omitempty"`
+	// FailureEscalation picks which error surface bubbles to the
+	// client when both the OAuth attempt and the fallback attempt
+	// fail. One of "fallback_error" or "oauth_error".
+	FailureEscalation string `json:"failureEscalation,omitempty" toml:"failure_escalation,omitempty"`
+	// ForwardToShunt opts the trigger path into a shunt instead of
+	// (or in addition to) `claude -p`. When ForwardToShunt.Enabled
+	// is true, the dispatcher forwards to the named shunt before
+	// trying `claude -p`.
+	ForwardToShunt AdapterFallbackShunt `json:"forwardToShunt,omitempty" toml:"forward_to_shunt,omitempty"`
+	// CLIAliases maps a family slug declared in cfg.Families to
+	// the short name `claude -p --model` accepts (e.g. "opus",
+	// "sonnet", "haiku"). Required (non-empty) when Enabled. Every
+	// key must exist in cfg.Families.
+	CLIAliases map[string]string `json:"cliAliases,omitempty" toml:"cli_aliases,omitempty"`
+}
+
+// AdapterFallbackShunt opts the fallback dispatcher into routing
+// trigger-fired requests at a configured shunt instead of (or before)
+// the `claude -p` subprocess.
+type AdapterFallbackShunt struct {
+	// Enabled toggles the shunt forwarding leg of the fallback.
+	Enabled bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	// Shunt names an entry in cfg.Shunts. Required when Enabled.
+	Shunt string `json:"shunt,omitempty" toml:"shunt,omitempty"`
+}
+
+// AdapterImpersonation holds the three Claude Code identity signals
+// the adapter mirrors on every /v1/messages call. All three fields
+// are required at registry construction; missing values fail fast
+// rather than silently demote the request to the lower-quota bucket.
+type AdapterImpersonation struct {
+	// BetaHeader is the comma-joined value of the anthropic-beta
+	// request header. Drives both auth (REDACTED-OAUTH-BETA) and
+	// feature flags (effort-2025-11-24, REDACTED-CC-BETA).
+	BetaHeader string `json:"betaHeader,omitempty" toml:"beta_header,omitempty"`
+	// UserAgent is the value of the User-Agent request header.
+	// Pinned to a real CLI version string so the request matches
+	// the bucket the upstream CLI lands in.
+	UserAgent string `json:"userAgent,omitempty" toml:"user_agent,omitempty"`
+	// SystemPromptPrefix is prepended to every outgoing system
+	// prompt because /v1/messages discriminates the OAuth bucket on
+	// system content too. Caller-supplied system text is preserved
+	// after the prefix.
+	SystemPromptPrefix string `json:"systemPromptPrefix,omitempty" toml:"system_prompt_prefix,omitempty"`
+}
+
+// AdapterFamily describes one Claude model family and the cross
+// product of efforts, thinking modes, and context windows the
+// registry expands into individual aliases. The registry generator
+// produces aliases of shape
+// `clyde-<family>[-<effort>][-<ctx>][-thinking-<mode>]`.
+type AdapterFamily struct {
+	// Model is the wire-level Anthropic model id (e.g.
+	// "claude-opus-4-7"). The Contexts entries may add a wire
+	// suffix (e.g. "[1m]") when calling /v1/messages.
+	Model string `json:"model,omitempty" toml:"model,omitempty"`
+	// Efforts enumerates effort tiers the wire API accepts for this
+	// family. Empty means the server rejects effort on this family
+	// (the registry will refuse caller-supplied effort with 400).
+	Efforts []string `json:"efforts,omitempty" toml:"efforts,omitempty"`
+	// ThinkingModes enumerates the thinking modes the wire API
+	// accepts. Always at least default+enabled+disabled for
+	// thinking-capable families; adaptive is gated server-side.
+	ThinkingModes []string `json:"thinkingModes,omitempty" toml:"thinking_modes,omitempty"`
+	// MaxOutputTokens caps this family's output. Used to derive
+	// thinking.budget_tokens (budget = max - 1) per the CLI's
+	// invariant.
+	MaxOutputTokens int `json:"maxOutputTokens,omitempty" toml:"max_output_tokens,omitempty"`
+	// SupportsTools declares whether this family accepts the
+	// Anthropic tools/tool_choice request fields. There is no
+	// default: NewRegistry rejects a family with the field unset
+	// (nil pointer means "user did not say"). Set true for opus,
+	// sonnet, haiku-4-5; set false for legacy text-only snapshots.
+	SupportsTools *bool `json:"supportsTools,omitempty" toml:"supports_tools,omitempty"`
+	// SupportsVision declares whether this family accepts image
+	// content blocks on user messages. Same fail-loud contract as
+	// SupportsTools.
+	SupportsVision *bool `json:"supportsVision,omitempty" toml:"supports_vision,omitempty"`
+	// Contexts pairs an advertised context window (tokens) with an
+	// alias suffix and a wire suffix. At least one entry required.
+	Contexts []AdapterModelContext `json:"contexts,omitempty" toml:"contexts,omitempty"`
+}
+
+// AdapterModelContext binds one context-window variant for a family.
+// The alias suffix is appended to the public alias; the wire suffix
+// is appended to the model id sent to /v1/messages (e.g. "[1m]" for
+// the 1M-context Opus snapshot).
+type AdapterModelContext struct {
+	Tokens      int    `json:"tokens,omitempty" toml:"tokens,omitempty"`
+	AliasSuffix string `json:"aliasSuffix,omitempty" toml:"alias_suffix,omitempty"`
+	WireSuffix  string `json:"wireSuffix,omitempty" toml:"wire_suffix,omitempty"`
+}
+
+// AdapterModel describes one backend the adapter can route to.
+// Backend is either "claude" or "shunt". For claude backends, Model
+// names the real Claude model passed through via --model. Context
+// sets the advertised context window. Efforts names the allowed
+// reasoning effort tiers for this model. The first entry is the
+// default when the request does not specify one.
+type AdapterModel struct {
+	Backend string   `json:"backend,omitempty" toml:"backend,omitempty"`
+	Model   string   `json:"model,omitempty" toml:"model,omitempty"`
+	Context int      `json:"context,omitempty" toml:"context,omitempty"`
+	Efforts []string `json:"efforts,omitempty" toml:"efforts,omitempty"`
+	// Shunt names an entry in AdapterConfig.Shunts for backend "shunt".
+	Shunt string `json:"shunt,omitempty" toml:"shunt,omitempty"`
+}
+
+// AdapterShunt points to an upstream OpenAI compatible endpoint.
+type AdapterShunt struct {
+	BaseURL string `json:"baseUrl,omitempty" toml:"base_url,omitempty"`
+	APIKey  string `json:"apiKey,omitempty" toml:"api_key,omitempty"`
+	// APIKeyEnv lets the user keep the secret out of the config
+	// file. When set the adapter reads os.Getenv(APIKeyEnv) at
+	// request time.
+	APIKeyEnv string `json:"apiKeyEnv,omitempty" toml:"api_key_env,omitempty"`
+	// Model overrides the model name forwarded upstream. Empty
+	// means pass the caller's model string through unchanged.
+	Model string `json:"model,omitempty" toml:"model,omitempty"`
 }
 
 // SearchConfig configures the LLM backend for conversation search.
@@ -104,9 +452,10 @@ type SearchClaude struct {
 
 // Defaults are session defaults applied to all sessions.
 type Defaults struct {
-	RemoteControl bool   `json:"remoteControl,omitempty" toml:"remote_control,omitempty"`
-	Model         string `json:"model,omitempty" toml:"model,omitempty"`
-	EffortLevel   string `json:"effortLevel,omitempty" toml:"effort_level,omitempty"`
+	RemoteControl   bool   `json:"remoteControl,omitempty" toml:"remote_control,omitempty"`
+	Model           string `json:"model,omitempty" toml:"model,omitempty"`
+	EffortLevel     string `json:"effortLevel,omitempty" toml:"effort_level,omitempty"`
+	AnthropicAPIKey string `json:"anthropicApiKey,omitempty" toml:"anthropic_api_key,omitempty"`
 }
 
 // Profile represents a named preset of session settings.

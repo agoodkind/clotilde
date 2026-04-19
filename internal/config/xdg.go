@@ -6,14 +6,14 @@ import (
 	"path/filepath"
 )
 
-const appName = "clotilde"
+const appName = "clyde"
 
-// DefaultStateDir returns the XDG-derived state directory for clotilde.
+// DefaultStateDir returns the XDG-derived state directory for clyde.
 //
 // Resolution:
 //
-//	$XDG_STATE_HOME/clotilde    (if $XDG_STATE_HOME is set)
-//	~/.local/state/clotilde      (XDG spec default)
+//	$XDG_STATE_HOME/clyde    (if $XDG_STATE_HOME is set)
+//	~/.local/state/clyde      (XDG spec default)
 func DefaultStateDir() string {
 	base := os.Getenv("XDG_STATE_HOME")
 	if base == "" {
@@ -39,7 +39,7 @@ func RuntimeDir() string {
 	return filepath.Join(os.TempDir(), fmt.Sprintf("%s-%d", appName, uid))
 }
 
-// DaemonSocketPath returns the Unix socket path for the clotilde daemon.
+// DaemonSocketPath returns the Unix socket path for the clyde daemon.
 func DaemonSocketPath() string {
 	return filepath.Join(RuntimeDir(), "daemon.sock")
 }
@@ -49,7 +49,7 @@ func SessionRuntimeDir(wrapperID string) string {
 	return filepath.Join(RuntimeDir(), "sessions", wrapperID)
 }
 
-// EnsureRuntimeDir creates the clotilde runtime directory with correct permissions.
+// EnsureRuntimeDir creates the clyde runtime directory with correct permissions.
 // XDG spec requires 0700 for XDG_RUNTIME_DIR contents.
 func EnsureRuntimeDir() error {
 	dir := RuntimeDir()

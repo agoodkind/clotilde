@@ -8,45 +8,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/fgrehm/clotilde/internal/config"
-	"github.com/fgrehm/clotilde/internal/util"
+	"goodkind.io/clyde/internal/config"
 )
-
-var _ = Describe("Load", func() {
-	var tempDir string
-	var clotildeRoot string
-
-	BeforeEach(func() {
-		tempDir = GinkgoT().TempDir()
-		clotildeRoot = filepath.Join(tempDir, config.ClotildeDir)
-		err := util.EnsureDir(clotildeRoot)
-		Expect(err).NotTo(HaveOccurred())
-	})
-
-	It("should return error if config file doesn't exist", func() {
-		_, err := config.Load(clotildeRoot)
-		Expect(err).To(HaveOccurred())
-	})
-})
-
-var _ = Describe("LoadOrDefault", func() {
-	var tempDir string
-	var clotildeRoot string
-
-	BeforeEach(func() {
-		tempDir = GinkgoT().TempDir()
-		clotildeRoot = filepath.Join(tempDir, config.ClotildeDir)
-		err := util.EnsureDir(clotildeRoot)
-		Expect(err).NotTo(HaveOccurred())
-	})
-
-	It("should return default config if file doesn't exist", func() {
-		loaded, err := config.LoadOrDefault(clotildeRoot)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(loaded).NotTo(BeNil())
-		Expect(loaded.Profiles).To(BeEmpty())
-	})
-})
 
 var _ = Describe("NewConfig", func() {
 	It("should create config with defaults", func() {
@@ -85,7 +48,7 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 		tmpDir := GinkgoT().TempDir()
 		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
 
-		globalDir := filepath.Join(tmpDir, "clotilde")
+		globalDir := filepath.Join(tmpDir, "clyde")
 		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
 		data, _ := json.Marshal(map[string]any{
 			"profiles": map[string]any{
@@ -97,54 +60,5 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 		cfg, err := config.LoadGlobalOrDefault()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(cfg.Profiles["quick"].Model).To(Equal("haiku"))
-	})
-})
-
-var _ = Describe("MergedProfiles", func() {
-	var tmpDir string
-	var clotildeRoot string
-	var origXDG string
-
-	BeforeEach(func() {
-		tmpDir = GinkgoT().TempDir()
-		clotildeRoot = filepath.Join(tmpDir, "project", config.ClotildeDir)
-		Expect(util.EnsureDir(clotildeRoot)).To(Succeed())
-
-		origXDG = os.Getenv("XDG_CONFIG_HOME")
-		globalDir := filepath.Join(tmpDir, "xdg")
-		Expect(os.MkdirAll(filepath.Join(globalDir, "clotilde"), 0o755)).To(Succeed())
-		_ = os.Setenv("XDG_CONFIG_HOME", globalDir)
-	})
-
-	AfterEach(func() {
-		if origXDG == "" {
-			_ = os.Unsetenv("XDG_CONFIG_HOME")
-		} else {
-			_ = os.Setenv("XDG_CONFIG_HOME", origXDG)
-		}
-	})
-
-	writeGlobalConfig := func(profiles map[string]config.Profile) {
-		globalDir := os.Getenv("XDG_CONFIG_HOME")
-		data, err := json.Marshal(&config.Config{Profiles: profiles})
-		Expect(err).NotTo(HaveOccurred())
-		Expect(os.WriteFile(filepath.Join(globalDir, "clotilde", "config.json"), data, 0o644)).To(Succeed())
-	}
-
-	It("returns global profiles when only global config has profiles", func() {
-		writeGlobalConfig(map[string]config.Profile{
-			"quick": {Model: "haiku"},
-		})
-
-		merged, err := config.MergedProfiles(clotildeRoot)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(merged).To(HaveKey("quick"))
-		Expect(merged["quick"].Model).To(Equal("haiku"))
-	})
-
-	It("returns empty map when neither config has profiles", func() {
-		merged, err := config.MergedProfiles(clotildeRoot)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(merged).To(BeEmpty())
 	})
 })
