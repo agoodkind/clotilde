@@ -8,8 +8,8 @@ package daemon
 import (
 	"sync"
 
-	"github.com/fgrehm/clotilde/api/daemonpb"
-	"github.com/fgrehm/clotilde/internal/transcript"
+	clydev1 "goodkind.io/clyde/api/clyde/v1"
+	"goodkind.io/clyde/internal/transcript"
 )
 
 // transcriptHub fans transcript tail lines out to multiple
@@ -22,7 +22,7 @@ type transcriptHub struct {
 
 type hubEntry struct {
 	tailer       *transcript.Tailer
-	subscribers  map[chan *daemonpb.TranscriptLine]struct{}
+	subscribers  map[chan *clydev1.TailTranscriptResponse]struct{}
 	transcriptPath string
 	stop         chan struct{}
 }
@@ -35,7 +35,7 @@ func newTranscriptHub() *transcriptHub {
 // given session id. The first subscriber for a session triggers the
 // tailer to open. The returned cleanup function unsubscribes and
 // stops the tailer when the last subscriber leaves.
-func (h *transcriptHub) Subscribe(sessionID, path string, startOffset int64) (<-chan *daemonpb.TranscriptLine, func(), error) {
+func (h *transcriptHub) Subscribe(sessionID, path string, startOffset int64) (<-chan *clydev1.TailTranscriptResponse, func(), error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -47,7 +47,7 @@ func (h *transcriptHub) Subscribe(sessionID, path string, startOffset int64) (<-
 		}
 		entry = &hubEntry{
 			tailer:         t,
-			subscribers:    make(map[chan *daemonpb.TranscriptLine]struct{}),
+			subscribers:    make(map[chan *clydev1.TailTranscriptResponse]struct{}),
 			transcriptPath: path,
 			stop:           make(chan struct{}),
 		}
@@ -55,7 +55,7 @@ func (h *transcriptHub) Subscribe(sessionID, path string, startOffset int64) (<-
 		go h.fanOut(sessionID, entry)
 	}
 
-	ch := make(chan *daemonpb.TranscriptLine, 64)
+	ch := make(chan *clydev1.TailTranscriptResponse, 64)
 	entry.subscribers[ch] = struct{}{}
 
 	cleanup := func() {
@@ -89,7 +89,7 @@ func (h *transcriptHub) fanOut(sessionID string, entry *hubEntry) {
 				h.closeAll(sessionID, entry)
 				return
 			}
-			pb := &daemonpb.TranscriptLine{
+			pb := &clydev1.TailTranscriptResponse{
 				ByteOffset: line.ByteOffset,
 				RawJsonl:   line.RawJSONL,
 				Role:       line.Role,
@@ -105,7 +105,7 @@ func (h *transcriptHub) fanOut(sessionID string, entry *hubEntry) {
 	}
 }
 
-func (h *transcriptHub) broadcast(entry *hubEntry, pb *daemonpb.TranscriptLine) {
+func (h *transcriptHub) broadcast(entry *hubEntry, pb *clydev1.TailTranscriptResponse) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for ch := range entry.subscribers {

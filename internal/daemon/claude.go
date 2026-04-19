@@ -75,10 +75,6 @@ func locateRealClaude() string {
 		if resolved == resolvedSelf || filepath.Dir(resolved) == selfDir {
 			continue
 		}
-		base := strings.ToLower(filepath.Base(resolved))
-		if base == "agent-gate" {
-			continue
-		}
 		return candidate
 	}
 	return ""

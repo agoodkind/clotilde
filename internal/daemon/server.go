@@ -1,4 +1,4 @@
-// Package daemon implements the clotilde daemon gRPC server.
+// Package daemon implements the clyde daemon gRPC server.
 // It manages per-session settings.json files so that /model changes
 // in one Claude session don't leak to others. The daemon is lazily
 // started on first use and exits after an idle timeout.
@@ -11,10 +11,8 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -23,22 +21,24 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
-	"github.com/fgrehm/clotilde/api/daemonpb"
-	"github.com/fgrehm/clotilde/internal/bridge"
-	"github.com/fgrehm/clotilde/internal/config"
-	"github.com/fgrehm/clotilde/internal/session"
+	clydev1 "goodkind.io/clyde/api/clyde/v1"
+	"goodkind.io/clyde/internal/bridge"
+	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/session"
 )
 
-// Server implements the AgentGateD gRPC service.
+// Server implements the Clyde gRPC service.
 type Server struct {
-	daemonpb.UnimplementedAgentGateDServer
+	clydev1.UnimplementedClydeServiceServer
 
 	log      *slog.Logger
 	mu       sync.RWMutex
 	sessions map[string]*wrapperSession // keyed by wrapper_id
 
 	watcher        *fsnotify.Watcher
+	bridgeWatcher  *bridge.Watcher
 	globalSettings map[string]any // last-known global settings.json content
 
 	// scanWake fires the discovery scanner immediately. Buffered so a
@@ -48,7 +48,7 @@ type Server struct {
 	// subscribers receive registry events as they happen. The mutex
 	// guards the map so subscribe and broadcast can run concurrently.
 	subMu       sync.Mutex
-	subscribers map[chan *daemonpb.RegistryEvent]struct{}
+	subscribers map[chan *clydev1.SubscribeRegistryResponse]struct{}
 
 	// settingsLocks serialises writes per session name so two callers
 	// updating the same session do not stomp on each other. The lock
@@ -60,7 +60,7 @@ type Server struct {
 	// bridges maps Claude session UUIDs to the bridge URL exposed by
 	// `claude --remote-control`. Populated by the bridge watcher.
 	bridgeMu sync.RWMutex
-	bridges  map[string]*daemonpb.Bridge
+	bridges  map[string]*clydev1.Bridge
 
 	// transcripts hub fans tail lines out to multiple subscribers.
 	transcripts *transcriptHub
@@ -85,38 +85,55 @@ func New(log *slog.Logger) (*Server, error) {
 		log:           log,
 		sessions:      make(map[string]*wrapperSession),
 		watcher:       watcher,
+		bridgeWatcher: nil,
 		scanWake:      make(chan struct{}, 4),
-		subscribers:   make(map[chan *daemonpb.RegistryEvent]struct{}),
+		subscribers:   make(map[chan *clydev1.SubscribeRegistryResponse]struct{}),
 		settingsLocks: make(map[string]*sync.Mutex),
-		bridges:       make(map[string]*daemonpb.Bridge),
+		bridges:       make(map[string]*clydev1.Bridge),
 		transcripts:   newTranscriptHub(),
 	}
 
 	globalPath := globalSettingsPath()
 	if err := s.loadGlobalSettings(); err != nil {
-		log.Warn("global settings load failed on startup", "path", globalPath, "err", err)
+		log.LogAttrs(context.Background(), slog.LevelWarn, "global settings load failed on startup",
+			slog.String("path", globalPath),
+			slog.Any("err", err),
+		)
 	} else {
 		globalModel, _ := s.globalSettings["model"].(string)
-		log.Info("global settings loaded", "path", globalPath, "model", globalModel, "keys", len(s.globalSettings))
+		log.LogAttrs(context.Background(), slog.LevelInfo, "global settings loaded",
+			slog.String("path", globalPath),
+			slog.String("model", globalModel),
+			slog.Int("keys", len(s.globalSettings)),
+		)
 	}
 
 	if err := watcher.Add(globalPath); err != nil {
-		log.Warn("failed to watch global settings", "path", globalPath, "err", err)
+		log.LogAttrs(context.Background(), slog.LevelWarn, "failed to watch global settings",
+			slog.String("path", globalPath),
+			slog.Any("err", err),
+		)
 	} else {
-		log.Info("watching global settings", "path", globalPath)
+		log.LogAttrs(context.Background(), slog.LevelInfo, "watching global settings",
+			slog.String("path", globalPath),
+		)
 	}
 
 	go s.watchGlobalSettings()
 	go s.runDiscoveryScanner()
-	go s.runScratchCleaner()
 
 	if home, err := os.UserHomeDir(); err == nil {
 		sessionsDir := filepath.Join(home, ".claude", "sessions")
 		if w, err := bridge.Start(sessionsDir); err == nil {
+			s.bridgeWatcher = w
 			go s.runBridgeWatcher(w)
-			s.log.Info("bridge watcher started", "dir", sessionsDir)
+			s.log.LogAttrs(context.Background(), slog.LevelInfo, "bridge watcher started",
+				slog.String("dir", sessionsDir),
+			)
 		} else {
-			s.log.Warn("bridge watcher failed", "err", err)
+			s.log.LogAttrs(context.Background(), slog.LevelWarn, "bridge watcher failed",
+				slog.Any("err", err),
+			)
 		}
 	}
 
@@ -124,12 +141,12 @@ func New(log *slog.Logger) (*Server, error) {
 }
 
 // runBridgeWatcher consumes bridge events from the watcher and
-// translates them into RegistryEvent broadcasts.
+// translates them into SubscribeRegistryResponse broadcasts.
 func (s *Server) runBridgeWatcher(w *bridge.Watcher) {
 	// Seed the cache with anything the watcher already saw on its
 	// initial scan so ListBridges callers do not race the first event.
 	for _, b := range w.Snapshot() {
-		s.setBridge(&daemonpb.Bridge{
+		s.setBridge(&clydev1.Bridge{
 			SessionId:       b.SessionID,
 			Pid:             b.PID,
 			BridgeSessionId: b.BridgeSessionID,
@@ -139,7 +156,7 @@ func (s *Server) runBridgeWatcher(w *bridge.Watcher) {
 	for ev := range w.Events() {
 		switch ev.Kind {
 		case bridge.EventOpened:
-			s.setBridge(&daemonpb.Bridge{
+			s.setBridge(&clydev1.Bridge{
 				SessionId:       ev.Bridge.SessionID,
 				Pid:             ev.Bridge.PID,
 				BridgeSessionId: ev.Bridge.BridgeSessionID,
@@ -152,7 +169,7 @@ func (s *Server) runBridgeWatcher(w *bridge.Watcher) {
 }
 
 // runDiscoveryScanner periodically walks ~/.claude/projects and adopts
-// any transcripts whose UUID is not already tracked by clotilde. Runs
+// any transcripts whose UUID is not already tracked by clyde. Runs
 // once at startup, then on a 5 minute cadence. The scanner wakes
 // early when a SIGUSR1 lands or when a TriggerScan RPC arrives so
 // clients can refresh the daemon's view immediately. Errors are logged
@@ -167,9 +184,9 @@ func (s *Server) runDiscoveryScanner() {
 		select {
 		case <-time.After(interval):
 		case <-sig:
-			s.log.Debug("discovery scan wake from SIGUSR1")
+			s.log.LogAttrs(context.Background(), slog.LevelDebug, "discovery scan wake from SIGUSR1")
 		case <-s.scanWake:
-			s.log.Debug("discovery scan wake from TriggerScan RPC")
+			s.log.LogAttrs(context.Background(), slog.LevelDebug, "discovery scan wake from TriggerScan RPC")
 		}
 	}
 }
@@ -185,32 +202,43 @@ func (s *Server) runDiscoveryOnce() {
 	}
 	results, err := session.ScanProjects(projects)
 	if err != nil {
-		s.log.Warn("discovery scan failed", "err", err)
+		s.log.LogAttrs(context.Background(), slog.LevelWarn, "discovery scan failed",
+			slog.Any("err", err),
+		)
 		return
 	}
 	store, err := session.NewGlobalFileStore()
 	if err != nil {
-		s.log.Warn("discovery store init failed", "err", err)
+		s.log.LogAttrs(context.Background(), slog.LevelWarn, "discovery store init failed",
+			slog.Any("err", err),
+		)
 		return
 	}
 	adopted, err := session.AdoptUnknown(store, results)
 	if err != nil {
-		s.log.Warn("discovery adopt failed", "err", err)
+		s.log.LogAttrs(context.Background(), slog.LevelWarn, "discovery adopt failed",
+			slog.Any("err", err),
+		)
 		return
 	}
 	if len(adopted) > 0 {
 		names := make([]string, 0, len(adopted))
 		for _, a := range adopted {
 			names = append(names, a.Name)
-			s.publishEvent(&daemonpb.RegistryEvent{
-				Kind:        daemonpb.RegistryEvent_SESSION_ADOPTED,
+			s.publishEvent(&clydev1.SubscribeRegistryResponse{
+				Kind:        clydev1.SubscribeRegistryResponse_KIND_SESSION_ADOPTED,
 				SessionName: a.Name,
 				SessionId:   a.Metadata.SessionID,
 			})
 		}
-		s.log.Info("discovery adopted sessions", "count", len(adopted), "names", names)
+		s.log.LogAttrs(context.Background(), slog.LevelInfo, "discovery adopted sessions",
+			slog.Int("count", len(adopted)),
+			slog.Any("names", names),
+		)
 	} else {
-		s.log.Debug("discovery scan: nothing new", "transcripts", len(results))
+		s.log.LogAttrs(context.Background(), slog.LevelDebug, "discovery scan: nothing new",
+			slog.Int("transcripts", len(results)),
+		)
 	}
 }
 
@@ -218,21 +246,21 @@ func (s *Server) runDiscoveryOnce() {
 // the request lands; the response carries any sessions adopted by the
 // previous scan tick so the caller has immediate confirmation.
 // Subscribers also receive a SESSION_ADOPTED event for each new entry.
-func (s *Server) TriggerScan(ctx context.Context, _ *daemonpb.TriggerScanRequest) (*daemonpb.TriggerScanResponse, error) {
+func (s *Server) TriggerScan(ctx context.Context, _ *clydev1.TriggerScanRequest) (*clydev1.TriggerScanResponse, error) {
 	select {
 	case s.scanWake <- struct{}{}:
 	default:
 		// Channel is full; another wake is already pending.
 	}
-	return &daemonpb.TriggerScanResponse{}, nil
+	return &clydev1.TriggerScanResponse{}, nil
 }
 
-// SubscribeRegistry streams RegistryEvent values to the client until
+// SubscribeRegistry streams SubscribeRegistryResponse values to the client until
 // the client disconnects. Each subscriber gets its own buffered channel
 // so a slow client cannot block the broadcaster. Events that arrive
 // while a subscriber's buffer is full are dropped for that one client.
-func (s *Server) SubscribeRegistry(_ *daemonpb.SubscribeRegistryRequest, stream daemonpb.AgentGateD_SubscribeRegistryServer) error {
-	ch := make(chan *daemonpb.RegistryEvent, 32)
+func (s *Server) SubscribeRegistry(_ *clydev1.SubscribeRegistryRequest, stream clydev1.ClydeService_SubscribeRegistryServer) error {
+	ch := make(chan *clydev1.SubscribeRegistryResponse, 32)
 
 	s.subMu.Lock()
 	s.subscribers[ch] = struct{}{}
@@ -265,7 +293,7 @@ func (s *Server) SubscribeRegistry(_ *daemonpb.SubscribeRegistryRequest, stream 
 // so that no other process can simultaneously mutate the registry
 // while the rename is in flight. A SESSION_RENAMED event broadcasts
 // the change to every subscriber.
-func (s *Server) RenameSession(_ context.Context, req *daemonpb.RenameSessionRequest) (*daemonpb.RenameSessionResponse, error) {
+func (s *Server) RenameSession(ctx context.Context, req *clydev1.RenameSessionRequest) (*clydev1.RenameSessionResponse, error) {
 	if req.OldName == "" || req.NewName == "" {
 		return nil, status.Error(codes.InvalidArgument, "old_name and new_name are required")
 	}
@@ -276,13 +304,16 @@ func (s *Server) RenameSession(_ context.Context, req *daemonpb.RenameSessionReq
 	if err := store.Rename(req.OldName, req.NewName); err != nil {
 		return nil, status.Errorf(codes.Internal, "rename failed: %v", err)
 	}
-	s.publishEvent(&daemonpb.RegistryEvent{
-		Kind:        daemonpb.RegistryEvent_SESSION_RENAMED,
+	s.publishEvent(&clydev1.SubscribeRegistryResponse{
+		Kind:        clydev1.SubscribeRegistryResponse_KIND_SESSION_RENAMED,
 		SessionName: req.NewName,
 		OldName:     req.OldName,
 	})
-	s.log.Info("session renamed via RPC", "old", req.OldName, "new", req.NewName)
-	return &daemonpb.RenameSessionResponse{}, nil
+	s.log.LogAttrs(ctx, slog.LevelInfo, "session renamed via RPC",
+		slog.String("old", req.OldName),
+		slog.String("new", req.NewName),
+	)
+	return &clydev1.RenameSessionResponse{}, nil
 }
 
 // DeleteSession is the daemon-side delete. It removes the session
@@ -290,7 +321,7 @@ func (s *Server) RenameSession(_ context.Context, req *daemonpb.RenameSessionReq
 // connected dashboards prune the row immediately. Transcript and
 // agent log cleanup live in the cmd layer because they reach into
 // per-project state outside the daemon's scope.
-func (s *Server) DeleteSession(_ context.Context, req *daemonpb.DeleteSessionRequest) (*daemonpb.DeleteSessionResponse, error) {
+func (s *Server) DeleteSession(ctx context.Context, req *clydev1.DeleteSessionRequest) (*clydev1.DeleteSessionResponse, error) {
 	if req.Name == "" {
 		return nil, status.Error(codes.InvalidArgument, "name is required")
 	}
@@ -301,18 +332,20 @@ func (s *Server) DeleteSession(_ context.Context, req *daemonpb.DeleteSessionReq
 	if err := store.Delete(req.Name); err != nil {
 		return nil, status.Errorf(codes.Internal, "delete failed: %v", err)
 	}
-	s.publishEvent(&daemonpb.RegistryEvent{
-		Kind:        daemonpb.RegistryEvent_SESSION_DELETED,
+	s.publishEvent(&clydev1.SubscribeRegistryResponse{
+		Kind:        clydev1.SubscribeRegistryResponse_KIND_SESSION_DELETED,
 		SessionName: req.Name,
 	})
-	s.log.Info("session deleted via RPC", "name", req.Name)
-	return &daemonpb.DeleteSessionResponse{}, nil
+	s.log.LogAttrs(ctx, slog.LevelInfo, "session deleted via RPC",
+		slog.String("name", req.Name),
+	)
+	return &clydev1.DeleteSessionResponse{}, nil
 }
 
 // publishEvent fans an event out to every active subscriber. Slow
 // subscribers whose buffer is full silently drop the event to keep the
 // broadcaster non-blocking.
-func (s *Server) publishEvent(ev *daemonpb.RegistryEvent) {
+func (s *Server) publishEvent(ev *clydev1.SubscribeRegistryResponse) {
 	s.subMu.Lock()
 	defer s.subMu.Unlock()
 	for ch := range s.subscribers {
@@ -325,7 +358,10 @@ func (s *Server) publishEvent(ev *daemonpb.RegistryEvent) {
 
 // Close shuts down the watcher and cleans up all active session runtime dirs.
 func (s *Server) Close() {
-	_ = s.watcher.Close()
+	bridge.Close(s.bridgeWatcher)
+	if s.watcher != nil {
+		_ = s.watcher.Close()
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -333,12 +369,14 @@ func (s *Server) Close() {
 	for _, sess := range s.sessions {
 		_ = os.RemoveAll(config.SessionRuntimeDir(sess.wrapperID))
 	}
-	s.log.Info("daemon closed", "cleaned_sessions", len(s.sessions))
+	s.log.LogAttrs(context.Background(), slog.LevelInfo, "daemon closed",
+		slog.Int("cleaned_sessions", len(s.sessions)),
+	)
 }
 
 // AcquireSession writes a per-session settings.json (global settings with
 // model overridden) and returns the path along with the real claude binary.
-func (s *Server) AcquireSession(ctx context.Context, req *daemonpb.AcquireSessionRequest) (*daemonpb.AcquireSessionResponse, error) {
+func (s *Server) AcquireSession(ctx context.Context, req *clydev1.AcquireSessionRequest) (*clydev1.AcquireSessionResponse, error) {
 	if req.WrapperId == "" || req.WrapperId == "__probe__" {
 		return nil, status.Error(codes.InvalidArgument, "wrapper_id is required")
 	}
@@ -350,16 +388,16 @@ func (s *Server) AcquireSession(ctx context.Context, req *daemonpb.AcquireSessio
 
 	var model, effortLevel string
 	if existingModel != "" || existingEffort != "" {
-		// Re-registering after daemon restart — keep what claude has.
+		// Re-registering after daemon restart  --  keep what claude has.
 		model = existingModel
 		effortLevel = existingEffort
-		s.log.Info("re-acquired session with preserved settings",
-			"wrapper_id", req.WrapperId,
-			"model", model,
-			"effort", effortLevel,
+		s.log.LogAttrs(ctx, slog.LevelInfo, "re-acquired session with preserved settings",
+			slog.String("wrapper_id", req.WrapperId),
+			slog.String("model", model),
+			slog.String("effort", effortLevel),
 		)
 	} else {
-		// Fresh session — resolve from clotilde session settings + global.
+		// Fresh session  --  resolve from clyde session settings + global.
 		model, effortLevel = s.resolveSessionSettings(req.SessionName)
 	}
 
@@ -384,16 +422,16 @@ func (s *Server) AcquireSession(ctx context.Context, req *daemonpb.AcquireSessio
 		return nil, status.Errorf(codes.Internal, "failed to find real claude binary: %v", err)
 	}
 
-	s.log.Info("session acquired",
-		"wrapper_id", req.WrapperId,
-		"session", req.SessionName,
-		"model", model,
-		"settings_file", settingsFile,
-		"claude_bin", realClaude,
-		"active_sessions", len(s.sessions),
+	s.log.LogAttrs(ctx, slog.LevelInfo, "session acquired",
+		slog.String("wrapper_id", req.WrapperId),
+		slog.String("session", req.SessionName),
+		slog.String("model", model),
+		slog.String("settings_file", settingsFile),
+		slog.String("claude_bin", realClaude),
+		slog.Int("active_sessions", len(s.sessions)),
 	)
 
-	return &daemonpb.AcquireSessionResponse{
+	return &clydev1.AcquireSessionResponse{
 		RealClaude:   realClaude,
 		Model:        model,
 		SettingsFile: settingsFile,
@@ -402,7 +440,7 @@ func (s *Server) AcquireSession(ctx context.Context, req *daemonpb.AcquireSessio
 
 // ReleaseSession removes the per-session runtime dir after claude exits.
 // When the last session is released, the idle timer starts.
-func (s *Server) ReleaseSession(ctx context.Context, req *daemonpb.ReleaseSessionRequest) (*daemonpb.ReleaseSessionResponse, error) {
+func (s *Server) ReleaseSession(ctx context.Context, req *clydev1.ReleaseSessionRequest) (*clydev1.ReleaseSessionResponse, error) {
 	s.mu.Lock()
 	sess, ok := s.sessions[req.WrapperId]
 	if ok {
@@ -413,17 +451,19 @@ func (s *Server) ReleaseSession(ctx context.Context, req *daemonpb.ReleaseSessio
 
 	if ok {
 		_ = os.RemoveAll(config.SessionRuntimeDir(sess.wrapperID))
-		s.log.Info("session released",
-			"wrapper_id", req.WrapperId,
-			"session", sess.sessionName,
-			"model", sess.model,
-			"active_sessions", remaining,
+		s.log.LogAttrs(ctx, slog.LevelInfo, "session released",
+			slog.String("wrapper_id", req.WrapperId),
+			slog.String("session", sess.sessionName),
+			slog.String("model", sess.model),
+			slog.Int("active_sessions", remaining),
 		)
 	} else {
-		s.log.Warn("release for unknown session", "wrapper_id", req.WrapperId)
+		s.log.LogAttrs(ctx, slog.LevelWarn, "release for unknown session",
+			slog.String("wrapper_id", req.WrapperId),
+		)
 	}
 
-	return &daemonpb.ReleaseSessionResponse{}, nil
+	return &clydev1.ReleaseSessionResponse{}, nil
 }
 
 // hookEventPayload is the JSON structure sent via HookEvent RPC.
@@ -435,317 +475,52 @@ type hookEventPayload struct {
 }
 
 // HookEvent processes a Claude Code hook event forwarded from a wrapper process.
-func (s *Server) HookEvent(ctx context.Context, req *daemonpb.HookEventRequest) (*daemonpb.HookEventResponse, error) {
+func (s *Server) HookEvent(ctx context.Context, req *clydev1.HookEventRequest) (*clydev1.HookEventResponse, error) {
 	var payload hookEventPayload
 	if err := json.Unmarshal(req.RawJson, &payload); err != nil {
-		return &daemonpb.HookEventResponse{ExitCode: 0}, nil
+		return &clydev1.HookEventResponse{ExitCode: 0}, nil
 	}
 
 	switch payload.Type {
 	case "update_context":
-		// Throttle and de-duplicate. The same session can request a
-		// summary several times per minute when the wrapper acquires
-		// repeatedly. Each fired claude -p subprocess writes to
-		// ~/.claude.json which serialises with Claude Code's bridge
-		// session creation. Without the gate, /remote-control fails
-		// because the writes overlap. The gate enforces one in-flight
-		// summary per session and a five minute cool down between
-		// runs.
-		if s.tryStartContextUpdate(payload.SessionName) {
-			go func() {
-				defer s.finishContextUpdate(payload.SessionName)
-				s.updateSessionContext(payload)
-			}()
-		} else {
-			s.log.Debug("skip context update (throttled)", "session", payload.SessionName)
-		}
+		// Stubbed. The previous implementation shelled out to
+		// `claude -p --model sonnet` which recursed through the
+		// SessionStart hook chain (claude -> clyde hook -> daemon
+		// -> claude -p ...) and fanned out a process tree until the
+		// host ran out of file descriptors. The whole subsystem is
+		// disabled until it is rebuilt against the in-process
+		// adapter. See config.LabelerConfig for the future wiring
+		// point.
+		s.log.LogAttrs(ctx, slog.LevelDebug, "daemon.hook.update_context.stubbed",
+			slog.String("component", "daemon"),
+			slog.String("subject", "hook"),
+			slog.String("session", payload.SessionName),
+		)
 	}
 
-	return &daemonpb.HookEventResponse{ExitCode: 0}, nil
+	return &clydev1.HookEventResponse{ExitCode: 0}, nil
 }
 
-// contextUpdateGate is the throttle and dedupe state for
-// updateSessionContext. inflight tracks per-session goroutines that
-// are already running; lastRun records when the most recent run for
-// each session finished so we can enforce a minimum gap before the
-// next call.
+// adapterScratchDir returns the cwd used for OpenAI adapter spawned
+// claude -p calls. The path is created lazily and cached.
 var (
-	contextGateMu  sync.Mutex
-	contextLastRun = map[string]time.Time{}
-	contextRunning = map[string]bool{}
+	adapterScratchOnce sync.Once
+	adapterScratchPath string
 )
 
-const contextUpdateMinGap = 5 * time.Minute
-
-// tryStartContextUpdate returns true when the caller is allowed to run
-// a fresh context update for this session. It marks the session as
-// running so concurrent calls return false.
-func (s *Server) tryStartContextUpdate(name string) bool {
-	contextGateMu.Lock()
-	defer contextGateMu.Unlock()
-	if contextRunning[name] {
-		return false
-	}
-	if last, ok := contextLastRun[name]; ok {
-		if time.Since(last) < contextUpdateMinGap {
-			return false
-		}
-	}
-	contextRunning[name] = true
-	return true
-}
-
-// finishContextUpdate clears the running flag and records when the run
-// finished so the cool down starts now.
-func (s *Server) finishContextUpdate(name string) {
-	contextGateMu.Lock()
-	defer contextGateMu.Unlock()
-	delete(contextRunning, name)
-	contextLastRun[name] = time.Now()
-}
-
-// updateSessionContext generates a one-sentence context summary via sonnet
-// and stores it in the session metadata. Runs in a background goroutine.
-func (s *Server) updateSessionContext(payload hookEventPayload) {
-	if payload.SessionName == "" || len(payload.Messages) == 0 {
-		return
-	}
-
-	s.log.Info("updating session context", "session", payload.SessionName)
-
-	// Build prompt.
-	// The summary should describe the session's TOPIC, not its current
-	// status. Prior revisions asked "what is this session currently
-	// working on", which Sonnet read as a live-state question and would
-	// answer "Session ended with no active coding task" for sessions
-	// whose last turn was idle. Asking for the topic produces a useful
-	// label regardless of whether the conversation is still in flight.
-	var promptParts []string
-	promptParts = append(promptParts, "Write a topic label of AT MOST 5 words that names what this coding conversation is about. Pretend you are labeling a bookmark tab. Do not describe state. Do not mention whether it is finished. Do not mention message counts. Mention the concrete project, feature, or task by name when evident. Output ONLY the label. No preamble. No trailing punctuation.")
-	promptParts = append(promptParts, "")
-	promptParts = append(promptParts, "Good examples:")
-	promptParts = append(promptParts, "Clotilde tcell TUI rewrite")
-	promptParts = append(promptParts, "MWAN health-check CLI")
-	promptParts = append(promptParts, "Tack node model schema")
-	promptParts = append(promptParts, "")
-
-	// Include project memory if available
-	if payload.WorkspaceRoot != "" {
-		memPath := projectMemoryPathFromRoot(payload.WorkspaceRoot)
-		if memPath != "" {
-			if content, err := os.ReadFile(memPath); err == nil && len(content) > 0 {
-				mem := string(content)
-				if len(mem) > 2000 {
-					mem = mem[:2000]
-				}
-				promptParts = append(promptParts, "Project memory index:")
-				promptParts = append(promptParts, mem)
-				promptParts = append(promptParts, "")
-			}
-		}
-	}
-
-	promptParts = append(promptParts, "Recent messages:")
-	for _, m := range payload.Messages {
-		promptParts = append(promptParts, sanitizePromptLine(m))
-	}
-
-	prompt := strings.Join(promptParts, "\n")
-
-	// Call claude -p --model sonnet
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	claudeBin, err := findRealClaude()
-	if err != nil {
-		s.log.Warn("context update: claude not found", "err", err)
-		return
-	}
-
-	// Run claude -p in a clotilde-owned scratch dir so the resulting
-	// transcript file lands in ~/.claude/projects/<our scratch>/ instead
-	// of ~/.claude/projects/-/ (the encoded form of /). Running from /
-	// also caused macOS TCC prompts because claude tried to inspect
-	// neighbouring system directories.
-	// Anchor claude in a clotilde-owned scratch dir so the resulting
-	// transcript file lands inside ~/Library/Caches/clotilde/... and
-	// not in ~/.claude/projects/-/ (the encoded form of /). The
-	// subprocess inherits the daemon's environment because claude
-	// needs ANTHROPIC_API_KEY and the rest of its npm runtime.
-	cmd := exec.CommandContext(ctx, claudeBin, "-p", "--model", "sonnet", prompt)
-	if scratch := contextScratchDir(); scratch != "" {
-		cmd.Dir = scratch
-	}
-	output, err := cmd.Output()
-	if err != nil {
-		s.log.Warn("context update: claude -p failed", "session", payload.SessionName, "err", err)
-		return
-	}
-
-	summary := strings.TrimSpace(string(output))
-	// Keep only the first line. Sonnet sometimes appends an explanation or
-	// a trailing sentence despite the prompt. We treat the first line as
-	// the label candidate.
-	if idx := strings.IndexAny(summary, "\r\n"); idx >= 0 {
-		summary = strings.TrimSpace(summary[:idx])
-	}
-	// Strip any surrounding quotes or trailing punctuation the model may add.
-	summary = strings.Trim(summary, " \t`\"'")
-	summary = strings.TrimRight(summary, ".!?")
-	// Reject anything that is not a short label. The column shows five
-	// words; we allow a little slack for punctuation but not a sentence.
-	words := strings.Fields(summary)
-	if len(summary) == 0 || len(summary) > 60 || len(words) > 7 {
-		s.log.Warn("context update: bad summary",
-			"session", payload.SessionName,
-			"len", len(summary),
-			"words", len(words),
-			"value", summary)
-		return
-	}
-
-	// Update session metadata in global store
-	store, err := session.NewGlobalFileStore()
-	if err != nil {
-		s.log.Warn("context update: store error", "err", err)
-		return
-	}
-	sess, err := store.Get(payload.SessionName)
-	if err != nil {
-		s.log.Warn("context update: session not found", "session", payload.SessionName, "err", err)
-		return
-	}
-	sess.Metadata.Context = summary
-	// Stamp the message count so the TUI can detect when this summary
-	// becomes stale. Messages may have been filtered or truncated by
-	// the caller; an approximate count is fine for the staleness check.
-	sess.Metadata.ContextMessageCount = len(payload.Messages)
-	if err := store.Update(sess); err != nil {
-		s.log.Warn("context update: update failed", "session", payload.SessionName, "err", err)
-		return
-	}
-
-	s.log.Info("context updated", "session", payload.SessionName, "context", summary)
-}
-
-var (
-	imageMarkerRe  = regexp.MustCompile(`(?i)\[image[^\]]*\]`)
-	absolutePathRe = regexp.MustCompile(`/(?:Users|Volumes|System|Library)/[^\s\]]+`)
-)
-
-// sanitizePromptLine strips image markers and absolute file paths from
-// a message line before it lands in the labeling prompt. claude -p
-// otherwise interprets entries like "[Image #4]" or
-// "/Users/.../Photos Library.photoslibrary/foo" as files to load,
-// triggering macOS TCC prompts for whatever protected directory they
-// reference. The replacement keeps the surrounding text intact so the
-// model still has signal about the conversation topic.
-func sanitizePromptLine(line string) string {
-	out := line
-	out = imageMarkerRe.ReplaceAllString(out, "[image]")
-	out = absolutePathRe.ReplaceAllString(out, "<path>")
-	return out
-}
-
-// contextScratchDir returns a clotilde-owned working directory that
-// the daemon uses as cwd when invoking claude -p for context summaries.
-// Anchoring claude there keeps its transcript files inside the scratch
-// project and stops them from polluting ~/.claude/projects/-/. The dir
-// is created lazily and cached for the life of the process.
-var (
-	scratchDirOnce sync.Once
-	scratchDirPath string
-)
-
-// runScratchCleaner deletes transcripts left behind in
-// ~/.claude/projects/<encoded scratch dir>/ by past claude -p calls
-// for context summaries. Each call writes one file. The files are
-// throwaway: their summary already lives in session metadata. Without
-// pruning the directory grows without bound.
-//
-// The cleaner runs every hour and removes any transcript older than
-// 12 hours. Anything that was useful for debugging in the last half
-// day is preserved so the user can inspect prompt drift.
-func (s *Server) runScratchCleaner() {
-	const interval = 1 * time.Hour
-	const maxAge = 12 * time.Hour
-	for {
-		s.cleanScratchOnce(maxAge)
-		time.Sleep(interval)
-	}
-}
-
-func (s *Server) cleanScratchOnce(maxAge time.Duration) {
-	scratch := contextScratchDir()
-	if scratch == "" {
-		return
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return
-	}
-	encoded := strings.ReplaceAll(scratch, "/", "-")
-	encoded = strings.ReplaceAll(encoded, ".", "-")
-	dir := filepath.Join(home, ".claude", "projects", encoded)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	cutoff := time.Now().Add(-maxAge)
-	removed := 0
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
-			continue
-		}
-		full := filepath.Join(dir, e.Name())
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		if info.ModTime().After(cutoff) {
-			continue
-		}
-		if err := os.Remove(full); err == nil {
-			removed++
-		}
-	}
-	if removed > 0 {
-		s.log.Info("scratch cleaner pruned old summary transcripts", "removed", removed, "dir", dir)
-	}
-}
-
-func contextScratchDir() string {
-	scratchDirOnce.Do(func() {
+func adapterScratchDir() string {
+	adapterScratchOnce.Do(func() {
 		base, err := os.UserCacheDir()
 		if err != nil {
 			return
 		}
-		dir := filepath.Join(base, "clotilde", "context-scratch")
+		dir := filepath.Join(base, "clyde", "adapter-scratch")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return
 		}
-		scratchDirPath = dir
+		adapterScratchPath = dir
 	})
-	return scratchDirPath
-}
-
-// projectMemoryPathFromRoot returns the path to MEMORY.md for a workspace root.
-func projectMemoryPathFromRoot(workspaceRoot string) string {
-	if workspaceRoot == "" {
-		return ""
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	// Encode workspace path the same way Claude does: replace / and . with -
-	encoded := strings.ReplaceAll(workspaceRoot, "/", "-")
-	encoded = strings.ReplaceAll(encoded, ".", "-")
-	memPath := filepath.Join(home, ".claude", "projects", encoded, "memory", "MEMORY.md")
-	if _, statErr := os.Stat(memPath); statErr == nil {
-		return memPath
-	}
-	return ""
+	return adapterScratchPath
 }
 
 // writeSettingsJSON writes a per-session settings.json to the runtime dir,
@@ -767,13 +542,13 @@ func (s *Server) writeSettingsJSON(wrapperID, model, effortLevel string) (string
 	}
 
 	effectiveModel, _ := globalCopy["model"].(string)
-	s.log.Debug("writing per-session settings",
-		"wrapper_id", wrapperID,
-		"global_model", globalModel,
-		"session_model", model,
-		"session_effort", effortLevel,
-		"effective_model", effectiveModel,
-		"settings_keys", len(globalCopy),
+	s.log.LogAttrs(context.Background(), slog.LevelDebug, "writing per-session settings",
+		slog.String("wrapper_id", wrapperID),
+		slog.String("global_model", globalModel),
+		slog.String("session_model", model),
+		slog.String("session_effort", effortLevel),
+		slog.String("effective_model", effectiveModel),
+		slog.Int("settings_keys", len(globalCopy)),
 	)
 
 	data, err := json.MarshalIndent(globalCopy, "", "  ")
@@ -813,18 +588,23 @@ func (s *Server) syncAllSessions() {
 		if currentEffort != "" {
 			sess.effortLevel = currentEffort
 		}
-		s.log.Debug("syncing session",
-			"wrapper_id", sess.wrapperID,
-			"session", sess.sessionName,
-			"preserved_model", sess.model,
-			"preserved_effort", sess.effortLevel,
+		s.log.LogAttrs(context.Background(), slog.LevelDebug, "syncing session",
+			slog.String("wrapper_id", sess.wrapperID),
+			slog.String("session", sess.sessionName),
+			slog.String("preserved_model", sess.model),
+			slog.String("preserved_effort", sess.effortLevel),
 		)
 		if _, err := s.writeSettingsJSON(sess.wrapperID, sess.model, sess.effortLevel); err != nil {
-			s.log.Warn("failed to sync settings", "wrapper_id", sess.wrapperID, "err", err)
+			s.log.LogAttrs(context.Background(), slog.LevelWarn, "failed to sync settings",
+				slog.String("wrapper_id", sess.wrapperID),
+				slog.Any("err", err),
+			)
 		}
 	}
 
-	s.log.Info("global settings synced to all sessions", "active_sessions", len(sessions))
+	s.log.LogAttrs(context.Background(), slog.LevelInfo, "global settings synced to all sessions",
+		slog.Int("active_sessions", len(sessions)),
+	)
 }
 
 // readSessionSettings reads model and effortLevel from a session's current settings.json.
@@ -854,9 +634,13 @@ func (s *Server) watchGlobalSettings() {
 				return
 			}
 			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
-				s.log.Debug("global settings file changed", "event", event.Op.String())
+				s.log.LogAttrs(context.Background(), slog.LevelDebug, "global settings file changed",
+					slog.String("event", event.Op.String()),
+				)
 				if err := s.loadGlobalSettings(); err != nil {
-					s.log.Warn("failed to reload global settings", "err", err)
+					s.log.LogAttrs(context.Background(), slog.LevelWarn, "failed to reload global settings",
+						slog.Any("err", err),
+					)
 					continue
 				}
 				s.syncAllSessions()
@@ -866,7 +650,9 @@ func (s *Server) watchGlobalSettings() {
 			if !ok {
 				return
 			}
-			s.log.Warn("settings watcher error", "err", err)
+			s.log.LogAttrs(context.Background(), slog.LevelWarn, "settings watcher error",
+				slog.Any("err", err),
+			)
 		}
 	}
 }
@@ -877,7 +663,9 @@ func (s *Server) loadGlobalSettings() error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			s.log.Debug("global settings file not found, using empty", "path", path)
+			s.log.LogAttrs(context.Background(), slog.LevelDebug, "global settings file not found, using empty",
+				slog.String("path", path),
+			)
 			s.mu.Lock()
 			s.globalSettings = make(map[string]any)
 			s.mu.Unlock()
@@ -892,7 +680,10 @@ func (s *Server) loadGlobalSettings() error {
 	}
 
 	model, _ := settings["model"].(string)
-	s.log.Debug("global settings reloaded", "model", model, "keys", len(settings))
+	s.log.LogAttrs(context.Background(), slog.LevelDebug, "global settings reloaded",
+		slog.String("model", model),
+		slog.Int("keys", len(settings)),
+	)
 
 	s.mu.Lock()
 	s.globalSettings = settings
@@ -902,7 +693,7 @@ func (s *Server) loadGlobalSettings() error {
 }
 
 // resolveSessionSettings loads per-session model and effortLevel from the
-// clotilde session's settings.json, falling back to global settings for any
+// clyde session's settings.json, falling back to global settings for any
 // field not set at the session level.
 func (s *Server) resolveSessionSettings(sessionName string) (model, effortLevel string) {
 	s.mu.RLock()
@@ -914,12 +705,15 @@ func (s *Server) resolveSessionSettings(sessionName string) (model, effortLevel 
 	effortLevel = globalEffort
 
 	if sessionName == "" {
-		s.log.Debug("no session name, using global settings", "model", model, "effort", effortLevel)
+		s.log.LogAttrs(context.Background(), slog.LevelDebug, "no session name, using global settings",
+			slog.String("model", model),
+			slog.String("effort", effortLevel),
+		)
 		return model, effortLevel
 	}
 
-	// Load session-specific settings from clotilde's global store
-	sessSettings := loadClotildeSessionSettings(sessionName)
+	// Load session-specific settings from clyde's global store
+	sessSettings := loadClydeSessionSettings(sessionName)
 	if sessSettings != nil {
 		if sessSettings.Model != "" {
 			model = sessSettings.Model
@@ -927,17 +721,25 @@ func (s *Server) resolveSessionSettings(sessionName string) (model, effortLevel 
 		if sessSettings.EffortLevel != "" {
 			effortLevel = sessSettings.EffortLevel
 		}
-		s.log.Debug("resolved session settings", "session", sessionName, "model", model, "effort", effortLevel)
+		s.log.LogAttrs(context.Background(), slog.LevelDebug, "resolved session settings",
+			slog.String("session", sessionName),
+			slog.String("model", model),
+			slog.String("effort", effortLevel),
+		)
 	} else {
-		s.log.Debug("no clotilde session settings, using global", "session", sessionName, "model", model, "effort", effortLevel)
+		s.log.LogAttrs(context.Background(), slog.LevelDebug, "no clyde session settings, using global",
+			slog.String("session", sessionName),
+			slog.String("model", model),
+			slog.String("effort", effortLevel),
+		)
 	}
 
 	return model, effortLevel
 }
 
-// loadClotildeSessionSettings loads settings.json from the clotilde global
+// loadClydeSessionSettings loads settings.json from the clyde global
 // store for the given session name. Returns nil if not found.
-func loadClotildeSessionSettings(sessionName string) *session.Settings {
+func loadClydeSessionSettings(sessionName string) *session.Settings {
 	sessionDir := config.GetSessionDir(config.GlobalDataDir(), sessionName)
 	settingsPath := filepath.Join(sessionDir, "settings.json")
 
@@ -962,19 +764,19 @@ func globalSettingsPath() string {
 }
 
 // ListActiveSessions returns all currently acquired sessions.
-func (s *Server) ListActiveSessions(_ context.Context, _ *daemonpb.ListActiveSessionsRequest) (*daemonpb.ListActiveSessionsResponse, error) {
+func (s *Server) ListActiveSessions(_ context.Context, _ *clydev1.ListActiveSessionsRequest) (*clydev1.ListActiveSessionsResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var active []*daemonpb.ActiveSession
+	var active []*clydev1.ActiveSession
 	for wid, sess := range s.sessions {
-		active = append(active, &daemonpb.ActiveSession{
+		active = append(active, &clydev1.ActiveSession{
 			SessionName: sess.sessionName,
 			WrapperId:   wid,
 		})
 	}
 
-	return &daemonpb.ListActiveSessionsResponse{Sessions: active}, nil
+	return &clydev1.ListActiveSessionsResponse{Sessions: active}, nil
 }
 
 // settingsLockFor returns the per-session mutex used to serialise
@@ -995,7 +797,7 @@ func (s *Server) settingsLockFor(name string) *sync.Mutex {
 // settings.json. Mutations from the TUI, CLI, and any other client
 // go through here so writes serialise per session and broadcast to
 // every subscriber on completion.
-func (s *Server) UpdateSessionSettings(_ context.Context, req *daemonpb.UpdateSessionSettingsRequest) (*daemonpb.UpdateSessionSettingsResponse, error) {
+func (s *Server) UpdateSessionSettings(ctx context.Context, req *clydev1.UpdateSessionSettingsRequest) (*clydev1.UpdateSessionSettingsResponse, error) {
 	if req.Name == "" {
 		return nil, status.Error(codes.InvalidArgument, "name is required")
 	}
@@ -1043,26 +845,26 @@ func (s *Server) UpdateSessionSettings(_ context.Context, req *daemonpb.UpdateSe
 	if err := store.SaveSettings(req.Name, current); err != nil {
 		return nil, status.Errorf(codes.Internal, "save settings: %v", err)
 	}
-	s.publishEvent(&daemonpb.RegistryEvent{
-		Kind:        daemonpb.RegistryEvent_SESSION_UPDATED,
+	s.publishEvent(&clydev1.SubscribeRegistryResponse{
+		Kind:        clydev1.SubscribeRegistryResponse_KIND_SESSION_UPDATED,
 		SessionName: req.Name,
 		SessionId:   sess.Metadata.SessionID,
 	})
-	s.log.Info("session settings updated via RPC",
-		"session", req.Name,
-		"remote_control", current.RemoteControl,
-		"model", current.Model,
-		"effort", current.EffortLevel,
+	s.log.LogAttrs(ctx, slog.LevelInfo, "session settings updated via RPC",
+		slog.String("session", req.Name),
+		slog.Bool("remote_control", current.RemoteControl),
+		slog.String("model", current.Model),
+		slog.String("effort", current.EffortLevel),
 	)
-	return &daemonpb.UpdateSessionSettingsResponse{}, nil
+	return &clydev1.UpdateSessionSettingsResponse{}, nil
 }
 
-// UpdateGlobalSettings mutates the clotilde global config defaults
+// UpdateGlobalSettings mutates the clyde global config defaults
 // from any client. Currently only the remote_control default is
 // exposed because that is the field this work needs. The handler
 // rewrites the global config TOML through internal/config so callers
 // do not need filesystem access.
-func (s *Server) UpdateGlobalSettings(_ context.Context, req *daemonpb.UpdateGlobalSettingsRequest) (*daemonpb.UpdateGlobalSettingsResponse, error) {
+func (s *Server) UpdateGlobalSettings(ctx context.Context, req *clydev1.UpdateGlobalSettingsRequest) (*clydev1.UpdateGlobalSettingsResponse, error) {
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "load global: %v", err)
@@ -1084,25 +886,33 @@ func (s *Server) UpdateGlobalSettings(_ context.Context, req *daemonpb.UpdateGlo
 	if err := config.SaveGlobal(cfg); err != nil {
 		return nil, status.Errorf(codes.Internal, "save global: %v", err)
 	}
-	s.log.Info("global settings updated via RPC", "remote_control", cfg.Defaults.RemoteControl)
-	return &daemonpb.UpdateGlobalSettingsResponse{}, nil
+	s.log.LogAttrs(ctx, slog.LevelInfo, "global settings updated via RPC",
+		slog.Bool("remote_control", cfg.Defaults.RemoteControl),
+	)
+	return &clydev1.UpdateGlobalSettingsResponse{}, nil
 }
 
 // ListBridges returns the current set of active claude --remote-control
 // bridges as discovered by the bridge watcher.
-func (s *Server) ListBridges(_ context.Context, _ *daemonpb.ListBridgesRequest) (*daemonpb.ListBridgesResponse, error) {
+func (s *Server) ListBridges(_ context.Context, _ *clydev1.ListBridgesRequest) (*clydev1.ListBridgesResponse, error) {
+	return &clydev1.ListBridgesResponse{Bridges: s.snapshotBridges()}, nil
+}
+
+// snapshotBridges returns a copy of the daemon's current bridge map.
+// The webapp uses it to render the active bridge list without going
+// through the gRPC surface.
+func (s *Server) snapshotBridges() []*clydev1.Bridge {
 	s.bridgeMu.RLock()
 	defer s.bridgeMu.RUnlock()
-	out := make([]*daemonpb.Bridge, 0, len(s.bridges))
+	out := make([]*clydev1.Bridge, 0, len(s.bridges))
 	for _, b := range s.bridges {
-		bb := *b
-		out = append(out, &bb)
+		out = append(out, proto.Clone(b).(*clydev1.Bridge))
 	}
-	return &daemonpb.ListBridgesResponse{Bridges: out}, nil
+	return out
 }
 
 // setBridge records a bridge entry and broadcasts BRIDGE_OPENED.
-func (s *Server) setBridge(b *daemonpb.Bridge) {
+func (s *Server) setBridge(b *clydev1.Bridge) {
 	if b == nil || b.SessionId == "" {
 		return
 	}
@@ -1113,13 +923,16 @@ func (s *Server) setBridge(b *daemonpb.Bridge) {
 	if exists && prev != nil && prev.BridgeSessionId == b.BridgeSessionId {
 		return
 	}
-	s.publishEvent(&daemonpb.RegistryEvent{
-		Kind:            daemonpb.RegistryEvent_BRIDGE_OPENED,
+	s.publishEvent(&clydev1.SubscribeRegistryResponse{
+		Kind:            clydev1.SubscribeRegistryResponse_KIND_BRIDGE_OPENED,
 		SessionId:       b.SessionId,
 		BridgeSessionId: b.BridgeSessionId,
 		BridgeUrl:       b.Url,
 	})
-	s.log.Info("bridge opened", "session_id", b.SessionId, "bridge", b.BridgeSessionId)
+	s.log.LogAttrs(context.Background(), slog.LevelInfo, "bridge opened",
+		slog.String("session_id", b.SessionId),
+		slog.String("bridge", b.BridgeSessionId),
+	)
 }
 
 // removeBridge clears a bridge entry and broadcasts BRIDGE_CLOSED.
@@ -1134,13 +947,16 @@ func (s *Server) removeBridge(sessionID string) {
 	if !ok || prev == nil {
 		return
 	}
-	s.publishEvent(&daemonpb.RegistryEvent{
-		Kind:            daemonpb.RegistryEvent_BRIDGE_CLOSED,
+	s.publishEvent(&clydev1.SubscribeRegistryResponse{
+		Kind:            clydev1.SubscribeRegistryResponse_KIND_BRIDGE_CLOSED,
 		SessionId:       sessionID,
 		BridgeSessionId: prev.BridgeSessionId,
 		BridgeUrl:       prev.Url,
 	})
-	s.log.Info("bridge closed", "session_id", sessionID, "bridge", prev.BridgeSessionId)
+	s.log.LogAttrs(context.Background(), slog.LevelInfo, "bridge closed",
+		slog.String("session_id", sessionID),
+		slog.String("bridge", prev.BridgeSessionId),
+	)
 }
 
 // resolveTranscriptPath looks up the transcript path for a Claude
@@ -1172,7 +988,7 @@ func resolveTranscriptPath(sessionID string) string {
 // TailTranscript streams transcript lines for a session via the hub.
 // Reference counted so multiple subscribers share one underlying
 // fsnotify watcher per transcript.
-func (s *Server) TailTranscript(req *daemonpb.TailTranscriptRequest, stream daemonpb.AgentGateD_TailTranscriptServer) error {
+func (s *Server) TailTranscript(req *clydev1.TailTranscriptRequest, stream clydev1.ClydeService_TailTranscriptServer) error {
 	if req.SessionId == "" {
 		return status.Error(codes.InvalidArgument, "session_id is required")
 	}
@@ -1213,17 +1029,17 @@ func (s *Server) TailTranscript(req *daemonpb.TailTranscriptRequest, stream daem
 // per session inject socket the wrapper opened on launch. Returns
 // delivered=false when no socket exists, so callers can fall back to
 // telling the user to use the local terminal directly.
-func (s *Server) SendToSession(_ context.Context, req *daemonpb.SendToSessionRequest) (*daemonpb.SendToSessionResponse, error) {
+func (s *Server) SendToSession(_ context.Context, req *clydev1.SendToSessionRequest) (*clydev1.SendToSessionResponse, error) {
 	if req.SessionId == "" {
 		return nil, status.Error(codes.InvalidArgument, "session_id is required")
 	}
 	socketPath := injectSocketPath(req.SessionId)
 	if _, err := os.Stat(socketPath); err != nil {
-		return &daemonpb.SendToSessionResponse{Delivered: false}, nil
+		return &clydev1.SendToSessionResponse{Delivered: false}, nil
 	}
 	conn, err := net.DialTimeout("unix", socketPath, 2*time.Second)
 	if err != nil {
-		return &daemonpb.SendToSessionResponse{Delivered: false}, nil
+		return &clydev1.SendToSessionResponse{Delivered: false}, nil
 	}
 	defer conn.Close()
 	payload := req.Text
@@ -1232,9 +1048,9 @@ func (s *Server) SendToSession(_ context.Context, req *daemonpb.SendToSessionReq
 	}
 	n, werr := conn.Write([]byte(payload))
 	if werr != nil {
-		return &daemonpb.SendToSessionResponse{Delivered: false, BytesWritten: int32(n)}, nil
+		return &clydev1.SendToSessionResponse{Delivered: false, BytesWritten: int32(n)}, nil
 	}
-	return &daemonpb.SendToSessionResponse{Delivered: true, BytesWritten: int32(n)}, nil
+	return &clydev1.SendToSessionResponse{Delivered: true, BytesWritten: int32(n)}, nil
 }
 
 // injectSocketPath returns the per session Unix socket path the
@@ -1251,7 +1067,7 @@ func injectSocketPath(sessionID string) string {
 // session local path.
 func injectSocketDir() string {
 	if xdg := os.Getenv("XDG_RUNTIME_DIR"); xdg != "" {
-		return filepath.Join(xdg, "clotilde", "inject")
+		return filepath.Join(xdg, "clyde", "inject")
 	}
-	return filepath.Join(os.TempDir(), "clotilde-inject")
+	return filepath.Join(os.TempDir(), "clyde-inject")
 }

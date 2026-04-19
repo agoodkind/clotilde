@@ -15,14 +15,14 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/fgrehm/clotilde/api/daemonpb"
-	"github.com/fgrehm/clotilde/internal/config"
+	clydev1 "goodkind.io/clyde/api/clyde/v1"
+	"goodkind.io/clyde/internal/config"
 )
 
-// Client is a gRPC client for the clotilde daemon.
+// Client is a gRPC client for the clyde daemon.
 type Client struct {
 	conn *grpc.ClientConn
-	rpc  daemonpb.AgentGateDClient
+	rpc  clydev1.ClydeServiceClient
 }
 
 // NudgeDiscoveryScan asks the daemon to run an immediate discovery
@@ -34,7 +34,7 @@ func NudgeDiscoveryScan() {
 	if c, err := ConnectOrStart(context.Background()); err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		_, _ = c.rpc.TriggerScan(ctx, &daemonpb.TriggerScanRequest{})
+		_, _ = c.rpc.TriggerScan(ctx, &clydev1.TriggerScanRequest{})
 		c.conn.Close()
 		return
 	}
@@ -58,7 +58,7 @@ func RenameSessionViaDaemon(ctx context.Context, oldName, newName string) (bool,
 	defer c.conn.Close()
 	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	_, err = c.rpc.RenameSession(rpcCtx, &daemonpb.RenameSessionRequest{
+	_, err = c.rpc.RenameSession(rpcCtx, &clydev1.RenameSessionRequest{
 		OldName: oldName,
 		NewName: newName,
 	})
@@ -79,32 +79,32 @@ func DeleteSessionViaDaemon(ctx context.Context, name string) (bool, error) {
 	defer c.conn.Close()
 	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	_, err = c.rpc.DeleteSession(rpcCtx, &daemonpb.DeleteSessionRequest{Name: name})
+	_, err = c.rpc.DeleteSession(rpcCtx, &clydev1.DeleteSessionRequest{Name: name})
 	if err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-// SubscribeRegistry opens a long-lived stream of RegistryEvent values
+// SubscribeRegistry opens a long-lived stream of SubscribeRegistryResponse values
 // from the daemon. The returned channel closes when the stream
 // terminates for any reason. Callers can stop subscribing by calling
 // the returned cancel function. The channel buffers a few events so a
 // slow consumer does not lose recent activity, but the daemon will
 // drop events once a per-subscriber buffer fills.
-func SubscribeRegistry(parent context.Context) (<-chan *daemonpb.RegistryEvent, context.CancelFunc, error) {
+func SubscribeRegistry(parent context.Context) (<-chan *clydev1.SubscribeRegistryResponse, context.CancelFunc, error) {
 	c, err := ConnectOrStart(parent)
 	if err != nil {
 		return nil, nil, err
 	}
 	ctx, cancel := context.WithCancel(parent)
-	stream, err := c.rpc.SubscribeRegistry(ctx, &daemonpb.SubscribeRegistryRequest{})
+	stream, err := c.rpc.SubscribeRegistry(ctx, &clydev1.SubscribeRegistryRequest{})
 	if err != nil {
 		cancel()
 		c.conn.Close()
 		return nil, nil, err
 	}
-	out := make(chan *daemonpb.RegistryEvent, 8)
+	out := make(chan *clydev1.SubscribeRegistryResponse, 8)
 	go func() {
 		defer close(out)
 		defer c.conn.Close()
@@ -126,7 +126,7 @@ func SubscribeRegistry(parent context.Context) (<-chan *daemonpb.RegistryEvent, 
 // findDaemonPID locates the running daemon's pid via launchctl. Returns
 // 0 with no error when the daemon is not registered.
 func findDaemonPID() (int, error) {
-	out, err := exec.Command("launchctl", "list", "io.goodkind.clotilde.daemon").Output()
+	out, err := exec.Command("launchctl", "list", "io.goodkind.clyde.daemon").Output()
 	if err != nil {
 		return 0, err
 	}
@@ -203,8 +203,8 @@ func connect(ctx context.Context) (*Client, error) {
 	}
 
 	// Verify the daemon is alive by making a trivial RPC.
-	client := &Client{conn: conn, rpc: daemonpb.NewAgentGateDClient(conn)}
-	_, err = client.rpc.AcquireSession(dialCtx, &daemonpb.AcquireSessionRequest{
+	client := &Client{conn: conn, rpc: clydev1.NewClydeServiceClient(conn)}
+	_, err = client.rpc.AcquireSession(dialCtx, &clydev1.AcquireSessionRequest{
 		WrapperId: "__probe__",
 	})
 	// InvalidArgument means the daemon is alive (it rejected the probe).
@@ -253,12 +253,12 @@ func searchString(s, sub string) bool {
 // simultaneously.
 func ConnectOrStart(ctx context.Context) (*Client, error) {
 	// Tests and CI can disable the daemon entirely by setting
-	// CLOTILDE_DISABLE_DAEMON=1. The wrapper then behaves as if the
+	// CLYDE_DISABLE_DAEMON=1. The wrapper then behaves as if the
 	// daemon is unreachable, which gives the classic stdio path
 	// without settings injection, global sync, or context summary
 	// side effects.
-	if os.Getenv("CLOTILDE_DISABLE_DAEMON") != "" {
-		return nil, fmt.Errorf("daemon disabled by CLOTILDE_DISABLE_DAEMON")
+	if os.Getenv("CLYDE_DISABLE_DAEMON") != "" {
+		return nil, fmt.Errorf("daemon disabled by CLYDE_DISABLE_DAEMON")
 	}
 	// Fast path: daemon is already running.
 	if client, err := connect(ctx); err == nil {
@@ -317,11 +317,11 @@ func (c *Client) Close() error {
 }
 
 // AcquireSession asks the daemon to create a per-session settings file.
-func (c *Client) AcquireSession(wrapperID, sessionName string) (*daemonpb.AcquireSessionResponse, error) {
+func (c *Client) AcquireSession(wrapperID, sessionName string) (*clydev1.AcquireSessionResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	return c.rpc.AcquireSession(ctx, &daemonpb.AcquireSessionRequest{
+	return c.rpc.AcquireSession(ctx, &clydev1.AcquireSessionRequest{
 		WrapperId:   wrapperID,
 		SessionName: sessionName,
 	})
@@ -332,7 +332,7 @@ func (c *Client) ReleaseSession(wrapperID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := c.rpc.ReleaseSession(ctx, &daemonpb.ReleaseSessionRequest{
+	_, err := c.rpc.ReleaseSession(ctx, &clydev1.ReleaseSessionRequest{
 		WrapperId: wrapperID,
 	})
 	return err
@@ -352,7 +352,7 @@ func (c *Client) UpdateContext(sessionName, workspaceRoot string, messages []str
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	_, err := c.rpc.HookEvent(ctx, &daemonpb.HookEventRequest{
+	_, err := c.rpc.HookEvent(ctx, &clydev1.HookEventRequest{
 		RawJson: payload,
 	})
 	return err
@@ -370,9 +370,9 @@ func UpdateSessionRemoteControlViaDaemon(ctx context.Context, name string, enabl
 	defer c.conn.Close()
 	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	_, err = c.rpc.UpdateSessionSettings(rpcCtx, &daemonpb.UpdateSessionSettingsRequest{
+	_, err = c.rpc.UpdateSessionSettings(rpcCtx, &clydev1.UpdateSessionSettingsRequest{
 		Name:       name,
-		Settings:   &daemonpb.Settings{RemoteControl: enabled},
+		Settings:   &clydev1.Settings{RemoteControl: enabled},
 		UpdateMask: []string{"remote_control"},
 	})
 	if err != nil {
@@ -382,7 +382,7 @@ func UpdateSessionRemoteControlViaDaemon(ctx context.Context, name string, enabl
 }
 
 // UpdateGlobalRemoteControlViaDaemon flips the global default. The
-// daemon serialises writes to ~/.config/clotilde/config.toml.
+// daemon serialises writes to ~/.config/clyde/config.toml.
 func UpdateGlobalRemoteControlViaDaemon(ctx context.Context, enabled bool) (bool, error) {
 	c, err := ConnectOrStart(ctx)
 	if err != nil {
@@ -391,8 +391,8 @@ func UpdateGlobalRemoteControlViaDaemon(ctx context.Context, enabled bool) (bool
 	defer c.conn.Close()
 	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	_, err = c.rpc.UpdateGlobalSettings(rpcCtx, &daemonpb.UpdateGlobalSettingsRequest{
-		Defaults:   &daemonpb.GlobalDefaults{RemoteControl: enabled},
+	_, err = c.rpc.UpdateGlobalSettings(rpcCtx, &clydev1.UpdateGlobalSettingsRequest{
+		Defaults:   &clydev1.GlobalDefaults{RemoteControl: enabled},
 		UpdateMask: []string{"remote_control"},
 	})
 	if err != nil {
@@ -402,7 +402,7 @@ func UpdateGlobalRemoteControlViaDaemon(ctx context.Context, enabled bool) (bool
 }
 
 // ListBridgesViaDaemon fetches the daemon's current bridge map.
-func ListBridgesViaDaemon(ctx context.Context) ([]*daemonpb.Bridge, error) {
+func ListBridgesViaDaemon(ctx context.Context) ([]*clydev1.Bridge, error) {
 	c, err := ConnectOrStart(ctx)
 	if err != nil {
 		return nil, err
@@ -410,7 +410,7 @@ func ListBridgesViaDaemon(ctx context.Context) ([]*daemonpb.Bridge, error) {
 	defer c.conn.Close()
 	rpcCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	resp, err := c.rpc.ListBridges(rpcCtx, &daemonpb.ListBridgesRequest{})
+	resp, err := c.rpc.ListBridges(rpcCtx, &clydev1.ListBridgesRequest{})
 	if err != nil {
 		return nil, err
 	}
@@ -429,7 +429,7 @@ func SendToSessionViaDaemon(ctx context.Context, sessionID, text string) (bool, 
 	defer c.conn.Close()
 	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	resp, err := c.rpc.SendToSession(rpcCtx, &daemonpb.SendToSessionRequest{
+	resp, err := c.rpc.SendToSession(rpcCtx, &clydev1.SendToSessionRequest{
 		SessionId: sessionID,
 		Text:      text,
 	})
@@ -442,13 +442,13 @@ func SendToSessionViaDaemon(ctx context.Context, sessionID, text string) (bool, 
 // TailTranscriptViaDaemon opens the daemon's transcript stream for
 // the given session id. The returned channel closes when the stream
 // terminates. Calling cancel stops the subscription.
-func TailTranscriptViaDaemon(parent context.Context, sessionID string, startOffset int64) (<-chan *daemonpb.TranscriptLine, context.CancelFunc, error) {
+func TailTranscriptViaDaemon(parent context.Context, sessionID string, startOffset int64) (<-chan *clydev1.TailTranscriptResponse, context.CancelFunc, error) {
 	c, err := ConnectOrStart(parent)
 	if err != nil {
 		return nil, nil, err
 	}
 	ctx, cancel := context.WithCancel(parent)
-	stream, err := c.rpc.TailTranscript(ctx, &daemonpb.TailTranscriptRequest{
+	stream, err := c.rpc.TailTranscript(ctx, &clydev1.TailTranscriptRequest{
 		SessionId:     sessionID,
 		StartAtOffset: startOffset,
 	})
@@ -457,7 +457,7 @@ func TailTranscriptViaDaemon(parent context.Context, sessionID string, startOffs
 		c.conn.Close()
 		return nil, nil, err
 	}
-	out := make(chan *daemonpb.TranscriptLine, 64)
+	out := make(chan *clydev1.TailTranscriptResponse, 64)
 	go func() {
 		defer close(out)
 		defer c.conn.Close()
@@ -476,7 +476,7 @@ func TailTranscriptViaDaemon(parent context.Context, sessionID string, startOffs
 	return out, cancel, nil
 }
 
-const launchAgentLabel = "io.goodkind.clotilde.daemon"
+const launchAgentLabel = "io.goodkind.clyde.daemon"
 
 // startDaemon starts the daemon process. On macOS, tries launchctl kickstart
 // first (if the LaunchAgent is registered), falling back to direct spawn.
@@ -487,7 +487,7 @@ func startDaemon() error {
 		if err := exec.Command("launchctl", "kickstart", target).Run(); err == nil {
 			return nil // launchd started it
 		}
-		// launchctl failed (agent not registered) — fall through to direct spawn
+		// launchctl failed (agent not registered)  --  fall through to direct spawn
 	}
 
 	return spawnDaemonDirect()
@@ -512,21 +512,3 @@ func spawnDaemonDirect() error {
 	return nil
 }
 
-// ListActiveSessions returns the names of all currently active sessions.
-func (c *Client) ListActiveSessions() ([]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	resp, err := c.rpc.ListActiveSessions(ctx, &daemonpb.ListActiveSessionsRequest{})
-	if err != nil {
-		return nil, err
-	}
-
-	var names []string
-	for _, s := range resp.Sessions {
-		if s.SessionName != "" {
-			names = append(names, s.SessionName)
-		}
-	}
-	return names, nil
-}
