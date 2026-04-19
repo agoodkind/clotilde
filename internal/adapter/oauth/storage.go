@@ -15,19 +15,18 @@ import (
 )
 
 // readCredentials returns the parsed Tokens from whichever store is
-// available. macOS prefers Keychain; on read failure we fall through
-// to ~/.claude/.credentials.json. Returns nil tokens when neither
-// store has a claudeAiOauth entry.
-func readCredentials(dir string) (*Tokens, error) {
-	if runtime.GOOS == "darwin" {
-		if t, err := readKeychain(); err == nil && t != nil {
+// available. macOS prefers Keychain when keychainService is non-empty;
+// on read failure we fall through to ~/.claude/.credentials.json.
+func readCredentials(dir, keychainService string) (*Tokens, error) {
+	if runtime.GOOS == "darwin" && keychainService != "" {
+		if t, err := readKeychain(keychainService); err == nil && t != nil {
 			return t, nil
 		}
 	}
 	return readCredentialsFile(filepath.Join(dir, ".credentials.json"))
 }
 
-func readKeychain() (*Tokens, error) {
+func readKeychain(keychainService string) (*Tokens, error) {
 	cmd := exec.Command("security", "find-generic-password",
 		"-s", keychainService, "-w")
 	cmd.Stderr = io.Discard

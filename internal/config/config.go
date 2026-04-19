@@ -1,6 +1,10 @@
 package config
 
-import "time"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 // Config represents the clyde configuration.
 type Config struct {
@@ -24,8 +28,8 @@ type Config struct {
 	// Disabled by default so existing installs see no behavior change
 	// until the user opts in.
 	Prune PruneConfig `json:"prune,omitempty" toml:"prune,omitempty"`
-	// OAuth configures the daemon's background Anthropic OAuth token
-	// refresher. The refresher keeps a warm access token in the keychain
+	// OAuth configures the daemon's background OAuth token refresher.
+	// The refresher keeps a warm access token in the keychain
 	// so the adapter direct-OAuth path almost never has to refresh
 	// inline.
 	OAuth OAuthConfig `json:"oauth,omitempty" toml:"oauth,omitempty"`
@@ -41,7 +45,23 @@ type Config struct {
 
 // LoggingConfig carries global logging settings.
 type LoggingConfig struct {
-	Level string `json:"level,omitempty" toml:"level,omitempty"`
+	Level    string          `json:"level,omitempty" toml:"level,omitempty"`
+	Rotation LoggingRotation `json:"rotation,omitempty" toml:"rotation,omitempty"`
+	Body     LoggingBody     `json:"body,omitempty" toml:"body,omitempty"`
+}
+
+// LoggingRotation controls file rotation behavior for the unified clyde logger.
+type LoggingRotation struct {
+	MaxSizeMB  int   `json:"max_size_mb,omitempty" toml:"max_size_mb,omitempty"`
+	MaxBackups int   `json:"max_backups,omitempty" toml:"max_backups,omitempty"`
+	MaxAgeDays int   `json:"max_age_days,omitempty" toml:"max_age_days,omitempty"`
+	Compress   *bool `json:"compress,omitempty" toml:"compress,omitempty"`
+}
+
+// LoggingBody controls how adapter.chat.raw emits request bodies.
+type LoggingBody struct {
+	Mode  string `json:"mode,omitempty" toml:"mode,omitempty"`
+	MaxKB int    `json:"max_kb,omitempty" toml:"max_kb,omitempty"`
 }
 
 // LabelerConfig drives the (currently stubbed) session topic labeler.
@@ -145,22 +165,18 @@ type AdapterConfig struct {
 	// itself. Empty disables fallback and unknown aliases 400.
 	FallbackShunt string `json:"fallbackShunt,omitempty" toml:"fallback_shunt,omitempty"`
 	// DirectOAuth, when true, routes Claude backend requests straight
-	// at https://REDACTED-UPSTREAM/v1/messages using the user's
-	// Claude.ai OAuth token from the local keychain. This bypasses
-	// the `claude -p` subprocess entirely so no per-call session
-	// transcripts get written under ~/.claude/projects/ and the
-	// adapter avoids the ~150ms node startup cost. Default false to
-	// preserve the legacy shellout path until users opt in. Requires
-	// `claude /login` to have populated the keychain.
+	// at the configured messages URL using the user's OAuth token from
+	// the local keychain.
 	DirectOAuth bool `json:"directOauth,omitempty" toml:"direct_oauth,omitempty"`
-	// Impersonation carries the three Anthropic Claude Code identity
-	// signals (anthropic-beta, User-Agent, system prompt prefix) the
-	// adapter sends on every /v1/messages call so requests land in
-	// the higher-quota Claude Code OAuth bucket. There are no
-	// compiled-in defaults: NewRegistry rejects an empty
-	// Impersonation. The repo-root `clyde.example.toml` carries a
-	// validated reference stanza users copy into their config.
-	Impersonation AdapterImpersonation `json:"impersonation,omitempty" toml:"impersonation,omitempty"`
+	// OAuth holds token endpoint, API URLs, and keychain label for the
+	// direct-OAuth path and the background token refresher. Required
+	// when DirectOAuth is true; also required when the global [oauth]
+	// refresher is enabled so periodic refresh can reach the token URL.
+	OAuth AdapterOAuth `json:"oauth,omitempty" toml:"oauth,omitempty"`
+	// ClientIdentity carries wire request-shape fields (headers and
+	// body-side billing line inputs). There are no compiled-in defaults:
+	// NewRegistry rejects empty required fields. See clyde.example.toml.
+	ClientIdentity AdapterClientIdentity `json:"clientIdentity,omitempty" toml:"client_identity,omitempty"`
 	// Logprobs configures per-backend handling of the OpenAI
 	// logprobs / top_logprobs request fields. Anthropic does not
 	// emit logprobs and `claude -p` does not either; shunts may.
@@ -193,8 +209,7 @@ type AdapterLogprobs struct {
 // AdapterFallback configures the optional `claude -p` driven third
 // backend. Disabled by default. When enabled, every field is
 // required: the registry refuses to start the listener with a
-// partial configuration. See docs/openai-adapter.md for the
-// trigger semantics and which OpenAI fields are silently dropped.
+// partial configuration.
 type AdapterFallback struct {
 	// Enabled toggles the entire fallback subsystem. When false,
 	// NewRegistry skips all validation below.
@@ -263,24 +278,59 @@ type AdapterFallbackShunt struct {
 	Shunt string `json:"shunt,omitempty" toml:"shunt,omitempty"`
 }
 
-// AdapterImpersonation holds the three Claude Code identity signals
-// the adapter mirrors on every /v1/messages call. All three fields
-// are required at registry construction; missing values fail fast
-// rather than silently demote the request to the lower-quota bucket.
-type AdapterImpersonation struct {
-	// BetaHeader is the comma-joined value of the anthropic-beta
-	// request header. Drives both auth (REDACTED-OAUTH-BETA) and
-	// feature flags (effort-2025-11-24, REDACTED-CC-BETA).
-	BetaHeader string `json:"betaHeader,omitempty" toml:"beta_header,omitempty"`
-	// UserAgent is the value of the User-Agent request header.
-	// Pinned to a real CLI version string so the request matches
-	// the bucket the upstream CLI lands in.
-	UserAgent string `json:"userAgent,omitempty" toml:"user_agent,omitempty"`
-	// SystemPromptPrefix is prepended to every outgoing system
-	// prompt because /v1/messages discriminates the OAuth bucket on
-	// system content too. Caller-supplied system text is preserved
-	// after the prefix.
-	SystemPromptPrefix string `json:"systemPromptPrefix,omitempty" toml:"system_prompt_prefix,omitempty"`
+// AdapterOAuth holds endpoints and OAuth client metadata supplied by
+// the operator. No defaults are compiled into clyde.
+type AdapterOAuth struct {
+	TokenURL         string   `json:"tokenUrl,omitempty" toml:"token_url,omitempty"`
+	MessagesURL      string   `json:"messagesUrl,omitempty" toml:"messages_url,omitempty"`
+	ClientID         string   `json:"clientId,omitempty" toml:"client_id,omitempty"`
+	AnthropicBeta    string   `json:"anthropicBeta,omitempty" toml:"anthropic_beta,omitempty"`
+	AnthropicVersion string   `json:"anthropicVersion,omitempty" toml:"anthropic_version,omitempty"`
+	KeychainService  string   `json:"keychainService,omitempty" toml:"keychain_service,omitempty"`
+	Scopes           []string `json:"scopes,omitempty" toml:"scopes,omitempty"`
+}
+
+// ValidateOAuthFields returns an error if any required field is empty.
+func (o AdapterOAuth) ValidateOAuthFields() error {
+	if o.TokenURL == "" {
+		return fmt.Errorf("adapter: [adapter.oauth].token_url must be set")
+	}
+	if o.MessagesURL == "" {
+		return fmt.Errorf("adapter: [adapter.oauth].messages_url must be set")
+	}
+	if o.ClientID == "" {
+		return fmt.Errorf("adapter: [adapter.oauth].client_id must be set")
+	}
+	if o.AnthropicBeta == "" {
+		return fmt.Errorf("adapter: [adapter.oauth].anthropic_beta must be set")
+	}
+	if o.AnthropicVersion == "" {
+		return fmt.Errorf("adapter: [adapter.oauth].anthropic_version must be set")
+	}
+	if o.KeychainService == "" {
+		return fmt.Errorf("adapter: [adapter.oauth].keychain_service must be set")
+	}
+	if len(o.Scopes) == 0 {
+		return fmt.Errorf("adapter: [adapter.oauth].scopes must be non-empty")
+	}
+	return nil
+}
+
+// AdapterClientIdentity holds header and body-side wire fields for
+// direct HTTP chat. All listed fields are required at registry
+// construction unless noted.
+type AdapterClientIdentity struct {
+	BetaHeader              string `json:"betaHeader,omitempty" toml:"beta_header,omitempty"`
+	UserAgent               string `json:"userAgent,omitempty" toml:"user_agent,omitempty"`
+	SystemPromptPrefix      string `json:"systemPromptPrefix,omitempty" toml:"system_prompt_prefix,omitempty"`
+	StainlessPackageVersion string `json:"stainlessPackageVersion,omitempty" toml:"stainless_package_version,omitempty"`
+	StainlessRuntime        string `json:"stainlessRuntime,omitempty" toml:"stainless_runtime,omitempty"`
+	StainlessRuntimeVersion string `json:"stainlessRuntimeVersion,omitempty" toml:"stainless_runtime_version,omitempty"`
+	CCVersion               string `json:"ccVersion,omitempty" toml:"cc_version,omitempty"`
+	CCEntrypoint            string `json:"ccEntrypoint,omitempty" toml:"cc_entrypoint,omitempty"`
+	// PerContextBetas maps a substring of the wire model id (e.g. a
+	// context suffix) to an extra anthropic-beta flag for that variant.
+	PerContextBetas map[string]string `json:"perContextBetas,omitempty" toml:"per_context_betas,omitempty"`
 }
 
 // AdapterFamily describes one Claude model family and the cross
@@ -289,8 +339,8 @@ type AdapterImpersonation struct {
 // produces aliases of shape
 // `clyde-<family>[-<effort>][-<ctx>][-thinking-<mode>]`.
 type AdapterFamily struct {
-	// Model is the wire-level Anthropic model id (e.g.
-	// "claude-opus-4-7"). The Contexts entries may add a wire
+	// Model is the wire-level model id (e.g. a snapshot name). The
+	// Contexts entries may add a wire
 	// suffix (e.g. "[1m]") when calling /v1/messages.
 	Model string `json:"model,omitempty" toml:"model,omitempty"`
 	// Efforts enumerates effort tiers the wire API accepts for this
@@ -370,6 +420,8 @@ type SearchConfig struct {
 type SearchLocal struct {
 	URL                string        `json:"url,omitempty" toml:"url,omitempty"`
 	Token              string        `json:"token,omitempty" toml:"token,omitempty"`
+	EmbeddingURL       string        `json:"embeddingUrl,omitempty" toml:"embedding_url,omitempty"`
+	EmbeddingToken     string        `json:"embeddingToken,omitempty" toml:"embedding_token,omitempty"`
 	Model              string        `json:"model,omitempty" toml:"model,omitempty"`
 	RerankModel        string        `json:"rerankModel,omitempty" toml:"rerank_model,omitempty"`
 	DeepModel          string        `json:"deepModel,omitempty" toml:"deep_model,omitempty"`
@@ -383,6 +435,25 @@ type SearchLocal struct {
 	ContextLength      int           `json:"contextLength,omitempty" toml:"context_length,omitempty"`
 	EmbeddingThreshold float64       `json:"embeddingThreshold,omitempty" toml:"embedding_threshold,omitempty"`
 	EmbeddingModel     string        `json:"embeddingModel,omitempty" toml:"embedding_model,omitempty"`
+}
+
+// ResolvedEmbeddingURL returns the base URL for OpenAI-style embedding
+// requests (scheme plus host plus port, no trailing slash, no /v1 suffix).
+// When EmbeddingURL is empty it falls back to URL.
+func (s SearchLocal) ResolvedEmbeddingURL() string {
+	if trimmed := strings.TrimSpace(s.EmbeddingURL); trimmed != "" {
+		return strings.TrimSuffix(trimmed, "/")
+	}
+	return strings.TrimSuffix(strings.TrimSpace(s.URL), "/")
+}
+
+// ResolvedEmbeddingToken returns the bearer token for the embedding
+// endpoint. When EmbeddingToken is empty it falls back to Token.
+func (s SearchLocal) ResolvedEmbeddingToken() string {
+	if s.EmbeddingToken != "" {
+		return s.EmbeddingToken
+	}
+	return s.Token
 }
 
 // SearchLayer defines one stage of the search pipeline.

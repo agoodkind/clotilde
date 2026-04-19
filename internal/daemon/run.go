@@ -134,7 +134,7 @@ func startWebApp(log *slog.Logger, srv *Server) func() {
 //
 // Returns an error when the adapter is enabled but
 // adapter.New rejects the config (missing families, default model,
-// or impersonation triplet). The daemon then exits non-zero so
+// or required client_identity fields). The daemon then exits non-zero so
 // launchd reports the failure instead of silently running without
 // the OpenAI surface the user asked for.
 func startAdapter(log *slog.Logger) (func(), error) {
@@ -153,7 +153,7 @@ func startAdapter(log *slog.Logger) (func(), error) {
 		ResolveClaude: findRealClaude,
 		ScratchDir:    adapterScratchDir,
 	}
-	srv, err := adapter.New(cfg.Adapter, deps, log)
+	srv, err := adapter.New(cfg.Adapter, cfg.Logging, deps, log)
 	if err != nil {
 		log.Error("adapter.registry.invalid_config",
 			"component", "adapter",

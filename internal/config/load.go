@@ -27,6 +27,9 @@ func loadConfig(dir string) (*Config, error) {
 		if err := toml.Unmarshal(data, &cfg); err != nil {
 			return nil, fmt.Errorf("failed to parse %s: %w", tomlPath, err)
 		}
+		if err := applyLoggingDefaultsAndValidate(&cfg); err != nil {
+			return nil, fmt.Errorf("invalid %s: %w", tomlPath, err)
+		}
 		return &cfg, nil
 	}
 
@@ -35,6 +38,9 @@ func loadConfig(dir string) (*Config, error) {
 	if util.FileExists(jsonPath) {
 		var cfg Config
 		if err := util.ReadJSON(jsonPath, &cfg); err != nil {
+			return nil, err
+		}
+		if err := applyLoggingDefaultsAndValidate(&cfg); err != nil {
 			return nil, err
 		}
 		return &cfg, nil
@@ -50,8 +56,11 @@ func LoadGlobalOrDefault() (*Config, error) {
 	cfg, err := loadConfig(globalDir)
 	if err != nil {
 		if os.IsNotExist(err) || strings.Contains(err.Error(), "no such file") {
-			return NewConfig(), nil
+			return NewConfigWithDefaults(), nil
 		}
+		return nil, err
+	}
+	if err := applyLoggingDefaultsAndValidate(cfg); err != nil {
 		return nil, err
 	}
 	return cfg, nil
@@ -80,6 +89,62 @@ func SaveGlobal(cfg *Config) error {
 	if err := os.Rename(tmp, tomlPath); err != nil {
 		os.Remove(tmp)
 		return fmt.Errorf("rename: %w", err)
+	}
+	return nil
+}
+
+func NewConfigWithDefaults() *Config {
+	cfg := NewConfig()
+	_ = applyLoggingDefaultsAndValidate(cfg)
+	return cfg
+}
+
+func applyLoggingDefaultsAndValidate(cfg *Config) error {
+	if cfg == nil {
+		return nil
+	}
+	logLevel := strings.ToLower(strings.TrimSpace(cfg.Logging.Level))
+	cfg.Logging.Level = logLevel
+
+	if cfg.Logging.Rotation.MaxSizeMB <= 0 {
+		cfg.Logging.Rotation.MaxSizeMB = 5
+	}
+	if cfg.Logging.Rotation.MaxBackups < 0 {
+		return fmt.Errorf("logging.rotation.max_backups must be >= 0")
+	}
+	if cfg.Logging.Rotation.MaxBackups == 0 {
+		cfg.Logging.Rotation.MaxBackups = 5
+	}
+	if cfg.Logging.Rotation.MaxAgeDays < 0 {
+		return fmt.Errorf("logging.rotation.max_age_days must be >= 0")
+	}
+	if cfg.Logging.Rotation.MaxAgeDays == 0 {
+		cfg.Logging.Rotation.MaxAgeDays = 14
+	}
+	if cfg.Logging.Rotation.Compress == nil {
+		v := true
+		cfg.Logging.Rotation.Compress = &v
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(cfg.Logging.Body.Mode))
+	if mode == "" {
+		mode = "summary"
+	}
+	cfg.Logging.Body.Mode = mode
+
+	if cfg.Logging.Body.MaxKB <= 0 {
+		cfg.Logging.Body.MaxKB = 32
+	}
+	if cfg.Logging.Body.MaxKB > 256 {
+		return fmt.Errorf("logging.body.max_kb must be between 1 and 256")
+	}
+	switch cfg.Logging.Body.Mode {
+	case "", "summary", "whitelist", "raw", "off":
+	default:
+		return fmt.Errorf("logging.body.mode must be one of summary|whitelist|raw|off")
+	}
+	if cfg.Logging.Body.Mode == "" {
+		cfg.Logging.Body.Mode = "summary"
 	}
 	return nil
 }

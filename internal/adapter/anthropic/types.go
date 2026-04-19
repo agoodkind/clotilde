@@ -7,34 +7,24 @@ import (
 	"net/http"
 )
 
-// MessagesURL is the Anthropic Messages endpoint.
-const MessagesURL = "https://REDACTED-UPSTREAM/v1/messages"
-
 // MaxOutputTokens is the upper bound the adapter requests when the
-// caller doesn't pin one. Anthropic requires max_tokens; OpenAI's
+// caller doesn't pin one. The messages API requires max_tokens; OpenAI's
 // API defaults to "model max" which we approximate generously.
 const MaxOutputTokens = 8192
 
-// Config carries the Claude Code identity signals the client mirrors
-// on every /v1/messages call. There are no compiled-in defaults;
-// values come from [adapter.impersonation] in the user's toml. See
-// the AdapterImpersonation doc on the config package for the drift
-// profile of each field.
+// Config carries wire header and body-side values for the messages
+// API. Populated from the user's config; callers validate before New.
 type Config struct {
-	// BetaHeader is the comma-joined value of the anthropic-beta
-	// header. At minimum it must contain REDACTED-OAUTH-BETA (for OAuth
-	// bearer auth). REDACTED-CC-BETA routes into the Claude Code
-	// OAuth bucket; effort-2025-11-24 unlocks output_config.effort.
-	BetaHeader string
-	// UserAgent is the value of the User-Agent header. Pinned to a
-	// real CLI version string so the request matches the upstream
-	// CLI's bucket.
-	UserAgent string
-	// SystemPromptPrefix is prepended to every outgoing system
-	// prompt. /v1/messages discriminates the OAuth bucket on system
-	// content too; caller-supplied system text is preserved after
-	// the prefix.
-	SystemPromptPrefix string
+	MessagesURL             string
+	OAuthAnthropicVersion   string
+	BetaHeader              string
+	UserAgent               string
+	SystemPromptPrefix      string
+	StainlessPackageVersion string
+	StainlessRuntime        string
+	StainlessRuntimeVersion string
+	CCVersion               string
+	CCEntrypoint            string
 }
 
 // Client wraps an http.Client and an oauth.Manager.
@@ -80,7 +70,7 @@ type Message struct {
 
 // MarshalJSON emits a string "content" when there is exactly one text
 // block; otherwise it emits a JSON array of blocks. Both shapes are
-// accepted by Anthropic; the string form preserves prompt-cache
+// accepted by the server; the string form preserves prompt-cache
 // behavior for the common plain-text path.
 func (m Message) MarshalJSON() ([]byte, error) {
 	if len(m.Content) == 1 && m.Content[0].Type == "text" {
@@ -132,14 +122,15 @@ type Request struct {
 	Thinking   *Thinking   `json:"thinking,omitempty"`
 	Tools      []Tool      `json:"tools,omitempty"`
 	ToolChoice *ToolChoice `json:"tool_choice,omitempty"`
+	// ExtraBetas is appended to cfg.BetaHeader when building the
+	// outbound anthropic-beta header. Use for per-model / per-request
+	// flags the static config does not already include. Not serialized.
+	ExtraBetas []string `json:"-"`
 }
 
 // OutputConfig is the wire shape that wraps effort and (later) other
-// per-request output knobs. Claude Code's BetaOutputConfig nests
-// effort under this object; sending it top-level returns
-// `400 effort: Extra inputs are not permitted` even with the
-// effort-2025-11-24 beta header active. Verified empirically
-// 2026-04-18.
+// per-request output knobs. Effort must nest under this object for
+// the server to accept it when the beta header allows effort.
 type OutputConfig struct {
 	// Effort is one of low/medium/high/max. The adapter only sets
 	// this when the registry says the family supports it; haiku-4-5

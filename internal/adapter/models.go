@@ -13,11 +13,10 @@ import (
 const (
 	BackendClaude = "claude"
 	BackendShunt  = "shunt"
-	// BackendAnthropic routes the request directly at
-	// https://REDACTED-UPSTREAM/v1/messages. Auth is via the
-	// user's Claude.ai OAuth token from the keychain (the
-	// internal/adapter/oauth package handles the credential side;
-	// internal/adapter/anthropic handles the HTTP side). Selected
+	// BackendAnthropic routes the request directly at the configured
+	// messages URL. Auth uses the token from the keychain (the
+	// internal/adapter/oauth package handles credentials;
+	// internal/adapter/anthropic handles HTTP). Selected
 	// when adapter config sets direct_oauth=true; the registry
 	// rewrites every BackendClaude model to BackendAnthropic at
 	// construction so the HTTP layer only has to switch on this
@@ -45,10 +44,9 @@ const (
 	FallbackEscalationOAuthError    = "oauth_error"
 )
 
-// Effort tiers as defined in Claude Code's src/utils/effort.ts
-// (EFFORT_LEVELS = ['low', 'medium', 'high', 'max']). Sent inside
-// output_config on /v1/messages, gated by the effort-2025-11-24
-// beta header. Whether a given family accepts a given tier is
+// Effort tiers (low, medium, high, max). Sent inside output_config
+// on the messages API when the beta header set allows it. Whether a
+// given family accepts a given tier is
 // declared in the user's toml under [adapter.families.<name>.efforts].
 const (
 	EffortLow    = "low"
@@ -57,10 +55,9 @@ const (
 	EffortMax    = "max"
 )
 
-// Thinking modes mirror the three ThinkingConfig shapes from Claude
-// Code's src/utils/thinking.ts plus the implicit "default" baseline.
-// The adapter translates each value into the right wire payload on
-// the OAuth direct path. `default` means "send no thinking block"
+// Thinking modes for the extended-thinking wire shape. The adapter
+// translates each value into the right payload on the direct HTTP
+// path. `default` means "send no thinking block"
 // so the server applies its per-model default.
 const (
 	ThinkingDefault  = "default"
@@ -98,8 +95,7 @@ type ResolvedModel struct {
 	// one. Empty resolves to ThinkingDefault at request time.
 	Thinking string
 	// MaxOutputTokens caps the family's output tokens. Used to
-	// derive the budget_tokens for ThinkingEnabled (budget = max-1
-	// per Claude Code's invariant).
+	// derive the budget_tokens for ThinkingEnabled (budget = max-1).
 	MaxOutputTokens int
 	// SupportsTools mirrors the family toml after NewRegistry
 	// validation (nil disallowed at load time).
@@ -126,7 +122,7 @@ type ResolvedModel struct {
 // Construction layers user-supplied per-alias overrides on top of
 // the family-expanded aliases. There are no compiled-in defaults:
 // NewRegistry rejects an AdapterConfig that omits families,
-// impersonation, or default_model.
+// client_identity fields, or default_model.
 type Registry struct {
 	models       map[string]ResolvedModel
 	shunts       map[string]config.AdapterShunt
@@ -136,22 +132,41 @@ type Registry struct {
 
 // NewRegistry builds the registry from a loaded AdapterConfig. It
 // returns an error when the config is incomplete: no families,
-// no default model, or any field of Impersonation empty. Callers
-// (currently only the daemon adapter wiring) should refuse to start
-// the listener and surface the error so the user sees what is
-// missing.
+// no default model, or any required client_identity / oauth field
+// empty. Callers should refuse to start the listener and surface the
+// error so the user sees what is missing.
 func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 	if cfg.DefaultModel == "" {
 		return nil, fmt.Errorf("adapter: default_model must be set in [adapter]")
 	}
-	if cfg.Impersonation.BetaHeader == "" {
-		return nil, fmt.Errorf("adapter: [adapter.impersonation].beta_header must be set")
+	if cfg.ClientIdentity.BetaHeader == "" {
+		return nil, fmt.Errorf("adapter: [adapter.client_identity].beta_header must be set")
 	}
-	if cfg.Impersonation.UserAgent == "" {
-		return nil, fmt.Errorf("adapter: [adapter.impersonation].user_agent must be set")
+	if cfg.ClientIdentity.UserAgent == "" {
+		return nil, fmt.Errorf("adapter: [adapter.client_identity].user_agent must be set")
 	}
-	if cfg.Impersonation.SystemPromptPrefix == "" {
-		return nil, fmt.Errorf("adapter: [adapter.impersonation].system_prompt_prefix must be set")
+	if cfg.ClientIdentity.SystemPromptPrefix == "" {
+		return nil, fmt.Errorf("adapter: [adapter.client_identity].system_prompt_prefix must be set")
+	}
+	if cfg.ClientIdentity.StainlessPackageVersion == "" {
+		return nil, fmt.Errorf("adapter: [adapter.client_identity].stainless_package_version must be set")
+	}
+	if cfg.ClientIdentity.StainlessRuntime == "" {
+		return nil, fmt.Errorf("adapter: [adapter.client_identity].stainless_runtime must be set")
+	}
+	if cfg.ClientIdentity.StainlessRuntimeVersion == "" {
+		return nil, fmt.Errorf("adapter: [adapter.client_identity].stainless_runtime_version must be set")
+	}
+	if cfg.ClientIdentity.CCVersion == "" {
+		return nil, fmt.Errorf("adapter: [adapter.client_identity].cc_version must be set")
+	}
+	if cfg.ClientIdentity.CCEntrypoint == "" {
+		return nil, fmt.Errorf("adapter: [adapter.client_identity].cc_entrypoint must be set")
+	}
+	if cfg.DirectOAuth {
+		if err := cfg.OAuth.ValidateOAuthFields(); err != nil {
+			return nil, err
+		}
 	}
 	toolsCapable := 0
 	visionCapable := 0
@@ -236,7 +251,7 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 	}
 	if cfg.DirectOAuth {
 		slog.Info("adapter.registry.oauth_rewrite",
-			"component", "adapter",
+			"subcomponent", "adapter",
 			"models_rewritten", rewritten,
 			"models_total", len(r.models),
 		)
@@ -255,7 +270,7 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 	}
 
 	slog.Info("adapter.registry.capabilities_loaded",
-		"component", "adapter",
+		"subcomponent", "adapter",
 		"families", len(cfg.Families),
 		"tools_capable", toolsCapable,
 		"vision_capable", visionCapable,
@@ -489,7 +504,7 @@ func resolveFromConfig(alias string, m config.AdapterModel) ResolvedModel {
 //
 // Returns an error when the caller asks for an effort value the
 // alias's family doesn't support server-side. This surfaces as a
-// 400 to the OpenAI client rather than letting Anthropic 400 with
+// 400 to the OpenAI client rather than letting the upstream return
 // a less actionable message.
 func (r *Registry) Resolve(alias, reqEffort string) (ResolvedModel, string, error) {
 	if alias == "" {

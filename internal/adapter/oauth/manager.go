@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"goodkind.io/clyde/internal/config"
 )
 
 // Manager is goroutine-safe. One instance per daemon is enough.
@@ -21,12 +23,14 @@ type Manager struct {
 	credsMtime     int64
 	httpClient     *http.Client
 	credentialsDir string
+	oauthCfg       config.AdapterOAuth
 }
 
-// NewManager builds a Manager. credentialsDir defaults to
+// NewManager builds a Manager. oauthCfg supplies token URL, client id,
+// scopes, and keychain service name. credentialsDir defaults to
 // $HOME/.claude when empty; the lock file lives directly in that
 // directory.
-func NewManager(credentialsDir string) *Manager {
+func NewManager(oauthCfg config.AdapterOAuth, credentialsDir string) *Manager {
 	if credentialsDir == "" {
 		if home, err := os.UserHomeDir(); err == nil {
 			credentialsDir = filepath.Join(home, ".claude")
@@ -37,6 +41,7 @@ func NewManager(credentialsDir string) *Manager {
 			Timeout: 30 * time.Second,
 		},
 		credentialsDir: credentialsDir,
+		oauthCfg:       oauthCfg,
 	}
 }
 
@@ -54,7 +59,7 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 
 	tokens := m.cached
 	if tokens == nil {
-		fresh, err := readCredentials(m.credentialsDir)
+		fresh, err := readCredentials(m.credentialsDir, m.oauthCfg.KeychainService)
 		if err != nil {
 			return "", fmt.Errorf("read credentials: %w", err)
 		}
@@ -67,7 +72,7 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 
 	if !isExpired(tokens) {
 		slog.Debug("oauth.token.cache_hit",
-			"component", "oauth",
+			"subcomponent", "oauth",
 			"expires_at_ms", tokens.ExpiresAt,
 		)
 		return tokens.AccessToken, nil
@@ -77,7 +82,7 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 	refreshed, err := m.refreshLocked(ctx, tokens)
 	if err != nil {
 		slog.Error("oauth.token.refresh_failed",
-			"component", "oauth",
+			"subcomponent", "oauth",
 			"duration_ms", time.Since(refreshStarted).Milliseconds(),
 			slog.Any("err", err),
 		)
@@ -85,7 +90,7 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 	}
 	m.cached = refreshed
 	slog.Info("oauth.token.refreshed",
-		"component", "oauth",
+		"subcomponent", "oauth",
 		"duration_ms", time.Since(refreshStarted).Milliseconds(),
 		"expires_at_ms", refreshed.ExpiresAt,
 		"scopes", strings.Join(refreshed.Scopes, " "),
@@ -108,7 +113,7 @@ func (m *Manager) invalidateIfDiskChanged() error {
 	if mtime != m.credsMtime {
 		if m.credsMtime != 0 {
 			slog.Info("oauth.credentials.disk_changed",
-				"component", "oauth",
+				"subcomponent", "oauth",
 				"path", credsPath,
 			)
 		}

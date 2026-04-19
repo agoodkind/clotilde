@@ -33,10 +33,6 @@ const DefaultHost = "127.0.0.1"
 // subprocesses when the config omits a value.
 const DefaultMaxConcurrent = 4
 
-// rawChatBodyLimit caps adapter.chat.raw body capture at 256 KiB
-// before marking body_truncated=true.
-const rawChatBodyLimit = 256 * 1024
-
 type rawChatLogEvent struct {
 	RequestID     string
 	Method        string
@@ -44,7 +40,8 @@ type rawChatLogEvent struct {
 	RemoteAddr    string
 	Headers       map[string]string
 	BodyBytes     int
-	Body          string
+	BodySummary   *BodySummary
+	BodyRaw       string
 	BodyTruncated bool
 }
 
@@ -56,7 +53,12 @@ func (attrs rawChatLogEvent) asAttrs() []slog.Attr {
 		slog.String("remote_addr", attrs.RemoteAddr),
 		slog.Any("headers", attrs.Headers),
 		slog.Int("body_bytes", attrs.BodyBytes),
-		slog.String("body", attrs.Body),
+	}
+	if attrs.BodySummary != nil {
+		out = append(out, slog.Any("body_summary", attrs.BodySummary))
+	}
+	if attrs.BodyRaw != "" {
+		out = append(out, slog.String("body", attrs.BodyRaw))
 	}
 	if attrs.BodyTruncated {
 		out = append(out, slog.Bool("body_truncated", true))
@@ -78,6 +80,7 @@ type Server struct {
 	logprobs config.AdapterLogprobs
 	deps     Deps
 	log      *slog.Logger
+	logging  config.LoggingConfig
 	registry *Registry
 	sem      chan struct{}
 	token    string
@@ -96,11 +99,17 @@ type Server struct {
 // hooks come from the daemon process so the adapter reuses existing
 // binary resolution and scratch dir wiring. Returns an error when
 // the registry cannot be built (missing families, default model, or
-// impersonation triplet); the daemon refuses to start the listener
-// in that case.
-func New(cfg config.AdapterConfig, deps Deps, log *slog.Logger) (*Server, error) {
+// required client_identity fields); the daemon refuses to start the
+// listener in that case.
+func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log *slog.Logger) (*Server, error) {
 	if log == nil {
 		log = slog.Default()
+	}
+	if logging.Body.Mode == "" {
+		logging.Body.Mode = "summary"
+	}
+	if logging.Body.MaxKB <= 0 {
+		logging.Body.MaxKB = 32
 	}
 	max := cfg.MaxConcurrent
 	if max <= 0 {
@@ -118,17 +127,26 @@ func New(cfg config.AdapterConfig, deps Deps, log *slog.Logger) (*Server, error)
 		cfg:      cfg,
 		logprobs: cfg.Logprobs,
 		deps:     deps,
-		log:      log.With("component", "adapter"),
+		log:      log.With("subcomponent", "adapter"),
+		logging:  logging,
 		registry: registry,
 		sem:      make(chan struct{}, max),
 		token:    token,
 	}
 	if cfg.DirectOAuth {
-		s.oauthMgr = oauth.NewManager("")
+		s.oauthMgr = oauth.NewManager(cfg.OAuth, "")
+		id := cfg.ClientIdentity
 		s.anthr = anthropic.New(nil, s.oauthMgr, anthropic.Config{
-			BetaHeader:         cfg.Impersonation.BetaHeader,
-			UserAgent:          cfg.Impersonation.UserAgent,
-			SystemPromptPrefix: cfg.Impersonation.SystemPromptPrefix,
+			MessagesURL:             cfg.OAuth.MessagesURL,
+			OAuthAnthropicVersion:   cfg.OAuth.AnthropicVersion,
+			BetaHeader:              id.BetaHeader,
+			UserAgent:               id.UserAgent,
+			SystemPromptPrefix:      id.SystemPromptPrefix,
+			StainlessPackageVersion: id.StainlessPackageVersion,
+			StainlessRuntime:        id.StainlessRuntime,
+			StainlessRuntimeVersion: id.StainlessRuntimeVersion,
+			CCVersion:               id.CCVersion,
+			CCEntrypoint:            id.CCEntrypoint,
 		})
 		s.log.LogAttrs(context.Background(), slog.LevelInfo, "adapter.oauth.enabled",
 			slog.Int("max_concurrent", max),

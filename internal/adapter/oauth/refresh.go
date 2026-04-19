@@ -40,9 +40,9 @@ func (m *Manager) refreshLocked(ctx context.Context, current *Tokens) (*Tokens, 
 	}
 	defer func() { _ = lock.Unlock() }()
 
-	if disk, err := readCredentials(m.credentialsDir); err == nil && disk != nil && !isExpired(disk) {
+	if disk, err := readCredentials(m.credentialsDir, m.oauthCfg.KeychainService); err == nil && disk != nil && !isExpired(disk) {
 		slog.Info("oauth.token.refresh_raced",
-			"component", "oauth",
+			"subcomponent", "oauth",
 			"expires_at_ms", disk.ExpiresAt,
 		)
 		return disk, nil
@@ -51,14 +51,14 @@ func (m *Manager) refreshLocked(ctx context.Context, current *Tokens) (*Tokens, 
 	body, err := json.Marshal(map[string]any{
 		"grant_type":    "refresh_token",
 		"refresh_token": current.RefreshToken,
-		"client_id":     ClientID,
-		"scope":         strings.Join(DefaultScopes, " "),
+		"client_id":     m.oauthCfg.ClientID,
+		"scope":         strings.Join(m.oauthCfg.Scopes, " "),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal refresh body: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, TokenURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.oauthCfg.TokenURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build refresh request: %w", err)
 	}
@@ -100,7 +100,7 @@ func (m *Manager) refreshLocked(ctx context.Context, current *Tokens) (*Tokens, 
 
 	if err := writeCredentials(m.credentialsDir, newTokens); err != nil {
 		slog.Warn("oauth.credentials.write_failed",
-			"component", "oauth",
+			"subcomponent", "oauth",
 			slog.Any("err", err),
 		)
 	}

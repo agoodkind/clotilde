@@ -16,16 +16,18 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
 	"goodkind.io/clyde/internal/adapter/oauth"
 )
 
-// sessionID is a per-daemon-process UUIDv4 used for the
-// X-Claude-Code-Session-Id header. Generated lazily once at first
-// /v1/messages request and stable for the lifetime of the daemon,
-// which mirrors how the official CLI uses it.
+// sessionID is a per-daemon-process UUIDv4 used for the session
+// correlation header. Generated lazily once at the first messages
+// request and stable for the lifetime of the daemon.
 var sessionID = onceSessionID()
 
 func onceSessionID() string {
@@ -44,10 +46,9 @@ func onceSessionID() string {
 // New builds a Client. If httpClient is nil a 10 minute timeout
 // client is used; long timeouts matter because /v1/messages can keep
 // a connection open for the full inference window on large outputs.
-// cfg carries the impersonation triplet sourced from
-// [adapter.impersonation] in the user's toml. New does not validate
-// cfg; callers (the daemon adapter wiring) should refuse to start
-// when any field is empty.
+// cfg carries wire values from [adapter.client_identity] and
+// [adapter.oauth]. New does not validate cfg; callers should refuse
+// to start when required fields are empty.
 func New(httpClient *http.Client, source *oauth.Manager, cfg Config) *Client {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 10 * time.Minute}
@@ -60,10 +61,17 @@ func New(httpClient *http.Client, source *oauth.Manager, cfg Config) *Client {
 // reaching into the Client struct.
 func (c *Client) SystemPromptPrefix() string { return c.cfg.SystemPromptPrefix }
 
-// UserAgent returns the configured impersonation User-Agent so callers
-// (oauth_handler) can derive things like the CLI version for the
-// attribution-header fingerprint without re-parsing the config.
+// UserAgent returns the configured User-Agent so callers can derive
+// a semver-like prefix for the billing line without re-parsing config.
 func (c *Client) UserAgent() string { return c.cfg.UserAgent }
+
+// CCVersion returns the configured cc_version fallback when User-Agent
+// parsing yields no version segment.
+func (c *Client) CCVersion() string { return c.cfg.CCVersion }
+
+// CCEntrypoint returns the configured cc_entrypoint suffix for the
+// billing line.
+func (c *Client) CCEntrypoint() string { return c.cfg.CCEntrypoint }
 
 // managerWrap lets us pass an *oauth.Manager directly while keeping
 // the OAuthSource interface for tests.
@@ -131,40 +139,75 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		return nil, fmt.Errorf("oauth token: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, MessagesURL, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.MessagesURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build messages request: %w", err)
 	}
+	// Wire signals required by the upstream identity check; values come from cfg.
+
+	// Auth + protocol.
 	httpReq.Header.Set("Authorization", "Bearer "+token)
-	httpReq.Header.Set("anthropic-beta", c.cfg.BetaHeader)
-	httpReq.Header.Set("anthropic-version", oauth.Version)
-	httpReq.Header.Set("x-app", "cli")
-	httpReq.Header.Set("User-Agent", c.cfg.UserAgent)
+	httpReq.Header.Set("anthropic-version", c.cfg.OAuthAnthropicVersion)
 	httpReq.Header.Set("Content-Type", "application/json")
-	// Match the official @anthropic-ai/sdk v0.81.0 request fingerprint
-	// captured from claude-cli 2.1.114. These extra headers do not change
-	// model behavior but appear to participate in OAuth bucket selection;
-	// without them, identical requests land in a stricter throttling
-	// bucket and 429 immediately. See docs/openai-adapter.md "OAuth bucket
-	// impersonation drift" for the captured ground truth and diff method.
-	// TODO: move these to the config file
 	httpReq.Header.Set("Accept", "application/json")
 	httpReq.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
-	httpReq.Header.Set("Anthropic-Dangerous-Direct-Browser-Access", "true")
-	httpReq.Header.Set("X-Claude-Code-Session-Id", sessionID)
-	httpReq.Header.Set("X-Stainless-Lang", "js")
-	httpReq.Header.Set("X-Stainless-Package-Version", "0.81.0")
-	httpReq.Header.Set("X-Stainless-Os", "MacOS")
-	httpReq.Header.Set("X-Stainless-Arch", "arm64")
-	httpReq.Header.Set("X-Stainless-Runtime", "node")
-	httpReq.Header.Set("X-Stainless-Runtime-Version", "v24.3.0")
-	httpReq.Header.Set("X-Stainless-Retry-Count", "0")
-	httpReq.Header.Set("X-Stainless-Timeout", "600")
+
+	// CLYDE_PROBE_DROP is a comma-separated list of header names to
+	// omit below for debugging. Empty means send the full configured set.
+	dropped := probeDropSet()
+	setHard := func(key, value string) {
+		if _, skip := dropped[strings.ToLower(key)]; skip {
+			return
+		}
+		httpReq.Header.Set(key, value)
+	}
+
+	// Header values from client identity config.
+	beta := c.cfg.BetaHeader
+	if len(req.ExtraBetas) > 0 {
+		// Dedupe-merge: only append flags not already in the static set.
+		existing := map[string]struct{}{}
+		for _, f := range strings.Split(beta, ",") {
+			existing[strings.TrimSpace(f)] = struct{}{}
+		}
+		for _, extra := range req.ExtraBetas {
+			extra = strings.TrimSpace(extra)
+			if extra == "" {
+				continue
+			}
+			if _, dup := existing[extra]; dup {
+				continue
+			}
+			beta = beta + "," + extra
+			existing[extra] = struct{}{}
+		}
+	}
+	setHard("anthropic-beta", beta)
+	setHard("User-Agent", c.cfg.UserAgent)
+	setHard("X-Stainless-Package-Version", c.cfg.StainlessPackageVersion)
+	setHard("X-Stainless-Runtime", c.cfg.StainlessRuntime)
+	setHard("X-Stainless-Runtime-Version", c.cfg.StainlessRuntimeVersion)
+
+	// Runtime-derived headers plus defaults.
+	for _, h := range freeIdentityHeaders(c) {
+		httpReq.Header.Set(h.key, h.value)
+	}
+
+	if len(dropped) > 0 {
+		keys := make([]string, 0, len(dropped))
+		for k := range dropped {
+			keys = append(keys, k)
+		}
+		slog.Warn("anthropic.probe.headers_dropped",
+			"subcomponent", "anthropic",
+			"dropped", keys,
+		)
+	}
 
 	slog.Debug("anthropic.messages.request",
 		"subcomponent", "anthropic",
 		"model", req.Model,
-		"url", MessagesURL,
+		"url", c.cfg.MessagesURL,
 		"body_bytes", len(body),
 		"headers", redactedOutboundHeaders(httpReq.Header),
 		"body", string(body),
@@ -174,8 +217,8 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	postStarted := time.Now()
 	resp, err := c.http.Do(httpReq)
 	if resp != nil {
-		// We send Accept-Encoding ourselves to match the official CLI
-		// fingerprint, so Go's transparent gzip handling is disabled.
+		// We set Accept-Encoding explicitly, so Go's transparent gzip
+		// handling is disabled.
 		// Swap resp.Body in place with a decoding reader so every
 		// downstream consumer (error body readers, SSE stream parser)
 		// sees plaintext. Unsupported encodings (br, zstd) leave the
@@ -226,17 +269,91 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	return resp, nil
 }
 
+// probeDropSet returns the lowercased set of header names in CLYDE_PROBE_DROP.
+func probeDropSet() map[string]struct{} {
+	raw := strings.TrimSpace(os.Getenv("CLYDE_PROBE_DROP"))
+	if raw == "" {
+		return nil
+	}
+	out := map[string]struct{}{}
+	for _, part := range strings.Split(raw, ",") {
+		name := strings.ToLower(strings.TrimSpace(part))
+		if name != "" {
+			out[name] = struct{}{}
+		}
+	}
+	return out
+}
+
+type freeHeader struct {
+	key   string
+	value string
+}
+
+func freeIdentityHeaders(c *Client) []freeHeader {
+	return []freeHeader{
+		{key: "x-app", value: "cli"},
+		{key: "Anthropic-Dangerous-Direct-Browser-Access", value: "true"},
+		{key: "X-Claude-Code-Session-Id", value: sessionID},
+		{key: "X-Stainless-Lang", value: "js"},
+		{key: "X-Stainless-Os", value: stainlessOS()},
+		{key: "X-Stainless-Arch", value: stainlessArch()},
+		// clyde does not retry at the HTTP layer; SDK retry is delegated to the caller.
+		// Value is honest at 0.
+		{key: "X-Stainless-Retry-Count", value: "0"},
+		{key: "X-Stainless-Timeout", value: c.stainlessTimeout()},
+	}
+}
+
+func (c *Client) stainlessTimeout() string {
+	if c.http.Timeout == 0 {
+		return "600"
+	}
+	return strconv.Itoa(int(c.http.Timeout / time.Second))
+}
+
+func stainlessOS() string {
+	return stainlessOSFromGOOS(runtime.GOOS)
+}
+
+func stainlessOSFromGOOS(goos string) string {
+	switch goos {
+	case "darwin":
+		return "MacOS"
+	case "linux":
+		return "Linux"
+	case "windows":
+		return "Windows"
+	default:
+		return "Unknown"
+	}
+}
+
+func stainlessArch() string {
+	return stainlessArchFromGOARCH(runtime.GOARCH)
+}
+
+func stainlessArchFromGOARCH(goarch string) string {
+	switch goarch {
+	case "amd64":
+		return "x64"
+	case "arm64":
+		return "arm64"
+	default:
+		return goarch
+	}
+}
+
 // redactedOutboundHeaders returns a flat map[string]string of the
-// headers we set on the Anthropic /v1/messages request, with secret
+// headers we set on the outbound messages request, with secret
 // values masked. Keys are lowercased so log diffs are deterministic
 // and friendly to grep. Used by the anthropic.messages.request slog
 // event so debug captures show exactly what we sent.
 // decodeResponseBody swaps resp.Body for a decoding reader matching
 // resp.Header.Get("Content-Encoding"). Stdlib covers gzip and deflate;
 // br and zstd are passed through untouched (the upstream rarely picks
-// them when gzip is also offered, and decoding them would require a
-// new dep). Removes the Content-Encoding header on success so callers
-// don't double-decode.
+// them when gzip is also offered). Removes the Content-Encoding
+// header on success so callers don't double-decode.
 func decodeResponseBody(resp *http.Response) {
 	enc := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding")))
 	if enc == "" || enc == "identity" {
@@ -258,7 +375,7 @@ func decodeResponseBody(resp *http.Response) {
 		resp.Header.Del("Content-Encoding")
 	default:
 		// br, zstd, etc. Keep raw bytes; callers will see binary in
-		// the slog body field if Anthropic actually picks one of these.
+		// the slog body field if the server actually picks one of these.
 		slog.Warn("anthropic.response.unsupported_encoding",
 			"subcomponent", "anthropic", "encoding", enc)
 	}

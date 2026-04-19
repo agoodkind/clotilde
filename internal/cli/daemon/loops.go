@@ -151,6 +151,13 @@ func oauthLoop() daemonsvc.ExtraLoop {
 		if !cfg.OAuth.IsEnabled() {
 			return nil
 		}
+		if err := cfg.Adapter.OAuth.ValidateOAuthFields(); err != nil {
+			log.LogAttrs(context.Background(), slog.LevelWarn, "oauth.refresher.skipped_incomplete_adapter_oauth",
+				slog.String("component", "oauth"),
+				slog.Any("err", err),
+			)
+			return nil
+		}
 		interval := cfg.OAuth.Interval
 		if interval <= 0 {
 			interval = 30 * time.Minute
@@ -179,8 +186,22 @@ func oauthLoop() daemonsvc.ExtraLoop {
 	}
 }
 
+// RunOAuthRefreshOnce performs one OAuth access token refresh using the same
+// logic as the daemon's periodic loop. Intended for launchd or manual use.
+func RunOAuthRefreshOnce(ctx context.Context, log *slog.Logger) {
+	runOAuthRefresh(ctx, log)
+}
+
 func runOAuthRefresh(ctx context.Context, log *slog.Logger) {
-	mgr := adapteroauth.NewManager("")
+	cfg, err := config.LoadGlobalOrDefault()
+	if err != nil {
+		log.LogAttrs(ctx, slog.LevelWarn, "oauth.refresh.config_failed",
+			slog.String("component", "oauth"),
+			slog.Any("err", err),
+		)
+		return
+	}
+	mgr := adapteroauth.NewManager(cfg.Adapter.OAuth, "")
 	timeoutCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	started := time.Now()

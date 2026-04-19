@@ -1,39 +1,64 @@
 # Reference [adapter] stanza for ~/.config/clyde/config.toml.
 #
-# This file is the canonical capability matrix as empirically
-# validated against the account's accessible models on 2026-04-18.
-# It is the only place in the clyde repo that holds these values;
-# the adapter loads them from the user's toml at runtime and refuses
-# to start when [adapter.families] or [adapter.impersonation] is
-# missing.
+# Copy sections into your
+# config; the adapter refuses to start when required tables are
+# missing ([adapter.families], [adapter.client_identity], [adapter.oauth]
+# when direct_oauth = true).
 #
 # Bootstrap:
 #   cat clyde.example.toml >> ~/.config/clyde/config.toml
 #   $EDITOR ~/.config/clyde/config.toml
 #   launchctl kickstart -k gui/$UID/io.goodkind.clyde
 #
-# Drift notes:
-#   - beta_header: high drift, append-mostly. Anthropic ships new
-#     dated tokens with feature drops (e.g. effort-2025-11-24).
-#   - user_agent: medium drift. Tracks real CLI releases; under-
-#     version routes you to a stricter quota bucket.
-#   - system_prompt_prefix: low drift, catastrophic when wrong.
-#     Silently demotes the request out of the Claude Code OAuth
-#     bucket without an error. Verify against the live CLI before
-#     editing.
+# Operator note: [adapter.oauth] and the stainless/* / cc_* fields under
+# [adapter.client_identity] must match the canonical desktop client you
+# use for login (capture from your environment or vendor docs).
 
 [logging]
 level = "debug"
+
+[logging.rotation]
+max_size_mb = 5
+max_backups = 5
+max_age_days = 14
+compress = true
+
+[logging.body]
+mode = "summary"
+max_kb = 32
 
 [adapter]
 enabled = true
 direct_oauth = true
 default_model = "clyde-opus-4-7-high-1m"
 
-[adapter.impersonation]
+[adapter.oauth]
+token_url = "https://REDACTED-OAUTH-HOST/v1/oauth/token"
+messages_url = "https://REDACTED-UPSTREAM/v1/messages"
+client_id = "REDACTED-CLIENT-ID"
+anthropic_beta = "REDACTED-OAUTH-BETA"
+anthropic_version = "2023-06-01"
+keychain_service = "REDACTED-KEYCHAIN"
+scopes = [
+  "user:profile",
+  "user:inference",
+  "user:sessions:claude_code",
+  "user:mcp_servers",
+  "user:file_upload",
+]
+
+[adapter.client_identity]
 beta_header = "REDACTED-OAUTH-BETA,REDACTED-CC-BETA,effort-2025-11-24"
 user_agent = "REDACTED-UA"
 system_prompt_prefix = "REDACTED-SYSTEM-PREFIX"
+stainless_package_version = "0.81.0"
+stainless_runtime = "node"
+stainless_runtime_version = "v24.3.0"
+cc_version = "2.1.114"
+cc_entrypoint = "sdk-cli"
+
+[adapter.client_identity.per_context_betas]
+"[1m]" = "REDACTED-1M-BETA"
 
 # Per-backend handling of the OpenAI logprobs / top_logprobs
 # request fields. "reject" returns 400 when the caller sets
