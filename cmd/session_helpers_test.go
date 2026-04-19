@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/fgrehm/clotilde/internal/session"
+	"goodkind.io/clyde/internal/session"
 )
 
 func TestAllTranscriptPaths(t *testing.T) {
@@ -16,11 +16,11 @@ func TestAllTranscriptPaths(t *testing.T) {
 		wantCount      int
 	}{
 		{
-			name:      "empty fork — hook hasn't filled in UUID yet",
+			name:      "empty fork  --  hook hasn't filled in UUID yet",
 			wantCount: 0,
 		},
 		{
-			name:      "session with UUID only — path computed from UUID",
+			name:      "session with UUID only  --  path computed from UUID",
 			sessionID: "abc-123",
 			wantCount: 1,
 		},
@@ -44,12 +44,12 @@ func TestAllTranscriptPaths(t *testing.T) {
 			sess.Metadata.TranscriptPath = tt.transcriptPath
 			sess.Metadata.PreviousSessionIDs = tt.previousIDs
 
-			paths := allTranscriptPaths(sess, "/tmp/.claude/clotilde", "/home/user")
+			paths := allTranscriptPaths(sess, "/tmp/.claude/clyde", "/home/user")
 
 			if len(paths) != tt.wantCount {
 				t.Errorf("got %d paths %v, want %d", len(paths), paths, tt.wantCount)
 			}
-			// Verify no path is empty or has a bare ".jsonl" basename — either
+			// Verify no path is empty or has a bare ".jsonl" basename  --  either
 			// would indicate an empty UUID slipped through TranscriptPath().
 			for _, p := range paths {
 				if p == "" {

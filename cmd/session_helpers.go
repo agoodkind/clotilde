@@ -3,20 +3,17 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
-	"slices"
 	"time"
 
-	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 
-	"github.com/fgrehm/clotilde/internal/claude"
-	"github.com/fgrehm/clotilde/internal/config"
-	"github.com/fgrehm/clotilde/internal/daemon"
-	"github.com/fgrehm/clotilde/internal/session"
-	"github.com/fgrehm/clotilde/internal/ui"
-	"github.com/google/uuid"
+	"goodkind.io/clyde/internal/claude"
+	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/daemon"
+	"goodkind.io/clyde/internal/session"
 )
 
 // globalStore returns the global session store, or panics on error.
@@ -29,40 +26,34 @@ func globalStore() (*session.FileStore, error) {
 	return store, nil
 }
 
-// projectClotildeRootForSession returns the project-level .claude/clotilde path
+// projectClydeRootForSession returns the project-level .claude/clyde path
 // for a session. Used when computing transcript/agent-log paths (which are
 // stored per-project in ~/.claude/projects/<encoded-project-path>/).
-func projectClotildeRootForSession(sess *session.Session) string {
+func projectClydeRootForSession(sess *session.Session) string {
 	root := sess.Metadata.WorkspaceRoot
 	if root == "" {
 		root, _ = config.FindProjectRoot()
 	}
-	return filepath.Join(root, config.ClotildeDir)
-}
-
-// looksLikeUUID returns true if s is a valid UUID.
-func looksLikeUUID(s string) bool {
-	_, err := uuid.Parse(s)
-	return err == nil
+	return filepath.Join(root, config.ClydeDir)
 }
 
 // allTranscriptPaths returns paths for all transcripts associated with a session,
 // in chronological order: previous UUIDs first (oldest to newest), then the current one.
 // The current path comes from metadata when available; otherwise it is computed from the UUID.
 // Callers should skip paths that do not exist on disk (missing transcripts are not an error).
-func allTranscriptPaths(sess *session.Session, clotildeRoot, homeDir string) []string {
+func allTranscriptPaths(sess *session.Session, clydeRoot, homeDir string) []string {
 	var paths []string
 
 	for _, prevID := range sess.Metadata.PreviousSessionIDs {
 		if prevID == "" {
 			continue
 		}
-		paths = append(paths, claude.TranscriptPath(homeDir, clotildeRoot, prevID))
+		paths = append(paths, claude.TranscriptPath(homeDir, clydeRoot, prevID))
 	}
 
 	current := sess.Metadata.TranscriptPath
 	if current == "" && sess.Metadata.SessionID != "" {
-		current = claude.TranscriptPath(homeDir, clotildeRoot, sess.Metadata.SessionID)
+		current = claude.TranscriptPath(homeDir, clydeRoot, sess.Metadata.SessionID)
 	}
 	if current != "" {
 		paths = append(paths, current)
@@ -77,23 +68,11 @@ func printResumeInstructions(sess *session.Session) {
 	if sess.Metadata.IsIncognito {
 		return
 	}
-	fmt.Println()
-	fmt.Println("Resume this session with:")
-	fmt.Printf("  clotilde resume %s\n", sess.Name)
-	fmt.Printf("  claude --resume %s\n", sess.Metadata.SessionID)
-}
-
-// returnToDashboard shows the dashboard TUI after a session exits,
-// with "Return to <session>" at the top. Skipped in non-TTY environments.
-func returnToDashboard(sess *session.Session) {
-	if !isatty.IsTerminal(os.Stdout.Fd()) {
-		return
-	}
-	if sess == nil || sess.Metadata.IsIncognito {
-		return
-	}
-	fmt.Println()
-	runPostSessionDashboard(sess)
+	_, _ = fmt.Fprintln(os.Stdout)
+	_, _ = fmt.Fprintln(os.Stdout, "Resume this session with:")
+	_, _ = fmt.Fprintf(os.Stdout, "  clyde resume %s\n", sess.Name)
+	_, _ = fmt.Fprintf(os.Stdout, "  claude --resume %s\n", sess.Metadata.SessionID)
+	slog.Info("cmd.session.resume_instructions", "session", sess.Name, "session_id", sess.Metadata.SessionID)
 }
 
 // refreshSessionSummary requests a fresh Context summary via the daemon and
@@ -208,91 +187,23 @@ func autoUpdateContext(_ *session.FileStore, sess *session.Session) {
 // with CLI-specific additions: auto-adopt for UUIDs and TUI picker for ambiguous matches.
 // Returns nil session (no error) if nothing found. The caller should forward to claude.
 func resolveSessionForResume(cmd *cobra.Command, store *session.FileStore, query string) (*session.Session, error) {
-	// Try unified 4-tier resolution (name, UUID, display name, single substring match)
+	// Unified 4-tier resolution: exact name, UUID, display name, single
+	// substring match. Anything more ambiguous than a single match is
+	// listed and rejected so the user picks unambiguously themselves.
+	// The TUI dashboard exists for interactive multi-match selection;
+	// this CLI verb stays scriptable.
 	if sess, err := store.Resolve(query); err != nil {
 		return nil, err
 	} else if sess != nil {
 		return sess, nil
 	}
-
-	// CLI-specific: try auto-adopt for UUID queries
-	if looksLikeUUID(query) {
-		adoptedName, adoptErr := tryAdoptByUUID(query)
-		if adoptErr == nil {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Auto-adopted session '%s'\n", adoptedName)
-			sess, _ := store.Get(adoptedName)
-			return sess, nil
-		}
-	}
-
-	// CLI-specific: if multiple substring matches, show picker
 	matches, err := store.Search(query)
 	if err != nil || len(matches) <= 1 {
-		return nil, nil // not found or single match already handled by Resolve
+		return nil, nil
 	}
-
-	if !isatty.IsTerminal(os.Stdout.Fd()) {
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Multiple sessions match '%s':\n", query)
-		for _, s := range matches {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s (%s)\n", s.Name, s.Metadata.SessionID)
-		}
-		return nil, fmt.Errorf("ambiguous session name '%s'; specify the full name", query)
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Multiple sessions match '%s':\n", query)
+	for _, s := range matches {
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s (%s)\n", s.Name, s.Metadata.SessionID)
 	}
-
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Multiple sessions match '%s':\n\n", query)
-	sortSessionsByLastAccessed(matches)
-	picker := ui.NewPicker(matches, "Select session to resume").WithPreview()
-	picker.PreviewFn = richPreviewFunc(store, picker.StatsCache)
-	selected, pickerErr := ui.RunPicker(picker)
-	if pickerErr != nil {
-		return nil, fmt.Errorf("picker failed: %w", pickerErr)
-	}
-	if selected == nil {
-		return nil, fmt.Errorf("cancelled")
-	}
-	return selected, nil
-}
-
-// resolveSessionName resolves the session name using a multi-level fallback strategy.
-// Priority 1: CLOTILDE_SESSION_NAME env var (always checked).
-// When fullFallback is true, also tries:
-// Priority 2: Read from CLAUDE_ENV_FILE (persisted by previous hook).
-// Priority 3: Reverse UUID lookup in session store.
-func resolveSessionName(hookData hookInput, store session.Store, fullFallback bool) (string, error) {
-	if name := os.Getenv("CLOTILDE_SESSION_NAME"); name != "" {
-		return name, nil
-	}
-
-	if !fullFallback {
-		return "", nil
-	}
-
-	if name := readLastEnvFileValue("CLOTILDE_SESSION"); name != "" {
-		return name, nil
-	}
-
-	return findSessionByUUID(store, hookData.SessionID)
-}
-
-// findSessionByUUID searches for a session with the given UUID.
-// Checks both current sessionId and previousSessionIds.
-func findSessionByUUID(store session.Store, uuid string) (string, error) {
-	sessions, err := store.List()
-	if err != nil {
-		return "", fmt.Errorf("failed to list sessions: %w", err)
-	}
-
-	for _, sess := range sessions {
-		if sess.Metadata.SessionID == uuid {
-			return sess.Name, nil
-		}
-	}
-
-	for _, sess := range sessions {
-		if slices.Contains(sess.Metadata.PreviousSessionIDs, uuid) {
-			return sess.Name, nil
-		}
-	}
-
-	return "", fmt.Errorf("no session found with UUID %s", uuid)
+	return nil, fmt.Errorf("ambiguous session name '%s'; specify the full name", query)
 }

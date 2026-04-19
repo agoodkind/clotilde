@@ -1,8 +1,23 @@
+// Package cmd holds the TUI dashboard, its daemon-backed callbacks,
+// the `clyde resume` cobra verb, and the argument-routing helpers
+// (ClassifyArgs, ForwardToClaude) used by cmd/clyde/main.go to assemble
+// the cobra root.
+//
+// What lives here:
+//
+//   - RunDashboard / runPostSessionDashboard (the tcell TUI entrypoint)
+//   - TUI callbacks for delete, rename, resume, remote-control,
+//     bridges, send, tail, registry, summary, view, model extract
+//   - NewResumeCmd (the `clyde resume <name|uuid>` verb)
+//   - ClassifyArgs and ForwardToClaude (passthrough routing)
+//   - resumeSession / deleteSession helpers shared by the TUI and the
+//     resume verb
 package cmd
 
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,32 +27,29 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 
-	"github.com/fgrehm/clotilde/internal/claude"
-	"github.com/fgrehm/clotilde/internal/config"
-	"github.com/fgrehm/clotilde/internal/daemon"
-	"github.com/fgrehm/clotilde/internal/outputstyle"
-	"github.com/fgrehm/clotilde/internal/session"
-	"github.com/fgrehm/clotilde/internal/transcript"
-	"github.com/fgrehm/clotilde/internal/ui"
-	"github.com/fgrehm/clotilde/internal/util"
+	"goodkind.io/clyde/internal/claude"
+	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/daemon"
+	"goodkind.io/clyde/internal/outputstyle"
+	"goodkind.io/clyde/internal/session"
+	"goodkind.io/clyde/internal/transcript"
+	"goodkind.io/clyde/internal/ui"
+	"goodkind.io/clyde/internal/util"
 )
 
-var rootCmd = &cobra.Command{
-	Use:     "clotilde",
-	Short:   "Named sessions, profiles, and context management for Claude Code",
-	Long:    `Clotilde wraps Claude Code with human-friendly session names, profiles, and context management, enabling easy switching between multiple parallel conversations.`,
-	Version: version,
-	Run:     runDashboard,
-}
-
-// runDashboard shows the interactive tview TUI when no subcommand is provided
-func runDashboard(cmd *cobra.Command, args []string) {
+// RunDashboard is the entrypoint for `clyde` with no subcommand. It
+// boots the tcell TUI dashboard for managing existing sessions
+// (resume, delete, rename, view, remote-control toggle, send-to,
+// tail-transcript). Session creation is no longer wired in; the user
+// creates sessions via `claude` (passthrough) and clyde adopts them
+// in the background.
+func RunDashboard(cmd *cobra.Command, args []string) {
 	// Non-interactive (piped) invocation: forward to real claude.
 	if !isatty.IsTerminal(os.Stdin.Fd()) {
 		os.Exit(ForwardToClaude(os.Args[1:]))
 	}
 
-	// Non-TTY: show help
+	// Non-TTY stdout: show help. Avoids drawing the TUI into a pipe.
 	if !isatty.IsTerminal(os.Stdout.Fd()) {
 		_ = cmd.Help()
 		return
@@ -46,20 +58,32 @@ func runDashboard(cmd *cobra.Command, args []string) {
 	store, err := session.NewGlobalFileStore()
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Failed to initialize session storage: %v\n", err)
+		slog.Error("dashboard.store_init_failed",
+			"component", "tui",
+			slog.Any("err", err),
+		)
 		os.Exit(1)
 	}
 
 	// Adopt orphan transcripts in the background. The daemon also runs
-	// this, but doing it here makes the dashboard self-healing even when
-	// the daemon is not running yet. The result is picked up by the
-	// existing store watcher inside the TUI.
+	// this; doing it here makes the dashboard self-healing when the
+	// daemon is not yet running.
 	go runDiscoveryAdoption(store)
 
 	sessions, err := store.List()
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Failed to load sessions: %v\n", err)
+		slog.Error("dashboard.list_failed",
+			"component", "tui",
+			slog.Any("err", err),
+		)
 		os.Exit(1)
 	}
+
+	slog.Info("dashboard.opened",
+		"component", "tui",
+		"sessions", len(sessions),
+	)
 
 	cb := buildAppCallbacks(store, sessions)
 	app := ui.NewApp(sessions, cb)
@@ -67,16 +91,18 @@ func runDashboard(cmd *cobra.Command, args []string) {
 
 	if err := app.Run(); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
+		slog.Error("dashboard.tui_error",
+			"component", "tui",
+			slog.Any("err", err),
+		)
 		os.Exit(1)
 	}
+	slog.Info("dashboard.closed", "component", "tui")
 }
 
 // runDiscoveryAdoption walks ~/.claude/projects and creates registry
-// entries for any transcript whose UUID is unknown. Errors are swallowed
-// because this runs as a best-effort startup task; the user only sees
-// the result indirectly through the dashboard listing. The daemon
-// gets a nudge afterwards so any session adopted here also enters the
-// daemon's view of the registry without waiting for the next tick.
+// entries for any transcript whose UUID is unknown. Errors are
+// swallowed because this is a best-effort startup task.
 func runDiscoveryAdoption(store *session.FileStore) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -95,43 +121,19 @@ func runDiscoveryAdoption(store *session.FileStore) {
 		return
 	}
 	if len(adopted) > 0 {
+		slog.Info("dashboard.discovery.adopted",
+			"component", "tui",
+			"count", len(adopted),
+		)
 		daemon.NudgeDiscoveryScan()
 	}
 }
 
-// runPostSessionDashboard shows the main tcell TUI after a session exits,
-// with a "Return to <name>" prompt preselected so a single Enter resumes
-// the previous session. Press Down then Enter from the prompt to quit.
-// Press Esc to dismiss the prompt and browse the full session list.
-func runPostSessionDashboard(lastSession *session.Session) {
-	store, err := session.NewGlobalFileStore()
-	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Failed to initialize session storage: %v\n", err)
-		return
-	}
-	sessions, err := store.List()
-	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Failed to load sessions: %v\n", err)
-		return
-	}
-	// Refresh lastSession metadata so the header banner reflects any
-	// auto-context update that ran in the background.
-	if updated, getErr := store.Get(lastSession.Name); getErr == nil {
-		lastSession = updated
-	}
-
-	cb := buildAppCallbacks(store, sessions)
-	app := ui.NewApp(sessions, cb, ui.AppOptions{ReturnTo: lastSession})
-	app.PreWarmStats()
-	if runErr := app.Run(); runErr != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "TUI error: %v\n", runErr)
-	}
-}
-
-// buildAppCallbacks wires store + helpers into a ui.AppCallbacks. Shared by
-// runDashboard and runPostSessionDashboard so both entry points use the same
-// main TUI.
-func buildAppCallbacks(store session.Store, sessions []*session.Session) ui.AppCallbacks {
+// buildAppCallbacks wires store + helpers into a ui.AppCallbacks.
+// Start/Incognito/SetBasedir are intentionally nil: session creation
+// went away with the cull. The TUI checks for nil and disables those
+// keybindings, so the dashboard simply omits the "new session" path.
+func buildAppCallbacks(store session.Store, _ []*session.Session) ui.AppCallbacks {
 	return ui.AppCallbacks{
 		Store: store,
 		ResumeSession: func(sess *session.Session) error {
@@ -140,13 +142,7 @@ func buildAppCallbacks(store session.Store, sessions []*session.Session) ui.AppC
 		DeleteSession: func(sess *session.Session) error {
 			return deleteSession(sess, store)
 		},
-		ApplyCompact: func(sess *session.Session, choices ui.CompactChoices) (ui.CompactResult, error) {
-			return applyCompactChoices(sess, choices)
-		},
 		RenameSession: func(sess *session.Session) (string, error) {
-			// The TUI mutates sess.Name to the new value before
-			// calling. Pull the old name from the on-disk metadata
-			// because the in-memory copy may already be the new one.
 			newName := sess.Name
 			oldName := sess.Metadata.Name
 			if oldName == "" || oldName == newName {
@@ -158,26 +154,8 @@ func buildAppCallbacks(store session.Store, sessions []*session.Session) ui.AppC
 			}
 			return newName, nil
 		},
-		SetBasedir: func(sess *session.Session, newPath string) error {
-			resolved, err := resolveBasedirArg(newPath)
-			if err != nil {
-				return err
-			}
-			sess.Metadata.WorkspaceRoot = resolved
-			return store.Update(sess)
-		},
 		RefreshSummary: func(sess *session.Session, onDone func(*session.Session)) error {
 			return refreshSessionSummary(store, sess, onDone)
-		},
-		StartSession: func() error {
-			return startInteractiveSession(sessions, "")
-		},
-		StartSessionWithBasedir: func(basedir string) error {
-			resolved, err := resolveBasedirArg(basedir)
-			if err != nil {
-				return err
-			}
-			return startInteractiveSession(sessions, resolved)
 		},
 		ViewContent: func(sess *session.Session) string {
 			messages, err := loadSessionMessages(sess)
@@ -202,17 +180,17 @@ func buildAppCallbacks(store session.Store, sessions []*session.Session) ui.AppC
 			}
 			return "-"
 		},
-		SubscribeRegistry: func() (<-chan ui.RegistryEvent, func(), error) {
+		SubscribeRegistry: func() (<-chan ui.SessionEvent, func(), error) {
 			raw, cancel, err := daemon.SubscribeRegistry(context.Background())
 			if err != nil {
 				return nil, nil, err
 			}
-			out := make(chan ui.RegistryEvent, 8)
+			out := make(chan ui.SessionEvent, 8)
 			go func() {
 				defer close(out)
 				for ev := range raw {
-					out <- ui.RegistryEvent{
-						Kind:            ev.GetKind().String(),
+					out <- ui.SessionEvent{
+						Kind:            strings.TrimPrefix(ev.GetKind().String(), "KIND_"),
 						SessionName:     ev.GetSessionName(),
 						SessionID:       ev.GetSessionId(),
 						BridgeSessionID: ev.GetBridgeSessionId(),
@@ -280,12 +258,12 @@ func buildAppCallbacks(store session.Store, sessions []*session.Session) ui.AppC
 			}
 			return nil
 		},
-		TailTranscript: func(sessionID string, startOffset int64) (<-chan ui.TranscriptLine, func(), error) {
+		TailTranscript: func(sessionID string, startOffset int64) (<-chan ui.TranscriptEntry, func(), error) {
 			raw, cancel, err := daemon.TailTranscriptViaDaemon(context.Background(), sessionID, startOffset)
 			if err != nil {
 				return nil, nil, err
 			}
-			out := make(chan ui.TranscriptLine, 32)
+			out := make(chan ui.TranscriptEntry, 32)
 			go func() {
 				defer close(out)
 				for ln := range raw {
@@ -293,7 +271,7 @@ func buildAppCallbacks(store session.Store, sessions []*session.Session) ui.AppC
 					if ln.GetTimestampNanos() > 0 {
 						ts = time.Unix(0, ln.GetTimestampNanos())
 					}
-					out <- ui.TranscriptLine{
+					out <- ui.TranscriptEntry{
 						ByteOffset: ln.GetByteOffset(),
 						RawJSONL:   ln.GetRawJsonl(),
 						Role:       ln.GetRole(),
@@ -333,173 +311,37 @@ func buildAppCallbacks(store session.Store, sessions []*session.Session) ui.AppC
 					}
 					recentMsgs = append(recentMsgs, ui.DetailMessage{Role: m.Role, Text: text, Timestamp: m.Timestamp})
 				}
-
 				all := claude.LoadAllMessages(sess.Metadata.TranscriptPath, 1000)
 				for _, m := range all {
 					allMsgs = append(allMsgs, ui.DetailMessage{Role: m.Role, Text: m.Text, Timestamp: m.Timestamp})
 				}
-
 				for _, t := range claude.ToolUseStats(sess.Metadata.TranscriptPath, 8) {
 					tools = append(tools, ui.ToolUse{Name: t.Name, Count: t.Count})
 				}
 			}
-
 			return ui.SessionDetail{Model: model, Messages: recentMsgs, AllMessages: allMsgs, Tools: tools}
 		},
 	}
 }
 
-// startInteractiveSession creates a new clotilde session and launches
-// claude. When basedir is non-empty it lands in WorkspaceRoot so the
-// dashboard groups the session with its project even if the launching
-// terminal sits in another directory.
-func startInteractiveSession(existing []*session.Session, basedir string) error {
-	existingNames := make([]string, len(existing))
-	for i, s := range existing {
-		existingNames[i] = s.Name
-	}
-	name := util.GenerateUniqueRandomName(existingNames)
-
-	result, err := createSession(SessionCreateParams{Name: name})
-	if err != nil {
-		return fmt.Errorf("failed to create session: %w", err)
-	}
-
-	if basedir != "" {
-		result.Session.Metadata.WorkspaceRoot = basedir
-		result.Session.Metadata.WorkDir = basedir
-		store, sErr := session.NewGlobalFileStore()
-		if sErr == nil {
-			_ = store.Update(result.Session)
-		}
-	}
-
-	// Tell the daemon a new session exists so its scanner refreshes
-	// its registry view immediately. The nudge is best-effort; the
-	// background tick still catches anything that slips through.
-	daemon.NudgeDiscoveryScan()
-
-	fmt.Println(ui.Success(fmt.Sprintf("Created session '%s' (%s)", result.Session.Name, result.Session.Metadata.SessionID)))
-	fmt.Println("\nStarting Claude Code...")
-
-	return claude.Start(result.ClotildeRoot, result.Session, result.SettingsFile, nil)
-}
-
-func init() {
-	// Disable Cobra's auto-generated completion command so we can use our custom one
-	rootCmd.CompletionOptions.DisableDefaultCmd = true
-
-	// Initialize global rootCmd with all subcommands
-	initRootCmd()
-}
-
-// initRootCmd initializes the global rootCmd with all subcommands
-func initRootCmd() {
-	registerSubcommands(rootCmd)
-}
-
-// claudeBinaryPath is set via the --claude-bin flag (hidden, for testing)
-var claudeBinaryPath string
-
-// verbose is set via the --verbose/-v flag
-var verbose bool
-
-// NewRootCmd returns a new root command instance (useful for testing).
-// Creates a fresh command tree to avoid flag pollution between tests.
-func NewRootCmd() *cobra.Command {
-	root := &cobra.Command{
-		Use:     rootCmd.Use,
-		Short:   rootCmd.Short,
-		Long:    rootCmd.Long,
-		Version: rootCmd.Version,
-	}
-	root.CompletionOptions.DisableDefaultCmd = true
-	registerSubcommands(root)
-	return root
-}
-
-// registerSubcommands adds all subcommands and global flags to the given root command.
-func registerSubcommands(root *cobra.Command) {
-	freshInitCmd := &cobra.Command{
-		Use:   initCmd.Use,
-		Short: initCmd.Short,
-		Long:  initCmd.Long,
-		RunE:  initCmd.RunE,
-	}
-	freshInitCmd.Flags().Bool("global", false, "Install hooks in .claude/settings.json (project-wide) instead of settings.local.json (local)")
-
-	root.AddCommand(freshInitCmd)
-	root.AddCommand(newSetupCmd())
-	root.AddCommand(newStartCmd())
-	root.AddCommand(newIncognitoCmd())
-	root.AddCommand(newResumeCmd())
-	root.AddCommand(newListCmd())
-	root.AddCommand(newInspectCmd())
-	root.AddCommand(newForkCmd())
-	root.AddCommand(newRenameCmd())
-	root.AddCommand(newAutoNameCmd())
-	root.AddCommand(newBenchEmbedCmd())
-	root.AddCommand(newCompactCmd())
-	root.AddCommand(newDeleteCmd())
-	root.AddCommand(newPruneEphemeralCmd())
-	root.AddCommand(newPruneEmptyCmd())
-	root.AddCommand(newPruneAutonameCmd())
-	root.AddCommand(newBridgeCmd())
-	root.AddCommand(newSendCmd())
-	root.AddCommand(newSetBasedirCmd())
-	root.AddCommand(newExportCmd())
-	root.AddCommand(newSearchCmd())
-	root.AddCommand(newAdoptCmd())
-	root.AddCommand(hookCmd)
-	root.AddCommand(versionCmd)
-	root.AddCommand(newCompletionCmd())
-	root.AddCommand(newDaemonCmd())
-	root.AddCommand(newMCPCmd())
-	root.AddCommand(newExecCmd())
-
-	root.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
-	root.PersistentFlags().StringVar(&claudeBinaryPath, "claude-bin", "", "Path to claude binary (hidden, for testing)")
-	_ = root.PersistentFlags().MarkHidden("claude-bin")
-}
-
-// GetClaudeBinaryPath returns the path to the claude binary.
-// If --claude-bin flag is set, returns that path. Otherwise returns "claude".
-func GetClaudeBinaryPath() string {
-	if claudeBinaryPath != "" {
-		return claudeBinaryPath
-	}
-	return "claude"
-}
-
-// IsVerbose returns whether verbose mode is enabled.
-func IsVerbose() bool {
-	return verbose
-}
-
-func Execute() {
-	// Suppress cobra's own error printing so we can handle passthrough ourselves.
-	rootCmd.SilenceErrors = true
-
-	if err := rootCmd.Execute(); err != nil {
-		// Unknown subcommand: forward transparently to the real claude binary.
-		// This handles internal Claude Code commands (e.g. "claude exec ...") that
-		// the shell alias routes through clotilde but that clotilde doesn't own.
-		if strings.HasPrefix(err.Error(), "unknown command") {
-			os.Exit(ForwardToClaude(os.Args[1:]))
-		}
-		_, _ = fmt.Fprintln(os.Stderr, "Error:", err)
-		os.Exit(1)
-	}
-}
-
-// ForwardToClaude runs the real claude binary (bypassing the shell function) with
-// the given args, inheriting stdin/stdout/stderr. Returns the exit code.
+// ForwardToClaude runs the real claude binary (bypassing the shell
+// alias) with the given args, inheriting stdin/stdout/stderr. Returns
+// the exit code. Used by the dispatch path and by RunDashboard's
+// piped-input shortcut.
 func ForwardToClaude(args []string) int {
 	claudePath, err := exec.LookPath("claude")
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "clotilde: cannot find claude binary: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "clyde: cannot find claude binary: %v\n", err)
+		slog.Error("forward.claude_not_found",
+			"component", "cli",
+			slog.Any("err", err),
+		)
 		return 1
 	}
+	slog.Debug("forward.claude.invoked",
+		"component", "cli",
+		"argc", len(args),
+	)
 	cmd := exec.Command(claudePath, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -513,7 +355,10 @@ func ForwardToClaude(args []string) int {
 	return 0
 }
 
-// resumeSession resumes a session (extracted from resume command)
+// resumeSession runs claude --resume against an existing clyde
+// session, reattaching its workspace add-dir if the user invoked from
+// a different cwd. Shared by the resume cobra verb and the TUI
+// dashboard's resume callback.
 func resumeSession(sess *session.Session, store session.Store) error {
 	globalRoot := config.GlobalDataDir()
 	sessionDir := config.GetSessionDir(globalRoot, sess.Name)
@@ -524,7 +369,6 @@ func resumeSession(sess *session.Session, store session.Store) error {
 		settingsFile = settingsPath
 	}
 
-	// Auto add-dir if resuming from a different directory
 	var additionalArgs []string
 	if cwd, cwdErr := os.Getwd(); cwdErr == nil {
 		if sess.Metadata.WorkspaceRoot != "" && cwd != sess.Metadata.WorkspaceRoot {
@@ -532,7 +376,12 @@ func resumeSession(sess *session.Session, store session.Store) error {
 		}
 	}
 
-	fmt.Printf("Resuming session '%s' (%s)\n\n", sess.Name, sess.Metadata.SessionID)
+	_, _ = fmt.Fprintf(os.Stdout, "Resuming session '%s' (%s)\n\n", sess.Name, sess.Metadata.SessionID)
+	slog.Info("session.resume.started",
+		"component", "cli",
+		"session", sess.Name,
+		"session_id", sess.Metadata.SessionID,
+	)
 
 	err := claude.Resume(globalRoot, sess, settingsFile, additionalArgs)
 	if fs, ok := store.(*session.FileStore); ok {
@@ -542,90 +391,89 @@ func resumeSession(sess *session.Session, store session.Store) error {
 	return err
 }
 
-// deleteSession deletes a session (extracted from delete command)
+// deleteSession deletes a session's metadata, its claude transcripts
+// and agent logs, and (when present) the per-session output style.
+// Prefers the daemon path so subscribers (open dashboards) get the
+// SESSION_DELETED event immediately; falls back to the local store
+// when the daemon is unreachable.
 func deleteSession(sess *session.Session, store session.Store) error {
-	// Track all deleted files for verbose output
 	allDeletedFiles := &claude.DeletedFiles{
 		Transcript: []string{},
 		AgentLogs:  []string{},
 	}
 
-	// Use project-level clotilde root for transcript/agent-log path computation
-	projClotildeRoot := projectClotildeRootForSession(sess)
+	projClydeRoot := projectClydeRootForSession(sess)
 
-	// Delete Claude data for current session (transcript and agent logs)
-	deleted, err := claude.DeleteSessionData(projClotildeRoot, sess.Metadata.SessionID, sess.Metadata.TranscriptPath)
+	deleted, err := claude.DeleteSessionData(projClydeRoot, sess.Metadata.SessionID, sess.Metadata.TranscriptPath)
 	if err != nil {
-		fmt.Println(ui.Warning(fmt.Sprintf("Failed to delete Claude data for current session: %v", err)))
+		_, _ = fmt.Fprintln(os.Stdout, ui.Warning(fmt.Sprintf("Failed to delete Claude data for current session: %v", err)))
+		slog.Error("session.delete.current_data_failed",
+			"component", "cli",
+			"session", sess.Name,
+			"session_id", sess.Metadata.SessionID,
+			slog.Any("err", err),
+		)
 	} else {
 		allDeletedFiles.Transcript = append(allDeletedFiles.Transcript, deleted.Transcript...)
 		allDeletedFiles.AgentLogs = append(allDeletedFiles.AgentLogs, deleted.AgentLogs...)
 	}
 
-	// Delete Claude data for previous sessions (from /clear operations, and defensively from /compact)
 	for _, prevSessionID := range sess.Metadata.PreviousSessionIDs {
-		deleted, err := claude.DeleteSessionData(projClotildeRoot, prevSessionID, "")
+		deleted, err := claude.DeleteSessionData(projClydeRoot, prevSessionID, "")
 		if err != nil {
-			fmt.Println(ui.Warning(fmt.Sprintf("Failed to delete Claude data for previous session %s: %v", prevSessionID, err)))
+			_, _ = fmt.Fprintln(os.Stdout, ui.Warning(fmt.Sprintf("Failed to delete Claude data for previous session %s: %v", prevSessionID, err)))
+			slog.Error("session.delete.previous_data_failed",
+				"component", "cli",
+				"session", sess.Name,
+				"previous_session_id", prevSessionID,
+				slog.Any("err", err),
+			)
 		} else {
 			allDeletedFiles.Transcript = append(allDeletedFiles.Transcript, deleted.Transcript...)
 			allDeletedFiles.AgentLogs = append(allDeletedFiles.AgentLogs, deleted.AgentLogs...)
 		}
 	}
 
-	// Delete session folder. Prefer the daemon path so subscribers
-	// (open dashboards) get the SESSION_DELETED event immediately.
-	// Fall back to the direct store delete when the daemon is
-	// unreachable so the CLI still works without it.
 	if ok, derr := daemon.DeleteSessionViaDaemon(context.Background(), sess.Name); ok {
-		// Daemon handled the delete.
 		_ = derr
 	} else if err := store.Delete(sess.Name); err != nil {
 		return fmt.Errorf("failed to delete session: %w", err)
 	}
 
-	// Delete custom output style if it exists
 	if sess.Metadata.HasCustomOutputStyle {
 		if err := outputstyle.DeleteCustomStyleFile(config.GlobalOutputStyleRoot(), sess.Name); err != nil {
-			fmt.Println(ui.Warning(fmt.Sprintf("Failed to delete output style file: %v", err)))
+			_, _ = fmt.Fprintln(os.Stdout, ui.Warning(fmt.Sprintf("Failed to delete output style file: %v", err)))
+			slog.Error("session.delete.style_failed",
+				"component", "cli",
+				"session", sess.Name,
+				slog.Any("err", err),
+			)
 		}
 	}
 
-	// Show summary of what was deleted
 	transcriptCount := len(allDeletedFiles.Transcript)
 	agentLogCount := len(allDeletedFiles.AgentLogs)
-	fmt.Println(ui.Success(fmt.Sprintf("Deleted session '%s'", sess.Name)))
-	fmt.Printf("  Session folder, %d transcript(s), %d agent log(s)\n", transcriptCount, agentLogCount)
-
-	// Show detailed file paths in verbose mode
-	if verbose {
-		if transcriptCount > 0 {
-			fmt.Println("\n  Deleted transcripts:")
-			for _, path := range allDeletedFiles.Transcript {
-				fmt.Printf("    %s\n", path)
-			}
-		}
-		if agentLogCount > 0 {
-			fmt.Println("\n  Deleted agent logs:")
-			for _, path := range allDeletedFiles.AgentLogs {
-				fmt.Printf("    %s\n", path)
-			}
-		}
-	}
+	_, _ = fmt.Fprintln(os.Stdout, ui.Success(fmt.Sprintf("Deleted session '%s'", sess.Name)))
+	_, _ = fmt.Fprintf(os.Stdout, "  Session folder, %d transcript(s), %d agent log(s)\n", transcriptCount, agentLogCount)
+	slog.Info("session.deleted",
+		"component", "cli",
+		"session", sess.Name,
+		"transcripts", transcriptCount,
+		"agent_logs", agentLogCount,
+	)
 
 	return nil
 }
 
-
-// loadSessionMessages loads parsed messages from all transcripts for a session.
+// loadSessionMessages loads parsed messages from all transcripts for
+// a session. Used by the TUI's ViewContent callback.
 func loadSessionMessages(sess *session.Session) ([]transcript.Message, error) {
 	homeDir, err := util.HomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("could not determine home directory: %w", err)
 	}
-
-	clotildeRoot := projectClotildeRootForSession(sess)
-	paths := allTranscriptPaths(sess, clotildeRoot, homeDir)
+	clydeRoot := projectClydeRootForSession(sess)
+	paths := allTranscriptPaths(sess, clydeRoot, homeDir)
 
 	var allMessages []transcript.Message
 	for _, path := range paths {

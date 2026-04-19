@@ -1,0 +1,571 @@
+package compact
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// writeTranscript dumps lines (already JSON, no newline) into a temp
+// JSONL file and returns its path. Each test gets its own tempdir so
+// LoadSlice's file size and mtime are independent.
+func writeTranscript(t *testing.T, lines []string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "transcript.jsonl")
+	body := strings.Join(lines, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	return path
+}
+
+// userText builds a JSONL line for a user entry whose message.content
+// is a plain string. Sufficient for the boundary-discovery and
+// chat-stripper cases.
+func userText(uuid, parent, text string, ts time.Time) string {
+	payload := map[string]any{
+		"uuid":       uuid,
+		"parentUuid": parent,
+		"type":       "user",
+		"timestamp":  ts.UTC().Format(time.RFC3339Nano),
+		"message": map[string]any{
+			"role":    "user",
+			"content": text,
+		},
+	}
+	b, _ := json.Marshal(payload)
+	return string(b)
+}
+
+// assistantBlocks builds an assistant entry with a typed content
+// array. Useful for tool_use, thinking, and image cases.
+func assistantBlocks(uuid, parent string, ts time.Time, blocks []map[string]any) string {
+	payload := map[string]any{
+		"uuid":       uuid,
+		"parentUuid": parent,
+		"type":       "assistant",
+		"timestamp":  ts.UTC().Format(time.RFC3339Nano),
+		"message": map[string]any{
+			"role":    "assistant",
+			"content": blocks,
+		},
+	}
+	b, _ := json.Marshal(payload)
+	return string(b)
+}
+
+// userBlocks builds a user entry with a typed content array. Used
+// for tool_result entries.
+func userBlocks(uuid, parent string, ts time.Time, blocks []map[string]any) string {
+	payload := map[string]any{
+		"uuid":       uuid,
+		"parentUuid": parent,
+		"type":       "user",
+		"timestamp":  ts.UTC().Format(time.RFC3339Nano),
+		"message": map[string]any{
+			"role":    "user",
+			"content": blocks,
+		},
+	}
+	b, _ := json.Marshal(payload)
+	return string(b)
+}
+
+// boundaryLine builds a system compact_boundary entry the way Claude
+// Code (and the new apply path) emits them.
+func boundaryLine(uuid, parent string, ts time.Time) string {
+	payload := map[string]any{
+		"uuid":       uuid,
+		"parentUuid": parent,
+		"type":       "system",
+		"subtype":    "compact_boundary",
+		"timestamp":  ts.UTC().Format(time.RFC3339Nano),
+		"isMeta":     true,
+	}
+	b, _ := json.Marshal(payload)
+	return string(b)
+}
+
+// TestLoadSlice_BoundaryDiscovery verifies the slice splits at the
+// most recent compact_boundary, exposes both the full entry list and
+// the post-boundary tail, and produces -1 when no boundary exists.
+func TestLoadSlice_BoundaryDiscovery(t *testing.T) {
+	t0 := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name             string
+		lines            []string
+		wantBoundaryLine int
+		wantTotal        int
+		wantPost         int
+		wantBoundaryUUID string
+	}{
+		{
+			name: "no boundary",
+			lines: []string{
+				userText("u1", "", "hi", t0),
+				userText("u2", "u1", "world", t0.Add(time.Second)),
+			},
+			wantBoundaryLine: -1,
+			wantTotal:        2,
+			wantPost:         2,
+		},
+		{
+			name: "single boundary at index 1",
+			lines: []string{
+				userText("u1", "", "before", t0),
+				boundaryLine("b1", "u1", t0.Add(time.Second)),
+				userText("u2", "b1", "after", t0.Add(2*time.Second)),
+				userText("u3", "u2", "more", t0.Add(3*time.Second)),
+			},
+			wantBoundaryLine: 1,
+			wantTotal:        4,
+			wantPost:         2,
+			wantBoundaryUUID: "b1",
+		},
+		{
+			name: "two boundaries: most recent wins",
+			lines: []string{
+				userText("u1", "", "very old", t0),
+				boundaryLine("b1", "u1", t0.Add(time.Second)),
+				userText("u2", "b1", "old tail", t0.Add(2*time.Second)),
+				boundaryLine("b2", "u2", t0.Add(3*time.Second)),
+				userText("u3", "b2", "new", t0.Add(4*time.Second)),
+			},
+			wantBoundaryLine: 3,
+			wantTotal:        5,
+			wantPost:         1,
+			wantBoundaryUUID: "b2",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeTranscript(t, tc.lines)
+			slice, err := LoadSlice(path)
+			if err != nil {
+				t.Fatalf("LoadSlice: %v", err)
+			}
+			if slice.BoundaryLine != tc.wantBoundaryLine {
+				t.Errorf("BoundaryLine = %d, want %d", slice.BoundaryLine, tc.wantBoundaryLine)
+			}
+			if len(slice.AllEntries) != tc.wantTotal {
+				t.Errorf("len(AllEntries) = %d, want %d", len(slice.AllEntries), tc.wantTotal)
+			}
+			if len(slice.PostBoundary) != tc.wantPost {
+				t.Errorf("len(PostBoundary) = %d, want %d", len(slice.PostBoundary), tc.wantPost)
+			}
+			if tc.wantBoundaryUUID != "" && slice.BoundaryUUID != tc.wantBoundaryUUID {
+				t.Errorf("BoundaryUUID = %q, want %q", slice.BoundaryUUID, tc.wantBoundaryUUID)
+			}
+		})
+	}
+}
+
+// TestLoadSlice_PairIndex confirms tool_use/tool_result blocks in
+// the post-boundary slice link up by id.
+func TestLoadSlice_PairIndex(t *testing.T) {
+	t0 := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	lines := []string{
+		boundaryLine("b1", "", t0),
+		assistantBlocks("a1", "b1", t0.Add(time.Second), []map[string]any{
+			{"type": "tool_use", "id": "tool_a", "name": "Bash", "input": map[string]any{"cmd": "ls"}},
+		}),
+		userBlocks("u1", "a1", t0.Add(2*time.Second), []map[string]any{
+			{"type": "tool_result", "tool_use_id": "tool_a", "content": "file1\nfile2\n"},
+		}),
+		assistantBlocks("a2", "u1", t0.Add(3*time.Second), []map[string]any{
+			{"type": "tool_use", "id": "tool_b", "name": "Read", "input": map[string]any{"path": "x"}},
+		}),
+	}
+	slice, err := LoadSlice(writeTranscript(t, lines))
+	if err != nil {
+		t.Fatalf("LoadSlice: %v", err)
+	}
+	pairA, ok := slice.PairIndex["tool_a"]
+	if !ok {
+		t.Fatalf("PairIndex missing tool_a")
+	}
+	if pairA.UseEntryIdx != 0 || pairA.ResultEntryIdx != 1 {
+		t.Errorf("tool_a pair = %+v, want use=0 result=1", pairA)
+	}
+	pairB, ok := slice.PairIndex["tool_b"]
+	if !ok {
+		t.Fatalf("PairIndex missing tool_b")
+	}
+	if pairB.UseEntryIdx != 2 || pairB.ResultEntryIdx != -1 {
+		t.Errorf("tool_b pair = %+v, want use=2 result=-1 (no result yet)", pairB)
+	}
+}
+
+// TestApplyStrippersFully_TableDriven exercises each stripper alone
+// and the --all combination by running the no-target plan path,
+// which routes through applyStrippersFully + Synthesize. The
+// assertions look at the produced []OutputBlock to confirm the
+// stripper's intent showed up in the synthesized array.
+func TestApplyStrippersFully_TableDriven(t *testing.T) {
+	t0 := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	imageData := "ZmFrZWltYWdl" // base64 "fakeimage"
+	lines := []string{
+		boundaryLine("b1", "", t0),
+		userText("u1", "b1", "first user turn", t0.Add(time.Second)),
+		assistantBlocks("a1", "u1", t0.Add(2*time.Second), []map[string]any{
+			{"type": "thinking", "thinking": "let me think hard"},
+			{"type": "text", "text": "first assistant reply"},
+			{"type": "tool_use", "id": "tool_a", "name": "Bash", "input": map[string]any{"cmd": "ls"}},
+		}),
+		userBlocks("u2", "a1", t0.Add(3*time.Second), []map[string]any{
+			{"type": "tool_result", "tool_use_id": "tool_a", "content": "file1\nfile2\n"},
+		}),
+		userBlocks("u3", "u2", t0.Add(4*time.Second), []map[string]any{
+			{"type": "text", "text": "look at this image"},
+			{"type": "image", "source": map[string]any{"type": "base64", "media_type": "image/png", "data": imageData}},
+		}),
+		assistantBlocks("a2", "u3", t0.Add(5*time.Second), []map[string]any{
+			{"type": "text", "text": "final assistant reply"},
+		}),
+	}
+	slice, err := LoadSlice(writeTranscript(t, lines))
+	if err != nil {
+		t.Fatalf("LoadSlice: %v", err)
+	}
+
+	// joinedText concatenates every text block in the synthesized
+	// array. Image blocks contribute nothing to this string, so
+	// asserting on its presence cleanly distinguishes "image kept"
+	// from "image as placeholder".
+	joinedText := func(out []OutputBlock) string {
+		var sb strings.Builder
+		for _, b := range out {
+			if b.Image == nil {
+				sb.WriteString(b.Text)
+			}
+		}
+		return sb.String()
+	}
+
+	// hasImageBlock reports whether at least one block was emitted
+	// as an actual image (not a placeholder).
+	hasImageBlock := func(out []OutputBlock) bool {
+		for _, b := range out {
+			if b.Image != nil {
+				return true
+			}
+		}
+		return false
+	}
+
+	cases := []struct {
+		name            string
+		strippers       Strippers
+		wantThinking    bool // "[thinking]" substring present?
+		wantImageBlock  bool // an image block survived?
+		wantPlaceholder bool // "[image:" substring present?
+		wantToolBody    bool // the result body "file1" appears?
+		wantToolLine    bool // the "Bash(...)" tool activity line appears?
+		wantFirstUser   bool // "first user turn" appears?
+	}{
+		{
+			name:            "no strippers, full fidelity",
+			strippers:       Strippers{},
+			wantThinking:    true, // no-target path leaves DropThinking=false, so thinking renders
+			wantImageBlock:  true,
+			wantPlaceholder: false,
+			wantToolBody:    true,
+			wantToolLine:    true,
+			wantFirstUser:   true,
+		},
+		{
+			name:           "thinking only",
+			strippers:      Strippers{Thinking: true},
+			wantThinking:   false,
+			wantImageBlock: true,
+			wantToolBody:   true,
+			wantToolLine:   true,
+			wantFirstUser:  true,
+		},
+		{
+			name:            "images only",
+			strippers:       Strippers{Images: true},
+			wantThinking:    true,
+			wantImageBlock:  false,
+			wantPlaceholder: true,
+			wantToolBody:    true,
+			wantToolLine:    true,
+			wantFirstUser:   true,
+		},
+		{
+			name:           "tools only",
+			strippers:      Strippers{Tools: true},
+			wantThinking:   true,
+			wantImageBlock: true,
+			wantToolBody:   false,
+			wantToolLine:   false,
+			wantFirstUser:  true,
+		},
+		{
+			name:      "chat only drops oldest",
+			strippers: Strippers{Chat: true},
+			// Thinking lived on a1 (old assistant turn), which is
+			// dropped by the chat stripper, so the thinking marker
+			// disappears as a side effect.
+			wantThinking:   false,
+			wantImageBlock: true,
+			wantToolBody:   true,
+			wantToolLine:   true,
+			// chatDropOrder preserves the most recent assistant +
+			// its preceding user. "first user turn" is the OLDEST
+			// chat user turn, so it should be dropped.
+			wantFirstUser: false,
+		},
+		{
+			name:            "all",
+			strippers:       Strippers{Thinking: true, Images: true, Tools: true, Chat: true},
+			wantThinking:    false,
+			wantImageBlock:  false,
+			wantPlaceholder: true,
+			wantToolBody:    false,
+			wantToolLine:    false,
+			wantFirstUser:   false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := RunPlan(context.Background(), PlanInput{
+				Slice:     slice,
+				Strippers: tc.strippers,
+			})
+			if err != nil {
+				t.Fatalf("RunPlan: %v", err)
+			}
+			text := joinedText(res.BoundaryTail)
+			gotImage := hasImageBlock(res.BoundaryTail)
+			gotPlaceholder := strings.Contains(text, "[image:")
+			gotThinking := strings.Contains(text, "[thinking]")
+			gotToolBody := strings.Contains(text, "file1")
+			gotToolLine := strings.Contains(text, "Bash(")
+			gotFirstUser := strings.Contains(text, "first user turn")
+
+			if gotThinking != tc.wantThinking {
+				t.Errorf("thinking present = %v, want %v", gotThinking, tc.wantThinking)
+			}
+			if gotImage != tc.wantImageBlock {
+				t.Errorf("image block present = %v, want %v", gotImage, tc.wantImageBlock)
+			}
+			if gotPlaceholder != tc.wantPlaceholder {
+				t.Errorf("image placeholder present = %v, want %v", gotPlaceholder, tc.wantPlaceholder)
+			}
+			if gotToolBody != tc.wantToolBody {
+				t.Errorf("tool body present = %v, want %v", gotToolBody, tc.wantToolBody)
+			}
+			if gotToolLine != tc.wantToolLine {
+				t.Errorf("tool line present = %v, want %v", gotToolLine, tc.wantToolLine)
+			}
+			if gotFirstUser != tc.wantFirstUser {
+				t.Errorf("first user turn present = %v, want %v", gotFirstUser, tc.wantFirstUser)
+			}
+		})
+	}
+}
+
+// TestBuildBoundaryEntry_FieldOrder freezes the on-disk JSON shape of
+// a compact_boundary line. Field order matters: Claude Code's
+// large-file boundary scanner reads the first ~256 bytes looking for
+// "compact_boundary". A shuffled emitter would silently break that
+// detection.
+func TestBuildBoundaryEntry_FieldOrder(t *testing.T) {
+	ts := time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC)
+	got, err := buildBoundaryEntry(boundaryEntryArgs{
+		UUID:          "boundary-uuid-1",
+		ParentUUID:    "parent-uuid-1",
+		SessionID:     "sess-1",
+		Cwd:           "/tmp/x",
+		Version:       "clyde-test",
+		Timestamp:     ts,
+		PreCompactTok: 12345,
+	})
+	if err != nil {
+		t.Fatalf("buildBoundaryEntry: %v", err)
+	}
+	want := `{"parentUuid":"parent-uuid-1","isSidechain":false,"type":"system","subtype":"compact_boundary","content":"Conversation compacted by clyde.","isMeta":true,"timestamp":"2026-04-18T12:00:00Z","uuid":"boundary-uuid-1","compactMetadata":{"trigger":"manual","preCompactTokenCount":12345},"cwd":"/tmp/x","sessionId":"sess-1","version":"clyde-test"}`
+	if string(got) != want {
+		t.Errorf("boundary JSON mismatch\n got:  %s\n want: %s", got, want)
+	}
+}
+
+// TestBuildBoundaryEntry_NullParent confirms optionalString emits
+// JSON null when ParentUUID is empty (the very first chain entry
+// shape).
+func TestBuildBoundaryEntry_NullParent(t *testing.T) {
+	ts := time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC)
+	got, err := buildBoundaryEntry(boundaryEntryArgs{
+		UUID:      "b1",
+		SessionID: "s1",
+		Cwd:       "/x",
+		Version:   "v",
+		Timestamp: ts,
+	})
+	if err != nil {
+		t.Fatalf("buildBoundaryEntry: %v", err)
+	}
+	if !strings.HasPrefix(string(got), `{"parentUuid":null,`) {
+		t.Errorf("expected leading parentUuid:null, got prefix %q", string(got)[:40])
+	}
+}
+
+// TestBuildSyntheticUserEntry_FieldOrderAndContent freezes the
+// synthetic user entry shape including the embedded content array.
+func TestBuildSyntheticUserEntry_FieldOrderAndContent(t *testing.T) {
+	ts := time.Date(2026, 4, 18, 12, 0, 0, 1_000_000, time.UTC)
+	got, err := buildSyntheticUserEntry(syntheticEntryArgs{
+		UUID:       "syn-1",
+		ParentUUID: "boundary-1",
+		SessionID:  "sess-1",
+		Cwd:        "/tmp",
+		Version:    "v",
+		Timestamp:  ts,
+		Content: []OutputBlock{
+			{Text: "hello"},
+			{Image: &OutputImage{MediaType: "image/png", DataB64: "QUJD"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildSyntheticUserEntry: %v", err)
+	}
+	want := `{"parentUuid":"boundary-1","isSidechain":false,"type":"user","isCompactSummary":true,"timestamp":"2026-04-18T12:00:00.001Z","uuid":"syn-1","message":{"role":"user","content":[{"type":"text","text":"hello"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"QUJD"}}]},"cwd":"/tmp","sessionId":"sess-1","version":"v"}`
+	if string(got) != want {
+		t.Errorf("synthetic user JSON mismatch\n got:  %s\n want: %s", got, want)
+	}
+}
+
+// TestRunPlan_TargetLoop_FakeCounter exercises the target-driven
+// orchestration end-to-end against a stub HTTP server pretending to
+// be Anthropic's count_tokens endpoint. The fake decreases its
+// reported count by a fixed amount per call so the loop converges
+// after a predictable number of iterations.
+func TestRunPlan_TargetLoop_FakeCounter(t *testing.T) {
+	t0 := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	lines := []string{
+		boundaryLine("b1", "", t0),
+		userText("u1", "b1", "old turn one", t0.Add(time.Second)),
+		assistantBlocks("a1", "u1", t0.Add(2*time.Second), []map[string]any{
+			{"type": "text", "text": "old assistant"},
+			{"type": "tool_use", "id": "tool_a", "name": "Bash", "input": map[string]any{"cmd": "ls"}},
+		}),
+		userBlocks("u2", "a1", t0.Add(3*time.Second), []map[string]any{
+			{"type": "tool_result", "tool_use_id": "tool_a", "content": "noisy noisy output"},
+		}),
+		userText("u3", "u2", "second user turn", t0.Add(4*time.Second)),
+		assistantBlocks("a2", "u3", t0.Add(5*time.Second), []map[string]any{
+			{"type": "text", "text": "final assistant reply"},
+		}),
+	}
+	slice, err := LoadSlice(writeTranscript(t, lines))
+	if err != nil {
+		t.Fatalf("LoadSlice: %v", err)
+	}
+
+	// Fake counter: returns 1000 on first call, then decreases by
+	// 200 per call. With static_overhead=0 and reserved=0 and
+	// target=500, the loop will ping a few iterations, then return.
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&calls, 1)
+		count := 1000 - 200*int(n-1)
+		if count < 0 {
+			count = 0
+		}
+		fmt.Fprintf(w, `{"input_tokens":%d}`, count)
+	}))
+	defer srv.Close()
+
+	counter := &TokenCounter{
+		APIKey:   "test-key",
+		Endpoint: srv.URL,
+		Model:    "test-model",
+		Client:   srv.Client(),
+	}
+
+	res, err := RunPlan(context.Background(), PlanInput{
+		Slice:     slice,
+		Strippers: Strippers{Tools: true, Thinking: true, Images: true, Chat: true},
+		Target:    500,
+		Counter:   counter,
+		BatchSize: 1,
+	})
+	if err != nil {
+		t.Fatalf("RunPlan: %v", err)
+	}
+	if !res.HitTarget {
+		t.Errorf("HitTarget = false, want true")
+	}
+	if res.BaselineTail != 1000 {
+		t.Errorf("BaselineTail = %d, want 1000", res.BaselineTail)
+	}
+	if res.FinalTail > 500 {
+		t.Errorf("FinalTail = %d, want <= 500", res.FinalTail)
+	}
+	if len(res.Iterations) < 2 {
+		t.Errorf("expected at least 2 iterations (baseline + at least one demotion), got %d", len(res.Iterations))
+	}
+	if got := atomic.LoadInt32(&calls); got < 2 {
+		t.Errorf("count_tokens calls = %d, expected at least 2", got)
+	}
+}
+
+// TestRunPlan_TargetAlreadyMet skips the demotion loop when baseline
+// is already under target. Verifies the early-return path returns
+// HitTarget=true with exactly one iteration logged.
+func TestRunPlan_TargetAlreadyMet(t *testing.T) {
+	t0 := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	lines := []string{
+		boundaryLine("b1", "", t0),
+		userText("u1", "b1", "tiny", t0.Add(time.Second)),
+		assistantBlocks("a1", "u1", t0.Add(2*time.Second), []map[string]any{
+			{"type": "text", "text": "ok"},
+		}),
+	}
+	slice, err := LoadSlice(writeTranscript(t, lines))
+	if err != nil {
+		t.Fatalf("LoadSlice: %v", err)
+	}
+
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		fmt.Fprint(w, `{"input_tokens":42}`)
+	}))
+	defer srv.Close()
+
+	counter := &TokenCounter{
+		APIKey:   "k",
+		Endpoint: srv.URL,
+		Model:    "m",
+		Client:   srv.Client(),
+	}
+	res, err := RunPlan(context.Background(), PlanInput{
+		Slice:     slice,
+		Strippers: Strippers{Tools: true},
+		Target:    1000,
+		Counter:   counter,
+	})
+	if err != nil {
+		t.Fatalf("RunPlan: %v", err)
+	}
+	if !res.HitTarget {
+		t.Errorf("HitTarget = false, want true")
+	}
+	if len(res.Iterations) != 1 {
+		t.Errorf("len(Iterations) = %d, want 1", len(res.Iterations))
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Errorf("count_tokens calls = %d, want 1", got)
+	}
+}
