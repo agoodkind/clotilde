@@ -410,6 +410,242 @@ audio output return 400 across all backends. Tool calling, function
 calling, and image input are now supported as described in the tool
 calling, vision, audio, and logprobs section above.
 
+## OAuth bucket impersonation drift (429 root cause)
+
+The Anthropic `/v1/messages` OAuth path applies different throttling
+buckets based on the impersonation signals on each request. If clyde
+sends an impersonation set that does not match what the current `claude`
+CLI sends, the request lands in a smaller (or zero) bucket and returns
+HTTP 429 with body `{"type":"error","error":{"type":"rate_limit_error","message":"Error"}}`
+for prompts that the official CLI handles without issue.
+
+### Reproduction (verified 2026-04-19, concurrent run)
+
+Two requests fired in the same shell pipeline against the same OAuth
+token and the same `claude-opus-4-7` upstream model:
+
+| Path                                                       | Status                       | Duration | Body bytes  |
+| ---------------------------------------------------------- | ---------------------------- | -------- | ----------- |
+| Clyde adapter `/v1/chat/completions` (alias `clyde-opus-4-7-medium-1m`) | `502` wrapping upstream `429 rate_limit_error` | 318 ms   | 68,670      |
+| `claude -p --model claude-opus-4-7` via mitm proxy         | `200` with assistant content `"ok"`            | 3,563 ms | 238,790     |
+
+Same instant, same token, same upstream API: **only the request headers
+differed**, so Anthropic routed the two requests into different
+throttling buckets.
+
+### Testbed instrumentation
+
+Two pieces work together so the diff can be re-derived on demand
+without a wire sniffer.
+
+#### 1. `clyde-research/tools/anthropic-mitm`
+
+Forward proxy for `REDACTED-UPSTREAM`. Reads `Authorization` (redacts
+to length marker) and writes one ndjson line per request with both raw
+and base64 copies of the request and response body
+([clyde-research/tools/anthropic-mitm/main.go](../../../clyde-research/tools/anthropic-mitm/main.go)):
+
+| Field                       | Notes                                                                              |
+| --------------------------- | ---------------------------------------------------------------------------------- |
+| `request_method`, `request_path`, `request_headers` | `Authorization` and `x-api-key` redacted to `<REDACTED len=N>`           |
+| `request_body_bytes`        | full untruncated size                                                              |
+| `request_body_raw`          | UTF-8 string body, capped at 1 MiB (was 32 KiB; bumped so 240 KiB CLI bodies fit)  |
+| `request_body_b64`          | base64 of the same bytes; survives truncation without breaking outer JSON          |
+| `request_body_truncated`    | `true` if either capped form was clipped                                           |
+| `response_*` mirror set     | same triple plus `response_status_code`, `response_headers`                        |
+| `started_at`, `duration_ms` | wall-clock                                                                         |
+
+Invocation:
+
+```bash
+TMPMOD=$(mktemp -d) && cp /Users/agoodkind/Sites/clyde-research/tools/anthropic-mitm/main.go "$TMPMOD/" \
+  && (cd "$TMPMOD" && go mod init anthmitm && go build -o /tmp/anthropic-mitm .)
+/tmp/anthropic-mitm -out /tmp/anthropic-capture.ndjson -addr 127.0.0.1:19999 &
+ANTHROPIC_BASE_URL=http://127.0.0.1:19999 \
+  /Users/agoodkind/.cursor/extensions/anthropic.claude-code-2.1.114-darwin-arm64/resources/native-binary/claude \
+  -p "say hi" --model claude-opus-4-7
+kill %1
+```
+
+#### 2. Clyde slog event `anthropic.messages.request`
+
+Emitted in [internal/adapter/anthropic/client.go](../internal/adapter/anthropic/client.go)
+right before `c.http.Do(httpReq)`. Lands in `~/.local/state/clyde/clyde.jsonl`
+when `[logging] level = "debug"`. Attribute set:
+
+| Attribute     | Value                                                                |
+| ------------- | -------------------------------------------------------------------- |
+| `subcomponent`| `"anthropic"`                                                        |
+| `model`       | wire-format Anthropic model id                                       |
+| `url`         | `MessagesURL`                                                        |
+| `body_bytes`  | full size                                                            |
+| `headers`     | `map[string]string`, lowercased keys, `authorization` redacted to `Bearer <redacted len=N>`, `x-api-key`/`cookie`/`proxy-authorization` to `<redacted>` |
+| `body`        | raw JSON request body, full                                          |
+| `body_b64`    | base64 of the same bytes                                             |
+
+The same `body`/`body_b64`/`body_bytes` triple is also populated on
+`anthropic.ratelimit` and `anthropic.messages.upstream_error` events
+([internal/adapter/anthropic/logging.go](../internal/adapter/anthropic/logging.go)).
+The earlier behavior of truncating error bodies to 400 chars is gone;
+the response body is now logged in full.
+
+#### Diff script
+
+[/tmp/diff_headers.py](/tmp/diff_headers.py) (regenerable) reads the
+mitm ndjson and the clyde jsonl, decodes both bodies via base64, and
+prints a `[= same | + clyde-only | - cli-only | ! differ]`-marked
+header diff plus a sorted `anthropic-beta` set delta.
+
+### Captured ground truth
+
+Captured via [clyde-research/tools/anthropic-mitm](../../../clyde-research/tools/anthropic-mitm)
+pointed at `claude -p` with `ANTHROPIC_BASE_URL=http://127.0.0.1:19999`.
+The successful CLI request was:
+
+```
+POST /v1/messages
+Anthropic-Beta:    REDACTED-CC-BETA,REDACTED-OAUTH-BETA,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advisor-tool-2026-03-01,effort-2025-11-24
+Anthropic-Version: 2023-06-01
+User-Agent:        REDACTED-UA
+X-App:             cli
+X-Claude-Code-Session-Id: <uuid>
+X-Stainless-Lang:  js
+X-Stainless-Package-Version: 0.81.0
+X-Stainless-Os:    MacOS
+X-Stainless-Arch:  arm64
+X-Stainless-Runtime: node
+X-Stainless-Runtime-Version: v24.3.0
+X-Stainless-Retry-Count: 0
+X-Stainless-Timeout: 600
+Anthropic-Dangerous-Direct-Browser-Access: <present>
+Content-Type:      application/json
+Accept:            application/json
+Accept-Encoding:   gzip, deflate, br, zstd
+```
+
+What clyde currently sends from
+[internal/adapter/anthropic/client.go:109-114](../internal/adapter/anthropic/client.go):
+
+```
+Authorization:     Bearer <token>
+anthropic-beta:    REDACTED-OAUTH-BETA,REDACTED-CC-BETA,effort-2025-11-24
+anthropic-version: 2023-06-01
+x-app:             cli
+User-Agent:        REDACTED-UA
+Content-Type:      application/json
+```
+
+### Diff (machine-verified, 2026-04-19)
+
+Generated from a concurrent run by `diff_headers.py`. Markers:
+`= same`, `+ clyde-only`, `- cli-only`, `! differ`.
+
+```
+[= same]   anthropic-version
+[= same]   content-type
+[= same]   user-agent              -- REDACTED-UA
+[= same]   x-app                   -- cli
+[! differ] anthropic-beta
+            cli   : REDACTED-CC-BETA,REDACTED-OAUTH-BETA,interleaved-thinking-2025-05-14,
+                    context-management-2025-06-27,prompt-caching-scope-2026-01-05,
+                    advisor-tool-2026-03-01,effort-2025-11-24             (7 betas)
+            clyde : REDACTED-OAUTH-BETA,REDACTED-CC-BETA,effort-2025-11-24 (3 betas)
+[- cli-only] accept                                       -- application/json
+[- cli-only] accept-encoding                              -- gzip, deflate, br, zstd
+[- cli-only] anthropic-dangerous-direct-browser-access    -- true
+[- cli-only] x-claude-code-session-id                     -- <per-process uuid>
+[- cli-only] x-stainless-lang                             -- js
+[- cli-only] x-stainless-package-version                  -- 0.81.0
+[- cli-only] x-stainless-os                               -- MacOS
+[- cli-only] x-stainless-arch                             -- arm64
+[- cli-only] x-stainless-runtime                          -- node
+[- cli-only] x-stainless-runtime-version                  -- v24.3.0
+[- cli-only] x-stainless-retry-count                      -- 0
+[- cli-only] x-stainless-timeout                          -- 600
+```
+
+Beta-set delta in cleaner form. Source of truth for each missing beta
+is in the deobfuscated CLI source:
+
+| Missing beta                       | Source of truth in CLI v2.1.114                                                                                                          |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `interleaved-thinking-2025-05-14`  | [src/utils/betas.ts:257-262](../../../clyde-research/claude-code-sourcemap-main-2-newer/restored-src/src/utils/betas.ts) gated on `modelSupportsISP(model)` (opus-4 / sonnet-4 / haiku-4) |
+| `context-management-2025-06-27`    | [src/utils/betas.ts:307-312](../../../clyde-research/claude-code-sourcemap-main-2-newer/restored-src/src/utils/betas.ts) gated on `modelSupportsContextManagement(model)`                |
+| `prompt-caching-scope-2026-01-05`  | [src/utils/betas.ts:354-357](../../../clyde-research/claude-code-sourcemap-main-2-newer/restored-src/src/utils/betas.ts) firstParty + experimental-betas-not-disabled                    |
+| `advisor-tool-2026-03-01`          | [src/constants/betas.ts:31](../../../clyde-research/claude-code-sourcemap-main-2-newer/restored-src/src/constants/betas.ts) constant; emitted unconditionally in 2.1.114                 |
+
+Additional missing headers:
+
+| Header                                       | Source                                                                                                                          |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `X-Claude-Code-Session-Id`                   | [src/services/api/client.ts:108](../../../clyde-research/claude-code-sourcemap-main-2-newer/restored-src/src/services/api/client.ts) (per-process UUID) |
+| `X-Stainless-*` block                        | injected by `@anthropic-ai/sdk` v0.81.0; static for one CLI version                                                             |
+| `Anthropic-Dangerous-Direct-Browser-Access`  | Anthropic SDK default for non-browser environments                                                                              |
+| `Accept`, `Accept-Encoding`                  | Anthropic SDK fetch defaults                                                                                                    |
+
+An earlier draft of this section claimed `effort-2025-11-24` was not in
+the CLI request. That was wrong; the v2.1.114 capture above shows the
+CLI does send it on `claude-opus-4-7`. Despite the deobfuscated comment
+in [claude-code/06-named/deobfuscated.js:667257](../../../clyde-research/claude-code/06-named/deobfuscated.js)
+labeling it deprecated and "GA on 4.6", the runtime still ships it on
+4.7. Keep it on clyde's side.
+
+### What this means
+
+The clyde anthropic client uses a static `BetaHeader` string from
+`[adapter.impersonation]` in `~/.config/clyde/config.toml`. Hardcoding
+a single beta string cannot match the per-model, per-feature logic in
+`getAllModelBetas(model)`. Two paths forward:
+
+1. **Quick fix**: replace the configured `beta_header` value with the
+   superset captured above. This will bring clyde into the same bucket
+   as `claude -p` for opus-4-7-style requests but will drift again the
+   next time the CLI updates.
+2. **Right fix**: port `getAllModelBetas(model)` to Go in
+   `internal/adapter/anthropic` so the beta set is computed per request
+   from the resolved model id, mirroring the CLI's logic. Add the
+   `X-Claude-Code-Session-Id` header (one UUID per daemon process is
+   sufficient) and the `X-Stainless-*` block. The `Stainless` headers
+   are observability metadata only and have no per-request variation
+   inside one CLI version, so they can be a static block keyed off the
+   CLI version we are impersonating.
+
+### How to re-verify after a CLI update
+
+The full reproduction is one shell pipeline once the proxy is built and
+clyde is running with `[logging] level = "debug"`:
+
+```bash
+# 1. start the proxy (build instructions above under "Testbed instrumentation")
+truncate -s 0 ~/.local/state/clyde/clyde.jsonl
+rm -f /tmp/anthropic-capture.ndjson
+/tmp/anthropic-mitm -out /tmp/anthropic-capture.ndjson -addr 127.0.0.1:19999 &
+
+# 2. build a 60-100 KiB prompt that reliably trips the bucket
+python3 -c 'print("Repeat back the word ok. " + "Lorem ipsum dolor sit amet, consectetur adipiscing elit. " * 600)' > /tmp/big-prompt.txt
+python3 -c 'import json; print(json.dumps({"model":"clyde-opus-4-7-medium-1m","messages":[{"role":"system","content":"You are helpful."+" Lorem ipsum dolor sit amet, consectetur adipiscing elit."*600},{"role":"user","content":open("/tmp/big-prompt.txt").read()}],"max_tokens":64,"stream":False}))' > /tmp/big-req.json
+
+# 3. fire both at once
+TOKEN=$(awk -F'"' '/require_token/ {print $2}' ~/.config/clyde/config.toml)
+CLAUDE_BIN=/Users/agoodkind/.cursor/extensions/anthropic.claude-code-2.1.114-darwin-arm64/resources/native-binary/claude
+( curl -sS -X POST http://127.0.0.1:11434/v1/chat/completions \
+    -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    --data @/tmp/big-req.json -w '\n--- A %{http_code} %{time_total}s ---\n' ) &
+( cat /tmp/big-prompt.txt | ANTHROPIC_BASE_URL=http://127.0.0.1:19999 \
+    "$CLAUDE_BIN" -p --model claude-opus-4-7; echo "--- B exit $? ---" ) &
+wait
+
+# 4. stop the proxy and diff
+kill %1
+python3 /tmp/diff_headers.py
+```
+
+`diff_headers.py` lives at `/tmp/diff_headers.py` (regenerable from the
+shape documented above); it reads `/tmp/anthropic-capture.ndjson` and
+`~/.local/state/clyde/clyde.jsonl` and prints the marker-prefixed diff.
+Update [internal/adapter/anthropic/client.go](../internal/adapter/anthropic/client.go)
+or `[adapter.impersonation]` in your toml until the diff is empty.
+
 ## Terms of service
 
 You are responsible for complying with Anthropic's ToS when driving
