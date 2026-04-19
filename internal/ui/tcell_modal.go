@@ -146,20 +146,31 @@ func (m *Modal) drawBox(scr tcell.Screen, box Rect) {
 
 // HandleEvent processes keyboard events; mouse clicks on the modal area are
 // consumed so they do not leak to widgets behind.
+// HandleEvent routes keyboard and mouse events for the Modal.
+//
+// Modal navigates buttons left-to-right (Tab/Right or Shift-Tab/Left)
+// rather than vertically, so the cursor movement does not match the
+// generic up/down model HandleMenuKey assumes. Up/Down are not used
+// here. The activate / cancel half delegates to HandleMenuKey so
+// the Enter-vs-LF terminal-mode quirk stays fixed in one place.
+//
+// Custom Shortcuts (e.g. y/n on confirm dialogs) take priority over
+// the shared handler so a single key can both cancel AND confirm
+// depending on the registered shortcut.
 func (m *Modal) HandleEvent(ev tcell.Event) bool {
 	switch e := ev.(type) {
 	case *tcell.EventKey:
+		// Custom rune shortcuts first (y/n etc.).
+		if e.Key() == tcell.KeyRune {
+			if idx, ok := m.Shortcuts[e.Rune()]; ok {
+				if m.OnChoice != nil {
+					m.OnChoice(idx)
+				}
+				return true
+			}
+		}
+		// Horizontal button navigation (Modal-specific).
 		switch e.Key() {
-		case tcell.KeyEscape:
-			if m.OnChoice != nil {
-				m.OnChoice(-1)
-			}
-			return true
-		case tcell.KeyEnter:
-			if m.OnChoice != nil {
-				m.OnChoice(m.ActiveIndex)
-			}
-			return true
 		case tcell.KeyTab, tcell.KeyRight:
 			if len(m.Buttons) > 0 {
 				m.ActiveIndex = (m.ActiveIndex + 1) % len(m.Buttons)
@@ -170,15 +181,24 @@ func (m *Modal) HandleEvent(ev tcell.Event) bool {
 				m.ActiveIndex = (m.ActiveIndex - 1 + len(m.Buttons)) % len(m.Buttons)
 			}
 			return true
-		case tcell.KeyRune:
-			r := e.Rune()
-			if idx, ok := m.Shortcuts[r]; ok {
-				if m.OnChoice != nil {
-					m.OnChoice(idx)
-				}
-				return true
-			}
 		}
+		// Shared activate / cancel via HandleMenuKey. Pass a dummy
+		// cursor because Modal does not use the helper's vertical
+		// navigation. Enter activates the current button; Esc
+		// returns -1 (cancel) per the existing OnChoice contract.
+		dummy := m.ActiveIndex
+		return HandleMenuKey(e, &dummy, len(m.Buttons), MenuKeyOptions{
+			OnActivate: func(int) {
+				if m.OnChoice != nil {
+					m.OnChoice(m.ActiveIndex)
+				}
+			},
+			OnCancel: func() {
+				if m.OnChoice != nil {
+					m.OnChoice(-1)
+				}
+			},
+		})
 	case *tcell.EventMouse:
 		// Consume mouse clicks within the modal rect so they don't leak.
 		x, y := e.Position()

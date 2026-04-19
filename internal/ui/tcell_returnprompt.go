@@ -15,7 +15,7 @@ import (
 //
 //	0  Return to session
 //	1  Go back to session list
-//	2  Quit clotilde       (default, highlighted on open)
+//	2  Quit clyde       (default, highlighted on open)
 //
 // Stats rendered above the options include token count, message count,
 // compactions, session age, and basedir. The values come from the App
@@ -48,7 +48,7 @@ func (p *ReturnPrompt) Draw(scr tcell.Screen, r Rect) {
 	resumeLine := fmt.Sprintf("Return to %s", p.SessionName)
 	compactLine := "Compact this session..."
 	listLine := "Go back to session list"
-	quitLine := "Quit clotilde"
+	quitLine := "Quit clyde"
 
 	// Width: the longer of the widest stat row and the widest option.
 	widest := runeCount(title)
@@ -132,47 +132,18 @@ func drawOption(scr tcell.Screen, x, y, w int, tag, label string, active bool, a
 // HandleEvent routes navigation keys to index changes and action keys to the
 // registered callbacks. Mouse clicks inside the box are consumed so they do
 // not leak through to the table underneath.
+//
+// The shared HandleMenuKey helper covers Enter / LF / Esc / Up / Down /
+// j / k / q. The widget-specific letter shortcuts (r, l, c) are
+// handled here before delegating so the cursor index is not advanced
+// just because the user pressed an action shortcut.
 func (p *ReturnPrompt) HandleEvent(ev tcell.Event) bool {
 	switch e := ev.(type) {
 	case *tcell.EventKey:
-		switch e.Key() {
-		case tcell.KeyUp:
-			if p.Index > 0 {
-				p.Index--
-			}
-			return true
-		case tcell.KeyDown:
-			if p.Index < returnOptionCount-1 {
-				p.Index++
-			}
-			return true
-		case tcell.KeyEnter:
-			p.activate()
-			return true
-		case tcell.KeyEscape:
-			if p.OnCancel != nil {
-				p.OnCancel()
-			} else if p.OnList != nil {
-				p.OnList()
-			}
-			return true
-		case tcell.KeyRune:
+		// Widget-specific letter shortcuts: act directly without
+		// touching the cursor.
+		if e.Key() == tcell.KeyRune {
 			switch e.Rune() {
-			case 'k':
-				if p.Index > 0 {
-					p.Index--
-				}
-				return true
-			case 'j':
-				if p.Index < returnOptionCount-1 {
-					p.Index++
-				}
-				return true
-			case 'q', 'Q':
-				if p.OnQuit != nil {
-					p.OnQuit()
-				}
-				return true
 			case 'r', 'R':
 				if p.OnResume != nil {
 					p.OnResume()
@@ -190,6 +161,18 @@ func (p *ReturnPrompt) HandleEvent(ev tcell.Event) bool {
 				return true
 			}
 		}
+		// Shared menu navigation. Esc maps to OnCancel, falling
+		// back to OnList per the prompt's "esc to list" footer hint.
+		cancel := p.OnCancel
+		if cancel == nil {
+			cancel = p.OnList
+		}
+		return HandleMenuKey(e, &p.Index, returnOptionCount, MenuKeyOptions{
+			OnActivate: func(int) { p.activate() },
+			OnCancel:   cancel,
+			OnQuit:     p.OnQuit,
+			EnableJK:   true,
+		})
 	case *tcell.EventMouse:
 		x, y := e.Position()
 		if p.Rect.Contains(x, y) {

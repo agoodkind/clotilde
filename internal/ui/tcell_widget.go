@@ -17,6 +17,23 @@ type Widget interface {
 	HandleEvent(ev tcell.Event) bool
 }
 
+// drawBoxBorder paints a single-line border around box using color.
+func drawBoxBorder(scr tcell.Screen, box Rect, color tcell.Color) {
+	style := StyleDefault.Foreground(color)
+	scr.SetContent(box.X, box.Y, '┌', nil, style)
+	scr.SetContent(box.X+box.W-1, box.Y, '┐', nil, style)
+	scr.SetContent(box.X, box.Y+box.H-1, '└', nil, style)
+	scr.SetContent(box.X+box.W-1, box.Y+box.H-1, '┘', nil, style)
+	for x := box.X + 1; x < box.X+box.W-1; x++ {
+		scr.SetContent(x, box.Y, '─', nil, style)
+		scr.SetContent(x, box.Y+box.H-1, '─', nil, style)
+	}
+	for yy := box.Y + 1; yy < box.Y+box.H-1; yy++ {
+		scr.SetContent(box.X, yy, '│', nil, style)
+		scr.SetContent(box.X+box.W-1, yy, '│', nil, style)
+	}
+}
+
 // drawString writes s at (x, y) with the given style. Returns the width used.
 // Clips at maxW (cells). Grapheme/wide-char naive: one rune = one cell.
 func drawString(scr tcell.Screen, x, y int, style tcell.Style, s string, maxW int) int {
@@ -47,6 +64,40 @@ func clearRect(scr tcell.Screen, r Rect) {
 	for row := 0; row < r.H; row++ {
 		fillRow(scr, r.X, r.Y+row, r.W, tcell.StyleDefault)
 	}
+}
+
+// ColorDimOverlay is the background tone used behind modal overlays so
+// the active pane stands out. The pane itself redraws with the terminal
+// default background, which reads as a clear lifted panel against the
+// dimmed backdrop.
+var ColorDimOverlay = tcell.Color235
+
+// dimBackground paints a darker background over every cell in the
+// screen so the pane on top reads as a lifted panel. Cells are
+// rewritten with their existing rune and foreground, only the
+// background attribute changes. This is cheap because tcell already
+// holds the cell buffer in memory.
+func dimBackground(scr tcell.Screen) {
+	w, h := scr.Size()
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			r, _, style, _ := scr.GetContent(x, y)
+			fg, _, attr := style.Decompose()
+			newStyle := tcell.StyleDefault.Foreground(dimForeground(fg)).Background(ColorDimOverlay).Attributes(attr)
+			scr.SetContent(x, y, r, nil, newStyle)
+		}
+	}
+}
+
+// dimForeground softens a foreground tone so the dimmed backdrop does
+// not force the eye to compete with unchanged bright text. Colors
+// fall back to the muted palette entry; the default foreground and
+// every defined color get nudged into the subtext band.
+func dimForeground(fg tcell.Color) tcell.Color {
+	if fg == tcell.ColorDefault {
+		return ColorMuted
+	}
+	return ColorSubtext
 }
 
 // stripMarkup removes inline tview-style tags like [color:bg:flags] from s.

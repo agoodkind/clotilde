@@ -183,7 +183,7 @@ func (p *SidecarPanel) handleKey(e *tcell.EventKey) bool {
 		return true
 	}
 	if p.focus == sidecarFocusInput {
-		if e.Key() == tcell.KeyEnter {
+		if e.Key() == tcell.KeyEnter || e.Key() == tcell.KeyLF {
 			text := strings.TrimSpace(p.Input.Text)
 			if text == "" {
 				return true

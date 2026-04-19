@@ -7,9 +7,8 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/fgrehm/clotilde/internal/session"
-	"github.com/fgrehm/clotilde/internal/transcript"
-	"github.com/fgrehm/clotilde/internal/util"
+	"goodkind.io/clyde/internal/session"
+	"goodkind.io/clyde/internal/util"
 )
 
 // DetailsFocus identifies which sub-pane of the details view owns keyboard
@@ -35,11 +34,6 @@ type DetailsView struct {
 	LeftRect  Rect // last-drawn rect for the left pane, used for mouse hit-testing
 	RightRect Rect // last-drawn rect for the right pane
 
-	// FormatTokens lets the parent App inject its tokenizer-aware
-	// formatter. The default falls back to the local approximate
-	// formatter so the widget remains usable in isolation.
-	FormatTokens func(sess *session.Session, estimated int) string
-
 	// LookupBridge returns the active claude --remote-control bridge
 	// for sess, if any. Set by the App so the details pane can
 	// surface the bridge URL without importing the daemon protobuf.
@@ -60,15 +54,6 @@ func (d *DetailsView) formatBridge(sess *session.Session) string {
 	return "active  " + b.URL
 }
 
-// formatTokens delegates to the injected formatter or falls back to a
-// safe approximate format.
-func (d *DetailsView) formatTokens(sess *session.Session, estimated int) string {
-	if d.FormatTokens != nil {
-		return d.FormatTokens(sess, estimated)
-	}
-	return fmtTokenCount(estimated, false)
-}
-
 // NewDetailsView constructs a details pane.
 func NewDetailsView() *DetailsView {
 	return &DetailsView{
@@ -78,10 +63,10 @@ func NewDetailsView() *DetailsView {
 }
 
 // Set populates both columns from a session and detail payload.
-func (d *DetailsView) Set(sess *session.Session, detail SessionDetail, statsCache map[string]*transcript.CompactQuickStats) {
+func (d *DetailsView) Set(sess *session.Session, detail SessionDetail) {
 	d.Left.Title = " STATS "
 	d.Right.Title = " MESSAGES "
-	d.Left.SetSegments(d.buildLeft(sess, detail, statsCache))
+	d.Left.SetSegments(d.buildLeft(sess, detail))
 	d.Right.SetSegments(d.buildRight(sess, detail))
 	d.Left.Offset = 0
 	d.Right.Offset = 0
@@ -96,7 +81,7 @@ func (d *DetailsView) SetFocus(f DetailsFocus) {
 
 // buildLeft composes the stats column as a slice of styled logical lines.
 // The parent TextBox handles wrapping and scrolling.
-func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail, statsCache map[string]*transcript.CompactQuickStats) [][]TextSegment {
+func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][]TextSegment {
 	var out [][]TextSegment
 
 	// Header: name + optional context (no label, just prominent).
@@ -150,17 +135,6 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail, sta
 			kv("Size", fmt.Sprintf("%.2f MB", mb))
 		}
 	}
-	if qs, ok := statsCache[sess.Metadata.TranscriptPath]; ok {
-		kv("Tokens", d.formatTokens(sess, qs.EstimatedTokens))
-		kv("Compactions", fmt.Sprintf("%d", qs.Compactions))
-		kv("In context", fmt.Sprintf("%s entries", fmtInt(qs.EntriesInContext)))
-		if qs.Compactions > 0 && !qs.LastCompactTime.IsZero() {
-			kv("Last compact", util.FormatRelativeTime(qs.LastCompactTime))
-		}
-		kv("Total", fmt.Sprintf("%s entries", fmtInt(qs.TotalEntries)))
-	} else if sess.Metadata.TranscriptPath != "" {
-		out = append(out, []TextSegment{{Text: "  computing stats...", Style: StyleMuted}})
-	}
 	out = append(out, []TextSegment{})
 
 	if len(detail.AllMessages) > 0 {
@@ -210,7 +184,7 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail, sta
 	out = append(out, []TextSegment{})
 
 	section("Resume")
-	out = append(out, []TextSegment{{Text: "  clotilde resume " + sess.Name, Style: StyleMuted}})
+	out = append(out, []TextSegment{{Text: "  clyde resume " + sess.Name, Style: StyleMuted}})
 	out = append(out, []TextSegment{{Text: "  claude --resume " + sess.Metadata.SessionID, Style: StyleMuted}})
 
 	return out
@@ -308,7 +282,68 @@ func (d *DetailsView) Draw(scr tcell.Screen, r Rect) {
 		return
 	}
 
-	// Split 40/60 so the right pane has more room for message bodies.
+	// Responsive layout. Three modes:
+	//
+	//   wide  (>=80 cols): side-by-side 40/60 split, the original layout.
+	//   tall  (50..79 cols): stack vertically so each pane gets the full
+	//                        width. Stats sits on top, messages below.
+	//   tiny  (<50 cols):    stats only; messages would be unreadable.
+	//
+	// The vertical split allocates 40% of the available height to stats
+	// and 60% to messages so the bias matches the original 40/60 split
+	// the user sees on a wide terminal.
+	if inner.W < 50 {
+		d.LeftRect = inner
+		d.RightRect = Rect{}
+		d.Left.Draw(scr, inner)
+		// Show a hint at the bottom so users know they're in tiny-mode.
+		drawString(scr, inner.X, inner.Y+inner.H-1, StyleMuted,
+			"  (resize wider to see messages pane)", inner.W)
+		return
+	}
+	if inner.W < 80 {
+		// Vertical stack mode.
+		topH := inner.H * 40 / 100
+		if topH < 6 {
+			topH = imin(6, inner.H-1)
+		}
+		bottomH := inner.H - topH - 1
+		if bottomH < 3 {
+			d.LeftRect = inner
+			d.RightRect = Rect{}
+			d.Left.Draw(scr, inner)
+			return
+		}
+		d.LeftRect = Rect{X: inner.X, Y: inner.Y, W: inner.W, H: topH}
+		d.RightRect = Rect{X: inner.X, Y: inner.Y + topH + 1, W: inner.W, H: bottomH}
+		d.Left.Draw(scr, d.LeftRect)
+		// Horizontal divider between the two stacked panes.
+		for x := inner.X; x < inner.X+inner.W; x++ {
+			scr.SetContent(x, inner.Y+topH, '─', nil, borderStyle)
+		}
+		d.Right.Draw(scr, d.RightRect)
+		// Focus indicators for the stacked layout. Both top rows get the
+		// usual title; the focused pane gets the accent fill so the user
+		// can still tell where arrow keys land.
+		focusStyle := tcell.StyleDefault.Background(ColorAccent).Foreground(tcell.ColorBlack).Bold(true)
+		idleStyle := StyleSubtext.Bold(true)
+		switch d.Focus {
+		case DetailsFocusLeft:
+			fillRow(scr, inner.X, inner.Y, inner.W, focusStyle)
+			drawString(scr, inner.X+1, inner.Y, focusStyle, "STATS  (focused, ↑↓ scroll, tab to messages)", inner.W-1)
+			drawString(scr, inner.X+1, inner.Y+topH+1, idleStyle, "MESSAGES  (tab to focus)", inner.W-1)
+		case DetailsFocusRight:
+			fillRow(scr, inner.X, inner.Y+topH+1, inner.W, focusStyle)
+			drawString(scr, inner.X+1, inner.Y+topH+1, focusStyle, "MESSAGES  (focused, ↑↓ scroll, tab to stats)", inner.W-1)
+			drawString(scr, inner.X+1, inner.Y, idleStyle, "STATS  (tab to focus)", inner.W-1)
+		default:
+			drawString(scr, inner.X+1, inner.Y, idleStyle, "STATS  (tab to focus)", inner.W-1)
+			drawString(scr, inner.X+1, inner.Y+topH+1, idleStyle, "MESSAGES  (tab to focus)", inner.W-1)
+		}
+		return
+	}
+
+	// Wide layout: side-by-side 40/60 split.
 	leftW := inner.W * 40 / 100
 	if leftW < 28 {
 		leftW = imin(28, inner.W-1)
@@ -358,42 +393,4 @@ func (d *DetailsView) HandleEvent(ev tcell.Event) bool {
 		return d.Right.HandleEvent(ev)
 	}
 	return false
-}
-
-// ---------------- formatting helpers ----------------
-
-func fmtTokens(n int) string {
-	if n >= 1_000_000 {
-		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
-	}
-	if n >= 1_000 {
-		return fmt.Sprintf("%dk", n/1_000)
-	}
-	return fmt.Sprintf("%d", n)
-}
-
-// fmtTokenCount formats a token value with the "approximate" prefix
-// applied only when the source is the local tiktoken estimate. Counts
-// returned by the Claude API are exact, so the prefix would be
-// misleading. Callers pass exact=true when the value came from the API.
-func fmtTokenCount(n int, exact bool) string {
-	if exact {
-		return fmtTokens(n)
-	}
-	return "~" + fmtTokens(n)
-}
-
-func fmtInt(n int) string {
-	s := fmt.Sprintf("%d", n)
-	if len(s) <= 3 {
-		return s
-	}
-	var b strings.Builder
-	for i, c := range s {
-		if i > 0 && (len(s)-i)%3 == 0 {
-			b.WriteByte(',')
-		}
-		b.WriteRune(c)
-	}
-	return b.String()
 }

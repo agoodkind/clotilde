@@ -392,7 +392,7 @@ func (t *TableWidget) HandleEvent(ev tcell.Event) bool {
 	case tcell.KeyRight:
 		t.ScrollRight(6)
 		return true
-	case tcell.KeyEnter:
+	case tcell.KeyEnter, tcell.KeyLF:
 		if t.Active && t.OnActivate != nil {
 			t.OnActivate(t.SelectedRow)
 		}

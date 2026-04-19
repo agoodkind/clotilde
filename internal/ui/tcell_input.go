@@ -66,7 +66,7 @@ func (ti *TextInput) HandleEvent(ev tcell.Event) bool {
 			ti.OnCancel()
 		}
 		return true
-	case tcell.KeyEnter:
+	case tcell.KeyEnter, tcell.KeyLF:
 		if ti.OnSubmit != nil {
 			ti.OnSubmit(ti.Text)
 		}

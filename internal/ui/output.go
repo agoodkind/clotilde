@@ -10,7 +10,6 @@ const (
 	ansiReset  = "\x1b[0m"
 	ansiGreen  = "\x1b[32m"
 	ansiYellow = "\x1b[33m"
-	ansiBlue   = "\x1b[34m"
 )
 
 // Success renders a success message with a green checkmark.
@@ -21,9 +20,4 @@ func Success(msg string) string {
 // Warning renders a warning message with a yellow warning icon.
 func Warning(msg string) string {
 	return fmt.Sprintf("%s⚠%s %s", ansiYellow, ansiReset, msg)
-}
-
-// Info renders an info message with a blue info icon.
-func Info(msg string) string {
-	return fmt.Sprintf("%sℹ%s %s", ansiBlue, ansiReset, msg)
 }

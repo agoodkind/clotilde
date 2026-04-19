@@ -112,29 +112,22 @@ func (m *OptionsModal) HandleEvent(ev tcell.Event) bool {
 	return false
 }
 
+// handleKey routes navigation keys. Cursor movement stays local so
+// the skip-disabled-entry loop in moveCursor is preserved; the
+// remaining gestures (Enter / LF / Esc / q) delegate to the shared
+// HandleMenuKey helper so the Enter-vs-LF terminal-mode bug cannot
+// resurface here.
 func (m *OptionsModal) handleKey(e *tcell.EventKey) bool {
+	// Local navigation: respects the skip-disabled-entry walk.
 	switch e.Key() {
-	case tcell.KeyEscape:
-		if m.OnCancel != nil {
-			m.OnCancel()
-		}
-		return true
 	case tcell.KeyUp:
 		m.moveCursor(-1)
 		return true
 	case tcell.KeyDown:
 		m.moveCursor(+1)
 		return true
-	case tcell.KeyEnter:
-		m.activate()
-		return true
 	case tcell.KeyRune:
 		switch e.Rune() {
-		case 'q', 'Q':
-			if m.OnCancel != nil {
-				m.OnCancel()
-			}
-			return true
 		case 'j':
 			m.moveCursor(+1)
 			return true
@@ -143,7 +136,15 @@ func (m *OptionsModal) handleKey(e *tcell.EventKey) bool {
 			return true
 		}
 	}
-	return false
+	// Shared handler for Enter / LF / Esc / q. Pass a throwaway
+	// cursor pointer because the helper would otherwise increment
+	// our cursor on Up / Down (which we already handled above).
+	dummy := m.cursor
+	return HandleMenuKey(e, &dummy, len(m.Entries), MenuKeyOptions{
+		OnActivate: func(int) { m.activate() },
+		OnCancel:   m.OnCancel,
+		OnQuit:     m.OnCancel, // OptionsModal treats q as cancel.
+	})
 }
 
 func (m *OptionsModal) moveCursor(delta int) {

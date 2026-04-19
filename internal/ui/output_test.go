@@ -30,16 +30,3 @@ func TestWarning(t *testing.T) {
 		t.Error("Warning() did not include warning icon")
 	}
 }
-
-func TestInfo(t *testing.T) {
-	result := Info("Informational message")
-	if result == "" {
-		t.Error("Info() returned empty string")
-	}
-	if !strings.Contains(result, "Informational message") {
-		t.Error("Info() did not include the message")
-	}
-	if !strings.Contains(result, "ℹ") {
-		t.Error("Info() did not include info icon")
-	}
-}
