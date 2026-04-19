@@ -12,18 +12,48 @@ import (
 	"time"
 )
 
+// CountNormalizedTools counts tools that arrived without a `function` key
+// and were likely sent in native alternate shape.
+func CountNormalizedTools(req ChatRequest, raw []byte) int {
+	if len(req.Tools) == 0 {
+		return 0
+	}
+	var wire struct {
+		Tools []json.RawMessage `json:"tools"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return 0
+	}
+
+	count := 0
+	for _, rawTool := range wire.Tools {
+		var w struct {
+			Function json.RawMessage `json:"function"`
+		}
+		if err := json.Unmarshal(rawTool, &w); err != nil {
+			continue
+		}
+		if len(w.Function) == 0 {
+			count++
+		}
+	}
+	return count
+}
+
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	entries := s.registry.List()
 	resp := ModelsResponse{Object: "list"}
 	for _, m := range entries {
 		resp.Data = append(resp.Data, ModelEntry{
-			ID:          m.Alias,
-			Object:      "model",
-			OwnedBy:     "clyde",
-			Context:     m.Context,
-			Efforts:     m.Efforts,
-			Backend:     m.Backend,
-			ClaudeModel: m.ClaudeModel,
+			ID:            m.Alias,
+			Object:        "model",
+			OwnedBy:       "clyde",
+			Context:       m.Context,
+			ContextLength: m.Context,
+			MaxModelLen:   m.Context,
+			Efforts:       m.Efforts,
+			Backend:       m.Backend,
+			ClaudeModel:   m.ClaudeModel,
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -41,29 +71,58 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "failed to read body")
 		return
 	}
-	bodyBytes := len(body)
-	logBody := body
-	bodyTruncated := false
-	if bodyBytes > rawChatBodyLimit {
-		logBody = body[:rawChatBodyLimit]
-		bodyTruncated = true
-	}
-	rawAttrs := rawChatLogEvent{
-		RequestID:     reqID,
-		Method:        r.Method,
-		Path:          r.URL.Path,
-		RemoteAddr:    r.RemoteAddr,
-		Headers:       redactedHeaders(r.Header),
-		BodyBytes:     bodyBytes,
-		Body:          string(logBody),
-		BodyTruncated: bodyTruncated,
-	}
-	s.log.LogAttrs(r.Context(), slog.LevelDebug, "adapter.chat.raw", rawAttrs.asAttrs()...)
 
+	bodyBytes := len(body)
+	rawAttrs := rawChatLogEvent{
+		RequestID:  reqID,
+		Method:     r.Method,
+		Path:       r.URL.Path,
+		RemoteAddr: r.RemoteAddr,
+		Headers:    redactedHeaders(r.Header),
+		BodyBytes:  bodyBytes,
+	}
 	var req ChatRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON: "+err.Error())
+	parseErr := json.Unmarshal(body, &req)
+	bodyLimit := s.logging.Body.MaxKB * 1024
+
+	switch s.logging.Body.Mode {
+	case "summary":
+		if parseErr == nil {
+			bodySummary := SummarizeChatRequest(req)
+			rawAttrs.BodySummary = &bodySummary
+		}
+	case "whitelist":
+		if parseErr == nil {
+			bodySummary := SummarizeChatRequest(req)
+			rawAttrs.BodySummary = &bodySummary
+			rawAttrs.BodyRaw, rawAttrs.BodyTruncated = buildWhitelistBody(req, bodyLimit)
+		} else {
+			rawAttrs.BodyRaw, rawAttrs.BodyTruncated = truncateBody(body, bodyLimit)
+		}
+	case "raw":
+		if parseErr == nil {
+			bodySummary := SummarizeChatRequest(req)
+			rawAttrs.BodySummary = &bodySummary
+		}
+		rawAttrs.BodyRaw, rawAttrs.BodyTruncated = truncateBody(body, bodyLimit)
+	case "off", "":
+	default:
+		rawAttrs.BodyRaw, rawAttrs.BodyTruncated = truncateBody(body, bodyLimit)
+	}
+	if s.logging.Body.Mode != "off" {
+		s.log.LogAttrs(r.Context(), slog.LevelDebug, "adapter.chat.raw", rawAttrs.asAttrs()...)
+	}
+
+	if parseErr != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON: "+parseErr.Error())
 		return
+	}
+	if n := CountNormalizedTools(req, body); n > 0 {
+		s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.tools.normalized",
+			slog.String("request_id", reqID),
+			slog.String("from_shape", "anthropic_native"),
+			slog.Int("count", n),
+		)
 	}
 	if len(req.Messages) == 0 {
 		writeError(w, http.StatusBadRequest, "invalid_request", "messages is required")
@@ -149,6 +208,98 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.collectChat(w, r.Context(), req, model, stdout, reqID, started, jsonSpec)
+}
+
+func truncateBody(body []byte, maxBytes int) (string, bool) {
+	if maxBytes <= 0 {
+		return "", false
+	}
+	if len(body) <= maxBytes {
+		return string(body), false
+	}
+	return string(body[:maxBytes]), true
+}
+
+func buildWhitelistBody(req ChatRequest, maxBytes int) (string, bool) {
+	type whitelistTool struct {
+		Type     string `json:"type"`
+		Function struct {
+			Name string `json:"name"`
+		} `json:"function"`
+	}
+	type whitelistMessage struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+
+	payloadMessages := make([]whitelistMessage, 0, len(req.Messages))
+	payload := map[string]any{
+		"model":    req.Model,
+		"stream":   req.Stream,
+		"messages": payloadMessages,
+	}
+
+	for _, msg := range req.Messages {
+		content := FlattenContent(msg.Content)
+		if len(content) > 2048 {
+			content = content[:2048]
+		}
+		payloadMessages = append(payloadMessages, whitelistMessage{
+			Role:    msg.Role,
+			Content: content,
+		})
+	}
+	payload["messages"] = payloadMessages
+	if len(req.Tools) > 0 {
+		tools := make([]whitelistTool, 0, len(req.Tools))
+		for _, tool := range req.Tools {
+			tools = append(tools, whitelistTool{
+				Type: "function",
+				Function: struct {
+					Name string `json:"name"`
+				}{Name: tool.Function.Name},
+			})
+		}
+		payload["tools"] = tools
+	}
+	if len(req.Functions) > 0 {
+		functions := make([]whitelistTool, 0, len(req.Functions))
+		for _, fn := range req.Functions {
+			functions = append(functions, whitelistTool{
+				Type: "function",
+				Function: struct {
+					Name string `json:"name"`
+				}{Name: fn.Name},
+			})
+		}
+		payload["functions"] = functions
+	}
+	if req.ToolChoice != nil {
+		payload["tool_choice"] = json.RawMessage(req.ToolChoice)
+	}
+	if req.ParallelTools != nil {
+		payload["parallel_tool_calls"] = req.ParallelTools
+	}
+	if req.Logprobs != nil {
+		payload["logprobs"] = req.Logprobs
+	}
+	if req.Temperature != nil {
+		payload["temperature"] = req.Temperature
+	}
+	if req.TopP != nil {
+		payload["top_p"] = req.TopP
+	}
+	if req.MaxTokens != nil {
+		payload["max_tokens"] = req.MaxTokens
+	}
+
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", false
+	}
+
+	logBody, bodyTruncated := truncateBody(raw, maxBytes)
+	return logBody, bodyTruncated
 }
 
 func (s *Server) collectChat(w http.ResponseWriter, ctx context.Context, req ChatRequest, model ResolvedModel, stdout io.ReadCloser, reqID string, started time.Time, jsonSpec JSONResponseSpec) {

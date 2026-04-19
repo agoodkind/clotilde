@@ -89,7 +89,7 @@ func TranslateRequest(req OpenAIRequest, systemPrefix string, maxTokens int) (An
 		choiceName = toolChoice.Name
 	}
 	slog.Info("tooltrans.translated",
-		"component", "tooltrans",
+		"subcomponent", "tooltrans",
 		"model", req.Model,
 		"system_len", len(systemStr),
 		"message_count", len(out),
@@ -171,11 +171,62 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 				continue
 			}
 			blocks = append(blocks, AnthContentBlock{Type: "text", Text: p.Refusal})
+		case "tool_result":
+			result := flattenToolResultContent(p.Content)
+			if result == "" {
+				result = " "
+			}
+			blocks = append(blocks, AnthContentBlock{
+				Type:          "tool_result",
+				ToolUseID:     p.ToolUseID,
+				ResultContent: result,
+			})
+			slog.Debug("tooltrans.tool_result.translated",
+				"subcomponent", "tooltrans",
+				"msg_idx", msgIdx,
+				"part_idx", partIdx,
+				"tool_use_id", p.ToolUseID,
+				"content_bytes", len(result),
+				"carrier", "user_part",
+			)
 		default:
+			slog.Warn("tooltrans.user_part.unknown_type",
+				"subcomponent", "tooltrans",
+				"msg_idx", msgIdx,
+				"part_idx", partIdx,
+				"part_type", p.Type,
+			)
 			blocks = append(blocks, AnthContentBlock{Type: "text", Text: "[" + p.Type + "]"})
 		}
 	}
 	return blocks, nil
+}
+
+// flattenToolResultContent normalizes a tool_result content payload to a
+// single string. Cursor sends either a raw string or an array of OpenAI
+// content parts (text-only); both shapes survive the trip.
+func flattenToolResultContent(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	var parts []OpenAIContentPart
+	if err := json.Unmarshal(raw, &parts); err == nil {
+		var b strings.Builder
+		for _, p := range parts {
+			if p.Type == "text" && p.Text != "" {
+				if b.Len() > 0 {
+					b.WriteByte('\n')
+				}
+				b.WriteString(p.Text)
+			}
+		}
+		return b.String()
+	}
+	return string(raw)
 }
 
 func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBlock, error) {
@@ -204,7 +255,35 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage) ([]AnthConten
 				continue
 			}
 			blocks = append(blocks, AnthContentBlock{Type: "text", Text: p.Refusal})
+		case "tool_use":
+			input := p.Input
+			if len(input) == 0 {
+				input = json.RawMessage("{}")
+			}
+			blocks = append(blocks, AnthContentBlock{
+				Type:  "tool_use",
+				ID:    p.ID,
+				Name:  p.Name,
+				Input: input,
+			})
+			slog.Debug("tooltrans.tool_use.translated",
+				"subcomponent", "tooltrans",
+				"msg_idx", msgIdx,
+				"part_idx", partIdx,
+				"tool_use_id", p.ID,
+				"tool_name", p.Name,
+				"input_bytes", len(input),
+				"carrier", "assistant_part",
+			)
+		case "thinking":
+			continue
 		default:
+			slog.Warn("tooltrans.assistant_part.unknown_type",
+				"subcomponent", "tooltrans",
+				"msg_idx", msgIdx,
+				"part_idx", partIdx,
+				"part_type", p.Type,
+			)
 			continue
 		}
 	}
