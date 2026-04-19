@@ -88,22 +88,23 @@ func dedicatedLogger() *slog.Logger {
 // RetryAfter/Body/Err empty strings are dropped, and Status==0 means
 // the response never came back (post_failed).
 type responseEvent struct {
-	Component  string
-	Model      string
-	Status     int
-	RequestID  string
-	BodyBytes  int
-	DurationMs int64
-	RateLimits []rateLimitAttr
-	RetryAfter string
-	Body       string
-	Err        string
+	Subcomponent string
+	Model        string
+	Status       int
+	RequestID    string
+	BodyBytes    int
+	DurationMs   int64
+	RateLimits   []rateLimitAttr
+	RetryAfter   string
+	Body         string
+	BodyB64      string
+	Err          string
 }
 
 func (e responseEvent) toSlogAttrs() []any {
 	attrs := make([]any, 0, 14+2*len(e.RateLimits))
-	if e.Component != "" {
-		attrs = append(attrs, "component", e.Component)
+	if e.Subcomponent != "" {
+		attrs = append(attrs, "subcomponent", e.Subcomponent)
 	}
 	if e.Model != "" {
 		attrs = append(attrs, "model", e.Model)
@@ -124,6 +125,9 @@ func (e responseEvent) toSlogAttrs() []any {
 	}
 	if e.Body != "" {
 		attrs = append(attrs, "body", e.Body)
+	}
+	if e.BodyB64 != "" {
+		attrs = append(attrs, "body_b64", e.BodyB64)
 	}
 	if e.Err != "" {
 		attrs = append(attrs, "err", e.Err)

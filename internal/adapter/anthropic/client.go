@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -113,27 +114,37 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	httpReq.Header.Set("User-Agent", c.cfg.UserAgent)
 	httpReq.Header.Set("Content-Type", "application/json")
 
+	slog.Debug("anthropic.messages.request",
+		"subcomponent", "anthropic",
+		"model", req.Model,
+		"url", MessagesURL,
+		"body_bytes", len(body),
+		"headers", redactedOutboundHeaders(httpReq.Header),
+		"body", string(body),
+		"body_b64", base64.StdEncoding.EncodeToString(body),
+	)
+
 	postStarted := time.Now()
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
 		logResponse(slog.LevelError, "anthropic.messages.post_failed", responseEvent{
-			Component:  "anthropic",
-			Model:      req.Model,
-			BodyBytes:  len(body),
-			DurationMs: time.Since(postStarted).Milliseconds(),
-			Err:        err.Error(),
+			Subcomponent: "anthropic",
+			Model:        req.Model,
+			BodyBytes:    len(body),
+			DurationMs:   time.Since(postStarted).Milliseconds(),
+			Err:          err.Error(),
 		})
 		return nil, fmt.Errorf("post /v1/messages: %w", err)
 	}
 
 	base := responseEvent{
-		Component:  "anthropic",
-		Model:      req.Model,
-		Status:     resp.StatusCode,
-		RequestID:  resp.Header.Get("request-id"),
-		BodyBytes:  len(body),
-		DurationMs: time.Since(postStarted).Milliseconds(),
-		RateLimits: rateLimitAttrs(resp.Header),
+		Subcomponent: "anthropic",
+		Model:        req.Model,
+		Status:       resp.StatusCode,
+		RequestID:    resp.Header.Get("request-id"),
+		BodyBytes:    len(body),
+		DurationMs:   time.Since(postStarted).Milliseconds(),
+		RateLimits:   rateLimitAttrs(resp.Header),
 	}
 
 	if resp.StatusCode == http.StatusTooManyRequests {
@@ -141,7 +152,9 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		resp.Body.Close()
 		ev := base
 		ev.RetryAfter = resp.Header.Get("retry-after")
-		ev.Body = truncate(string(errBody), 400)
+		ev.Body = string(errBody)
+		ev.BodyB64 = base64.StdEncoding.EncodeToString(errBody)
+		ev.BodyBytes = len(errBody)
 		logResponse(slog.LevelWarn, "anthropic.ratelimit", ev)
 		return nil, fmt.Errorf("anthropic %s: %s", resp.Status, truncate(string(errBody), 600))
 	}
@@ -149,10 +162,34 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		errBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		ev := base
-		ev.Body = truncate(string(errBody), 400)
+		ev.Body = string(errBody)
+		ev.BodyB64 = base64.StdEncoding.EncodeToString(errBody)
+		ev.BodyBytes = len(errBody)
 		logResponse(slog.LevelError, "anthropic.messages.upstream_error", ev)
 		return nil, fmt.Errorf("anthropic %s: %s", resp.Status, truncate(string(errBody), 600))
 	}
 	logResponse(slog.LevelInfo, "anthropic.messages.connected", base)
 	return resp, nil
+}
+
+// redactedOutboundHeaders returns a flat map[string]string of the
+// headers we set on the Anthropic /v1/messages request, with secret
+// values masked. Keys are lowercased so log diffs are deterministic
+// and friendly to grep. Used by the anthropic.messages.request slog
+// event so debug captures show exactly what we sent.
+func redactedOutboundHeaders(h http.Header) map[string]string {
+	out := make(map[string]string, len(h))
+	for key, values := range h {
+		lk := strings.ToLower(key)
+		joined := strings.Join(values, ", ")
+		switch lk {
+		case "authorization":
+			out[lk] = fmt.Sprintf("Bearer <redacted len=%d>", len(joined)-len("Bearer "))
+		case "x-api-key", "cookie", "proxy-authorization":
+			out[lk] = "<redacted>"
+		default:
+			out[lk] = joined
+		}
+	}
+	return out
 }
