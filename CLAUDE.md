@@ -185,12 +185,12 @@ No matcher field - the single hook handles all sources (startup, resume, compact
 
 **Source-based dispatch:**
 
-- `**startup`**: New sessions - outputs session name and context, saves transcript path
-- `**resume`**: Resuming or `clyde fork` - outputs context
-- `**compact**`: Session compaction - defensive handler (Claude Code doesn't currently create new UUID for `/compact`, but we handle it anyway in case behavior changes)
+- `**startup`\*\*: New sessions - outputs session name and context, saves transcript path
+- `**resume`\*\*: Resuming or `clyde fork` - outputs context
+- `**compact`\*\*: Session compaction - defensive handler (Claude Code doesn't currently create new UUID for `/compact`, but we handle it anyway in case behavior changes)
 - `**clear**`: Session clear - updates metadata with new UUID, preserves old UUID in `previousSessionIds` array
 
-`**clyde fork` registration:**
+`**clyde fork` registration:\*\*
 
 1. `clyde fork` pre-assigns a UUID via `util.GenerateUUID()` before creating the session
 2. Sets env var: `CLYDE_SESSION_NAME` (for context output in hook)
@@ -203,12 +203,16 @@ No matcher field - the single hook handles all sources (startup, resume, compact
 1. User runs `/clear` in Claude Code
 2. Claude creates new UUID and triggers SessionStart with `source: "clear"`
 3. Hook resolves session name using three-level fallback:
-  - Priority 1: `CLYDE_SESSION_NAME` env var (from `clyde resume`)
-  - Priority 2: Read from `CLAUDE_ENV_FILE` (persisted by previous hook)
-  - Priority 3: Reverse UUID lookup in sessions (searches current and previous IDs)
+
+- Priority 1: `CLYDE_SESSION_NAME` env var (from `clyde resume`)
+- Priority 2: Read from `CLAUDE_ENV_FILE` (persisted by previous hook)
+- Priority 3: Reverse UUID lookup in sessions (searches current and previous IDs)
+
 4. Hook calls `session.AddPreviousSessionID()` to update metadata:
-  - Appends current UUID to `previousSessionIds` array (idempotent)
-  - Updates `sessionId` to new UUID
+
+- Appends current UUID to `previousSessionIds` array (idempotent)
+- Updates `sessionId` to new UUID
+
 5. Session name persists across multiple `/clear` operations
 
 **Note on `/compact`:** Currently, Claude Code does NOT create a new session UUID when `/compact` is run (only `/clear` does). However, the hook defensively handles `source: "compact"` identically to `source: "clear"` in case Claude Code's behavior changes in the future.
@@ -258,10 +262,10 @@ Sessions can opt into Claude Code's bridge so the running conversation is expose
 2. **Daemon** (`internal/bridge/`, `internal/daemon/`): one `bridge.Watcher` per daemon process tails `~/.claude/sessions/<pid>.json` via fsnotify and emits `BRIDGE_OPENED` / `BRIDGE_CLOSED` on the existing registry stream. `transcript.Tailer` plus `transcriptHub` fan transcript lines out to multiple subscribers via the new `TailTranscript` server-side streaming RPC. `SendToSession` dials the wrapper's inject socket. `UpdateSessionSettings` and `UpdateGlobalSettings` are the daemon-authoritative write paths for per session / global config.
 3. **TUI** (`internal/ui/`): The dashboard shows an `RC` badge column, a "Remote ctrl" details row, an `RC×N` status bar badge, and "Open bridge in browser" / "Copy bridge URL" entries in the options popup. Press `S` to pin a session in the new "Sidecar" tab (`internal/ui/tcell_sidecar.go`), which subscribes to `TailTranscript` and posts user input through `SendToSession`. Press `G` on the Settings tab to flip the global default.
 
-Post-cull, the bridge is reachable through the TUI only (RC toggle in  
-the options popup, Sidecar tab for tail/send). The standalone  
-`clyde bridge` and `clyde send` verbs were removed; their daemon RPCs  
-(`UpdateSessionSettings`, `TailTranscript`, `SendToSession`,  
+Post-cull, the bridge is reachable through the TUI only (RC toggle in
+the options popup, Sidecar tab for tail/send). The standalone
+`clyde bridge` and `clyde send` verbs were removed; their daemon RPCs
+(`UpdateSessionSettings`, `TailTranscript`, `SendToSession`,
 `ListBridges`) still exist and are driven directly by the TUI.
 
 ## Testing
@@ -296,7 +300,12 @@ the options popup, Sidecar tab for tail/send). The standalone
 - **Settings scope**: `settings.json` should only contain session-specific settings (model, permissions), not global config (hooks, MCP, UI)
 - **Native integration**: Use `--settings` flag to pass settings, let Claude Code handle merging with global/project configs
 
+# Clyde unified slog standard- **Settings scope**: `settings.json` should only contain session-specific settings (model, permissions), not global config (hooks, MCP, UI)
+- **Native integration**: Use `--settings` flag to pass settings, let Claude Code handle merging with global/project configs
+
 # Clyde unified slog standard
+
+# Clyde unified slog standard (P0)
 
 Every operation in the clyde codebase MUST emit at least one
 structured `slog` event. No exceptions. This includes ticks, clicks,
@@ -315,8 +324,12 @@ At process start (daemon main, CLI root command, hook entrypoints):
 
 ```go≈
 import "goodkind.io/clyde/internal/slogger"
+import "goodkind.io/clyde/internal/config"
 
-closer, err := slogger.Setup()
+cfg := config.LoggingConfig{
+    // loaded from config.toml
+}
+closer, err := slogger.Setup(cfg)
 if err != nil {
     // Init failed; gklog returned an error. log via slog.Default
     // (stderr text fallback) and exit.
@@ -329,8 +342,8 @@ defer closer.Close()
 `slogger.Setup` calls `gklog.New` with the JSONL file path, which:
 
 - Writes JSON to `$XDG_STATE_HOME/clyde/clyde.jsonl` with
-rotation (5 MB / forever / compressed by default).
-- Also writes JSON to stdout so journald / launchd captures it.
+  configurable rotation from `[logging.rotation]`.
+- Writes no JSON to stdout so CLI command output remains stable.
 - Annotates every record with `build` from `goodkind.io/gklog/version`.
 - Calls `slog.SetDefault` so the rest of the codebase just uses `slog`.
 
@@ -373,21 +386,20 @@ event message as the first argument (the slog convention) and SHOULD
 include the keys below whenever they apply, so cross-component
 queries join cleanly:
 
-
-| Key           | Meaning                                               |
-| ------------- | ----------------------------------------------------- |
-| `component`   | Subsystem owning the call (`adapter`, `compact`, ...) |
-| `request_id`  | Per-incoming-request correlation id                   |
-| `session`     | Clyde session name                                    |
-| `session_id`  | Claude session UUID                                   |
-| `transcript`  | Absolute path to the JSONL transcript on disk         |
-| `model`       | Resolved Claude model name                            |
-| `alias`       | Public model alias (clyde-haiku, ...)                 |
-| `tokens_in`   | Prompt tokens                                         |
-| `tokens_out`  | Completion tokens                                     |
-| `duration_ms` | Operation latency in milliseconds                     |
-| `err`         | Error message string (only set on Error)              |
-
+| Key            | Meaning                                               |
+| -------------- | ----------------------------------------------------- |
+| `component`    | Subsystem owning the call (`adapter`, `compact`, ...) |
+| `subcomponent` | Internal emitter inside a top-level component         |
+| `request_id`   | Per-incoming-request correlation id                   |
+| `session`      | Clyde session name                                    |
+| `session_id`   | Claude session UUID                                   |
+| `transcript`   | Absolute path to the JSONL transcript on disk         |
+| `model`        | Resolved Claude model name                            |
+| `alias`        | Public model alias (clyde-haiku, ...)                 |
+| `tokens_in`    | Prompt tokens                                         |
+| `tokens_out`   | Completion tokens                                     |
+| `duration_ms`  | Operation latency in milliseconds                     |
+| `err`          | Error message string (only set on Error)              |
 
 Levels:
 
@@ -400,28 +412,43 @@ Event names use dot-separated `component.subject.verb` form, lowercase
 snake_case where multi-word: `adapter.chat.completed`,
 `compact.boundary.lifted`, `verify.context.probe.parsed`.
 
+## adapter.chat.raw logging
+
+`adapter.chat.raw` is controlled by `[logging.body]`:
+
+| Mode        | Captured fields                     |
+| ----------- | ----------------------------------- |
+| `summary`   | `body_summary`                      |
+| `whitelist` | `body_summary` and sanitized `body` |
+| `raw`       | `body_summary` and full raw `body`  |
+| `off`       | no `adapter.chat.raw` event         |
+
+When `mode = "whitelist"`, the sanitized body keeps request metadata and
+`messages`, trims each message content to 2 KiB, strips tool parameter
+schemas, and caps the logged body at `[logging.body].max_kb`.
+
 ## Banned patterns
 
 `make slog-audit` rejects any production .go file containing:
 
 - `fmt.Print`, `fmt.Println`, `fmt.Printf` (bare stdout writes).
 - `log.Print*`, `log.Fatal*`, `log.Panic*` (stdlib log goes nowhere
-structured).
+  structured).
 
 Allowed (these go through writers the test harness can capture):
 
 - `fmt.Fprint*` to a writer (`cmd.OutOrStdout()`, `os.Stderr` in
-bootstrap-only paths).
+  bootstrap-only paths).
 - `slog.Info / Debug / Warn / Error` directly. The wrapper at
-`internal/slogger` only handles initialization and ctx plumbing;
-there is no banned slog method.
+  `internal/slogger` only handles initialization and ctx plumbing;
+  there is no banned slog method.
 
 Exempt files (audit walks past them):
 
 - `_test.go` files -- tests can use any logging shape.
 - `scripts/`, `research/`, `vendor/`, `node_modules/`.
 - `cmd/version.go`, `cmd/completion.go` -- bootstrap output before
-the slog system is initialized.
+  the slog system is initialized.
 
 ## Audit tool
 
@@ -430,9 +457,14 @@ first 30 offending call sites, exits non-zero on hits. CI runs this
 on every PR. Local runs let contributors find their own violations
 before pushing.
 
-## Migration
-
-Existing modules are converted in waves by parallel Haiku subagents.
-New code is held to the standard from day one. The audit tool reports
-a per-package count so contributors can see which area has the
-largest backfill remaining.
+The audit is a first-line smell test, not an authority. A clean audit
+means no banned patterns leaked through; it does not mean coverage is
+sufficient. Every file passing the audit can still be drastically
+under-logged. When you find yourself thinking "this is enough logging,"
+it is not. Add more events: every branch taken, every value chosen,
+every retry, every fallback, every silent default, every conditional
+short-circuit, every loop iteration that touches state. The cost of
+an extra `slog.Debug` is bytes; the cost of a missing one is a
+debugging session that ends with "we have no idea what happened."
+Default to over-logging; trim only when an event proves itself
+permanently useless across many real incidents.

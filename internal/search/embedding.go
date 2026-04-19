@@ -27,16 +27,16 @@ type embeddingFilter struct {
 }
 
 func newEmbeddingFilter(cfg config.SearchLocal) *embeddingFilter {
-	url := cfg.URL
-	if url == "" {
-		url = "http://localhost:1234"
+	base := cfg.ResolvedEmbeddingURL()
+	if base == "" {
+		base = "http://localhost:1234"
 	}
 
 	opts := []option.RequestOption{
-		option.WithBaseURL(url + "/v1"),
+		option.WithBaseURL(base + "/v1"),
 	}
-	if cfg.Token != "" {
-		opts = append(opts, option.WithAPIKey(cfg.Token))
+	if cfg.ResolvedEmbeddingToken() != "" {
+		opts = append(opts, option.WithAPIKey(cfg.ResolvedEmbeddingToken()))
 	} else {
 		opts = append(opts, option.WithAPIKey("not-needed"))
 	}

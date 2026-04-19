@@ -150,65 +150,14 @@ first 30 offending call sites, exits non-zero on hits. CI runs this
 on every PR. Local runs let contributors find their own violations
 before pushing.
 
-## Migration
-
-Existing modules are converted in waves by parallel Haiku subagents.
-New code is held to the standard from day one. The audit tool reports
-a per-package count so contributors can see which area has the
-largest backfill remaining.
-
-## adapter.tools.normalized
-
-`adapter.tools.normalized` is emitted when request tools are normalized
-from Anthropic-native tool shape (`name`, `description`, `input_schema`)
-into OpenAI tool shape before downstream translation.
-
-Logged fields:
-
-- `request_id`: request correlation id.
-- `from_shape`: always `anthropic_native`.
-- `count`: number of normalized tool entries in this request.
-
-## anthropic.messages.request
-
-Debug-level event emitted in
-[internal/adapter/anthropic/client.go](../internal/adapter/anthropic/client.go)
-immediately before the outbound `POST /v1/messages` is sent. Used by the
-OAuth bucket impersonation testbed (see
-[docs/openai-adapter.md](openai-adapter.md) "OAuth bucket impersonation
-drift") to diff clyde's wire format against the official `claude` CLI
-captured by `clyde-research/tools/anthropic-mitm`.
-
-Logged fields:
-
-- `subcomponent`: always `"anthropic"`.
-- `model`: wire-format Anthropic model id (e.g. `claude-opus-4-7`).
-- `url`: target URL, currently `MessagesURL` constant.
-- `body_bytes`: full request body size before any truncation.
-- `headers`: `map[string]string` of every outbound header. Keys
-  lowercased for grep stability. `authorization` is masked to
-  `Bearer <redacted len=N>`; `x-api-key`, `cookie`, and
-  `proxy-authorization` to `<redacted>`. All other headers are
-  passed through verbatim because they are required for the diff.
-- `body`: raw JSON request body, full (not truncated). Suitable for
-  byte-for-byte replay against the upstream API.
-- `body_b64`: base64 of the same bytes; survives any downstream sink
-  that strips control characters.
-
-Only emits at `Debug` level, so it costs nothing in production unless
-`[logging] level = "debug"` in the user toml.
-
-## anthropic.ratelimit and anthropic.messages.upstream_error
-
-These two events fire when the upstream returns 429 or any other
-non-200 status. Both carry the typed `responseEvent` payload defined
-in [internal/adapter/anthropic/logging.go](../internal/adapter/anthropic/logging.go).
-
-The `body` and `body_b64` fields are populated with the **full**
-upstream error body (no longer truncated to 400 chars; that limit was
-dropped in service of the impersonation diff workflow). `body_bytes` is
-the byte length of the response body, not the request body, so a 429
-line carries both `request_id` (from upstream `request-id` header) and
-the verbatim error JSON Anthropic sent back. Pair with a
-correlated `anthropic.messages.request` event to reconstruct what
-clyde sent and what came back.
+The audit is a first-line smell test, not an authority. A clean audit
+means no banned patterns leaked through; it does not mean coverage is
+sufficient. Every file passing the audit can still be drastically
+under-logged. When you find yourself thinking "this is enough logging,"
+it is not. Add more events: every branch taken, every value chosen,
+every retry, every fallback, every silent default, every conditional
+short-circuit, every loop iteration that touches state. The cost of
+an extra `slog.Debug` is bytes; the cost of a missing one is a
+debugging session that ends with "we have no idea what happened."
+Default to over-logging; trim only when an event proves itself
+permanently useless across many real incidents.

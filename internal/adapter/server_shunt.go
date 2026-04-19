@@ -197,7 +197,15 @@ func redactedHeaders(input http.Header) map[string]string {
 
 func redactedHeader(name string) bool {
 	switch name {
-	case "authorization", "proxy-authorization", "cookie", "x-clyde-token":
+	case "authorization", "proxy-authorization", "cookie", "set-cookie", "x-clyde-token", "x-amz-security-token", "openai-api-key":
+		return true
+	case "":
+		return false
+	}
+	if strings.HasPrefix(name, "x-cursor-") {
+		return true
+	}
+	if strings.HasPrefix(name, "openai-") {
 		return true
 	}
 	return strings.HasSuffix(name, "-api-key")

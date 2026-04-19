@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/gklog"
 )
 
@@ -28,16 +29,16 @@ const (
 	defaultFile       = "clyde.jsonl"
 )
 
-// Setup initialises the global slog logger via gklog. It writes
+// Setup initializes the global slog logger via gklog. It writes
 // JSONL to $XDG_STATE_HOME/clyde/clyde.jsonl (rotated) AND to
-// stdout for journald/launchd capture. Call once at process start
-// before emitting any events; otherwise slog.Default falls back to a
-// stderr text handler.
+// stdout is currently disabled so command output remains machine-friendly
+// for CLI callers. Call once at process start before emitting any events;
+// otherwise slog.Default falls back to a stderr text handler.
 //
 // Returns an io.Closer that the caller must Close on shutdown so the
 // rotating file handles flush. closer.Close() is safe to call once.
-func Setup(level string) (io.Closer, error) {
-	level = strings.ToLower(strings.TrimSpace(level))
+func Setup(cfg config.LoggingConfig) (io.Closer, error) {
+	level := strings.ToLower(strings.TrimSpace(cfg.Level))
 	switch level {
 	case "debug", "info", "warn", "error":
 	case "":
@@ -55,16 +56,30 @@ func Setup(level string) (io.Closer, error) {
 	// parseable single-line output). slog goes to the rotated JSONL
 	// file at $XDG_STATE_HOME/clyde/clyde.jsonl; tail that file
 	// for live diagnostics.
+	compress := cfg.Rotation.Compress
+	if compress == nil {
+		compress = boolPtr(true)
+	}
 	logger, closer, err := gklog.New(gklog.Config{
 		JSONLogFile:   path,
 		DisableStdout: true,
 		JSONMinLevel:  level,
+		Rotation: gklog.RotationConfig{
+			MaxSizeMB:  cfg.Rotation.MaxSizeMB,
+			MaxBackups: cfg.Rotation.MaxBackups,
+			MaxAgeDays: cfg.Rotation.MaxAgeDays,
+			Compress:   compress,
+		},
 	})
 	if err != nil {
 		return nopCloser{}, fmt.Errorf("slogger: gklog.New: %w", err)
 	}
 	slog.SetDefault(logger)
 	return closer, nil
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }
 
 // defaultPath resolves the unified JSONL path. Honors the env override

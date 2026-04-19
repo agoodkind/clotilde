@@ -11,6 +11,7 @@
 //	clyde                       -> TUI dashboard (cmd.RunDashboard)
 //	clyde compact ...           -> append-only compaction
 //	clyde daemon                -> long-lived daemon (adapter, oauth, mcp, prune)
+//	clyde oauth-refresh         -> one-shot Anthropic OAuth token refresh (launchd)
 //	clyde hook sessionstart     -> Claude Code SessionStart hook
 //	clyde mcp                   -> MCP stdio server (in-chat search/list/context)
 //	clyde resume <name|uuid>    -> resolve clyde name then claude --resume <uuid>
@@ -43,7 +44,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	closer, err := slogger.Setup(cfg.Logging.Level)
+	closer, err := slogger.Setup(cfg.Logging)
 	if err != nil {
 		slog.Error("clyde.slogger.setup_failed",
 			"component", "cli",
@@ -88,6 +89,7 @@ func main() {
 	root.AddCommand(hook.NewCmd(f))
 	root.AddCommand(mcp.NewCmd(f))
 	root.AddCommand(cmd.NewResumeCmd())
+	root.AddCommand(daemon.NewOAuthRefreshCmd())
 
 	root.SilenceErrors = true
 

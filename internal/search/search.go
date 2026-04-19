@@ -163,11 +163,7 @@ func embeddingOnlySearch(ctx context.Context, log *slog.Logger, messages []trans
 		return nil, fmt.Errorf("quick depth requires local backend with embedding model")
 	}
 
-	embModel := cfg.Local.EmbeddingModel
-	if embModel == "" {
-		embModel = defaultEmbeddingModel
-	}
-	if err := lmctl.EnsureLoaded(ctx, embModel, lmctl.WithMaxMemoryGB(cfg.Local.MaxMemoryGB)); err != nil {
+	if err := ensureEmbeddingModelReady(ctx, cfg.Local); err != nil {
 		return nil, fmt.Errorf("failed to load embedding model: %w", err)
 	}
 
@@ -260,12 +256,7 @@ func sweepChunks(ctx context.Context, log *slog.Logger, client Client, messages 
 	// Pre-filter with embeddings if available (local backend only).
 	// The embedding model is tiny (~0.1 GB) and can coexist with inference models.
 	if cfg.Backend == "local" {
-		// Ensure embedding model is loaded (won't evict large models due to tiny size)
-		sweepEmbModel := cfg.Local.EmbeddingModel
-		if sweepEmbModel == "" {
-			sweepEmbModel = defaultEmbeddingModel
-		}
-		_ = lmctl.EnsureLoaded(ctx, sweepEmbModel, lmctl.WithMaxMemoryGB(cfg.Local.MaxMemoryGB))
+		_ = ensureEmbeddingModelReady(ctx, cfg.Local)
 		filter := newEmbeddingFilter(cfg.Local)
 		filtered, filterErr := filter.filterChunks(ctx, query, chunks)
 		if filterErr == nil {
