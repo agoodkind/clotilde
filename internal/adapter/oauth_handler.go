@@ -100,10 +100,21 @@ func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort
 	// path strips arbitrary x-* HTTP headers. Without this token in the
 	// request body the upstream classifies the request as
 	// non-CLI traffic and returns 429 immediately even with the full
-	// CLI header set. See docs/openai-adapter.md "OAuth bucket
-	// impersonation drift" / "Bisection results" for the captured
-	// evidence.
-	billingHeader := "x-anthropic-billing-header: cc_version=2.1.114.d29; cc_entrypoint=sdk-cli; cch=c29e8;"
+	// CLI header set.
+	//
+	// The version suffix on cc_version is a SHA256-derived 3-char
+	// fingerprint of (salt + sample-of-first-user-message + version) per
+	// the CLI's fingerprint.ts. Recompute it per request using the same
+	// algorithm so the value stays valid if/when Anthropic enforces the
+	// hash on the OAuth path.
+	//
+	// See docs/openai-adapter.md "OAuth bucket impersonation drift" /
+	// "Bisection results" for the captured evidence and full algorithm.
+	cliVersion := anthropic.VersionFromUserAgent(s.anthr.UserAgent())
+	if cliVersion == "" {
+		cliVersion = "2.1.114"
+	}
+	billingHeader := anthropic.BuildAttributionHeader(firstUserMessageText(tr.Messages), cliVersion, "sdk-cli")
 	tr.System = billingHeader + "\n" + tr.System
 
 	out := toAnthropicAPIRequest(tr, stripContextSuffix(model.ClaudeModel))
@@ -523,6 +534,30 @@ func stripContextSuffix(model string) string {
 		return model[:i]
 	}
 	return model
+}
+
+// firstUserMessageText returns the concatenated text of the first
+// user-role message's text content blocks, or "" if there is no user
+// message or it has no text. Used to seed the attribution-header
+// fingerprint, which the official CLI computes from the first user
+// message body. See internal/adapter/anthropic/fingerprint.go.
+func firstUserMessageText(messages []tooltrans.AnthMessage) string {
+	for _, m := range messages {
+		if m.Role != "user" {
+			continue
+		}
+		var b strings.Builder
+		for _, block := range m.Content {
+			if block.Type == "text" && block.Text != "" {
+				if b.Len() > 0 {
+					b.WriteByte('\n')
+				}
+				b.WriteString(block.Text)
+			}
+		}
+		return b.String()
+	}
+	return ""
 }
 
 // anthropicMaxTokens picks a max_tokens value: caller-supplied when

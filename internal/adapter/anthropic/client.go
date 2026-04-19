@@ -60,6 +60,11 @@ func New(httpClient *http.Client, source *oauth.Manager, cfg Config) *Client {
 // reaching into the Client struct.
 func (c *Client) SystemPromptPrefix() string { return c.cfg.SystemPromptPrefix }
 
+// UserAgent returns the configured impersonation User-Agent so callers
+// (oauth_handler) can derive things like the CLI version for the
+// attribution-header fingerprint without re-parsing the config.
+func (c *Client) UserAgent() string { return c.cfg.UserAgent }
+
 // managerWrap lets us pass an *oauth.Manager directly while keeping
 // the OAuthSource interface for tests.
 func managerWrap(m *oauth.Manager) OAuthSource {

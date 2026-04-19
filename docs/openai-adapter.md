@@ -713,16 +713,78 @@ sends), and there are zero `tools`, `metadata`, `thinking`, or
 features matter for bucket selection** -- only the `x-anthropic-billing-header`
 text token in the body's system prompt does.
 
-That makes the `cch=c29e8;` value in particular interesting. It is
-hardcoded to a single value across all of clyde's traffic and the
-bucket still routes correctly, so it is **not** a per-request
-correlation hash that gets validated. Either Anthropic's classifier
-parses only the prefix (`cc_version=...; cc_entrypoint=...;`) or it
-accepts any non-empty `cch=`.
-
 Full headers added in step 2 (Stainless block, session id, browser-access)
 remain wired up because they were captured from the official CLI;
 removing them is untested and risky. They cost nothing at runtime.
+
+### What `cc_version` and `cch` actually are (source-confirmed)
+
+The deobfuscated CLI source explains both fields:
+
+- [src/constants/system.ts:73-95](../../../clyde-research/claude-code-TYPESCRIPT-SRC/restored-src/src/constants/system.ts)
+  builds the line as:
+
+  ```
+  x-anthropic-billing-header: cc_version=${MACRO.VERSION}.${fingerprint}; cc_entrypoint=${process.env.CLAUDE_CODE_ENTRYPOINT}; ${cch}${workloadPair}
+  ```
+- [src/utils/fingerprint.ts:50-63](../../../clyde-research/claude-code-TYPESCRIPT-SRC/restored-src/src/utils/fingerprint.ts)
+  computes `fingerprint` as
+  `SHA256(salt + msg[4] + msg[7] + msg[20] + version)[:3]` where
+  `salt = "REDACTED-SALT"`. The salt comment is explicit:
+
+  > Hardcoded salt from backend validation. **Must match exactly for
+  > fingerprint validation to pass.**
+
+  And on the function:
+
+  > **Do not change this method without careful coordination with 1P
+  > and 3P (Bedrock, Vertex, Azure) APIs.**
+
+  So Anthropic's API server already has (or will have) code that
+  recomputes the same SHA over the request body and compares the first
+  3 hex chars to the suffix after `cc_version=2.1.114.<fp>`.
+
+- The `cch=...;` field is a **separate** client-attestation token,
+  gated on a build-time `feature('NATIVE_CLIENT_ATTESTATION')` flag.
+  When the flag is on, the CLI writes `cch=00000;` as a placeholder
+  and Bun's native HTTP stack (`Attestation.zig`) overwrites the
+  zeros with a computed token before the bytes leave the socket
+  ([src/constants/system.ts:64-71](../../../clyde-research/claude-code-TYPESCRIPT-SRC/restored-src/src/constants/system.ts)).
+  In the captured request the value was `cch=c29e8;`, suggesting the
+  3p binary I MITM'd had attestation enabled. The fact that clyde's
+  hardcoded `cch=c29e8;` repeatedly passed in the bisection means the
+  OAuth backend is **not yet** validating the `cch` token.
+
+### Dynamic fingerprint shipped (commit follows)
+
+[internal/adapter/anthropic/fingerprint.go](../internal/adapter/anthropic/fingerprint.go)
+ports the algorithm. [internal/adapter/oauth_handler.go](../internal/adapter/oauth_handler.go)
+now calls `anthropic.BuildAttributionHeader(firstUserMessageText, version, "sdk-cli")`
+where `version` is parsed from the configured impersonation
+`User-Agent` (so changing one in the toml does not drift from the
+other). The CLI version that produces the captured `d29` value is in
+the unit tests as a regression check.
+
+Verified end-to-end with 5 prompts that differ at the sampled indices
+(4, 7, 20):
+
+| Prompt first 40                                 | sample chars | computed `cc_version` | HTTP |
+| ----------------------------------------------- | ------------ | --------------------- | ---- |
+| `Sample-1 prompt-1 first-message-1 lorem `      | `l1r`        | `2.1.114.cba`         | 200  |
+| `Sample-2 prompt-2 first-message-2 lorem `      | `l2r`        | `2.1.114.609`         | 200  |
+| `Sample-3 prompt-3 first-message-3 lorem `      | `l3r`        | `2.1.114.d7b`         | 200  |
+| `Sample-4 prompt-4 first-message-4 lorem `      | `l4r`        | `2.1.114.d72`         | 200  |
+| `Sample-5 prompt-5 first-message-5 lorem `      | `l5r`        | `2.1.114.d54`         | 200  |
+
+Five distinct fingerprints, five 200s. The `cch=` value is now omitted
+(was hardcoded; the CLI's own value is meaningless without the Bun
+attestation overwrite, and the OAuth path does not validate it today).
+
+The remaining drift risk is `cc_entrypoint`, hardcoded to `"sdk-cli"`,
+and the salt itself, hardcoded to `"REDACTED-SALT"`. Both come straight
+from the CLI source and would need to be updated if Anthropic rotates
+either; the testbed and `BuildAttributionHeader` keep them as named
+constants for easy patching.
 
 ### How to re-verify after a CLI update
 
