@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/adapter/fallback"
+	"goodkind.io/clyde/internal/adapter/finishreason"
 )
 
 // handleFallback fulfils a chat completion via the local `claude`
@@ -163,7 +164,7 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 		Choices: []ChatChoice{{
 			Index:        0,
 			Message:      msg,
-			FinishReason: mapStopReason(result.Stop),
+			FinishReason: finishreason.FromAnthropicNonStream(result.Stop),
 		}},
 		Usage: &usage,
 	}
@@ -188,8 +189,8 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 // deltas (role, tool_calls, finish_reason) that match OpenAI
 // clients. Plain tool_choice "none" keeps live text deltas.
 func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fallback.Request, model ResolvedModel, reqID string, started time.Time, escalate bool) error {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
+	sw, err := newSSEWriter(w)
+	if err != nil {
 		if escalate {
 			return fmt.Errorf("no_flusher: streaming not supported by transport")
 		}
@@ -199,40 +200,18 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 
 	created := time.Now().Unix()
 	firstText := true
-	headersWritten := false
-
-	writeHeaders := func() {
-		if headersWritten {
-			return
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		w.WriteHeader(http.StatusOK)
-		headersWritten = true
-	}
 
 	emit := func(chunk StreamChunk) error {
-		writeHeaders()
-		chunk.SystemFingerprint = systemFingerprint
-		b, err := json.Marshal(chunk)
-		if err != nil {
-			return err
-		}
-		if _, err := fmt.Fprintf(w, "data: %s\n\n", b); err != nil {
-			return err
-		}
-		flusher.Flush()
-		return nil
+		return sw.emitStreamChunk(systemFingerprint, chunk)
 	}
 
 	bufferedTools := len(req.Tools) > 0 && strings.ToLower(strings.TrimSpace(req.ToolChoice)) != "none"
 	var sr fallback.StreamResult
-	var err error
+	var streamErr error
 	if bufferedTools {
-		sr, err = s.fb.Stream(r.Context(), req, func(string) error { return nil })
+		sr, streamErr = s.fb.Stream(r.Context(), req, func(string) error { return nil })
 	} else {
-		sr, err = s.fb.Stream(r.Context(), req, func(delta string) error {
+		sr, streamErr = s.fb.Stream(r.Context(), req, func(delta string) error {
 			chunk := StreamChunk{
 				ID:      reqID,
 				Object:  "chat.completion.chunk",
@@ -250,19 +229,19 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 			return emit(chunk)
 		})
 	}
-	if err != nil {
+	if streamErr != nil {
 		s.log.LogAttrs(r.Context(), slog.LevelWarn, "adapter.chat.stream_error",
 			slog.String("backend", "fallback"),
 			slog.String("request_id", reqID),
 			slog.String("alias", model.Alias),
 			slog.String("cli_model", req.Model),
-			slog.Any("err", err),
+			slog.Any("err", streamErr),
 		)
-		if escalate && !headersWritten {
-			return err
+		if escalate && !sw.hasCommittedHeaders() {
+			return streamErr
 		}
 	}
-	writeHeaders()
+	sw.writeSSEHeaders()
 
 	if bufferedTools {
 		if len(sr.ToolCalls) > 0 {
@@ -324,7 +303,7 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 					},
 				}},
 			})
-			plainFinish := mapStopReason(sr.Stop)
+			plainFinish := finishreason.FromAnthropicNonStream(sr.Stop)
 			_ = emit(StreamChunk{
 				ID:      reqID,
 				Object:  "chat.completion.chunk",
@@ -338,7 +317,7 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 			})
 		}
 	} else {
-		finishReason := mapStopReason(sr.Stop)
+		finishReason := finishreason.FromAnthropicNonStream(sr.Stop)
 		_ = emit(StreamChunk{
 			ID:      reqID,
 			Object:  "chat.completion.chunk",
@@ -366,8 +345,7 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 		Choices: []StreamChoice{},
 		Usage:   &finalUsage,
 	})
-	_, _ = w.Write([]byte("data: [DONE]\n\n"))
-	flusher.Flush()
+	_ = sw.writeStreamDone()
 	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.chat.completed",
 		slog.String("backend", "fallback"),
 		slog.String("request_id", reqID),

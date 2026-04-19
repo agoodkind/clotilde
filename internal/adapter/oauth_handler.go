@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -424,139 +422,27 @@ func (s *Server) collectOAuth(w http.ResponseWriter, ctx context.Context, req an
 	return nil
 }
 
-type toolAccSlot struct {
-	id, typ, name, args string
-}
-
-func mergeOAuthStreamChunks(reqID, modelAlias string, chunks []tooltrans.OpenAIStreamChunk, u Usage, finishReason string, jsonSpec JSONResponseSpec) ChatResponse {
-	var text strings.Builder
-	toolAcc := make(map[int]*toolAccSlot)
-	for _, ch := range chunks {
-		if len(ch.Choices) == 0 {
-			continue
-		}
-		delta := ch.Choices[0].Delta
-		text.WriteString(delta.Content)
-		for _, tc := range delta.ToolCalls {
-			slot := toolAcc[tc.Index]
-			if slot == nil {
-				slot = &toolAccSlot{}
-				toolAcc[tc.Index] = slot
-			}
-			if tc.ID != "" {
-				slot.id = tc.ID
-			}
-			if tc.Type != "" {
-				slot.typ = tc.Type
-			}
-			if tc.Function.Name != "" {
-				slot.name = tc.Function.Name
-			}
-			slot.args += tc.Function.Arguments
-		}
-	}
-
-	outText := text.String()
-	if jsonSpec.Mode != "" {
-		coerced := CoerceJSON(outText)
-		if LooksLikeJSON(coerced) {
-			outText = coerced
-		}
-	}
-
-	msg := ChatMessage{
-		Role:    "assistant",
-		Content: json.RawMessage(strconv.Quote(outText)),
-	}
-	var order []int
-	for k := range toolAcc {
-		order = append(order, k)
-	}
-	sort.Ints(order)
-	for _, i := range order {
-		slot := toolAcc[i]
-		typ := slot.typ
-		if typ == "" {
-			typ = "function"
-		}
-		msg.ToolCalls = append(msg.ToolCalls, ToolCall{
-			Index: i,
-			ID:    slot.id,
-			Type:  typ,
-			Function: ToolCallFunction{
-				Name:      slot.name,
-				Arguments: slot.args,
-			},
-		})
-	}
-
-	return ChatResponse{
-		ID:                reqID,
-		Object:            "chat.completion",
-		Created:           time.Now().Unix(),
-		Model:             modelAlias,
-		SystemFingerprint: systemFingerprint,
-		Choices: []ChatChoice{{
-			Index:        0,
-			Message:      msg,
-			FinishReason: finishReason,
-		}},
-		Usage: &u,
-	}
-}
-
 // streamOAuth honors the escalate flag for the *initial* call to
 // s.anthr.StreamEvents. Once any byte has been written to the SSE stream
 // the function commits and never escalates (the response headers
 // are already flushed and the dispatcher cannot retry without
 // confusing the OpenAI client).
 func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthropic.Request, model ResolvedModel, reqID string, started time.Time, escalate bool) error {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
+	sw, err := newSSEWriter(w)
+	if err != nil {
 		if escalate {
 			return fmt.Errorf("no_flusher: streaming not supported by transport")
 		}
-		writeError(w, http.StatusInternalServerError, "no_flusher", "streaming not supported by this transport")
+		writeError(w, http.StatusInternalServerError, "no_flusher", err.Error())
 		return nil
-	}
-
-	headersWritten := false
-
-	writeHeaders := func() {
-		if headersWritten {
-			return
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		w.WriteHeader(http.StatusOK)
-		headersWritten = true
 	}
 
 	emit := func(chunk StreamChunk) error {
-		writeHeaders()
-		chunk.SystemFingerprint = systemFingerprint
-		b, err := json.Marshal(chunk)
-		if err != nil {
-			return err
-		}
-		if _, err := fmt.Fprintf(w, "data: %s\n\n", b); err != nil {
-			return err
-		}
-		flusher.Flush()
-		return nil
+		return sw.emitStreamChunk(systemFingerprint, chunk)
 	}
 
 	emitTool := func(och tooltrans.OpenAIStreamChunk) error {
-		b, err := json.Marshal(och)
-		if err != nil {
-			return err
-		}
-		var sc StreamChunk
-		if err := json.Unmarshal(b, &sc); err != nil {
-			return err
-		}
-		return emit(sc)
+		return emit(streamChunkFromTooltrans(och))
 	}
 
 	anthUsage, _, finishReason, err := s.runOAuthTranslatorStream(r.Context(), req, model, reqID, func(ch tooltrans.OpenAIStreamChunk) error {
@@ -570,11 +456,10 @@ func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthrop
 			slog.String("model", req.Model),
 			slog.Any("err", err),
 		)
-		if escalate && !headersWritten {
+		if escalate && !sw.hasCommittedHeaders() {
 			return err
 		}
 	}
-	writeHeaders()
 
 	fr := finishReason
 	_ = emit(StreamChunk{
@@ -604,8 +489,7 @@ func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthrop
 			Usage:   &finalUsage,
 		})
 	}
-	_, _ = w.Write([]byte("data: [DONE]\n\n"))
-	flusher.Flush()
+	_ = sw.writeStreamDone()
 
 	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.chat.completed",
 		slog.String("backend", "anthropic"),

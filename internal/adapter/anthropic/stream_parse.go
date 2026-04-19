@@ -1,0 +1,200 @@
+// SSE parsing for /v1/messages streaming: wire structs and dispatchSSE.
+package anthropic
+
+import (
+	"encoding/json"
+	"fmt"
+)
+
+// streamMessageUsage is the usage object inside a message_start event.
+type streamMessageUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+}
+
+// streamMessage is the message object inside a message_start event.
+type streamMessage struct {
+	Usage streamMessageUsage `json:"usage"`
+}
+
+// streamMessageStartEvent is the full payload for `event: message_start`.
+type streamMessageStartEvent struct {
+	Message streamMessage `json:"message"`
+}
+
+// streamContentBlockSpec is the content_block object on content_block_start.
+type streamContentBlockSpec struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// streamContentBlockStartEvent is the full payload for
+// `event: content_block_start`.
+type streamContentBlockStartEvent struct {
+	Index        int                    `json:"index"`
+	ContentBlock streamContentBlockSpec `json:"content_block"`
+}
+
+// streamContentBlockStopEvent is the full payload for
+// `event: content_block_stop`.
+type streamContentBlockStopEvent struct {
+	Index int `json:"index"`
+}
+
+// streamContentBlockDeltaPayload is the delta object inside a
+// content_block_delta event.
+type streamContentBlockDeltaPayload struct {
+	Type        string `json:"type"`
+	Text        string `json:"text"`
+	PartialJSON string `json:"partial_json"`
+	Thinking    string `json:"thinking"`
+}
+
+// streamContentBlockDeltaEvent is the full payload for
+// `event: content_block_delta`.
+type streamContentBlockDeltaEvent struct {
+	Index int                            `json:"index"`
+	Delta streamContentBlockDeltaPayload `json:"delta"`
+}
+
+// streamMessageDeltaPayload is the delta object inside a
+// message_delta event (carries stop_reason).
+type streamMessageDeltaPayload struct {
+	StopReason string `json:"stop_reason"`
+}
+
+// streamMessageDeltaUsage is the usage delta on a message_delta event
+// (only output_tokens is updated mid-stream).
+type streamMessageDeltaUsage struct {
+	OutputTokens int `json:"output_tokens"`
+}
+
+// streamMessageDeltaEvent is the full payload for `event: message_delta`.
+type streamMessageDeltaEvent struct {
+	Delta streamMessageDeltaPayload `json:"delta"`
+	Usage streamMessageDeltaUsage   `json:"usage"`
+}
+
+// streamErrorPayload is the error object inside an error event.
+type streamErrorPayload struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
+// streamErrorEvent is the full payload for `event: error`.
+type streamErrorEvent struct {
+	Error streamErrorPayload `json:"error"`
+}
+
+// dispatchSSE decodes one SSE data payload according to the
+// currentEvent name and forwards structured events / usage / stop reasons.
+func dispatchSSE(
+	eventName, data string,
+	sink EventSink,
+	usage *Usage,
+	stop *string,
+	blockTypes map[int]string,
+) error {
+	switch eventName {
+	case "ping":
+		return nil
+	case "message_start":
+		var ev streamMessageStartEvent
+		if err := json.Unmarshal([]byte(data), &ev); err == nil {
+			usage.InputTokens = ev.Message.Usage.InputTokens
+			usage.OutputTokens = ev.Message.Usage.OutputTokens
+		}
+	case "content_block_start":
+		var ev streamContentBlockStartEvent
+		if err := json.Unmarshal([]byte(data), &ev); err != nil {
+			return nil
+		}
+		t := ev.ContentBlock.Type
+		blockTypes[ev.Index] = t
+		switch t {
+		case "tool_use":
+			return sink(StreamEvent{
+				Kind:        "tool_use_start",
+				BlockIndex:  ev.Index,
+				ToolUseID:   ev.ContentBlock.ID,
+				ToolUseName: ev.ContentBlock.Name,
+			})
+		case "thinking":
+			return sink(StreamEvent{
+				Kind:       "thinking",
+				BlockIndex: ev.Index,
+			})
+		}
+	case "content_block_delta":
+		var ev streamContentBlockDeltaEvent
+		if err := json.Unmarshal([]byte(data), &ev); err != nil {
+			return nil
+		}
+		switch ev.Delta.Type {
+		case "text_delta":
+			if ev.Delta.Text == "" {
+				return nil
+			}
+			return sink(StreamEvent{
+				Kind:       "text",
+				Text:       ev.Delta.Text,
+				BlockIndex: ev.Index,
+			})
+		case "input_json_delta":
+			return sink(StreamEvent{
+				Kind:        "tool_use_arg_delta",
+				BlockIndex:  ev.Index,
+				PartialJSON: ev.Delta.PartialJSON,
+			})
+		case "thinking_delta":
+			return sink(StreamEvent{
+				Kind:       "thinking",
+				Text:       ev.Delta.Thinking,
+				BlockIndex: ev.Index,
+			})
+		}
+	case "content_block_stop":
+		var ev streamContentBlockStopEvent
+		if err := json.Unmarshal([]byte(data), &ev); err != nil {
+			return nil
+		}
+		if blockTypes[ev.Index] == "tool_use" {
+			delete(blockTypes, ev.Index)
+			return sink(StreamEvent{
+				Kind:       "tool_use_stop",
+				BlockIndex: ev.Index,
+			})
+		}
+		delete(blockTypes, ev.Index)
+	case "message_delta":
+		var ev streamMessageDeltaEvent
+		if err := json.Unmarshal([]byte(data), &ev); err == nil {
+			if ev.Delta.StopReason != "" {
+				*stop = ev.Delta.StopReason
+			}
+			if ev.Usage.OutputTokens > 0 {
+				usage.OutputTokens = ev.Usage.OutputTokens
+			}
+		}
+	case "message_stop":
+		return sink(StreamEvent{
+			Kind:       "stop",
+			StopReason: *stop,
+		})
+	case "error":
+		var ev streamErrorEvent
+		if err := json.Unmarshal([]byte(data), &ev); err == nil {
+			return fmt.Errorf("anthropic error: %s: %s", ev.Error.Type, ev.Error.Message)
+		}
+		return fmt.Errorf("anthropic error: %s", truncate(data, 400))
+	}
+	return nil
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
+}

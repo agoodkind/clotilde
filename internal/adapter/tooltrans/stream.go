@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"goodkind.io/clyde/internal/adapter/finishreason"
 )
 
 // StreamTranslator converts Anthropic SSE events into OpenAI streaming chunks.
@@ -171,7 +173,7 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 		return nil, false, "", nil, nil
 
 	case "message_stop":
-		reason := mapAnthropicStopReasonStream(t.lastStopReason)
+		reason := finishreason.FromAnthropicStream(t.lastStopReason)
 		u := &OpenAIUsage{
 			PromptTokens:     t.pendingInputTokens,
 			CompletionTokens: t.lastOutputTokens,
@@ -212,20 +214,5 @@ func (t *StreamTranslator) baseChunk(delta OpenAIStreamDelta) OpenAIStreamChunk 
 			Index: 0,
 			Delta: delta,
 		}},
-	}
-}
-
-func mapAnthropicStopReasonStream(stop string) string {
-	switch stop {
-	case "max_tokens":
-		return "length"
-	case "tool_use":
-		return "tool_calls"
-	case "end_turn", "stop_sequence":
-		return "stop"
-	case "":
-		return "stop"
-	default:
-		return "stop"
 	}
 }

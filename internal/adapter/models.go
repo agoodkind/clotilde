@@ -1,8 +1,3 @@
-// Package adapter implements the OpenAI compatible HTTP surface
-// folded into the clyde daemon. A single launchd entry boots the
-// gRPC daemon plus this adapter so clients pointing at a local URL
-// can drive the Claude Max subscription through claude -p. The
-// package is intentionally small so the monolith stays cohesive.
 package adapter
 
 import (
