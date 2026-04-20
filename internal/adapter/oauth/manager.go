@@ -24,6 +24,7 @@ type Manager struct {
 	httpClient     *http.Client
 	credentialsDir string
 	oauthCfg       config.AdapterOAuth
+	relogin        reloginState
 }
 
 // NewManager builds a Manager. oauthCfg supplies token URL, client id,
@@ -86,6 +87,41 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 			"duration_ms", time.Since(refreshStarted).Milliseconds(),
 			slog.Any("err", err),
 		)
+		if isInvalidGrant(err) {
+			slog.Info("oauth.refresh.invalid_grant_detected",
+				"subcomponent", "oauth",
+			)
+			if reErr := m.autoRelogin(ctx, err); reErr != nil {
+				return "", reErr
+			}
+			fresh, readErr := readCredentials(m.credentialsDir, m.oauthCfg.KeychainService)
+			if readErr != nil {
+				return "", fmt.Errorf("post-relogin read credentials: %w", readErr)
+			}
+			if fresh == nil {
+				return "", errors.New("post-relogin: no tokens found in credentials store")
+			}
+			m.cached = fresh
+			if !isExpired(fresh) {
+				slog.Info("oauth.token.refreshed_via_relogin",
+					"subcomponent", "oauth",
+					"duration_ms", time.Since(refreshStarted).Milliseconds(),
+					"expires_at_ms", fresh.ExpiresAt,
+				)
+				return fresh.AccessToken, nil
+			}
+			retried, retryErr := m.refreshLocked(ctx, fresh)
+			if retryErr != nil {
+				return "", fmt.Errorf("post-relogin refresh: %w", retryErr)
+			}
+			m.cached = retried
+			slog.Info("oauth.token.refreshed_via_relogin",
+				"subcomponent", "oauth",
+				"duration_ms", time.Since(refreshStarted).Milliseconds(),
+				"expires_at_ms", retried.ExpiresAt,
+			)
+			return retried.AccessToken, nil
+		}
 		return "", err
 	}
 	m.cached = refreshed
