@@ -135,9 +135,10 @@ type (
 	Usage             = chatemit.Usage
 	ChatResponse      = chatemit.ChatResponse
 	ChatChoice        = chatemit.ChatChoice
-	StreamChunk       = chatemit.StreamChunk
-	StreamChoice      = chatemit.StreamChoice
-	StreamDelta       = chatemit.StreamDelta
+	StreamChunk         = chatemit.StreamChunk
+	StreamChoice        = chatemit.StreamChoice
+	StreamDelta         = chatemit.StreamDelta
+	PromptTokensDetails = chatemit.PromptTokensDetails
 )
 
 // ContentPart is one element of a content-parts array on a chat
@@ -173,7 +174,11 @@ type StreamOptions struct {
 	IncludeUsage bool `json:"include_usage,omitempty"`
 }
 
-// Usage matches the OpenAI token accounting shape.
+// Usage, PromptTokensDetails, and ChatResponse / ChatChoice / Logprobs /
+// StreamChunk / StreamChoice / StreamDelta / LogprobToken / TopLogprob are
+// all aliased via chatemit above to keep the OpenAI wire shape
+// single-sourced in tooltrans. PromptTokensDetails carries the OpenAI
+// cached_tokens breakdown; Usage.CachedTokens() helper reads it safely.
 
 // ModelsResponse is returned from GET /v1/models.
 type ModelsResponse struct {

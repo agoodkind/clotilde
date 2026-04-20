@@ -222,15 +222,16 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 	}
 	writeJSON(w, http.StatusOK, resp)
 	chatemit.LogCompleted(s.log, ctx, chatemit.CompletedAttrs{
-		Backend:      "fallback",
-		RequestID:    reqID,
-		Alias:        model.Alias,
-		ModelID:      req.Model,
-		FinishReason: fr,
-		TokensIn:     usage.PromptTokens,
-		TokensOut:    usage.CompletionTokens,
-		DurationMs:   time.Since(started).Milliseconds(),
-		Stream:       false,
+		Backend:         "fallback",
+		RequestID:       reqID,
+		Alias:           model.Alias,
+		ModelID:         req.Model,
+		FinishReason:    fr,
+		TokensIn:        usage.PromptTokens,
+		TokensOut:       usage.CompletionTokens,
+		CacheReadTokens: usage.CachedTokens(),
+		DurationMs:      time.Since(started).Milliseconds(),
+		Stream:          false,
 	})
 	return nil
 }
@@ -402,15 +403,16 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 	}
 	_ = sw.writeStreamDone()
 	chatemit.LogCompleted(s.log, r.Context(), chatemit.CompletedAttrs{
-		Backend:      "fallback",
-		RequestID:    reqID,
-		Alias:        model.Alias,
-		ModelID:      req.Model,
-		FinishReason: finalFinish,
-		TokensIn:     finalUsage.PromptTokens,
-		TokensOut:    finalUsage.CompletionTokens,
-		DurationMs:   time.Since(started).Milliseconds(),
-		Stream:       true,
+		Backend:         "fallback",
+		RequestID:       reqID,
+		Alias:           model.Alias,
+		ModelID:         req.Model,
+		FinishReason:    finalFinish,
+		TokensIn:        finalUsage.PromptTokens,
+		TokensOut:       finalUsage.CompletionTokens,
+		CacheReadTokens: finalUsage.CachedTokens(),
+		DurationMs:      time.Since(started).Milliseconds(),
+		Stream:          true,
 	})
 	return nil
 }

@@ -41,17 +41,28 @@ type OAuthSource interface {
 	Token(ctx context.Context) (string, error)
 }
 
+// CacheControl marks a block / tool / system element as a prompt
+// cache breakpoint. Omitted entirely when nil; when set, the server
+// treats everything up to and including this element as cacheable.
+// TTL is optional: empty means 5 minutes; "1h" requires the
+// extended-cache-ttl-2025-04-11 beta.
+type CacheControl struct {
+	Type string `json:"type"`
+	TTL  string `json:"ttl,omitempty"`
+}
+
 // ContentBlock is one element in a message content array or a streamed
 // content block start payload subset we reuse for decoding.
 type ContentBlock struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text,omitempty"`
-	ID        string          `json:"id,omitempty"`
-	Name      string          `json:"name,omitempty"`
-	Input     json.RawMessage `json:"input,omitempty"`
-	ToolUseID string          `json:"tool_use_id,omitempty"`
-	Content   string          `json:"content,omitempty"`
-	Source    *ImageSource    `json:"source,omitempty"`
+	Type         string          `json:"type"`
+	Text         string          `json:"text,omitempty"`
+	ID           string          `json:"id,omitempty"`
+	Name         string          `json:"name,omitempty"`
+	Input        json.RawMessage `json:"input,omitempty"`
+	ToolUseID    string          `json:"tool_use_id,omitempty"`
+	Content      string          `json:"content,omitempty"`
+	Source       *ImageSource    `json:"source,omitempty"`
+	CacheControl *CacheControl   `json:"cache_control,omitempty"`
 }
 
 // ImageSource describes image bytes or a URL for image content blocks.
@@ -71,9 +82,11 @@ type Message struct {
 // MarshalJSON emits a string "content" when there is exactly one text
 // block; otherwise it emits a JSON array of blocks. Both shapes are
 // accepted by the server; the string form preserves prompt-cache
-// behavior for the common plain-text path.
+// behavior for the common plain-text path. When the single block
+// carries a CacheControl marker the array shape is forced so the
+// marker survives serialization.
 func (m Message) MarshalJSON() ([]byte, error) {
-	if len(m.Content) == 1 && m.Content[0].Type == "text" {
+	if len(m.Content) == 1 && m.Content[0].Type == "text" && m.Content[0].CacheControl == nil {
 		return json.Marshal(struct {
 			Role    string `json:"role"`
 			Content string `json:"content"`
@@ -93,9 +106,10 @@ func (m Message) MarshalJSON() ([]byte, error) {
 
 // Tool is the wire shape for the tools array on /v1/messages.
 type Tool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description,omitempty"`
+	InputSchema  json.RawMessage `json:"input_schema"`
+	CacheControl *CacheControl   `json:"cache_control,omitempty"`
 }
 
 // ToolChoice selects how the model may use tools.
@@ -151,9 +165,14 @@ type Thinking struct {
 }
 
 // Usage mirrors the prompt/completion token counts from the response.
+// CacheCreationInputTokens is the count of input tokens written into
+// the prompt cache on this request; CacheReadInputTokens is the count
+// served from cache. Both are zero when prompt caching is disabled.
 type Usage struct {
-	InputTokens  int
-	OutputTokens int
+	InputTokens              int
+	OutputTokens             int
+	CacheCreationInputTokens int
+	CacheReadInputTokens     int
 }
 
 // Sink receives a single text delta chunk during streaming. Empty

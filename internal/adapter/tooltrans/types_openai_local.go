@@ -196,9 +196,29 @@ type OpenAIStreamDelta struct {
 	Refusal          string           `json:"refusal,omitempty"`
 }
 
-// OpenAIUsage matches OpenAI token accounting.
+// OpenAIUsage matches OpenAI token accounting. PromptTokensDetails
+// carries the breakdown OpenAI defined for prompt caching; the adapter
+// populates cached_tokens from Anthropic's cache_read_input_tokens so
+// clients that display the breakdown see cache efficiency.
 type OpenAIUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens        int                        `json:"prompt_tokens"`
+	CompletionTokens    int                        `json:"completion_tokens"`
+	TotalTokens         int                        `json:"total_tokens"`
+	PromptTokensDetails *OpenAIPromptTokensDetails `json:"prompt_tokens_details,omitempty"`
+}
+
+// OpenAIPromptTokensDetails is the OpenAI-canonical cache accounting
+// sub-object. CachedTokens counts prompt tokens served from a cache
+// hit (billed at 10% of input rate on the Anthropic side).
+type OpenAIPromptTokensDetails struct {
+	CachedTokens int `json:"cached_tokens"`
+}
+
+// CachedTokens returns the cached-token count from a Usage, or 0 when
+// the details sub-object is absent. Helper so slog sites do not nil-check.
+func (u OpenAIUsage) CachedTokens() int {
+	if u.PromptTokensDetails == nil {
+		return 0
+	}
+	return u.PromptTokensDetails.CachedTokens
 }

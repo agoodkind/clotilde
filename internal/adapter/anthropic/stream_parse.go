@@ -8,8 +8,10 @@ import (
 
 // streamMessageUsage is the usage object inside a message_start event.
 type streamMessageUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 }
 
 // streamMessage is the message object inside a message_start event.
@@ -65,9 +67,13 @@ type streamMessageDeltaPayload struct {
 }
 
 // streamMessageDeltaUsage is the usage delta on a message_delta event
-// (only output_tokens is updated mid-stream).
+// (only output_tokens is updated mid-stream). Cache token counts from
+// message_start are authoritative; message_delta may echo them for
+// completeness.
 type streamMessageDeltaUsage struct {
-	OutputTokens int `json:"output_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 }
 
 // streamMessageDeltaEvent is the full payload for `event: message_delta`.
@@ -104,6 +110,8 @@ func dispatchSSE(
 		if err := json.Unmarshal([]byte(data), &ev); err == nil {
 			usage.InputTokens = ev.Message.Usage.InputTokens
 			usage.OutputTokens = ev.Message.Usage.OutputTokens
+			usage.CacheCreationInputTokens = ev.Message.Usage.CacheCreationInputTokens
+			usage.CacheReadInputTokens = ev.Message.Usage.CacheReadInputTokens
 		}
 	case "content_block_start":
 		var ev streamContentBlockStartEvent
@@ -175,6 +183,12 @@ func dispatchSSE(
 			}
 			if ev.Usage.OutputTokens > 0 {
 				usage.OutputTokens = ev.Usage.OutputTokens
+			}
+			if ev.Usage.CacheCreationInputTokens > 0 {
+				usage.CacheCreationInputTokens = ev.Usage.CacheCreationInputTokens
+			}
+			if ev.Usage.CacheReadInputTokens > 0 {
+				usage.CacheReadInputTokens = ev.Usage.CacheReadInputTokens
 			}
 		}
 	case "message_stop":

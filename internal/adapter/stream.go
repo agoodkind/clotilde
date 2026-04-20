@@ -34,8 +34,27 @@ type claudeContent struct {
 }
 
 type claudeUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+}
+
+// usageFromClaudeResult builds an OpenAI Usage from a claude -p result
+// event's usage block. When the upstream reports any cache_read tokens
+// they're surfaced via the OpenAI-canonical
+// prompt_tokens_details.cached_tokens field so clients see cache
+// efficiency without having to read the slog JSONL.
+func usageFromClaudeResult(u claudeUsage) Usage {
+	out := Usage{
+		PromptTokens:     u.InputTokens,
+		CompletionTokens: u.OutputTokens,
+		TotalTokens:      u.InputTokens + u.OutputTokens,
+	}
+	if u.CacheReadInputTokens > 0 {
+		out.PromptTokensDetails = &PromptTokensDetails{CachedTokens: u.CacheReadInputTokens}
+	}
+	return out
 }
 
 // StreamSink receives one translated chunk at a time. The HTTP
@@ -117,11 +136,7 @@ func TranslateStream(r io.Reader, modelAlias, completionID string, sink StreamSi
 				}
 			}
 		case "result":
-			usage = Usage{
-				PromptTokens:     ev.Usage.InputTokens,
-				CompletionTokens: ev.Usage.OutputTokens,
-				TotalTokens:      ev.Usage.InputTokens + ev.Usage.OutputTokens,
-			}
+			usage = usageFromClaudeResult(ev.Usage)
 			apiStopReason = ev.StopReason
 		}
 	}
@@ -176,11 +191,7 @@ func CollectStream(r io.Reader) (string, Usage, error) {
 				}
 			}
 		case "result":
-			usage = Usage{
-				PromptTokens:     ev.Usage.InputTokens,
-				CompletionTokens: ev.Usage.OutputTokens,
-				TotalTokens:      ev.Usage.InputTokens + ev.Usage.OutputTokens,
-			}
+			usage = usageFromClaudeResult(ev.Usage)
 		}
 	}
 	if err := sc.Err(); err != nil {

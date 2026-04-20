@@ -54,3 +54,24 @@ func TestTranslateStreamEmitsAssistantDeltasAndFinish(t *testing.T) {
 		t.Fatalf("usage total = %d, want 15", usage.TotalTokens)
 	}
 }
+
+const fixtureStreamWithCache = `{"type":"system","subtype":"init"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}
+{"type":"result","total_cost_usd":0.001,"usage":{"input_tokens":120,"output_tokens":8,"cache_creation_input_tokens":640,"cache_read_input_tokens":3200}}
+`
+
+func TestCollectStreamSurfacesCacheTokens(t *testing.T) {
+	_, usage, err := CollectStream(strings.NewReader(fixtureStreamWithCache))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if usage.PromptTokens != 120 || usage.CompletionTokens != 8 {
+		t.Fatalf("core usage = %+v", usage)
+	}
+	if usage.PromptTokensDetails == nil || usage.PromptTokensDetails.CachedTokens != 3200 {
+		t.Fatalf("cache_read_tokens not surfaced in Usage: %+v", usage.PromptTokensDetails)
+	}
+	if usage.CachedTokens() != 3200 {
+		t.Fatalf("CachedTokens helper returned %d", usage.CachedTokens())
+	}
+}

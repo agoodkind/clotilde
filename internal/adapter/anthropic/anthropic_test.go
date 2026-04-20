@@ -80,6 +80,26 @@ func TestMessageMarshalJSON(t *testing.T) {
 	}
 }
 
+func TestMessageMarshalJSONWithCacheControlStaysArray(t *testing.T) {
+	t.Parallel()
+	msg := Message{
+		Role: "user",
+		Content: []ContentBlock{{
+			Type:         "text",
+			Text:         "hello",
+			CacheControl: &CacheControl{Type: "ephemeral"},
+		}},
+	}
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	want := `{"role":"user","content":[{"type":"text","text":"hello","cache_control":{"type":"ephemeral"}}]}`
+	if string(raw) != want {
+		t.Fatalf("got %s want %s", raw, want)
+	}
+}
+
 func TestRequestMarshalToolsAndToolChoice(t *testing.T) {
 	t.Parallel()
 	req := Request{

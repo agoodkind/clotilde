@@ -102,6 +102,7 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, req ChatRequ
 		slog.String("finish_reason", finishReason),
 		slog.Int("prompt_tokens", usage.PromptTokens),
 		slog.Int("completion_tokens", usage.CompletionTokens),
+		slog.Int("cache_read_tokens", usage.CachedTokens()),
 		slog.Int64("duration_ms", time.Since(started).Milliseconds()),
 		slog.Bool("stream", true),
 	)

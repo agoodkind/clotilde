@@ -6,15 +6,17 @@ import (
 )
 
 type CompletedAttrs struct {
-	Backend      string
-	RequestID    string
-	Alias        string
-	ModelID      string
-	FinishReason string
-	TokensIn     int
-	TokensOut    int
-	DurationMs   int64
-	Stream       bool
+	Backend             string
+	RequestID           string
+	Alias               string
+	ModelID             string
+	FinishReason        string
+	TokensIn            int
+	TokensOut           int
+	CacheReadTokens     int
+	CacheCreationTokens int
+	DurationMs          int64
+	Stream              bool
 }
 
 // LogCompleted emits a normalized adapter chat completion log with model_id and
@@ -37,6 +39,8 @@ func LogCompleted(log *slog.Logger, ctx context.Context, attrs CompletedAttrs) {
 		slog.String("finish_reason", attrs.FinishReason),
 		slog.Int("tokens_in", attrs.TokensIn),
 		slog.Int("tokens_out", attrs.TokensOut),
+		slog.Int("cache_read_tokens", attrs.CacheReadTokens),
+		slog.Int("cache_creation_tokens", attrs.CacheCreationTokens),
 		slog.Int64("duration_ms", attrs.DurationMs),
 		slog.Bool("stream", attrs.Stream),
 	}

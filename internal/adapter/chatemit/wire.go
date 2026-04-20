@@ -13,6 +13,7 @@ type LogprobsResult = tooltrans.OpenAILogprobsResult
 type LogprobToken = tooltrans.OpenAILogprobToken
 type TopLogprob = tooltrans.OpenAITopLogprob
 type Usage = tooltrans.OpenAIUsage
+type PromptTokensDetails = tooltrans.OpenAIPromptTokensDetails
 type StreamChunk = tooltrans.OpenAIStreamChunk
 type StreamChoice = tooltrans.OpenAIStreamChoice
 type StreamDelta = tooltrans.OpenAIStreamDelta

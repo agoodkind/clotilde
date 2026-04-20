@@ -206,6 +206,7 @@ func toAnthropicAPIRequest(tr tooltrans.AnthRequest, claudeModel string) anthrop
 			DisableParallelToolUse: tr.ToolChoice.DisableParallelToolUse,
 		}
 	}
+	applyCacheBreakpoints(msgs, tools)
 	return anthropic.Request{
 		Model:      claudeModel,
 		System:     tr.System,
@@ -214,6 +215,37 @@ func toAnthropicAPIRequest(tr tooltrans.AnthRequest, claudeModel string) anthrop
 		Stream:     false,
 		Tools:      tools,
 		ToolChoice: tc,
+	}
+}
+
+// applyCacheBreakpoints stamps ephemeral cache_control markers on the
+// outbound request. Two markers are placed: one on the last tool in
+// the tools array (caches the tools block plus the system prompt
+// prefix), and one on the last text block of the final user message
+// (pins the growing conversation prefix across turns). Mirrors the
+// minimal variant of addCacheBreakpoints in
+// src/services/api/claude.ts:3063. Single-message requests skip the
+// conversation marker because the 1.25x cache-write surcharge isn't
+// amortized on a one-shot call.
+func applyCacheBreakpoints(msgs []anthropic.Message, tools []anthropic.Tool) {
+	ephemeral := &anthropic.CacheControl{Type: "ephemeral"}
+	if len(tools) > 0 {
+		tools[len(tools)-1].CacheControl = ephemeral
+	}
+	if len(msgs) < 2 {
+		return
+	}
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role != "user" {
+			continue
+		}
+		for j := len(msgs[i].Content) - 1; j >= 0; j-- {
+			if msgs[i].Content[j].Type == "text" {
+				msgs[i].Content[j].CacheControl = ephemeral
+				return
+			}
+		}
+		return
 	}
 }
 
@@ -488,26 +520,66 @@ func (s *Server) collectOAuth(w http.ResponseWriter, ctx context.Context, req an
 		}
 		return nil
 	}
-	u := Usage{
-		PromptTokens:     anthUsage.InputTokens,
-		CompletionTokens: anthUsage.OutputTokens,
-		TotalTokens:      anthUsage.InputTokens + anthUsage.OutputTokens,
-	}
+	u := usageFromAnthropic(anthUsage)
 	resp := mergeOAuthStreamChunks(reqID, model.Alias, buf, u, finishReason, jsonSpec, anthStopReason)
 	resp, _ = chatemit.NoticeForResponseHeaders(resp, notice, Unclaim, json.Marshal)
 	writeJSON(w, http.StatusOK, resp)
+	s.logCacheUsage(ctx, reqID, model.Alias, anthUsage)
 	chatemit.LogCompleted(s.log, ctx, chatemit.CompletedAttrs{
-		Backend:      "anthropic",
-		RequestID:    reqID,
-		Alias:        model.Alias,
-		ModelID:      req.Model,
-		FinishReason: finishReason,
-		TokensIn:     u.PromptTokens,
-		TokensOut:    u.CompletionTokens,
-		DurationMs:   time.Since(started).Milliseconds(),
-		Stream:       false,
+		Backend:             "anthropic",
+		RequestID:           reqID,
+		Alias:               model.Alias,
+		ModelID:             req.Model,
+		FinishReason:        finishReason,
+		TokensIn:            u.PromptTokens,
+		TokensOut:           u.CompletionTokens,
+		CacheReadTokens:     anthUsage.CacheReadInputTokens,
+		CacheCreationTokens: anthUsage.CacheCreationInputTokens,
+		DurationMs:          time.Since(started).Milliseconds(),
+		Stream:              false,
 	})
 	return nil
+}
+
+// usageFromAnthropic converts an upstream usage block into the OpenAI
+// shape. Cache-read tokens surface in prompt_tokens_details.cached_tokens
+// so OpenAI clients that display the breakdown see cache efficiency;
+// cache-creation tokens have no OpenAI-canonical field and are only
+// reported via slog.
+func usageFromAnthropic(a anthropic.Usage) Usage {
+	u := Usage{
+		PromptTokens:     a.InputTokens,
+		CompletionTokens: a.OutputTokens,
+		TotalTokens:      a.InputTokens + a.OutputTokens,
+	}
+	if a.CacheReadInputTokens > 0 {
+		u.PromptTokensDetails = &PromptTokensDetails{CachedTokens: a.CacheReadInputTokens}
+	}
+	return u
+}
+
+// logCacheUsage emits a dedicated adapter.cache.usage slog event when
+// the upstream reports any cache activity. The hit_ratio denominator
+// is input_tokens + cache_read_input_tokens since Anthropic bills
+// input_tokens as the uncached portion only; a value of 1.0 means the
+// entire prompt came from cache.
+func (s *Server) logCacheUsage(ctx context.Context, reqID, alias string, u anthropic.Usage) {
+	if u.CacheCreationInputTokens == 0 && u.CacheReadInputTokens == 0 {
+		return
+	}
+	denom := u.InputTokens + u.CacheReadInputTokens
+	var hitRatio float64
+	if denom > 0 {
+		hitRatio = float64(u.CacheReadInputTokens) / float64(denom)
+	}
+	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.cache.usage",
+		slog.String("request_id", reqID),
+		slog.String("alias", alias),
+		slog.Int("input_tokens", u.InputTokens),
+		slog.Int("cache_creation_tokens", u.CacheCreationInputTokens),
+		slog.Int("cache_read_tokens", u.CacheReadInputTokens),
+		slog.Float64("hit_ratio", hitRatio),
+	)
 }
 
 // streamOAuth honors the escalate flag for the *initial* call to
@@ -588,26 +660,25 @@ func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthrop
 	fr := finishReason
 	_ = chatemit.EmitFinishChunk(emit, reqID, model.Alias, time.Now().Unix(), fr)
 
-	finalUsage := Usage{
-		PromptTokens:     anthUsage.InputTokens,
-		CompletionTokens: anthUsage.OutputTokens,
-		TotalTokens:      anthUsage.InputTokens + anthUsage.OutputTokens,
-	}
+	finalUsage := usageFromAnthropic(anthUsage)
 	if includeUsage {
 		_ = chatemit.EmitUsageChunk(emit, reqID, model.Alias, time.Now().Unix(), finalUsage)
 	}
 	_ = sw.writeStreamDone()
 
+	s.logCacheUsage(r.Context(), reqID, model.Alias, anthUsage)
 	chatemit.LogCompleted(s.log, r.Context(), chatemit.CompletedAttrs{
-		Backend:      "anthropic",
-		RequestID:    reqID,
-		Alias:        model.Alias,
-		ModelID:      req.Model,
-		FinishReason: fr,
-		TokensIn:     finalUsage.PromptTokens,
-		TokensOut:    finalUsage.CompletionTokens,
-		DurationMs:   time.Since(started).Milliseconds(),
-		Stream:       true,
+		Backend:             "anthropic",
+		RequestID:           reqID,
+		Alias:               model.Alias,
+		ModelID:             req.Model,
+		FinishReason:        fr,
+		TokensIn:            finalUsage.PromptTokens,
+		TokensOut:           finalUsage.CompletionTokens,
+		CacheReadTokens:     anthUsage.CacheReadInputTokens,
+		CacheCreationTokens: anthUsage.CacheCreationInputTokens,
+		DurationMs:          time.Since(started).Milliseconds(),
+		Stream:              true,
 	})
 	return nil
 }

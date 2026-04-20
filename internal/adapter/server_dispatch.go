@@ -352,6 +352,7 @@ func (s *Server) collectChat(w http.ResponseWriter, ctx context.Context, req Cha
 		slog.String("model", model.Alias),
 		slog.Int("prompt_tokens", usage.PromptTokens),
 		slog.Int("completion_tokens", usage.CompletionTokens),
+		slog.Int("cache_read_tokens", usage.CachedTokens()),
 		slog.Int64("duration_ms", time.Since(started).Milliseconds()),
 		slog.Bool("stream", false),
 		slog.String("json_mode", jsonSpec.Mode),
