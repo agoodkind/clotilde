@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -63,17 +64,17 @@ func New(cfg Config) *Client {
 func (c *Client) Collect(ctx context.Context, r Request) (Result, error) {
 	cctx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
 	defer cancel()
-	stdout, wait, err := c.spawn(cctx, r)
+	stdout, wait, info, err := c.spawn(cctx, r)
 	if err != nil {
 		return Result{}, err
 	}
-	text, reasoning, usage, stopReason, parseErr := collectStreamJSON(stdout)
+	text, reasoning, usage, stopReason, parsedErr, parseErr := collectStreamJSON(stdout, r.RequestID)
 	waitErr := wait()
 	if parseErr != nil {
 		return Result{}, parseErr
 	}
 	if waitErr != nil {
-		return Result{}, fmt.Errorf("claude -p exited: %w", waitErr)
+		return Result{}, exitError(waitErr, info, parsedErr)
 	}
 	return finalizeAssistantText(text, reasoning, r, usage, stopReason), nil
 }
@@ -88,17 +89,17 @@ func (c *Client) Collect(ctx context.Context, r Request) (Result, error) {
 func (c *Client) Stream(ctx context.Context, r Request, onEvent func(StreamEvent) error) (StreamResult, error) {
 	cctx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
 	defer cancel()
-	stdout, wait, err := c.spawn(cctx, r)
+	stdout, wait, info, err := c.spawn(cctx, r)
 	if err != nil {
 		return StreamResult{}, err
 	}
-	fullText, fullReasoning, usage, stopReason, parseErr := streamStreamJSON(stdout, r, onEvent)
+	fullText, fullReasoning, usage, stopReason, parsedErr, parseErr := streamStreamJSON(stdout, r, onEvent)
 	waitErr := wait()
 	if parseErr != nil {
 		return StreamResult{Usage: usage}, parseErr
 	}
 	if waitErr != nil {
-		return StreamResult{Usage: usage}, fmt.Errorf("claude -p exited: %w", waitErr)
+		return StreamResult{Usage: usage}, exitError(waitErr, info, parsedErr)
 	}
 	res := finalizeAssistantText(fullText, fullReasoning, r, usage, stopReason)
 	return StreamResult{
@@ -109,6 +110,32 @@ func (c *Client) Stream(ctx context.Context, r Request, onEvent func(StreamEvent
 		Refusal:          res.Refusal,
 		ToolCalls:        res.ToolCalls,
 	}, nil
+}
+
+// exitError builds a user-facing error from a non-zero claude -p exit.
+// It prefers the parsed stream-json error (auth_failed, API 4xx/5xx)
+// because claude -p emits failure details on stdout, not stderr; falls
+// back to the stderr tail when present; and otherwise returns the bare
+// exit status. The structured event with the full diagnostic surface
+// was already emitted by spawn's wait closure and the stream parser.
+func exitError(waitErr error, info *SpawnInfo, parsed *ParsedError) error {
+	const inlineLimit = 512
+	if parsed != nil {
+		if msg := strings.TrimSpace(parsed.Message()); msg != "" {
+			if len(msg) > inlineLimit {
+				msg = msg[:inlineLimit]
+			}
+			return fmt.Errorf("claude -p exited (%w): %s", waitErr, msg)
+		}
+	}
+	if info != nil && strings.TrimSpace(info.StderrTail) != "" {
+		tail := strings.TrimSpace(info.StderrTail)
+		if len(tail) > inlineLimit {
+			tail = tail[len(tail)-inlineLimit:]
+		}
+		return fmt.Errorf("claude -p exited (%w): %s", waitErr, tail)
+	}
+	return fmt.Errorf("claude -p exited: %w", waitErr)
 }
 
 // EnsureScratchDir creates the cwd path beneath base for the

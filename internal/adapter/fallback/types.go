@@ -64,6 +64,20 @@ type claudeEvent struct {
 	Message    claudeMessage  `json:"message,omitempty"`
 	Usage      claudeRawUsage `json:"usage,omitempty"`
 	StopReason string         `json:"stop_reason,omitempty"`
+	// Error is populated by claude -p when an upstream auth or API
+	// error occurs ("authentication_failed", etc.). The parser logs
+	// these so callers can diagnose silent CLI failures instead of
+	// only seeing "exit status 1" downstream.
+	Error string `json:"error,omitempty"`
+	// IsError mirrors the boolean field on `result` frames; true when
+	// the run aborted before producing a normal completion.
+	IsError bool `json:"is_error,omitempty"`
+	// APIErrorStatus is set on `result` frames after upstream HTTP
+	// failures. Surfaced via slog for diagnosis.
+	APIErrorStatus int `json:"api_error_status,omitempty"`
+	// Result is the human-readable error string on `result` frames
+	// when IsError is true (often a duplicate of the assistant text).
+	Result string `json:"result,omitempty"`
 }
 
 type claudeMessage struct {
