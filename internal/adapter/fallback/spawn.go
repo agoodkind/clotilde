@@ -45,18 +45,7 @@ func (c *Client) spawn(ctx context.Context, r Request) (io.ReadCloser, func() er
 	if r.Model == "" {
 		return nil, nil, nil, errors.New("fallback.Request.Model is empty (no CLI alias bound to family)")
 	}
-	args := []string{
-		"-p",
-		"--model", r.Model,
-		"--output-format", "stream-json",
-		"--verbose",
-		"--dangerously-skip-permissions",
-	}
-	sys := mergeSystemPrompt(r.System, renderToolsPreamble(r.Tools, r.ToolChoice))
-	if sys != "" {
-		args = append(args, "--append-system-prompt", sys)
-	}
-	args = append(args, renderPrompt(r.Messages))
+	args := buildArgs(r)
 
 	cmd := exec.CommandContext(ctx, c.cfg.Binary, args...)
 	cmd.Dir = c.cfg.ScratchDir
@@ -168,6 +157,33 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 
 func (b *boundedBuffer) String() string {
 	return b.buf.String()
+}
+
+// buildArgs renders the full argv for a `claude -p` invocation. Kept
+// separate from spawn so tests can assert flag presence without
+// executing the subprocess.
+func buildArgs(r Request) []string {
+	args := []string{
+		"-p",
+		"--model", r.Model,
+		"--output-format", "stream-json",
+		"--verbose",
+		"--dangerously-skip-permissions",
+	}
+	if r.SessionID != "" {
+		// Stable per-conversation UUID lets Claude Code reuse the same
+		// transcript file across back-to-back invocations, which
+		// stabilizes the byte sequence the upstream prompt cache hashes
+		// against. Cache hits are visible via cache_read_tokens in the
+		// adapter.chat.completed log event.
+		args = append(args, "--session-id", r.SessionID)
+	}
+	sys := mergeSystemPrompt(r.System, renderToolsPreamble(r.Tools, r.ToolChoice))
+	if sys != "" {
+		args = append(args, "--append-system-prompt", sys)
+	}
+	args = append(args, renderPrompt(r.Messages))
+	return args
 }
 
 // buildEnv returns the env slice for the subprocess, optionally

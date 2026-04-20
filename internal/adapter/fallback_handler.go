@@ -129,6 +129,7 @@ func (s *Server) handleFallback(w http.ResponseWriter, r *http.Request, req Chat
 		Tools:      buildFallbackTools(req),
 		ToolChoice: parseFallbackToolChoice(req.ToolChoice),
 		RequestID:  reqID,
+		SessionID:  deriveFallbackSessionID(msgs, model.Alias),
 	}
 
 	started := time.Now()
@@ -178,6 +179,9 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 		CompletionTokens: result.Usage.CompletionTokens,
 		TotalTokens:      result.Usage.TotalTokens,
 	}
+	if result.Usage.CacheReadInputTokens > 0 {
+		usage.PromptTokensDetails = &PromptTokensDetails{CachedTokens: result.Usage.CacheReadInputTokens}
+	}
 	msg := ChatMessage{Role: "assistant"}
 	if result.ReasoningContent != "" {
 		msg.ReasoningContent = result.ReasoningContent
@@ -221,17 +225,20 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 		Usage: &usage,
 	}
 	writeJSON(w, http.StatusOK, resp)
+	s.logCacheUsage(ctx, "fallback", reqID, model.Alias,
+		result.Usage.PromptTokens, result.Usage.CacheCreationInputTokens, result.Usage.CacheReadInputTokens)
 	chatemit.LogCompleted(s.log, ctx, chatemit.CompletedAttrs{
-		Backend:         "fallback",
-		RequestID:       reqID,
-		Alias:           model.Alias,
-		ModelID:         req.Model,
-		FinishReason:    fr,
-		TokensIn:        usage.PromptTokens,
-		TokensOut:       usage.CompletionTokens,
-		CacheReadTokens: usage.CachedTokens(),
-		DurationMs:      time.Since(started).Milliseconds(),
-		Stream:          false,
+		Backend:             "fallback",
+		RequestID:           reqID,
+		Alias:               model.Alias,
+		ModelID:             req.Model,
+		FinishReason:        fr,
+		TokensIn:            usage.PromptTokens,
+		TokensOut:           usage.CompletionTokens,
+		CacheReadTokens:     result.Usage.CacheReadInputTokens,
+		CacheCreationTokens: result.Usage.CacheCreationInputTokens,
+		DurationMs:          time.Since(started).Milliseconds(),
+		Stream:              false,
 	})
 	return nil
 }
@@ -398,21 +405,27 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 		CompletionTokens: sr.Usage.CompletionTokens,
 		TotalTokens:      sr.Usage.TotalTokens,
 	}
+	if sr.Usage.CacheReadInputTokens > 0 {
+		finalUsage.PromptTokensDetails = &PromptTokensDetails{CachedTokens: sr.Usage.CacheReadInputTokens}
+	}
 	if includeUsage {
 		_ = chatemit.EmitUsageChunk(emit, reqID, model.Alias, created, finalUsage)
 	}
 	_ = sw.writeStreamDone()
+	s.logCacheUsage(r.Context(), "fallback", reqID, model.Alias,
+		sr.Usage.PromptTokens, sr.Usage.CacheCreationInputTokens, sr.Usage.CacheReadInputTokens)
 	chatemit.LogCompleted(s.log, r.Context(), chatemit.CompletedAttrs{
-		Backend:         "fallback",
-		RequestID:       reqID,
-		Alias:           model.Alias,
-		ModelID:         req.Model,
-		FinishReason:    finalFinish,
-		TokensIn:        finalUsage.PromptTokens,
-		TokensOut:       finalUsage.CompletionTokens,
-		CacheReadTokens: finalUsage.CachedTokens(),
-		DurationMs:      time.Since(started).Milliseconds(),
-		Stream:          true,
+		Backend:             "fallback",
+		RequestID:           reqID,
+		Alias:               model.Alias,
+		ModelID:             req.Model,
+		FinishReason:        finalFinish,
+		TokensIn:            finalUsage.PromptTokens,
+		TokensOut:           finalUsage.CompletionTokens,
+		CacheReadTokens:     sr.Usage.CacheReadInputTokens,
+		CacheCreationTokens: sr.Usage.CacheCreationInputTokens,
+		DurationMs:          time.Since(started).Milliseconds(),
+		Stream:              true,
 	})
 	return nil
 }
@@ -472,6 +485,26 @@ func parseFallbackToolChoice(raw json.RawMessage) string {
 		}
 	}
 	return "auto"
+}
+
+// deriveFallbackSessionID returns a UUID stable across turns of the
+// same Cursor conversation: Cursor resends the full history on every
+// request so the first user message never changes, and hashing it
+// with the model alias gives us a deterministic per-conversation
+// identifier that we pass to `claude -p` via `--session-id`. Empty
+// when the history has no user message — the caller then omits the
+// flag and Claude Code allocates its own.
+func deriveFallbackSessionID(msgs []fallback.Message, modelAlias string) string {
+	return fallback.DeriveSessionID(fallbackFirstUserText(msgs), modelAlias)
+}
+
+func fallbackFirstUserText(msgs []fallback.Message) string {
+	for _, m := range msgs {
+		if strings.EqualFold(strings.TrimSpace(m.Role), "user") {
+			return m.Content
+		}
+	}
+	return ""
 }
 
 // buildFallbackMessages converts OpenAI-shaped ChatMessages into the

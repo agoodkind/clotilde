@@ -11,7 +11,11 @@ type Message struct {
 
 // Request describes one fallback dispatch. Model is the CLI short
 // name (e.g. "opus", "sonnet", "haiku") taken from
-// ResolvedModel.CLIAlias by the dispatcher.
+// ResolvedModel.CLIAlias by the dispatcher. SessionID, when non-empty,
+// is passed through as `--session-id <uuid>`: callers derive a stable
+// UUID per Cursor conversation so back-to-back invocations land in the
+// same Claude Code transcript file, which in turn stabilizes the byte
+// sequence the upstream prompt cache hashes against.
 type Request struct {
 	Model      string
 	System     string
@@ -19,13 +23,20 @@ type Request struct {
 	Tools      []Tool
 	ToolChoice string
 	RequestID  string
+	SessionID  string
 }
 
 // Usage is the token accounting echoed back from the result frame.
+// CacheCreationInputTokens and CacheReadInputTokens are parsed from
+// the stream-json result event when Claude Code reports prompt-cache
+// activity; zero means either no cache markers were set or the upstream
+// omitted them.
 type Usage struct {
-	PromptTokens     int
-	CompletionTokens int
-	TotalTokens      int
+	PromptTokens             int
+	CompletionTokens         int
+	TotalTokens              int
+	CacheCreationInputTokens int
+	CacheReadInputTokens     int
 }
 
 // Result is the non-streaming return shape: the joined assistant
@@ -91,6 +102,8 @@ type claudeContent struct {
 }
 
 type claudeRawUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 }

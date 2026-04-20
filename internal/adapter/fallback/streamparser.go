@@ -70,9 +70,11 @@ func collectStreamJSON(r io.Reader, requestID string) (string, string, Usage, st
 			appendAssistantDeltas(&textSb, &reasoningSb, ev, true, nil)
 		case "result":
 			usage = Usage{
-				PromptTokens:     ev.Usage.InputTokens,
-				CompletionTokens: ev.Usage.OutputTokens,
-				TotalTokens:      ev.Usage.InputTokens + ev.Usage.OutputTokens,
+				PromptTokens:             ev.Usage.InputTokens,
+				CompletionTokens:         ev.Usage.OutputTokens,
+				TotalTokens:              ev.Usage.InputTokens + ev.Usage.OutputTokens,
+				CacheCreationInputTokens: ev.Usage.CacheCreationInputTokens,
+				CacheReadInputTokens:     ev.Usage.CacheReadInputTokens,
 			}
 			stopReason = ev.StopReason
 		}
@@ -120,9 +122,11 @@ func streamStreamJSON(
 			}
 		case "result":
 			usage = Usage{
-				PromptTokens:     ev.Usage.InputTokens,
-				CompletionTokens: ev.Usage.OutputTokens,
-				TotalTokens:      ev.Usage.InputTokens + ev.Usage.OutputTokens,
+				PromptTokens:             ev.Usage.InputTokens,
+				CompletionTokens:         ev.Usage.OutputTokens,
+				TotalTokens:              ev.Usage.InputTokens + ev.Usage.OutputTokens,
+				CacheCreationInputTokens: ev.Usage.CacheCreationInputTokens,
+				CacheReadInputTokens:     ev.Usage.CacheReadInputTokens,
 			}
 			stopReason = ev.StopReason
 		}

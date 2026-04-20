@@ -29,6 +29,14 @@ echo "boom" 1>&2
 exit 7
 `
 
+// fakeClaudeCacheScript emits a result frame with cache accounting so
+// tests can assert the parser propagates cache tokens through Usage.
+const fakeClaudeCacheScript = `#!/usr/bin/env sh
+echo '{"type":"system","subtype":"init"}'
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}'
+echo '{"type":"result","usage":{"input_tokens":100,"output_tokens":5,"cache_creation_input_tokens":800,"cache_read_input_tokens":4000}}'
+`
+
 func writeFakeBinary(t *testing.T, body string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -113,6 +121,25 @@ func TestCollectHappyPath(t *testing.T) {
 	}
 	if res.Stop != "stop" {
 		t.Fatalf("stop = %q want stop", res.Stop)
+	}
+}
+
+func TestCollectPropagatesCacheTokens(t *testing.T) {
+	bin := writeFakeBinary(t, fakeClaudeCacheScript)
+	scratch := t.TempDir()
+	c := New(Config{Binary: bin, Timeout: 5 * time.Second, ScratchDir: scratch})
+	res, err := c.Collect(context.Background(), Request{
+		Model:    "haiku",
+		Messages: []Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if res.Usage.CacheCreationInputTokens != 800 {
+		t.Fatalf("cache_creation = %d want 800", res.Usage.CacheCreationInputTokens)
+	}
+	if res.Usage.CacheReadInputTokens != 4000 {
+		t.Fatalf("cache_read = %d want 4000", res.Usage.CacheReadInputTokens)
 	}
 }
 

@@ -524,7 +524,7 @@ func (s *Server) collectOAuth(w http.ResponseWriter, ctx context.Context, req an
 	resp := mergeOAuthStreamChunks(reqID, model.Alias, buf, u, finishReason, jsonSpec, anthStopReason)
 	resp, _ = chatemit.NoticeForResponseHeaders(resp, notice, Unclaim, json.Marshal)
 	writeJSON(w, http.StatusOK, resp)
-	s.logCacheUsage(ctx, reqID, model.Alias, anthUsage)
+	s.logCacheUsageAnthropic(ctx, "anthropic", reqID, model.Alias, anthUsage)
 	chatemit.LogCompleted(s.log, ctx, chatemit.CompletedAttrs{
 		Backend:             "anthropic",
 		RequestID:           reqID,
@@ -562,24 +562,31 @@ func usageFromAnthropic(a anthropic.Usage) Usage {
 // the upstream reports any cache activity. The hit_ratio denominator
 // is input_tokens + cache_read_input_tokens since Anthropic bills
 // input_tokens as the uncached portion only; a value of 1.0 means the
-// entire prompt came from cache.
-func (s *Server) logCacheUsage(ctx context.Context, reqID, alias string, u anthropic.Usage) {
-	if u.CacheCreationInputTokens == 0 && u.CacheReadInputTokens == 0 {
+// entire prompt came from cache. Callers on the OAuth path pass the
+// native anthropic.Usage via logCacheUsageAnthropic; the fallback path
+// passes the fields it already parsed from stream-json result events.
+func (s *Server) logCacheUsage(ctx context.Context, backend, reqID, alias string, inputTokens, cacheCreationTokens, cacheReadTokens int) {
+	if cacheCreationTokens == 0 && cacheReadTokens == 0 {
 		return
 	}
-	denom := u.InputTokens + u.CacheReadInputTokens
+	denom := inputTokens + cacheReadTokens
 	var hitRatio float64
 	if denom > 0 {
-		hitRatio = float64(u.CacheReadInputTokens) / float64(denom)
+		hitRatio = float64(cacheReadTokens) / float64(denom)
 	}
 	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.cache.usage",
+		slog.String("backend", backend),
 		slog.String("request_id", reqID),
 		slog.String("alias", alias),
-		slog.Int("input_tokens", u.InputTokens),
-		slog.Int("cache_creation_tokens", u.CacheCreationInputTokens),
-		slog.Int("cache_read_tokens", u.CacheReadInputTokens),
+		slog.Int("input_tokens", inputTokens),
+		slog.Int("cache_creation_tokens", cacheCreationTokens),
+		slog.Int("cache_read_tokens", cacheReadTokens),
 		slog.Float64("hit_ratio", hitRatio),
 	)
+}
+
+func (s *Server) logCacheUsageAnthropic(ctx context.Context, backend, reqID, alias string, u anthropic.Usage) {
+	s.logCacheUsage(ctx, backend, reqID, alias, u.InputTokens, u.CacheCreationInputTokens, u.CacheReadInputTokens)
 }
 
 // streamOAuth honors the escalate flag for the *initial* call to
@@ -666,7 +673,7 @@ func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthrop
 	}
 	_ = sw.writeStreamDone()
 
-	s.logCacheUsage(r.Context(), reqID, model.Alias, anthUsage)
+	s.logCacheUsageAnthropic(r.Context(), "anthropic", reqID, model.Alias, anthUsage)
 	chatemit.LogCompleted(s.log, r.Context(), chatemit.CompletedAttrs{
 		Backend:             "anthropic",
 		RequestID:           reqID,
