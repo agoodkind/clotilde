@@ -122,6 +122,10 @@ type Request struct {
 	Thinking   *Thinking   `json:"thinking,omitempty"`
 	Tools      []Tool      `json:"tools,omitempty"`
 	ToolChoice *ToolChoice `json:"tool_choice,omitempty"`
+	// OnHeaders receives the raw response headers on successful 200 responses.
+	// The callback executes during do() after the /v1/messages request is
+	// committed and before status-specific processing.
+	OnHeaders func(http.Header) `json:"-"`
 	// ExtraBetas is appended to cfg.BetaHeader when building the
 	// outbound anthropic-beta header. Use for per-model / per-request
 	// flags the static config does not already include. Not serialized.

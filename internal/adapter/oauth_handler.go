@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
+	"goodkind.io/clyde/internal/adapter/chatemit"
 	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
@@ -26,18 +27,35 @@ import (
 // and returns nil.
 func (s *Server) handleOAuth(w http.ResponseWriter, r *http.Request, req ChatRequest, model ResolvedModel, effort, reqID string, escalate bool) error {
 	if s.anthr == nil {
-		if escalate {
-			return fmt.Errorf("oauth_unconfigured: adapter built without anthropic client")
+		if err := chatemit.EscalateOrWrite(
+			fmt.Errorf("oauth_unconfigured: adapter built without anthropic client"),
+			escalate,
+			func(status int, code, msg string) error {
+				writeError(w, status, code, msg)
+				return nil
+			},
+			http.StatusInternalServerError,
+			"oauth_unconfigured",
+			"adapter built without anthropic client; set adapter.direct_oauth=true and restart",
+		); err != nil {
+			return err
 		}
-		writeError(w, http.StatusInternalServerError, "oauth_unconfigured",
-			"adapter built without anthropic client; set adapter.direct_oauth=true and restart")
 		return nil
 	}
 	if err := s.acquire(r.Context()); err != nil {
-		if escalate {
-			return fmt.Errorf("rate_limited: %w", err)
+		if err2 := chatemit.EscalateOrWrite(
+			fmt.Errorf("rate_limited: %w", err),
+			escalate,
+			func(status int, code, msg string) error {
+				writeError(w, status, code, msg)
+				return nil
+			},
+			http.StatusTooManyRequests,
+			"rate_limited",
+			err.Error(),
+		); err2 != nil {
+			return err2
 		}
-		writeError(w, http.StatusTooManyRequests, "rate_limited", err.Error())
 		return nil
 	}
 	defer s.release()
@@ -45,17 +63,29 @@ func (s *Server) handleOAuth(w http.ResponseWriter, r *http.Request, req ChatReq
 	jsonSpec := ParseResponseFormat(req.ResponseFormat)
 	anthReq, err := s.buildAnthropicWire(req, model, effort, jsonSpec)
 	if err != nil {
-		if escalate {
-			return fmt.Errorf("oauth_translate: %w", err)
+		if err2 := chatemit.EscalateOrWrite(
+			fmt.Errorf("oauth_translate: %w", err),
+			escalate,
+			func(status int, code, msg string) error {
+				writeError(w, status, code, msg)
+				return nil
+			},
+			http.StatusBadRequest,
+			"invalid_request",
+			err.Error(),
+		); err2 != nil {
+			return err2
 		}
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return nil
 	}
 
 	started := time.Now()
 	if req.Stream {
-		includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
-		return s.streamOAuth(w, r, anthReq, model, reqID, started, escalate, includeUsage)
+		// Always emit the final usage chunk; many OpenAI-compat clients
+		// (Cursor, etc.) read per-turn token counts from it without setting
+		// stream_options.include_usage.
+		_ = req.StreamOptions
+		return s.streamOAuth(w, r, anthReq, model, reqID, started, escalate, true)
 	}
 	return s.collectOAuth(w, r.Context(), anthReq, model, reqID, started, jsonSpec, escalate)
 }
@@ -402,24 +432,60 @@ func (s *Server) runOAuthTranslatorStream(
 
 func (s *Server) collectOAuth(w http.ResponseWriter, ctx context.Context, req anthropic.Request, model ResolvedModel, reqID string, started time.Time, jsonSpec JSONResponseSpec, escalate bool) error {
 	var buf []tooltrans.OpenAIStreamChunk
+	var notice *anthropic.Notice
 	emit := func(ch tooltrans.OpenAIStreamChunk) error {
 		buf = append(buf, ch)
 		return nil
 	}
+	req.OnHeaders = func(h http.Header) {
+		notice = chatemit.EvaluateNoticeFromHeaders(h, s.cfg.Notices.EnabledOrDefault(), Claim)
+	}
 	anthUsage, anthStopReason, finishReason, err := s.runOAuthTranslatorStream(ctx, req, model, reqID, emit)
 	if err != nil {
-		s.log.LogAttrs(ctx, slog.LevelError, "adapter.chat.failed",
-			slog.String("backend", "anthropic"),
-			slog.String("request_id", reqID),
-			slog.String("alias", model.Alias),
-			slog.String("model", req.Model),
-			slog.Int64("duration_ms", time.Since(started).Milliseconds()),
-			slog.Any("err", err),
-		)
-		if escalate {
+		chatemit.LogFailed(s.log, ctx, chatemit.FailedAttrs{
+			Backend:    "anthropic",
+			RequestID:  reqID,
+			Alias:      model.Alias,
+			ModelID:    req.Model,
+			Err:        err,
+			DurationMs: time.Since(started).Milliseconds(),
+		})
+		errMsg := err.Error()
+		if notice != nil {
+			if escalate {
+				// We are about to retry on another backend; release the
+				// notice slot so a successful retry can still deliver it.
+				Unclaim(notice.Kind, notice.ResetsAt)
+				s.log.LogAttrs(ctx, slog.LevelDebug, "adapter.notice.unclaimed_on_escalate",
+					slog.String("subcomponent", "adapter"),
+					slog.String("request_id", reqID),
+					slog.String("alias", model.Alias),
+					slog.String("kind", notice.Kind),
+				)
+			} else {
+				errMsg = errMsg + " · " + notice.Text
+				s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.notice.injected_into_error",
+					slog.String("subcomponent", "adapter"),
+					slog.String("request_id", reqID),
+					slog.String("alias", model.Alias),
+					slog.String("kind", notice.Kind),
+					slog.String("notice_text", notice.Text),
+				)
+			}
+		}
+		if err := chatemit.EscalateOrWrite(
+			err,
+			escalate,
+			func(status int, code, msg string) error {
+				writeError(w, status, code, msg)
+				return nil
+			},
+			http.StatusBadGateway,
+			"upstream_error",
+			errMsg,
+		); err != nil {
 			return err
 		}
-		writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
 		return nil
 	}
 	u := Usage{
@@ -428,18 +494,19 @@ func (s *Server) collectOAuth(w http.ResponseWriter, ctx context.Context, req an
 		TotalTokens:      anthUsage.InputTokens + anthUsage.OutputTokens,
 	}
 	resp := mergeOAuthStreamChunks(reqID, model.Alias, buf, u, finishReason, jsonSpec, anthStopReason)
+	resp, _ = chatemit.NoticeForResponseHeaders(resp, notice, Unclaim, json.Marshal)
 	writeJSON(w, http.StatusOK, resp)
-	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.completed",
-		slog.String("backend", "anthropic"),
-		slog.String("request_id", reqID),
-		slog.String("alias", model.Alias),
-		slog.String("model", req.Model),
-		slog.String("finish_reason", finishReason),
-		slog.Int("tokens_in", u.PromptTokens),
-		slog.Int("tokens_out", u.CompletionTokens),
-		slog.Int64("duration_ms", time.Since(started).Milliseconds()),
-		slog.Bool("stream", false),
-	)
+	chatemit.LogCompleted(s.log, ctx, chatemit.CompletedAttrs{
+		Backend:      "anthropic",
+		RequestID:    reqID,
+		Alias:        model.Alias,
+		ModelID:      req.Model,
+		FinishReason: finishReason,
+		TokensIn:     u.PromptTokens,
+		TokensOut:    u.CompletionTokens,
+		DurationMs:   time.Since(started).Milliseconds(),
+		Stream:       false,
+	})
 	return nil
 }
 
@@ -451,10 +518,19 @@ func (s *Server) collectOAuth(w http.ResponseWriter, ctx context.Context, req an
 func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthropic.Request, model ResolvedModel, reqID string, started time.Time, escalate bool, includeUsage bool) error {
 	sw, err := newSSEWriter(w)
 	if err != nil {
-		if escalate {
-			return fmt.Errorf("no_flusher: streaming not supported by transport")
+		if err := chatemit.EscalateOrWrite(
+			fmt.Errorf("no_flusher: streaming not supported by transport"),
+			escalate,
+			func(status int, code, msg string) error {
+				writeError(w, status, code, msg)
+				return nil
+			},
+			http.StatusInternalServerError,
+			"no_flusher",
+			err.Error(),
+		); err != nil {
+			return err
 		}
-		writeError(w, http.StatusInternalServerError, "no_flusher", err.Error())
 		return nil
 	}
 
@@ -470,6 +546,27 @@ func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthrop
 
 	emitTool := func(och tooltrans.OpenAIStreamChunk) error {
 		return emit(streamChunkFromTooltrans(och))
+	}
+	req.OnHeaders = func(h http.Header) {
+		notice, err := chatemit.NoticeForStreamHeaders(
+			reqID,
+			model.Alias,
+			h,
+			s.cfg.Notices.EnabledOrDefault(),
+			func(chunk tooltrans.OpenAIStreamChunk) error {
+				return emitTool(chunk)
+			},
+			Claim,
+			Unclaim,
+		)
+		if err != nil && notice != nil {
+			s.log.LogAttrs(r.Context(), slog.LevelWarn, "adapter.notice.stream_emit_failed",
+				slog.String("request_id", reqID),
+				slog.String("alias", model.Alias),
+				slog.String("model", req.Model),
+				slog.String("kind", notice.Kind),
+			)
+		}
 	}
 
 	anthUsage, _, finishReason, err := s.runOAuthTranslatorStream(r.Context(), req, model, reqID, func(ch tooltrans.OpenAIStreamChunk) error {
@@ -489,17 +586,7 @@ func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthrop
 	}
 
 	fr := finishReason
-	_ = emit(StreamChunk{
-		ID:      reqID,
-		Object:  "chat.completion.chunk",
-		Created: time.Now().Unix(),
-		Model:   model.Alias,
-		Choices: []StreamChoice{{
-			Index:        0,
-			Delta:        StreamDelta{},
-			FinishReason: &fr,
-		}},
-	})
+	_ = chatemit.EmitFinishChunk(emit, reqID, model.Alias, time.Now().Unix(), fr)
 
 	finalUsage := Usage{
 		PromptTokens:     anthUsage.InputTokens,
@@ -507,28 +594,21 @@ func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthrop
 		TotalTokens:      anthUsage.InputTokens + anthUsage.OutputTokens,
 	}
 	if includeUsage {
-		_ = emit(StreamChunk{
-			ID:      reqID,
-			Object:  "chat.completion.chunk",
-			Created: time.Now().Unix(),
-			Model:   model.Alias,
-			Choices: []StreamChoice{},
-			Usage:   &finalUsage,
-		})
+		_ = chatemit.EmitUsageChunk(emit, reqID, model.Alias, time.Now().Unix(), finalUsage)
 	}
 	_ = sw.writeStreamDone()
 
-	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.chat.completed",
-		slog.String("backend", "anthropic"),
-		slog.String("request_id", reqID),
-		slog.String("alias", model.Alias),
-		slog.String("model", req.Model),
-		slog.String("finish_reason", fr),
-		slog.Int("tokens_in", finalUsage.PromptTokens),
-		slog.Int("tokens_out", finalUsage.CompletionTokens),
-		slog.Int64("duration_ms", time.Since(started).Milliseconds()),
-		slog.Bool("stream", true),
-	)
+	chatemit.LogCompleted(s.log, r.Context(), chatemit.CompletedAttrs{
+		Backend:      "anthropic",
+		RequestID:    reqID,
+		Alias:        model.Alias,
+		ModelID:      req.Model,
+		FinishReason: fr,
+		TokensIn:     finalUsage.PromptTokens,
+		TokensOut:    finalUsage.CompletionTokens,
+		DurationMs:   time.Since(started).Milliseconds(),
+		Stream:       true,
+	})
 	return nil
 }
 

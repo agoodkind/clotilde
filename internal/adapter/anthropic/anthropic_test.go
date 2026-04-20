@@ -120,6 +120,63 @@ func TestRequestMarshalToolsAndToolChoice(t *testing.T) {
 	}
 }
 
+// TestStreamEvents_429InvokesOnHeaders asserts that a 429 response fires the
+// OnHeaders callback before returning the error, so the chat handler can
+// Claim and inject an in-band overage / early-warning notice into the
+// user-facing rate-limit error message.
+func TestStreamEvents_429InvokesOnHeaders(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("anthropic-ratelimit-unified-status", "rejected")
+		w.Header().Set("anthropic-ratelimit-unified-overage-status", "allowed")
+		w.Header().Set("anthropic-ratelimit-unified-representative-claim", "five_hour")
+		w.Header().Set("anthropic-ratelimit-unified-overage-reset", "9999999999")
+		w.Header().Set("anthropic-ratelimit-unified-reset", "9999999999")
+		w.Header().Set("retry-after", "60")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	srvURL, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hc := &http.Client{Transport: &rewriteMessagesHost{serverURL: srvURL}}
+	cli := &Client{
+		http:  hc,
+		oauth: &staticToken{},
+		cfg: Config{
+			MessagesURL:           "https://REDACTED-UPSTREAM/v1/messages",
+			OAuthAnthropicVersion: "2023-06-01",
+			BetaHeader:            "REDACTED-OAUTH-BETA",
+			UserAgent:             "anthropic-test/0",
+			CCVersion:             "1.0.0",
+			CCEntrypoint:          "test",
+		},
+	}
+
+	var observed http.Header
+	_, _, err = cli.StreamEvents(context.Background(), Request{
+		Model:     "claude-test",
+		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
+		MaxTokens: 10,
+		OnHeaders: func(h http.Header) { observed = h },
+	}, func(StreamEvent) error { return nil })
+	if err == nil {
+		t.Fatalf("StreamEvents returned nil error on 429; want one")
+	}
+	if !strings.Contains(err.Error(), "anthropic 429") {
+		t.Fatalf("err = %q; want anthropic 429 prefix", err.Error())
+	}
+	if observed == nil {
+		t.Fatalf("OnHeaders was not invoked on 429 response")
+	}
+	if got := observed.Get("anthropic-ratelimit-unified-status"); got != "rejected" {
+		t.Fatalf("OnHeaders received status=%q; want rejected", got)
+	}
+}
+
 func TestStreamEvents_fixtureSSE(t *testing.T) {
 	t.Parallel()
 	startPayload, err := json.Marshal(map[string]any{

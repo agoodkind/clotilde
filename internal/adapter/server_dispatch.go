@@ -135,6 +135,24 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if override := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Clyde-Backend"))); override != "" {
+		original := string(model.Backend)
+		switch override {
+		case BackendAnthropic, BackendFallback, BackendShunt:
+			model.Backend = override
+		default:
+			writeError(w, http.StatusBadRequest, "invalid_backend_override",
+				"X-Clyde-Backend must be one of: anthropic, fallback, shunt")
+			return
+		}
+		s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.backend.overridden",
+			slog.String("request_id", reqID),
+			slog.String("alias", req.Model),
+			slog.String("from", original),
+			slog.String("to", override),
+		)
+	}
+
 	toolNames := make([]string, 0, len(req.Tools)+len(req.Functions))
 	for _, t := range req.Tools {
 		toolNames = append(toolNames, t.Function.Name)

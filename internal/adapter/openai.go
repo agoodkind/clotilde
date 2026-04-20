@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"goodkind.io/clyde/internal/adapter/chatemit"
 )
 
 // ChatRequest models the OpenAI chat.completions payload. Every
@@ -119,52 +121,24 @@ type Function struct {
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 }
 
-// ChatMessage is a single message in the chat history. Content is
-// either a plain string or an OpenAI content parts array; callers
-// that need typed parts use NormalizeContent. Tool call data lives
-// on ToolCalls (assistant-emitted) and ToolCallID (the linkage on
-// a role:"tool" reply).
-type ChatMessage struct {
-	Role             string              `json:"role"`
-	Content          json.RawMessage     `json:"content,omitempty"`
-	Name             string              `json:"name,omitempty"`
-	ToolCalls        []ToolCall          `json:"tool_calls,omitempty"`
-	ToolCallID       string              `json:"tool_call_id,omitempty"`
-	ReasoningContent string              `json:"reasoning_content,omitempty"`
-	Refusal          string              `json:"refusal,omitempty"`
-	Annotations      []MessageAnnotation `json:"annotations,omitempty"`
-}
-
-// MessageAnnotation is one OpenAI chat completion message annotation (for example url_citation).
-type MessageAnnotation struct {
-	Type        string       `json:"type"`
-	URLCitation *URLCitation `json:"url_citation,omitempty"`
-}
-
-// URLCitation is the citation payload for a url_citation annotation.
-type URLCitation struct {
-	URL   string `json:"url"`
-	Title string `json:"title,omitempty"`
-}
-
-// ToolCall is one assistant-emitted function call. ID is the
-// correlation key the next-turn role:"tool" message references via
-// ToolCallID. Index is OpenAI's positional id within streaming
-// chunks; non-streaming responses set it to the array position.
-type ToolCall struct {
-	Index    int              `json:"index"`
-	ID       string           `json:"id,omitempty"`
-	Type     string           `json:"type,omitempty"`
-	Function ToolCallFunction `json:"function,omitempty"`
-}
-
-// ToolCallFunction is the per-call function payload. Arguments is a
-// JSON-encoded string per the OpenAI spec (NOT a JSON object) so
-// callers can stream partial JSON without the wire shape changing.
-type ToolCallFunction struct {
-	Name      string `json:"name,omitempty"`
-	Arguments string `json:"arguments,omitempty"`
-}
+// Message and streaming types are aliased from chatemit to keep all OpenAI
+// wire-shape definitions single-sourced.
+type (
+	ChatMessage       = chatemit.ChatMessage
+	MessageAnnotation = chatemit.MessageAnnotation
+	URLCitation       = chatemit.URLCitation
+	ToolCall          = chatemit.ToolCall
+	ToolCallFunction  = chatemit.ToolCallFunction
+	LogprobsResult    = chatemit.LogprobsResult
+	LogprobToken      = chatemit.LogprobToken
+	TopLogprob        = chatemit.TopLogprob
+	Usage             = chatemit.Usage
+	ChatResponse      = chatemit.ChatResponse
+	ChatChoice        = chatemit.ChatChoice
+	StreamChunk       = chatemit.StreamChunk
+	StreamChoice      = chatemit.StreamChoice
+	StreamDelta       = chatemit.StreamDelta
+)
 
 // ContentPart is one element of a content-parts array on a chat
 // message. Type is one of "text", "image_url", "input_audio",
@@ -199,82 +173,7 @@ type StreamOptions struct {
 	IncludeUsage bool `json:"include_usage,omitempty"`
 }
 
-// ChatResponse is the non streaming reply shape.
-type ChatResponse struct {
-	ID                string       `json:"id"`
-	Object            string       `json:"object"`
-	Created           int64        `json:"created"`
-	Model             string       `json:"model"`
-	Choices           []ChatChoice `json:"choices"`
-	Usage             *Usage       `json:"usage,omitempty"`
-	SystemFingerprint string       `json:"system_fingerprint,omitempty"`
-}
-
-// ChatChoice is one completion choice.
-type ChatChoice struct {
-	Index        int             `json:"index"`
-	Message      ChatMessage     `json:"message"`
-	Logprobs     *LogprobsResult `json:"logprobs,omitempty"`
-	FinishReason string          `json:"finish_reason"`
-}
-
-// LogprobsResult mirrors OpenAI's choices[].logprobs object.
-type LogprobsResult struct {
-	Content []LogprobToken `json:"content,omitempty"`
-}
-
-// LogprobToken is one token entry inside LogprobsResult.Content.
-type LogprobToken struct {
-	Token       string       `json:"token"`
-	Logprob     float64      `json:"logprob"`
-	Bytes       []int        `json:"bytes,omitempty"`
-	TopLogprobs []TopLogprob `json:"top_logprobs,omitempty"`
-}
-
-// TopLogprob is one alternative-token entry.
-type TopLogprob struct {
-	Token   string  `json:"token"`
-	Logprob float64 `json:"logprob"`
-	Bytes   []int   `json:"bytes,omitempty"`
-}
-
-// StreamChunk is one server sent event in a streaming reply.
-type StreamChunk struct {
-	ID                string         `json:"id"`
-	Object            string         `json:"object"`
-	Created           int64          `json:"created"`
-	Model             string         `json:"model"`
-	Choices           []StreamChoice `json:"choices"`
-	Usage             *Usage         `json:"usage,omitempty"`
-	SystemFingerprint string         `json:"system_fingerprint,omitempty"`
-}
-
-// StreamChoice carries the delta for one chunk.
-type StreamChoice struct {
-	Index        int             `json:"index"`
-	Delta        StreamDelta     `json:"delta"`
-	Logprobs     *LogprobsResult `json:"logprobs,omitempty"`
-	FinishReason *string         `json:"finish_reason"`
-}
-
-// StreamDelta is the incremental message body. ToolCalls carries
-// per-index incremental updates: the first chunk for each tool
-// index sets ID + Type + Function.Name; subsequent chunks append
-// to Function.Arguments.
-type StreamDelta struct {
-	Role             string     `json:"role,omitempty"`
-	Content          string     `json:"content,omitempty"`
-	ReasoningContent string     `json:"reasoning_content,omitempty"`
-	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
-	Refusal          string     `json:"refusal,omitempty"`
-}
-
 // Usage matches the OpenAI token accounting shape.
-type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
-}
 
 // ModelsResponse is returned from GET /v1/models.
 type ModelsResponse struct {

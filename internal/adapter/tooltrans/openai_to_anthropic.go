@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"regexp"
 	"strings"
 )
+
+var noticeSentinelRE = regexp.MustCompile(`(?s)<!--clyde-notice-->.*?<!--/clyde-notice-->\s*`)
 
 // TranslateRequest maps an OpenAI-shaped chat request to Anthropic /v1/messages fields.
 func TranslateRequest(req OpenAIRequest, systemPrefix string, maxTokens int) (AnthRequest, error) {
@@ -202,6 +205,24 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 	return blocks, nil
 }
 
+func stripNotice(text string, msgIdx, partIdx int) string {
+	if text == "" {
+		return ""
+	}
+	stripped := noticeSentinelRE.ReplaceAllString(text, "")
+	if stripped == text {
+		return text
+	}
+	slog.Info("tooltrans.notice.stripped",
+		"subcomponent", "tooltrans",
+		"msg_idx", msgIdx,
+		"part_idx", partIdx,
+		"source_len", len(text),
+		"stripped_len", len(stripped),
+	)
+	return stripped
+}
+
 // flattenToolResultContent normalizes a tool_result content payload to a
 // single string. Cursor sends either a raw string or an array of OpenAI
 // content parts (text-only); both shapes survive the trip.
@@ -235,10 +256,11 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage) ([]AnthConten
 	for partIdx, p := range parts {
 		switch p.Type {
 		case "text":
-			if p.Text == "" {
+			text := stripNotice(p.Text, msgIdx, partIdx)
+			if strings.TrimSpace(text) == "" {
 				continue
 			}
-			blocks = append(blocks, AnthContentBlock{Type: "text", Text: p.Text})
+			blocks = append(blocks, AnthContentBlock{Type: "text", Text: text})
 		case "image_url":
 			if p.ImageURL == nil {
 				continue
@@ -251,10 +273,11 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage) ([]AnthConten
 		case "input_audio":
 			return nil, fmt.Errorf("%w: message %d part %d", ErrAudioUnsupported, msgIdx, partIdx)
 		case "refusal":
-			if p.Refusal == "" {
+			refusal := stripNotice(p.Refusal, msgIdx, partIdx)
+			if strings.TrimSpace(refusal) == "" {
 				continue
 			}
-			blocks = append(blocks, AnthContentBlock{Type: "text", Text: p.Refusal})
+			blocks = append(blocks, AnthContentBlock{Type: "text", Text: refusal})
 		case "tool_use":
 			input := p.Input
 			if len(input) == 0 {

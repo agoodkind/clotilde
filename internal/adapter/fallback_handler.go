@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"goodkind.io/clyde/internal/adapter/chatemit"
 	"goodkind.io/clyde/internal/adapter/fallback"
 	"goodkind.io/clyde/internal/adapter/finishreason"
 )
@@ -26,35 +27,68 @@ import (
 // errors are written to w directly.
 func (s *Server) handleFallback(w http.ResponseWriter, r *http.Request, req ChatRequest, model ResolvedModel, reqID string, escalate bool) error {
 	if s.fb == nil {
-		if escalate {
-			return fmt.Errorf("fallback_unconfigured: adapter built without fallback client")
+		if err := chatemit.EscalateOrWrite(
+			fmt.Errorf("fallback_unconfigured: adapter built without fallback client"),
+			escalate,
+			func(status int, code, msg string) error {
+				writeError(w, status, code, msg)
+				return nil
+			},
+			http.StatusInternalServerError,
+			"fallback_unconfigured",
+			"adapter built without fallback client; set adapter.fallback.enabled=true and restart",
+		); err != nil {
+			return err
 		}
-		writeError(w, http.StatusInternalServerError, "fallback_unconfigured",
-			"adapter built without fallback client; set adapter.fallback.enabled=true and restart")
 		return nil
 	}
 	if model.CLIAlias == "" {
-		if escalate {
-			return fmt.Errorf("fallback_no_cli_alias: family %q has no CLI alias bound", model.FamilySlug)
+		if err := chatemit.EscalateOrWrite(
+			fmt.Errorf("fallback_no_cli_alias: family %q has no CLI alias bound", model.FamilySlug),
+			escalate,
+			func(status int, code, msg string) error {
+				writeError(w, status, code, msg)
+				return nil
+			},
+			http.StatusBadRequest,
+			"fallback_no_cli_alias",
+			"alias resolves to a family with no [adapter.fallback.cli_aliases] entry; cannot dispatch via claude -p",
+		); err != nil {
+			return err
 		}
-		writeError(w, http.StatusBadRequest, "fallback_no_cli_alias",
-			"alias resolves to a family with no [adapter.fallback.cli_aliases] entry; cannot dispatch via claude -p")
 		return nil
 	}
 	if req.Stream && !s.cfg.Fallback.StreamPassthrough {
-		if escalate {
-			return fmt.Errorf("fallback_stream_disabled: stream_passthrough=false")
+		if err := chatemit.EscalateOrWrite(
+			fmt.Errorf("fallback_stream_disabled: stream_passthrough=false"),
+			escalate,
+			func(status int, code, msg string) error {
+				writeError(w, status, code, msg)
+				return nil
+			},
+			http.StatusBadRequest,
+			"fallback_stream_disabled",
+			"this adapter is configured with stream_passthrough=false; pass stream=false",
+		); err != nil {
+			return err
 		}
-		writeError(w, http.StatusBadRequest, "fallback_stream_disabled",
-			"this adapter is configured with stream_passthrough=false; pass stream=false")
 		return nil
 	}
 
 	if err := s.acquireFallback(r.Context()); err != nil {
-		if escalate {
-			return fmt.Errorf("rate_limited: %w", err)
+		if err2 := chatemit.EscalateOrWrite(
+			fmt.Errorf("rate_limited: %w", err),
+			escalate,
+			func(status int, code, msg string) error {
+				writeError(w, status, code, msg)
+				return nil
+			},
+			http.StatusTooManyRequests,
+			"rate_limited",
+			err.Error(),
+		); err2 != nil {
+			return err2
 		}
-		writeError(w, http.StatusTooManyRequests, "rate_limited", err.Error())
 		return nil
 	}
 	defer s.releaseFallback()
@@ -99,8 +133,9 @@ func (s *Server) handleFallback(w http.ResponseWriter, r *http.Request, req Chat
 
 	started := time.Now()
 	if req.Stream {
-		includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
-		return s.streamFallback(w, r, fbReq, model, reqID, started, escalate, includeUsage)
+		// Always emit the final usage chunk; see oauth_handler.go for rationale.
+		_ = req.StreamOptions
+		return s.streamFallback(w, r, fbReq, model, reqID, started, escalate, true)
 	}
 	return s.collectFallback(w, r.Context(), fbReq, model, reqID, started, jsonSpec, escalate)
 }
@@ -108,18 +143,27 @@ func (s *Server) handleFallback(w http.ResponseWriter, r *http.Request, req Chat
 func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req fallback.Request, model ResolvedModel, reqID string, started time.Time, jsonSpec JSONResponseSpec, escalate bool) error {
 	result, err := s.fb.Collect(ctx, req)
 	if err != nil {
-		s.log.LogAttrs(ctx, slog.LevelError, "adapter.chat.failed",
-			slog.String("backend", "fallback"),
-			slog.String("request_id", reqID),
-			slog.String("alias", model.Alias),
-			slog.String("cli_model", req.Model),
-			slog.Int64("duration_ms", time.Since(started).Milliseconds()),
-			slog.Any("err", err),
-		)
-		if escalate {
+		chatemit.LogFailed(s.log, ctx, chatemit.FailedAttrs{
+			Backend:    "fallback",
+			RequestID:  reqID,
+			Alias:      model.Alias,
+			ModelID:    req.Model,
+			Err:        err,
+			DurationMs: time.Since(started).Milliseconds(),
+		})
+		if err := chatemit.EscalateOrWrite(
+			err,
+			escalate,
+			func(status int, code, msg string) error {
+				writeError(w, status, code, msg)
+				return nil
+			},
+			http.StatusBadGateway,
+			"fallback_error",
+			err.Error(),
+		); err != nil {
 			return err
 		}
-		writeError(w, http.StatusBadGateway, "fallback_error", err.Error())
 		return nil
 	}
 	finalText := result.Text
@@ -177,17 +221,17 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 		Usage: &usage,
 	}
 	writeJSON(w, http.StatusOK, resp)
-	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.completed",
-		slog.String("backend", "fallback"),
-		slog.String("request_id", reqID),
-		slog.String("alias", model.Alias),
-		slog.String("cli_model", req.Model),
-		slog.String("finish_reason", fr),
-		slog.Int("tokens_in", usage.PromptTokens),
-		slog.Int("tokens_out", usage.CompletionTokens),
-		slog.Int64("duration_ms", time.Since(started).Milliseconds()),
-		slog.Bool("stream", false),
-	)
+	chatemit.LogCompleted(s.log, ctx, chatemit.CompletedAttrs{
+		Backend:      "fallback",
+		RequestID:    reqID,
+		Alias:        model.Alias,
+		ModelID:      req.Model,
+		FinishReason: fr,
+		TokensIn:     usage.PromptTokens,
+		TokensOut:    usage.CompletionTokens,
+		DurationMs:   time.Since(started).Milliseconds(),
+		Stream:       false,
+	})
 	return nil
 }
 
@@ -200,10 +244,19 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fallback.Request, model ResolvedModel, reqID string, started time.Time, escalate bool, includeUsage bool) error {
 	sw, err := newSSEWriter(w)
 	if err != nil {
-		if escalate {
-			return fmt.Errorf("no_flusher: streaming not supported by transport")
+		if err := chatemit.EscalateOrWrite(
+			fmt.Errorf("no_flusher: streaming not supported by transport"),
+			escalate,
+			func(status int, code, msg string) error {
+				writeError(w, status, code, msg)
+				return nil
+			},
+			http.StatusInternalServerError,
+			"no_flusher",
+			"streaming not supported by this transport",
+		); err != nil {
+			return err
 		}
-		writeError(w, http.StatusInternalServerError, "no_flusher", "streaming not supported by this transport")
 		return nil
 	}
 
@@ -314,19 +367,7 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 					}},
 				})
 			}
-			toolFinish := "tool_calls"
-			finalFinish = toolFinish
-			_ = emit(StreamChunk{
-				ID:      reqID,
-				Object:  "chat.completion.chunk",
-				Created: created,
-				Model:   model.Alias,
-				Choices: []StreamChoice{{
-					Index:        0,
-					Delta:        StreamDelta{},
-					FinishReason: &toolFinish,
-				}},
-			})
+			finalFinish = "tool_calls"
 		} else {
 			d := StreamDelta{Role: "assistant", Content: sr.Text}
 			if rc := strings.TrimSpace(sr.ReasoningContent); rc != "" {
@@ -342,49 +383,14 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 					Delta: d,
 				}},
 			})
-			pf := finishreason.FromAnthropicNonStream(sr.Stop)
-			finalFinish = pf
-			_ = emit(StreamChunk{
-				ID:      reqID,
-				Object:  "chat.completion.chunk",
-				Created: created,
-				Model:   model.Alias,
-				Choices: []StreamChoice{{
-					Index:        0,
-					Delta:        StreamDelta{},
-					FinishReason: &pf,
-				}},
-			})
+			finalFinish = finishreason.FromAnthropicNonStream(sr.Stop)
 		}
 	} else if strings.EqualFold(sr.Stop, "refusal") {
-		rf := finishreason.FromAnthropicNonStream(sr.Stop)
-		finalFinish = rf
-		_ = emit(StreamChunk{
-			ID:      reqID,
-			Object:  "chat.completion.chunk",
-			Created: created,
-			Model:   model.Alias,
-			Choices: []StreamChoice{{
-				Index:        0,
-				Delta:        StreamDelta{},
-				FinishReason: &rf,
-			}},
-		})
+		finalFinish = finishreason.FromAnthropicNonStream(sr.Stop)
 	} else {
-		fr := finishreason.FromAnthropicNonStream(sr.Stop)
-		finalFinish = fr
-		_ = emit(StreamChunk{
-			ID:      reqID,
-			Object:  "chat.completion.chunk",
-			Created: created,
-			Model:   model.Alias,
-			Choices: []StreamChoice{{
-				Index:        0,
-				Delta:        StreamDelta{},
-				FinishReason: &fr,
-			}},
-		})
+		finalFinish = finishreason.FromAnthropicNonStream(sr.Stop)
 	}
+	_ = chatemit.EmitFinishChunk(emit, reqID, model.Alias, created, finalFinish)
 
 	finalUsage := Usage{
 		PromptTokens:     sr.Usage.PromptTokens,
@@ -392,27 +398,20 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 		TotalTokens:      sr.Usage.TotalTokens,
 	}
 	if includeUsage {
-		_ = emit(StreamChunk{
-			ID:      reqID,
-			Object:  "chat.completion.chunk",
-			Created: created,
-			Model:   model.Alias,
-			Choices: []StreamChoice{},
-			Usage:   &finalUsage,
-		})
+		_ = chatemit.EmitUsageChunk(emit, reqID, model.Alias, created, finalUsage)
 	}
 	_ = sw.writeStreamDone()
-	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.chat.completed",
-		slog.String("backend", "fallback"),
-		slog.String("request_id", reqID),
-		slog.String("alias", model.Alias),
-		slog.String("cli_model", req.Model),
-		slog.String("finish_reason", finalFinish),
-		slog.Int("tokens_in", finalUsage.PromptTokens),
-		slog.Int("tokens_out", finalUsage.CompletionTokens),
-		slog.Int64("duration_ms", time.Since(started).Milliseconds()),
-		slog.Bool("stream", true),
-	)
+	chatemit.LogCompleted(s.log, r.Context(), chatemit.CompletedAttrs{
+		Backend:      "fallback",
+		RequestID:    reqID,
+		Alias:        model.Alias,
+		ModelID:      req.Model,
+		FinishReason: finalFinish,
+		TokensIn:     finalUsage.PromptTokens,
+		TokensOut:    finalUsage.CompletionTokens,
+		DurationMs:   time.Since(started).Milliseconds(),
+		Stream:       true,
+	})
 	return nil
 }
 

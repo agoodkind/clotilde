@@ -254,6 +254,31 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		ev.BodyB64 = base64.StdEncoding.EncodeToString(errBody)
 		ev.BodyBytes = len(errBody)
 		logResponse(slog.LevelWarn, "anthropic.ratelimit", ev)
+
+		// Surface unified rate-limit headers to the OnHeaders callback even
+		// on 429 so the chat handler can Claim and inject the in-band
+		// overage / early-warning notice into the user-facing error. The
+		// 200-OK path also calls OnHeaders below; this is the rejection
+		// peer of that hook and is intentionally invoked before returning.
+		if req.OnHeaders != nil {
+			slog.LogAttrs(context.Background(), slog.LevelDebug, "anthropic.notice.headers_observed",
+				slog.String("subcomponent", "anthropic"),
+				slog.String("phase", "ratelimit_429"),
+				slog.String("model", req.Model),
+				slog.String("request_id", resp.Header.Get("request-id")),
+			)
+			req.OnHeaders(resp.Header.Clone())
+		}
+
+		// Prefer a friendly message built from the unified rate-limit
+		// headers; fall back to the headerless "extra usage required"
+		// entitlement message; fall back to the raw body otherwise.
+		if friendly := FormatRateLimitMessage(resp.Header); friendly != "" {
+			return nil, fmt.Errorf("anthropic 429: %s", friendly)
+		}
+		if strings.Contains(string(errBody), "Extra usage is required for long context") {
+			return nil, fmt.Errorf("anthropic 429: Extra usage is required for 1M context · enable extra usage at claude.ai/settings/usage, or switch to a standard-context model")
+		}
 		return nil, fmt.Errorf("anthropic %s: %s", resp.Status, truncate(string(errBody), 600))
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -266,6 +291,9 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		return nil, fmt.Errorf("anthropic %s: %s", resp.Status, truncate(string(errBody), 600))
 	}
 	logResponse(slog.LevelInfo, "anthropic.messages.connected", base)
+	if req.OnHeaders != nil {
+		req.OnHeaders(resp.Header.Clone())
+	}
 	return resp, nil
 }
 

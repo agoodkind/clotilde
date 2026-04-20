@@ -183,6 +183,11 @@ type AdapterConfig struct {
 	// There is no compiled-in default. When either backend key is
 	// set, NewRegistry requires both keys and rejects unknown values.
 	Logprobs AdapterLogprobs `json:"logprobs,omitempty" toml:"logprobs,omitempty"`
+	// Notices controls the synthetic notice injection path that annotates
+	// assistant turns with overage / budget context in a hidden sentinel.
+	// Omitted defaults to true so operators can disable by setting
+	// enabled = false.
+	Notices AdapterNotices `json:"notices,omitempty" toml:"notices,omitempty"`
 	// Families declares the per-family Claude capability matrix the
 	// registry expands into the public alias set at load time. Keyed
 	// by a stable family slug (e.g. "opus-4-7", "sonnet-4-6",
@@ -204,6 +209,21 @@ type AdapterConfig struct {
 type AdapterLogprobs struct {
 	Anthropic string `json:"anthropic,omitempty" toml:"anthropic,omitempty"`
 	Fallback  string `json:"fallback,omitempty" toml:"fallback,omitempty"`
+}
+
+// AdapterNotices controls whether notice injection happens on direct
+// Anthropic backend responses. The field is a pointer so absence in config
+// can still map to enabled=true.
+type AdapterNotices struct {
+	Enabled *bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
+}
+
+// EnabledOrDefault returns true when the stanza is absent or enabled is unset.
+func (n AdapterNotices) EnabledOrDefault() bool {
+	if n.Enabled == nil {
+		return true
+	}
+	return *n.Enabled
 }
 
 // AdapterFallback configures the optional `claude -p` driven third

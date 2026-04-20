@@ -32,6 +32,9 @@ enabled = true
 direct_oauth = true
 default_model = "clyde-opus-4-7-high-1m"
 
+[adapter.notices]
+enabled = true
+
 [adapter.oauth]
 token_url = "https://REDACTED-OAUTH-HOST/v1/oauth/token"
 messages_url = "https://REDACTED-UPSTREAM/v1/messages"
