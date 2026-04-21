@@ -160,7 +160,7 @@ func oauthLoop() daemonsvc.ExtraLoop {
 		}
 		interval := cfg.OAuth.Interval
 		if interval <= 0 {
-			interval = 30 * time.Minute
+			interval = 4 * time.Hour
 		}
 
 		log.LogAttrs(context.Background(), slog.LevelInfo, "oauth.refresher.scheduled",
@@ -184,12 +184,6 @@ func oauthLoop() daemonsvc.ExtraLoop {
 		}()
 		return cancel
 	}
-}
-
-// RunOAuthRefreshOnce performs one OAuth access token refresh using the same
-// logic as the daemon's periodic loop. Intended for launchd or manual use.
-func RunOAuthRefreshOnce(ctx context.Context, log *slog.Logger) {
-	runOAuthRefresh(ctx, log)
 }
 
 func runOAuthRefresh(ctx context.Context, log *slog.Logger) {

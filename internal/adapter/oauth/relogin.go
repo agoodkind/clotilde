@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+	"golang.org/x/term"
 )
 
 // reloginMinInterval throttles auto-relogin attempts to one per
@@ -57,6 +58,24 @@ func isInvalidGrant(err error) bool {
 func (m *Manager) autoRelogin(ctx context.Context, originalErr error) error {
 	if !isInvalidGrant(originalErr) {
 		return originalErr
+	}
+
+	// `claude auth login` is a browser-based PKCE flow. Running it from a
+	// non-interactive context (launchd, daemon) pops browser tabs at the
+	// user with no way to answer prompts. Refuse to spawn when stderr is
+	// not a TTY. The error returned bubbles up through the adapter to the
+	// calling client with a hint to run `claude auth login` manually.
+	// TODO: add terminal-notifier integration so daemons can nudge the
+	// user via Notification Center without the osascript attribution
+	// annoyance (clicking an osascript-posted notification opens Script
+	// Editor).
+	if !term.IsTerminal(int(os.Stderr.Fd())) {
+		slog.Warn("oauth.relogin.skipped",
+			"subcomponent", "oauth",
+			"reason", "non_tty",
+		)
+		return fmt.Errorf("%w; auto re-login skipped (non-interactive context); run `claude auth login` manually",
+			originalErr)
 	}
 
 	if m.relogin.consecutiveFail >= reloginBreakerThreshold {

@@ -97,9 +97,9 @@ type OAuthConfig struct {
 	// off. The adapter's inline refresh still works as a safety net.
 	// Default behavior (nil or false) is enabled.
 	Disabled *bool `json:"disabled,omitempty" toml:"disabled,omitempty"`
-	// Interval between refresh attempts. Default 30 minutes (well
-	// below the 8 hour OAuth access token lifetime so a single missed
-	// tick never causes inline-refresh churn).
+	// Interval between refresh attempts. Default 4 hours (half the
+	// 8 hour OAuth access token lifetime so a single missed tick still
+	// leaves plenty of headroom before expiry).
 	Interval time.Duration `json:"interval,omitempty" toml:"interval,omitempty"`
 }
 
