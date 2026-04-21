@@ -9,9 +9,9 @@ debug across the daemon + adapter + TUI + hooks + MCP.
 
 ## The setup
 
-`internal/slogger` wraps `goodkind.io/gklog` (the cross-repo logging
-package) and the request-scoped context.WithLogger pattern from
-`tack/internal/telemetry`.
+`internal/slogger` wraps `goodkind.io/gklog` for process setup (`Setup`
+only). Request scoped loggers on `context.Context` use `goodkind.io/gklog`
+(`WithLogger`, `LoggerFromContext`, and optional `L`).
 
 At process start (daemon main, CLI root command, hook entrypoints):
 
@@ -58,7 +58,7 @@ slog.Info("adapter.chat.completed",
 For request-scoped fields, attach them to a logger and stash in ctx:
 
 ```go
-import "goodkind.io/clyde/internal/slogger"
+import "goodkind.io/gklog"
 
 func handleChat(w http.ResponseWriter, r *http.Request) {
     reqID := newRequestID()
@@ -66,9 +66,9 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
         "request_id", reqID,
         "component", "adapter",
     )
-    ctx := slogger.WithLogger(r.Context(), log)
+    ctx := gklog.WithLogger(r.Context(), log)
     // ...downstream code does:
-    //   slogger.L(ctx).Info("step.parsed", "ms", n)
+    //   gklog.LoggerFromContext(ctx).InfoContext(ctx, "step.parsed", "ms", n)
 }
 ```
 
@@ -133,7 +133,7 @@ Allowed (these go through writers the test harness can capture):
 - `fmt.Fprint*` to a writer (`cmd.OutOrStdout()`, `os.Stderr` in
   bootstrap-only paths).
 - `slog.Info / Debug / Warn / Error` directly. The wrapper at
-  `internal/slogger` only handles initialization and ctx plumbing;
+  `internal/slogger` only handles initialization (`Setup`);
   there is no banned slog method.
 
 Exempt files (audit walks past them):

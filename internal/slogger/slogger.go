@@ -1,10 +1,10 @@
 // Package slogger is the clyde-wide structured logging facade.
 //
 // It is a thin wrapper around goodkind.io/gklog (the cross-repo logging
-// package) plus the request-scoped context.WithLogger pattern adopted
-// from tack/internal/telemetry. Every call site uses Go's standard
-// log/slog package directly; this package only handles initialization
-// (Setup) and context plumbing (WithLogger / L).
+// package). Request scoped loggers on context use goodkind.io/gklog
+// (WithLogger, LoggerFromContext). Every call site uses Go's
+// standard log/slog package directly; this package only handles initialization
+// (Setup).
 //
 // The standard is non-negotiable: every operation in the codebase MUST
 // emit at least one slog event. Free-form fmt.Println / log.Printf are

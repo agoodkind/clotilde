@@ -196,7 +196,7 @@ func (s *Server) runDiscoveryOnce() {
 	if err != nil {
 		return
 	}
-	projects := filepath.Join(home, ".claude", "projects")
+	projects := config.ClaudeProjectsRoot(home)
 	if _, err := os.Stat(projects); err != nil {
 		return
 	}

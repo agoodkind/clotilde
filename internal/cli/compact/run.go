@@ -12,7 +12,24 @@ import (
 
 	"goodkind.io/clyde/internal/cli"
 	compactengine "goodkind.io/clyde/internal/compact"
+	"goodkind.io/clyde/internal/sessionctx"
 )
+
+// layerCounter adapts sessionctx.Layer to the planner's Counter
+// interface. Every count_tokens call from the target loop goes
+// through the unified layer so future backend swaps (local
+// tokenizer, cached responses, etc.) need to change only one place.
+type layerCounter struct {
+	layer sessionctx.Layer
+	model string
+}
+
+// CountSyntheticUser forwards to Layer.Count with the layer's default
+// model. The planner never overrides the model per call, so
+// CountOptions stays empty.
+func (c *layerCounter) CountSyntheticUser(ctx context.Context, contentArray []compactengine.OutputBlock) (int, error) {
+	return c.layer.Count(ctx, contentArray, sessionctx.CountOptions{Model: c.model})
+}
 
 func mergeTypeFlag(s *compactengine.Strippers, csv string) error {
 	if csv == "" {
@@ -84,6 +101,10 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 		model, _ := cmd.Flags().GetString("model")
 		return runCalibrate(out, sess, cal, model)
 	}
+	if auto, _ := cmd.Flags().GetBool("auto-calibrate"); auto {
+		model, _ := cmd.Flags().GetString("model")
+		return runAutoCalibrate(cmd.Context(), out, sess, model)
+	}
 
 	target := 0
 	if len(args) == 2 {
@@ -120,7 +141,8 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 		return err
 	}
 	if !strippers.Any() && target == 0 {
-		return runMetricsDashboard(out, sess, path)
+		refresh, _ := cmd.Flags().GetBool("refresh")
+		return runMetricsDashboard(cmd.Context(), out, sess, path, refresh)
 	}
 	if target > 0 && !strippers.Any() {
 		strippers.SetAll()
@@ -150,20 +172,41 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 		staticOverhead = cal.StaticOverhead
 	}
 
-	var counter *compactengine.TokenCounter
+	var counter compactengine.Counter
 	if target > 0 {
 		key, err := compactengine.AnthropicAPIKey()
 		if err != nil {
 			slog.Error("cli.compact.api_key_failed", "session", name, slog.Any("err", err))
 			return err
 		}
-		counter = compactengine.NewTokenCounter(key, model)
+		layer := sessionctx.NewDefault(sess, model, key)
+		counter = &layerCounter{layer: layer, model: model}
 	}
 
 	ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Minute)
 	defer cancel()
 
+	if target > 0 {
+		currentTotal := 0
+		// Best-effort cache lookup for the live /context total. Never
+		// probes (would duplicate the planner's counting work); shows a
+		// muted "current ctx" row when available so the user can see
+		// why the chat status bar shows ~800k while static is only 78k.
+		layer := sessionctx.NewDefault(sess, model, "")
+		if u, uerr := layer.Usage(ctx, sessionctx.UsageOptions{MaxAge: 24 * time.Hour}); uerr == nil {
+			currentTotal = u.TotalTokens
+		}
+		renderHeader(out, sess.Name, model, target, staticOverhead, reserved, currentTotal)
+	}
+
 	slog.Info("cli.compact.preview.run_plan.started", "session", name, "target", target)
+	isTTY := isTerminal(out)
+	var progress *progressView
+	var onIter func(compactengine.IterationRecord)
+	if target > 0 {
+		progress = newProgressView(out, target, 0, isTTY)
+		onIter = progress.Update
+	}
 	planRes, err := compactengine.RunPlan(ctx, compactengine.PlanInput{
 		Slice:          slice,
 		Strippers:      strippers,
@@ -171,8 +214,11 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 		StaticOverhead: staticOverhead,
 		Reserved:       reserved,
 		Counter:        counter,
-		Out:            out,
+		OnIteration:    onIter,
 	})
+	if progress != nil {
+		progress.Finish()
+	}
 	if err != nil {
 		slog.Error("cli.compact.preview.run_plan.failed", "session", name, slog.Any("err", err))
 		return err

@@ -10,6 +10,7 @@ require (
 	github.com/gdamore/tcell/v2 v2.13.8
 	github.com/gofrs/flock v0.13.0
 	github.com/google/uuid v1.6.0
+	github.com/hinshun/vt10x v0.0.0-20220301184237-5011da428d02
 	github.com/mark3labs/mcp-go v0.47.1
 	github.com/mattn/go-isatty v0.0.20
 	github.com/onsi/ginkgo/v2 v2.28.1
@@ -244,6 +245,8 @@ require (
 	mvdan.cc/gofumpt v0.9.2 // indirect
 	mvdan.cc/unparam v0.0.0-20251027182757-5beb8c8f8f15 // indirect
 )
+
+replace goodkind.io/gklog => ../../gklog
 
 tool (
 	github.com/fzipp/gocyclo/cmd/gocyclo

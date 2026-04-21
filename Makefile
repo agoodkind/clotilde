@@ -1,4 +1,4 @@
-.PHONY: help build test test-watch install install-launch-agent install-hook clean lint fmt coverage setup-hooks deadcode govulncheck audit sign notarize uninstall-launch-agent uninstall-hook slog-audit
+.PHONY: help build build-tui-qa tui-qa test test-watch install install-launch-agent install-hook clean lint fmt coverage setup-hooks deadcode govulncheck audit sign notarize uninstall-launch-agent uninstall-hook slog-audit
 
 # Optional local overrides (signing creds, never committed). Copy config.mk.example.
 -include config.mk
@@ -39,6 +39,15 @@ build: ## Build the clyde binary
 	@mkdir -p dist
 	@go build -ldflags "$(LDFLAGS)" -o dist/clyde ./cmd/clyde
 	@echo "✓ Built to dist/clyde"
+
+build-tui-qa: ## Build the clyde-tui-qa agent harness (tmux, PTY, iTerm drivers)
+	@mkdir -p dist
+	@go build -ldflags "$(LDFLAGS)" -o dist/clyde-tui-qa ./cmd/clyde-tui-qa
+	@echo "✓ Built to dist/clyde-tui-qa"
+
+tui-qa: build build-tui-qa ## Build clyde and clyde-tui-qa (requires tmux for tmux driver; iTerm on macOS)
+	@echo "Run interactively: dist/clyde-tui-qa repl --driver tmux --clyde dist/clyde --isolated /tmp/clyde-tuiqa-$$"
+	@echo "Prerequisites: tmux on PATH; iTerm2 for --driver iterm (macOS); PTY uses creack/pty and vt10x in-process"
 
 test: ## Run tests with Ginkgo
 	@go run github.com/onsi/ginkgo/v2/ginkgo -r --randomize-all --randomize-suites --fail-on-pending --race

@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"goodkind.io/gklog"
 )
 
 // CountNormalizedTools counts tools that arrived without a `function` key
@@ -209,7 +211,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	runner := NewRunner(s.deps, model, effort, system, prompt, reqID)
 	started := time.Now()
-	stdout, cancel, err := runner.Spawn(r.Context())
+	spawnCtx := gklog.WithLogger(r.Context(), s.log.With("request_id", reqID))
+	stdout, cancel, err := runner.Spawn(spawnCtx)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "spawn_failed", err.Error())
 		return

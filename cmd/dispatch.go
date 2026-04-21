@@ -1,5 +1,7 @@
 package cmd
 
+import "log/slog"
+
 // InvocationMode describes how clyde should handle a given set of CLI args.
 type InvocationMode int
 
@@ -47,19 +49,58 @@ var passthroughSubcommands = map[string]bool{
 //	stdin not a TTY + no subcommand      → ModePassthrough (pipe / script mode)
 //	anything else (unknown flags/cmds)   → ModeClyde       (let cobra handle / passthrough)
 func ClassifyArgs(args []string) (mode InvocationMode, rewritten []string) {
+	log := slog.Default().With("component", "cli", "subcomponent", "dispatch")
+	var firstArg string
+	if len(args) > 0 {
+		firstArg = args[0]
+	}
+	log.Debug("cli.args.classify.invoked",
+		"argc", len(args),
+		"first_arg", firstArg,
+	)
+
 	if len(args) == 0 {
+		log.Info(
+			"cli.args.classify.decided",
+			"argc", len(args),
+			"mode", "clyde",
+			"decision", "empty_args",
+		)
 		return ModeClyde, args
 	}
 
-	first := args[0]
+	first := firstArg
+	isPassthrough := passthroughSubcommands[first]
+	isClyde := clydeSubcommands[first]
+	isResume := first == "--resume" || first == "-r"
+	isPrint := first == "--print" || first == "-p"
 
 	// ── Resume flag forms ──────────────────────────────────────────────────────
 	if first == "--resume" || first == "-r" {
-		return ModeResumeFlag, append([]string{"resume"}, args[1:]...)
+		rewritten = append([]string{"resume"}, args[1:]...)
+		log.Info("cli.args.classify.decided",
+			"argc", len(args),
+			"first_arg", first,
+			"mode", "resume",
+			"decision", "resume_flag",
+			"rewritten_argc", len(rewritten),
+			"rewritten", true,
+			"is_resume", isResume,
+		)
+		return ModeResumeFlag, rewritten
 	}
 
 	// ── Claude-internal subcommands ────────────────────────────────────────────
 	if passthroughSubcommands[first] {
+		log.Info("cli.args.classify.decided",
+			"argc", len(args),
+			"first_arg", first,
+			"mode", "passthrough",
+			"decision", "passthrough_subcommand",
+			"rewritten_argc", len(args),
+			"passthrough", isPassthrough,
+			"is_clyde_subcommand", isClyde,
+		)
 		return ModePassthrough, args
 	}
 
@@ -67,11 +108,30 @@ func ClassifyArgs(args []string) (mode InvocationMode, rewritten []string) {
 	// claude -p "query" or claude --print "query" runs a single non-interactive
 	// query and exits. Clyde has no equivalent; forward to the real binary.
 	if first == "--print" || first == "-p" {
+		log.Info("cli.args.classify.decided",
+			"argc", len(args),
+			"first_arg", first,
+			"mode", "passthrough",
+			"decision", "print_flag",
+			"rewritten_argc", len(args),
+			"is_print", isPrint,
+			"is_resume", isResume,
+		)
 		return ModePassthrough, args
 	}
 
 	// ── Known clyde subcommand ─────────────────────────────────────────────
 	if clydeSubcommands[first] {
+		slog.Info("cli.args.classify.decided",
+			"component", "cli",
+			"subcomponent", "dispatch",
+			"argc", len(args),
+			"first_arg", first,
+			"mode", "clyde",
+			"decision", "clyde_subcommand",
+			"rewritten_argc", len(args),
+			"is_clyde_subcommand", isClyde,
+		)
 		return ModeClyde, args
 	}
 
@@ -79,5 +139,17 @@ func ClassifyArgs(args []string) (mode InvocationMode, rewritten []string) {
 	// Includes unknown flags (--debug, --model used at top level, etc.) and
 	// unknown subcommands. Hand to cobra; Execute()'s unknown-command handler
 	// will forward anything cobra can't parse.
+	slog.Info("cli.args.classify.decided",
+		"component", "cli",
+		"subcomponent", "dispatch",
+		"argc", len(args),
+		"first_arg", first,
+		"mode", "clyde",
+		"decision", "default_to_cobra",
+		"rewritten_argc", len(args),
+		"passthrough", isPassthrough,
+		"is_clyde_subcommand", isClyde,
+		"is_resume", isResume,
+	)
 	return ModeClyde, args
 }

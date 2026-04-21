@@ -133,3 +133,12 @@ func GlobalOutputStyleRoot() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".claude", "clyde")
 }
+
+// ClaudeProjectsRoot returns the root directory where Claude Code
+// stores all project transcripts, ~/.claude/projects. Centralizing
+// this literal keeps daemon, prune, and resolve paths in sync. Lives
+// in config rather than claude to avoid an import cycle between
+// session (needs it) and claude (imports session).
+func ClaudeProjectsRoot(homeDir string) string {
+	return filepath.Join(homeDir, ".claude", "projects")
+}

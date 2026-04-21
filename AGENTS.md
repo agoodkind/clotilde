@@ -1,16 +1,17 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file guides coding agents (including Claude Code and similar tools) when working in this repository. It replaces the former `CLAUDE.md` and adds agent tooling notes below.
 
 ## Project Purpose
 
-Clyde is a Go wrapper around Claude Code with a four-verb CLI surface,
-a TUI dashboard, and a long-lived background daemon. It exists for
+Clyde is a Go wrapper around Claude Code with a small first-party CLI
+(`clyde` subcommands plus transparent passthrough to `claude`), a TUI
+dashboard, and a long-lived background daemon. It exists for
 named-session resume, append-only compaction, an OpenAI-compatible
 HTTP shim that fronts Claude, and an MCP server for in-chat session
 search. Anything not in that list went away in the wipe-to-core cull.
 
-Surface (post-cull):
+Surface (post-cull), matching `cmd/clyde/main.go`:
 
 ```
 clyde                       -> TUI dashboard (manage existing sessions)
@@ -22,6 +23,8 @@ clyde resume <name|uuid>    -> resolve clyde name -> claude --resume <uuid>
 clyde -r / --resume <x>     -> rewritten by dispatch to `clyde resume <x>`
 anything else               -> ForwardToClaude (transparent passthrough)
 ```
+
+Developer tooling: **`cmd/clyde-tui-qa`** drives the real TUI for QA (see the section near the end of this file). It is not part of the default user surface.
 
 The TUI is read-mostly with management actions wired via direct Go
 calls into the daemon: resume, delete, rename, view content, send-to,
@@ -74,9 +77,9 @@ Each session is a folder in `.claude/clyde/sessions/<name>/`:
 
 `**isIncognito**`: Boolean flag. If true, session auto-deletes on exit (via defer-based cleanup in `invoke.go`). Incognito sessions are useful for quick queries, experiments, or sensitive work. Cleanup runs on normal exit and Ctrl+C, but not on SIGKILL or crashes.
 
-`**context**`: Optional free-text field set via `--context` flag on `start`, `incognito`, `fork`, and `resume` commands. Injected into Claude via the SessionStart hook alongside the session name. Forked sessions inherit context from the parent unless overridden. Context can be updated on resume (e.g. `clyde resume my-session --context "now on GH-456"`).
+`**context**`: Optional free-text in metadata. The SessionStart hook prints it when set (see `internal/hook/handlers.go`). The daemon can refresh it via `UpdateContext` from the live TUI (`cmd/session_helpers.go`). There is no `clyde` flag today that sets this field. Edit metadata or rely on those code paths. Forks created with Claude Code `claude --resume ... --fork-session` use whatever context the store holds for the adopted row.
 
-**Project config format** (`.claude/clyde/config.json`):
+**Project config file** (`.claude/clyde/config.json`, the path the Settings tab and `E` open in the TUI):
 
 ```json
 {
@@ -99,20 +102,16 @@ Each session is a folder in `.claude/clyde/sessions/<name>/`:
 }
 ```
 
-**Global config format** (`~/.config/clyde/config.json`):
+**Global config** (`internal/config/load.go`, `LoadGlobalOrDefault`): read from `$XDG_CONFIG_HOME/clyde/` (default `~/.config/clyde/`). **`config.toml` is preferred; `config.json` is used if TOML is absent.** `SaveGlobal` writes TOML only.
 
-Same structure as the project config. Respects `$XDG_CONFIG_HOME` if set, otherwise defaults to `~/.config/clyde/config.json`. Profiles defined here are available in all projects.
+The `Config` struct in `internal/config/config.go` includes `defaults`, `profiles`, `logging`, `adapter`, `search`, and other sections. **`profiles` exists in the on-disk schema. No production code path reads `cfg.Profiles` outside config tests today**, so do not document a `clyde` CLI that applies a profile by name until that wiring lands.
 
-**Config purpose**: Define named session presets (profiles) for common configurations. Use `clyde start <name> --profile <profile>` to apply a profile.
+**Example profile-shaped fields** (for reference when authoring JSON or TOML by hand):
 
-**Profile fields**:
-
-- `model` - Claude model (haiku, sonnet, opus)
-- `permissionMode` - Permission mode (acceptEdits, bypassPermissions, default, dontAsk, plan)
-- `permissions` - Granular permissions: allow/deny/ask lists, additionalDirectories, defaultMode, disableBypassPermissionsMode
-- `outputStyle` - Output style (built-in or custom name)
-
-**Precedence**: Global profile → project profile → CLI flags (each layer overrides the previous). For example, if both global and project configs define a `"quick"` profile, the project version wins. CLI flags always override profile values.
+- `model`: Claude model (haiku, sonnet, opus)
+- `permissionMode`: acceptEdits, bypassPermissions, default, dontAsk, plan
+- `permissions`: allow/deny/ask lists, additionalDirectories, defaultMode, disableBypassPermissionsMode
+- `outputStyle`: built-in or custom name
 
 **Settings format** (`settings.json`):
 
@@ -135,7 +134,7 @@ Same structure as the project config. Respects `$XDG_CONFIG_HOME` if set, otherw
 **Context loading**: Context is injected at session start via SessionStart hooks:
 
 - **Session name**: Always output if available
-- **Session context**: From metadata `context` field (set via `--context` flag)
+- **Session context**: From metadata `context` when non-empty
 
 ### Claude Code Integration Patterns
 
@@ -185,18 +184,16 @@ No matcher field - the single hook handles all sources (startup, resume, compact
 
 **Source-based dispatch:**
 
-- `**startup`\*\*: New sessions - outputs session name and context, saves transcript path
-- `**resume`\*\*: Resuming or `clyde fork` - outputs context
-- `**compact`\*\*: Session compaction - defensive handler (Claude Code doesn't currently create new UUID for `/compact`, but we handle it anyway in case behavior changes)
-- `**clear**`: Session clear - updates metadata with new UUID, preserves old UUID in `previousSessionIds` array
+- **`startup`**: New sessions. Outputs session name and context, saves transcript path.
+- **`resume`**: Resuming or fork flows. Outputs context when metadata has it.
+- **`compact`**: Session compaction. Defensive handler (Claude Code does not currently create a new UUID for `/compact`, but we handle it anyway in case behavior changes).
+- **`clear`**: Session clear. Updates metadata with new UUID and preserves old UUID in `previousSessionIds`.
 
-`**clyde fork` registration:\*\*
+**Forking with Claude Code (no `clyde fork` verb):**
 
-1. `clyde fork` pre-assigns a UUID via `util.GenerateUUID()` before creating the session
-2. Sets env var: `CLYDE_SESSION_NAME` (for context output in hook)
-3. Invokes `claude --resume <parent> --fork-session --session-id <forkUUID> -n <forkName>`
-4. Claude triggers SessionStart with `source: "resume"` → hook outputs context for the new session
-5. Fork UUID is guaranteed to match because it was pre-assigned (no hook-based UUID registration needed)
+1. Use `claude --resume <parent-uuid> --fork-session` with a new `--session-id` and `-n` name as in the examples above.
+2. The SessionStart hook sees `source: "resume"` for the new process and runs the same path as a normal resume.
+3. `CLYDE_SESSION_NAME` and transcript registration still apply when the hook adopts or updates the fork row.
 
 **Clear handling:**
 
@@ -252,7 +249,7 @@ This ensures complete cleanup even after multiple `/clear` operations (and `/com
 
 ### OpenAI compatible adapter
 
-The daemon optionally hosts an OpenAI Chat Completions v1 HTTP surface (`internal/adapter/`). One launchd entry boots both the gRPC daemon and this adapter. The adapter resolves a request's `model` + `reasoning_effort` through a built in registry (`claude-4-7-{low,med,high,max-thinking}` at 1M, `sonnet`/`haiku`/`claude-opus` at 200k, `gpt-4o` shunt) plus user overrides in `adapter.models` and upstream forwards in `adapter.shunts`. Version one supports streaming, non streaming, bearer auth, and a concurrency semaphore. Tool calling, images, and embeddings are rejected with a 400. See `docs/openai-adapter.md`.
+The daemon optionally hosts an OpenAI Chat Completions v1 HTTP surface under `internal/adapter/`. Incoming `model` strings resolve through a registry built from `[adapter]` and `[adapter.models]` in config (`internal/adapter/models.go`). Backends include direct Claude, Anthropic HTTP, configured shunts, and the local `claude` CLI fallback (`BackendFallback`). See `reasoning_effort` and family `efforts` in the adapter packages for how effort maps to wire format. Streaming and non streaming paths exist; tool calling, images, and embeddings policies are enforced in the dispatcher. There is no checked in `docs/openai-adapter.md`; read the code and config schema as the source of truth.
 
 ### Remote Control (`--remote-control`)
 
@@ -272,11 +269,11 @@ the options popup, Sidecar tab for tail/send). The standalone
 
 **Test Organization:**
 
-- 7 Ginkgo test suites: `cmd/`, `internal/claude/`, `internal/config/`, `internal/export/`, `internal/notify/`, `internal/session/`, `internal/util/`
-- Unit tests for core functionality
-- Integration tests using fake claude binary (internal/testutil)
-- os.Pipe() for testing hook stdin/stdout communication
-- Isolated test environments with temp directories
+- Ginkgo specs under `internal/claude/`, `internal/cli/hook/`, `internal/config/`, `internal/notify/`, `internal/session/`, and `internal/util/` (files using `Describe` / `It`).
+- Standard `testing` tests elsewhere (for example `internal/ui/*_test.go` with `tcell.SimulationScreen`, `internal/adapter/*_test.go`, `internal/tuiqa/keys_test.go`).
+- Integration style coverage where tests fake or stub the `claude` subprocess.
+- Hook tests use `os.Pipe()` for stdin and stdout where applicable.
+- Isolated temp dirs for filesystem heavy cases.
 
 **Testing Philosophy:**
 
@@ -289,7 +286,7 @@ the options popup, Sidecar tab for tail/send). The standalone
 
 ### Core Concepts
 
-- **[Claude Settings Behavior](docs/claude-settings-behavior.md)** - Detailed analysis of how Claude Code's `--settings` flag, permission system, and multi-layer settings work. Critical for understanding Clyde's design decisions around session isolation and permission handling.
+- **Claude Code settings**: There is no `docs/claude-settings-behavior.md` in this repo. For `--settings`, permissions, and merge order, use Anthropic or Claude Code product documentation. Clyde passes per session `settings.json` paths into `claude` where the invoke path builds the argv list (`internal/claude/invoke.go`).
 
 ## Key Constraints
 
@@ -300,12 +297,7 @@ the options popup, Sidecar tab for tail/send). The standalone
 - **Settings scope**: `settings.json` should only contain session-specific settings (model, permissions), not global config (hooks, MCP, UI)
 - **Native integration**: Use `--settings` flag to pass settings, let Claude Code handle merging with global/project configs
 
-# Clyde unified slog standard- **Settings scope**: `settings.json` should only contain session-specific settings (model, permissions), not global config (hooks, MCP, UI)
-- **Native integration**: Use `--settings` flag to pass settings, let Claude Code handle merging with global/project configs
-
-# Clyde unified slog standard
-
-# Clyde unified slog standard (P0)
+## Clyde unified slog standard (P0)
 
 Every operation in the clyde codebase MUST emit at least one
 structured `slog` event. No exceptions. This includes ticks, clicks,
@@ -314,15 +306,15 @@ state mutations, and decisions. The unified JSONL trace at
 `$XDG_STATE_HOME/clyde/clyde.jsonl` is the only way we can
 debug across the daemon + adapter + TUI + hooks + MCP.
 
-## The setup
+### The setup
 
-`internal/slogger` wraps `goodkind.io/gklog` (the cross-repo logging
-package) and the request-scoped context.WithLogger pattern from
-`tack/internal/telemetry`.
+`internal/slogger` wraps `goodkind.io/gklog` for process setup (`Setup`
+only). Request scoped loggers on `context.Context` use `goodkind.io/gklog`
+(`WithLogger`, `LoggerFromContext`, and optional `L`).
 
 At process start (daemon main, CLI root command, hook entrypoints):
 
-```go≈
+```go
 import "goodkind.io/clyde/internal/slogger"
 import "goodkind.io/clyde/internal/config"
 
@@ -347,7 +339,7 @@ defer closer.Close()
 - Annotates every record with `build` from `goodkind.io/gklog/version`.
 - Calls `slog.SetDefault` so the rest of the codebase just uses `slog`.
 
-## Emitting events
+### Emitting events
 
 Use Go's standard `log/slog` directly. No wrapper, no helper:
 
@@ -365,7 +357,7 @@ slog.Info("adapter.chat.completed",
 For request-scoped fields, attach them to a logger and stash in ctx:
 
 ```go
-import "goodkind.io/clyde/internal/slogger"
+import "goodkind.io/gklog"
 
 func handleChat(w http.ResponseWriter, r *http.Request) {
     reqID := newRequestID()
@@ -373,13 +365,13 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
         "request_id", reqID,
         "component", "adapter",
     )
-    ctx := slogger.WithLogger(r.Context(), log)
+    ctx := gklog.WithLogger(r.Context(), log)
     // ...downstream code does:
-    //   slogger.L(ctx).Info("step.parsed", "ms", n)
+    //   gklog.LoggerFromContext(ctx).InfoContext(ctx, "step.parsed", "ms", n)
 }
 ```
 
-## Required field conventions
+### Required field conventions
 
 `gklog` automatically attaches `build`. The caller MUST supply the
 event message as the first argument (the slog convention) and SHOULD
@@ -412,7 +404,7 @@ Event names use dot-separated `component.subject.verb` form, lowercase
 snake_case where multi-word: `adapter.chat.completed`,
 `compact.boundary.lifted`, `verify.context.probe.parsed`.
 
-## adapter.chat.raw logging
+### adapter.chat.raw logging
 
 `adapter.chat.raw` is controlled by `[logging.body]`:
 
@@ -427,7 +419,7 @@ When `mode = "whitelist"`, the sanitized body keeps request metadata and
 `messages`, trims each message content to 2 KiB, strips tool parameter
 schemas, and caps the logged body at `[logging.body].max_kb`.
 
-## Banned patterns
+### Banned patterns
 
 `make slog-audit` rejects any production .go file containing:
 
@@ -440,7 +432,7 @@ Allowed (these go through writers the test harness can capture):
 - `fmt.Fprint*` to a writer (`cmd.OutOrStdout()`, `os.Stderr` in
   bootstrap-only paths).
 - `slog.Info / Debug / Warn / Error` directly. The wrapper at
-  `internal/slogger` only handles initialization and ctx plumbing;
+  `internal/slogger` only handles initialization (`Setup`);
   there is no banned slog method.
 
 Exempt files (audit walks past them):
@@ -450,7 +442,7 @@ Exempt files (audit walks past them):
 - `cmd/version.go`, `cmd/completion.go` -- bootstrap output before
   the slog system is initialized.
 
-## Audit tool
+### Audit tool
 
 `make slog-audit` greps the tree, prints per-package counts and the
 first 30 offending call sites, exits non-zero on hits. CI runs this
@@ -468,3 +460,35 @@ an extra `slog.Debug` is bytes; the cost of a missing one is a
 debugging session that ends with "we have no idea what happened."
 Default to over-logging; trim only when an event proves itself
 permanently useless across many real incidents.
+
+## TUI QA harness (`clyde-tui-qa`)
+
+The **`cmd/clyde-tui-qa`** binary drives the **real** `clyde` TUI (not the in-memory `SimulationScreen` tests). Use it to iterate on UX and flows the way a user would: launch, read the screen, send keys or mouse bytes, repeat.
+
+### Drivers
+
+| Driver  | Role                                                                                                                              |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `tmux`  | Fast; `tmux` must be on `PATH`. Good default for agents and CI-style smoke.                                                       |
+| `pty`   | In-process PTY plus `vt10x` parsing; canonical terminal semantics; use the **`repl`** subcommand (single long-lived process).     |
+| `iterm` | Real iTerm2 via AppleScript (macOS only). Multi-invocation subcommands need **`--iterm-session-id`** from `session-start` stdout. |
+
+### Typical agent loop
+
+1. Build: `make tui-qa` or `make build build-tui-qa`.
+2. Optional hermetic tree: `dist/clyde-tui-qa env-print --isolated /tmp/clyde-tuiqa-$$` and `source` / export those lines, or pass **`--isolated`** on **`repl`** / **`session-start`** (sets XDG and `HOME` under that root).
+3. Optional **`--seed`** with **`--isolated`** to create one demo session row (`tuiqa-demo-01`).
+4. Run **`repl`** with **`--disable-daemon`** (default) unless you intentionally test the daemon.
+5. In **`repl`**, use **`capture`** to dump the pane, **`send`** with tmux-style tokens (`Enter`, `Tab`, `C-c`, etc.), **`raw`** with hex for SGR mouse or escapes, **`sleep MS`**, **`quit`**.
+
+### One-shot tmux workflow
+
+`session-start` prints the tmux session name. Pass **`--session`** to **`session-capture`**, **`session-send`**, **`session-stop`** in follow-up invocations.
+
+### iTerm follow-up invocations
+
+`session-start` prints the **iTerm session id** (AppleScript). Pass **`--iterm-session-id`** (or **`CLYDE_TUIQA_ITERM_ID`**) to **`session-capture`** / **`session-send`** / **`session-stop`**.
+
+### Regression tests
+
+Keep structural UI regression in **`internal/ui/*_test.go`** (standard `testing` tests and `tcell.SimulationScreen`). The harness is for **live** subprocess and terminal behavior.

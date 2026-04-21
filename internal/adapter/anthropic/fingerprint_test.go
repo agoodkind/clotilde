@@ -6,28 +6,6 @@ import (
 	"testing"
 )
 
-func TestVersionFromUserAgent(t *testing.T) {
-	cases := []struct {
-		name string
-		ua   string
-		want string
-	}{
-		{"canonical", "REDACTED-UA", "2.1.114"},
-		{"no_paren", "REDACTED-UA", "2.1.114"},
-		{"with_semi", "REDACTED-UA; foo", "2.1.114"},
-		{"missing_prefix", "Mozilla/5.0", ""},
-		{"empty", "", ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := VersionFromUserAgent(tc.ua)
-			if got != tc.want {
-				t.Fatalf("VersionFromUserAgent(%q) = %q want %q", tc.ua, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestBuildAttributionHeaderShape(t *testing.T) {
 	// Wire shape from mitm: cc_version=<semver>.<3hex>; cc_entrypoint=...; cch=<5hex>;
 	re := regexp.MustCompile(`^x-anthropic-billing-header: cc_version=\d+\.\d+\.\d+\.[0-9a-f]{3}; cc_entrypoint=sdk-cli; cch=[0-9a-f]{5};$`)

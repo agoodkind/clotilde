@@ -31,6 +31,16 @@ type Metadata struct {
 	// last generated. The TUI uses it to decide when the summary is stale
 	// and should be regenerated in the background.
 	ContextMessageCount int `json:"contextMessageCount,omitempty"`
+
+	// DisplayTitle preserves the original user-given chat name that
+	// Claude Code stores in transcript "custom-title" entries. It is the
+	// human-readable form surfaced in the TUI. The session Name is a
+	// sanitized derivative used as the directory identifier and is what
+	// clyde resume, compact, and other verbs accept. DisplayTitle stays
+	// in sync with the latest custom-title entry seen during scan; the
+	// Name never renames post-adoption because that would break
+	// previousSessionIds and parentSession references.
+	DisplayTitle string `json:"displayTitle,omitempty"`
 }
 
 // Settings represents Claude Code session-specific settings stored in settings.json.

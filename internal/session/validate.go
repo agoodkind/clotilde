@@ -48,3 +48,94 @@ func ValidateName(name string) error {
 
 	return nil
 }
+
+// Sanitize converts an arbitrary string into a valid session name or
+// returns "" when the input has no usable alphanumeric content. It
+// lowercases the input, replaces every non [a-z0-9] rune with a hyphen,
+// collapses runs of hyphens, trims edge hyphens, and truncates to
+// MaxNameLength. Callers use this to map a Claude Code customTitle into
+// a clyde session Name. A return of "" signals that the caller should
+// fall back to another naming strategy.
+func Sanitize(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	raw = strings.ToLower(raw)
+	var b strings.Builder
+	b.Grow(len(raw))
+	for _, r := range raw {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	out := collapseHyphens(b.String())
+	out = strings.Trim(out, "-")
+	if len(out) > MaxNameLength {
+		out = strings.TrimRight(out[:MaxNameLength], "-")
+	}
+	if ValidateName(out) != nil {
+		return ""
+	}
+	return out
+}
+
+// collapseHyphens replaces every run of consecutive hyphens with a
+// single hyphen. Used by Sanitize to meet the no-consecutive-hyphens
+// rule enforced by ValidateName.
+func collapseHyphens(s string) string {
+	if !strings.Contains(s, "--") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	prevHyphen := false
+	for _, r := range s {
+		if r == '-' {
+			if prevHyphen {
+				continue
+			}
+			prevHyphen = true
+		} else {
+			prevHyphen = false
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// NameCollisionMax bounds the counter suffix loop used by UniqueName so
+// an adversarial taken set cannot spin forever. Well above any realistic
+// number of same-base sessions a user would ever create.
+const NameCollisionMax = 1000
+
+// UniqueName returns base if it is not in taken, otherwise appends a
+// numeric suffix until the result is unique. Returns base unchanged when
+// the collision loop is exhausted; callers should treat that as a
+// fall-through signal. Truncates the base when a suffix would push the
+// combined length over MaxNameLength so the returned name always passes
+// ValidateName.
+func UniqueName(base string, taken map[string]bool) string {
+	if base == "" {
+		return ""
+	}
+	if !taken[base] {
+		return base
+	}
+	for i := 2; i < NameCollisionMax; i++ {
+		suffix := fmt.Sprintf("-%d", i)
+		candidate := base
+		if len(candidate)+len(suffix) > MaxNameLength {
+			candidate = strings.TrimRight(candidate[:MaxNameLength-len(suffix)], "-")
+		}
+		candidate += suffix
+		if !taken[candidate] {
+			return candidate
+		}
+	}
+	return base
+}

@@ -3,6 +3,7 @@ package claude
 import (
 	"bufio"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,6 +65,14 @@ func DeleteSessionData(clydeRoot, sessionID, transcriptPath string) (*DeletedFil
 		return deleted, err
 	}
 	deleted.AgentLogs = agentLogs
+
+	slog.Info("claude.cleanup.session_data.completed",
+		"component", "claude",
+		"subcomponent", "cleanup",
+		"session_id", sessionID,
+		"transcript_removed", len(deleted.Transcript),
+		"agent_logs_removed", len(deleted.AgentLogs),
+	)
 
 	return deleted, nil
 }

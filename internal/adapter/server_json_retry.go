@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+
+	"goodkind.io/gklog"
 )
 
 // structuredOutputParseFailedEvent is the slog message for first-pass JSON failure.
@@ -46,7 +48,9 @@ func (s *Server) legacyCollectApplyStructuredOutput(
 	retrySystem, retryPrompt := BuildPrompt(req.Messages)
 	retrySystem = strings.TrimSpace(retrySystem + "\n\n" + jsonSpec.SystemPrompt(true))
 	retryRunner := NewRunner(s.deps, model, "", retrySystem, retryPrompt, reqID+"-r")
-	retryStdout, retryCancel, spawnErr := retryRunner.Spawn(BackgroundDetachContext())
+	retryID := reqID + "-r"
+	retryCtx := gklog.WithLogger(BackgroundDetachContext(), s.log.With("request_id", retryID))
+	retryStdout, retryCancel, spawnErr := retryRunner.Spawn(retryCtx)
 	if spawnErr != nil {
 		return finalText, outUsage, jsonRetried
 	}

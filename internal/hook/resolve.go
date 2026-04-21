@@ -2,6 +2,7 @@ package hook
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"slices"
 
@@ -27,6 +28,11 @@ func resolveSessionName(hookData SessionStartInput, store session.Store, fullFal
 func findSessionByUUID(store session.Store, uuid string) (string, error) {
 	sessions, err := store.List()
 	if err != nil {
+		slog.Warn("hook.resolve_session.list_failed",
+			"component", "hook",
+			"subcomponent", "resolve",
+			"err", err,
+		)
 		return "", fmt.Errorf("failed to list sessions: %w", err)
 	}
 
@@ -42,5 +48,10 @@ func findSessionByUUID(store session.Store, uuid string) (string, error) {
 		}
 	}
 
+	slog.Warn("hook.resolve_session.uuid_not_found",
+		"component", "hook",
+		"subcomponent", "resolve",
+		"session_id", uuid,
+	)
 	return "", fmt.Errorf("no session found with UUID %s", uuid)
 }

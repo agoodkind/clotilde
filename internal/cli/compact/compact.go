@@ -81,12 +81,14 @@ both work.`,
 	cmd.Flags().Bool("all", false, "Shortcut for --tools --thinking --images --chat at most aggressive")
 	cmd.Flags().String("type", "", "CSV synonym for the boolean flags: tools|thinking|images|chat|all")
 	cmd.Flags().Int("calibrate", 0, "Write static_overhead=N (from a real /context run) for this session and exit")
+	cmd.Flags().Bool("auto-calibrate", false, "Probe the live session via `claude -p /context` over SDK stream-json, compute static_overhead, save calibration, and exit")
 	cmd.Flags().Bool("apply", false, "Actually append the boundary + synthetic user message (default is preview)")
 	cmd.Flags().Bool("undo", false, "Roll back the most recent apply for this session")
 	cmd.Flags().Bool("list-backups", false, "Print the per-session backup ledger and exit")
 	cmd.Flags().Int("reserved", DefaultReservedBuffer, "Reserved buffer included in /context total (default matches autocompact)")
 	cmd.Flags().String("model", DefaultModel, "Model name passed to count_tokens; must match the live session's model")
 	cmd.Flags().Bool("force", false, "Bypass the fresh-mtime concurrency guard during --apply")
+	cmd.Flags().Bool("refresh", false, "Force a fresh context probe; bust both the in-process and on-disk cache tiers")
 
 	return cmd
 }

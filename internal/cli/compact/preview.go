@@ -1,6 +1,7 @@
 package compact
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -10,14 +11,16 @@ import (
 
 	compactengine "goodkind.io/clyde/internal/compact"
 	"goodkind.io/clyde/internal/session"
+	"goodkind.io/clyde/internal/sessionctx"
 	"goodkind.io/clyde/internal/util"
 )
 
-func runMetricsDashboard(out io.Writer, sess *session.Session, path string) error {
+func runMetricsDashboard(ctx context.Context, out io.Writer, sess *session.Session, path string, refresh bool) error {
 	slog.Info("cli.compact.preview.metrics.started",
 		"session", sess.Name,
 		"session_id", sess.Metadata.SessionID,
 		"transcript", path,
+		"refresh", refresh,
 	)
 	slice, err := compactengine.LoadSlice(path)
 	if err != nil {
@@ -45,7 +48,7 @@ func runMetricsDashboard(out io.Writer, sess *session.Session, path string) erro
 		_, _ = fmt.Fprintf(out, "calibration static_overhead = %s  (captured %s)\n",
 			humanInt(cal.StaticOverhead), cal.CapturedAt.UTC().Format("2006-01-02"))
 	} else {
-		_, _ = fmt.Fprintf(out, "calibration NOT CALIBRATED  (run: clyde compact %s --calibrate=N)\n", sess.Name)
+		_, _ = fmt.Fprintf(out, "calibration NOT CALIBRATED  (run: clyde compact %s --auto-calibrate)\n", sess.Name)
 	}
 	_, _ = fmt.Fprintf(out, "reserved    %s   (default, assumes autocompact on)\n", humanInt(DefaultReservedBuffer))
 	_, _ = fmt.Fprintln(out)
@@ -58,17 +61,54 @@ func runMetricsDashboard(out io.Writer, sess *session.Session, path string) erro
 	}
 	_, _ = fmt.Fprintf(out, "            %d entries since boundary\n", len(slice.PostBoundary))
 
+	// Block counts (informational only). Token numbers come from the
+	// probe below; fixed multipliers are gone.
 	thinking, images, toolPairs, chatTurns := categoryCounts(slice)
 	_, _ = fmt.Fprintln(out)
-	_, _ = fmt.Fprintln(out, "tail")
-	_, _ = fmt.Fprintf(out, "  thinking blocks   %d   ~%s tok (rough)\n", thinking, humanInt(thinking*200))
-	_, _ = fmt.Fprintf(out, "  image blocks      %d   ~%s tok (rough)\n", images, humanInt(images*150))
-	_, _ = fmt.Fprintf(out, "  tool_use/result   %d pairs   ~%s tok (rough)\n", toolPairs, humanInt(toolPairs*800))
-	_, _ = fmt.Fprintf(out, "  chat turns        %d   ~%s tok (rough)\n", chatTurns, humanInt(chatTurns*120))
+	_, _ = fmt.Fprintln(out, "tail blocks")
+	_, _ = fmt.Fprintf(out, "  thinking blocks   %d\n", thinking)
+	_, _ = fmt.Fprintf(out, "  image blocks      %d\n", images)
+	_, _ = fmt.Fprintf(out, "  tool_use/result   %d pairs\n", toolPairs)
+	_, _ = fmt.Fprintf(out, "  chat turns        %d\n", chatTurns)
+
+	// Probe Claude for the exact /context breakdown. Numbers here are
+	// what Claude itself reports, not rough estimates. A 5 minute
+	// MaxAge keeps repeat invocations cheap; refresh busts the cache.
+	layer := sessionctx.NewDefault(sess, "", "")
+	usage, usageErr := layer.Usage(ctx, sessionctx.UsageOptions{
+		Refresh: refresh,
+		MaxAge:  5 * time.Minute,
+	})
+	_, _ = fmt.Fprintln(out)
+	if usageErr != nil {
+		slog.Warn("cli.compact.preview.metrics.usage_failed",
+			"session", sess.Name,
+			"session_id", sess.Metadata.SessionID,
+			slog.Any("err", usageErr),
+		)
+		_, _ = fmt.Fprintf(out, "context     unavailable (%v)\n", usageErr)
+		_, _ = fmt.Fprintf(out, "            rerun with --refresh to probe claude /context\n")
+	} else {
+		_, _ = fmt.Fprintf(out, "context (from claude /context, source=%s, captured=%s)\n",
+			usage.Source, usage.CapturedAt.UTC().Format(time.RFC3339))
+		for _, cat := range usage.Categories {
+			name := cat.Name
+			if cat.IsDeferred && !strings.Contains(name, "(deferred)") {
+				name += " (deferred)"
+			}
+			_, _ = fmt.Fprintf(out, "  %-24s %s tok\n", name, humanInt(cat.Tokens))
+		}
+		_, _ = fmt.Fprintf(out, "  %-24s %s / %s  (%d%%)\n",
+			"total", humanInt(usage.TotalTokens), humanInt(usage.MaxTokens), usage.Percentage)
+		_, _ = fmt.Fprintf(out, "  %-24s %s tok   (derived: everything except Messages, Compact buffer, Free space)\n",
+			"static overhead", humanInt(usage.StaticOverhead()))
+	}
+
 	slog.Info("cli.compact.preview.metrics.completed",
 		"session", sess.Name,
 		"session_id", sess.Metadata.SessionID,
 		"transcript", path,
+		"usage_available", usageErr == nil,
 	)
 	return nil
 }
@@ -91,7 +131,9 @@ func categoryCounts(slice *compactengine.Slice) (thinking, images, toolPairs, ch
 	return
 }
 
-// runPlanPreview prints the iteration log and before/after summary after RunPlan.
+// runPlanPreview renders the final summary after RunPlan finishes.
+// The iteration log itself is streamed live by progressView during the
+// loop; this function only draws the end-of-run summary box.
 func runPlanPreview(
 	out io.Writer,
 	sess *session.Session,
@@ -107,35 +149,8 @@ func runPlanPreview(
 		"target", target,
 		"model", model,
 	)
-	_, _ = fmt.Fprintln(out, "session     "+sess.Name)
-	_, _ = fmt.Fprintln(out, "model       "+model)
 	if target > 0 {
-		_, _ = fmt.Fprintf(out, "static      %s   (calibrated)\n", humanInt(staticOverhead))
-		_, _ = fmt.Fprintf(out, "reserved    %s\n", humanInt(reserved))
-		_, _ = fmt.Fprintf(out, "target      %s\n", humanInt(target))
-		_, _ = fmt.Fprintln(out)
-		for i, it := range res.Iterations {
-			over := it.Delta
-			tag := "OK"
-			if over > 0 {
-				tag = fmt.Sprintf("+%s over", humanInt(over))
-			} else {
-				tag = fmt.Sprintf("-%s OK", humanInt(-over))
-			}
-			_, _ = fmt.Fprintf(out, "iter %-2d %-44s tail=%s  ctx=%s  %s\n",
-				i, it.Step, humanInt(it.TailTokens), humanInt(it.CtxTotal), tag)
-		}
-		_, _ = fmt.Fprintln(out)
-		_, _ = fmt.Fprintf(out, "result  tail %s -> %s   ctx %s -> %s   %s\n",
-			humanInt(res.BaselineTail), humanInt(res.FinalTail),
-			humanInt(staticOverhead+res.BaselineTail+reserved),
-			humanInt(staticOverhead+res.FinalTail+reserved),
-			func() string {
-				if res.HitTarget {
-					return "(under target)"
-				}
-				return "(STILL OVER TARGET)"
-			}())
+		renderFinal(out, res, target, staticOverhead, reserved)
 		slog.Info("cli.compact.preview.plan.completed",
 			"session", sess.Name,
 			"session_id", sess.Metadata.SessionID,
@@ -145,10 +160,7 @@ func runPlanPreview(
 		)
 		return
 	}
-	_, _ = fmt.Fprintln(out, "no target; strippers applied at most-aggressive setting")
-	_, _ = fmt.Fprintln(out, "selected: "+strippersDescribe(s))
-	_, _ = fmt.Fprintf(out, "synthesized content blocks: %d\n", len(res.BoundaryTail))
-	_, _ = fmt.Fprintf(out, "post-boundary entries:      %d\n", len(slice.PostBoundary))
+	renderNoTarget(out, sess.Name, s, res, len(res.BoundaryTail), len(slice.PostBoundary))
 	slog.Info("cli.compact.preview.plan.completed",
 		"session", sess.Name,
 		"session_id", sess.Metadata.SessionID,

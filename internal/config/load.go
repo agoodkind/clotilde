@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,6 +31,12 @@ func loadConfig(dir string) (*Config, error) {
 		if err := applyLoggingDefaultsAndValidate(&cfg); err != nil {
 			return nil, fmt.Errorf("invalid %s: %w", tomlPath, err)
 		}
+		slog.Info("config.load.loaded",
+			"component", "config",
+			"subcomponent", "load",
+			"format", "toml",
+			"path", tomlPath,
+		)
 		return &cfg, nil
 	}
 
@@ -43,6 +50,12 @@ func loadConfig(dir string) (*Config, error) {
 		if err := applyLoggingDefaultsAndValidate(&cfg); err != nil {
 			return nil, err
 		}
+		slog.Info("config.load.loaded",
+			"component", "config",
+			"subcomponent", "load",
+			"format", "json",
+			"path", jsonPath,
+		)
 		return &cfg, nil
 	}
 

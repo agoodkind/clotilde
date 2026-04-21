@@ -31,6 +31,15 @@ func (s *Strippers) SetAll() {
 	s.Chat = true
 }
 
+// Counter is the narrow interface the target loop needs. It is
+// satisfied by the concrete *TokenCounter in this package, and by any
+// sessionctx.Layer-backed adapter so callers can route every token
+// question through the unified context layer without the planner
+// needing to know about it.
+type Counter interface {
+	CountSyntheticUser(ctx context.Context, contentArray []OutputBlock) (int, error)
+}
+
 // PlanInput is the orchestrator's input bundle.
 type PlanInput struct {
 	Slice          *Slice
@@ -38,8 +47,9 @@ type PlanInput struct {
 	Target         int           // /context total ceiling, 0 = no target
 	StaticOverhead int           // calibrated overhead, ignored when Target == 0
 	Reserved       int           // reserved buffer (default 13_000)
-	Counter        *TokenCounter // required when Target > 0
-	Out            io.Writer     // iteration log
+	Counter        Counter       // required when Target > 0
+	Out            io.Writer     // fallback streaming sink when OnIteration nil
+	OnIteration    func(IterationRecord) // preferred: called after each measure
 	BatchSize      int           // tool demotion batch size; default 8
 	ChatBatchSize  int           // chat-drop batch size; default 4
 	StopTimeout    time.Duration // max wall time for whole loop; 0 = no limit
@@ -74,10 +84,10 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 		return nil, fmt.Errorf("plan: nil slice")
 	}
 	if in.BatchSize <= 0 {
-		in.BatchSize = 8
+		in.BatchSize = 32
 	}
 	if in.ChatBatchSize <= 0 {
-		in.ChatBatchSize = 4
+		in.ChatBatchSize = 64
 	}
 	if in.Target > 0 && in.Counter == nil {
 		return nil, fmt.Errorf("plan: target set but no token counter")
@@ -113,6 +123,23 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 			return 0, 0, fmt.Errorf("count_tokens after %q: %w", label, err)
 		}
 		ctxTotal := in.StaticOverhead + tail + in.Reserved
+		record := IterationRecord{
+			Step:       label,
+			TailTokens: tail,
+			CtxTotal:   ctxTotal,
+			Delta:      ctxTotal - in.Target,
+		}
+		if in.OnIteration != nil {
+			in.OnIteration(record)
+		} else if in.Out != nil {
+			tag := "OK"
+			if record.Delta > 0 {
+				tag = fmt.Sprintf("+%d over", record.Delta)
+			} else {
+				tag = fmt.Sprintf("-%d under", -record.Delta)
+			}
+			fmt.Fprintf(in.Out, "  iter  %-44s tail=%d  ctx=%d  %s\n", label, tail, ctxTotal, tag)
+		}
 		return tail, ctxTotal, nil
 	}
 

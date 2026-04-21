@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,8 +20,9 @@ type DiscoveryResult struct {
 	WorkspaceRoot  string
 	Entrypoint     string
 	FirstEntryTime time.Time
-	IsAutoName     bool // SDK-CLI invocation that looks like a clyde auto-name call
-	IsSubagent     bool // file lives in a subagents/ directory
+	CustomTitle    string // user-given chat name from Claude Code "custom-title" entries
+	IsAutoName     bool   // SDK-CLI invocation that looks like a clyde auto-name call
+	IsSubagent     bool   // file lives in a subagents/ directory
 }
 
 // AdoptedSession is the registry entry created for a previously-unknown
@@ -64,12 +66,13 @@ func isClydeScratch(path string) bool {
 // transcriptHeader is the minimum subset we need from the first entry of a
 // jsonl transcript to map it into the registry.
 type transcriptHeader struct {
-	SessionID  string `json:"sessionId"`
-	CWD        string `json:"cwd"`
-	Entrypoint string `json:"entrypoint"`
-	Timestamp  string `json:"timestamp"`
-	Type       string `json:"type"`
-	Content    string `json:"content"` // present on queue-operation entries
+	SessionID   string `json:"sessionId"`
+	CWD         string `json:"cwd"`
+	Entrypoint  string `json:"entrypoint"`
+	Timestamp   string `json:"timestamp"`
+	Type        string `json:"type"`
+	Content     string `json:"content"`     // present on queue-operation entries
+	CustomTitle string `json:"customTitle"` // present on custom-title entries
 }
 
 // ScanProjects walks ~/.claude/projects/<encoded-cwd>/*.jsonl and returns
@@ -78,7 +81,9 @@ type transcriptHeader struct {
 // decide whether to surface them. The walk is best-effort: unreadable
 // files are skipped silently.
 func ScanProjects(claudeProjectsDir string) ([]DiscoveryResult, error) {
+	started := time.Now()
 	var out []DiscoveryResult
+	var withTitle int
 	err := filepath.WalkDir(claudeProjectsDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			// Skip permission errors but keep walking other branches.
@@ -94,13 +99,38 @@ func ScanProjects(claudeProjectsDir string) ([]DiscoveryResult, error) {
 		if !ok {
 			return nil
 		}
+		if dr.CustomTitle != "" {
+			withTitle++
+		}
 		out = append(out, dr)
 		return nil
 	})
 	if err != nil {
+		slog.Warn("session.scan.walk_failed",
+			"component", "session",
+			"subcomponent", "scan",
+			"projects_dir", claudeProjectsDir,
+			slog.Any("err", err),
+		)
 		return nil, err
 	}
+	slog.Debug("session.scan.completed",
+		"component", "session",
+		"subcomponent", "scan",
+		"projects_dir", claudeProjectsDir,
+		"transcripts", len(out),
+		"with_custom_title", withTitle,
+		"duration_ms", time.Since(started).Milliseconds(),
+	)
 	return out, nil
+}
+
+// ReadTranscriptHeader is the exported entry point for
+// readTranscriptHeader, used by hook and other callers outside the
+// package to learn the sessionId, workspace root, and customTitle of a
+// transcript on disk without walking the full projects directory.
+func ReadTranscriptHeader(path string) (DiscoveryResult, bool) {
+	return readTranscriptHeader(path)
 }
 
 // readTranscriptHeader reads enough of a jsonl transcript to identify the
@@ -135,6 +165,19 @@ func readTranscriptHeader(path string) (DiscoveryResult, bool) {
 		if h.Type == "queue-operation" {
 			if dr.IsAutoName == false && looksLikeAutoNamePrompt(h.Content) {
 				dr.IsAutoName = true
+			}
+			continue
+		}
+		// custom-title entries carry the user-given chat name. They may
+		// appear on line 1 of user-named transcripts, or later when a
+		// name is set or changed mid-session. The latest value wins so
+		// DisplayTitle reflects the current Claude Code name.
+		if h.Type == "custom-title" {
+			if h.CustomTitle != "" {
+				dr.CustomTitle = h.CustomTitle
+			}
+			if h.SessionID != "" && dr.SessionID == "" {
+				dr.SessionID = h.SessionID
 			}
 			continue
 		}
@@ -183,28 +226,73 @@ func looksLikeAutoNamePrompt(content string) bool {
 func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession, error) {
 	known, err := buildKnownUUIDSet(store)
 	if err != nil {
+		slog.Warn("session.adopt.known_uuids_failed",
+			"component", "session",
+			"subcomponent", "adopt",
+			slog.Any("err", err),
+		)
 		return nil, err
 	}
 	existingNames, err := buildExistingNameSet(store)
 	if err != nil {
+		slog.Warn("session.adopt.existing_names_failed",
+			"component", "session",
+			"subcomponent", "adopt",
+			slog.Any("err", err),
+		)
 		return nil, err
 	}
+
+	slog.Debug("session.adopt.started",
+		"component", "session",
+		"subcomponent", "adopt",
+		"candidates", len(results),
+		"known_uuids", len(known),
+		"existing_names", len(existingNames),
+	)
 
 	var adopted []AdoptedSession
 	for _, r := range results {
 		if r.IsAutoName || r.IsSubagent {
+			slog.Debug("session.adopt.skipped",
+				"component", "session",
+				"subcomponent", "adopt",
+				"reason", "auto_name_or_subagent",
+				"transcript", r.TranscriptPath,
+				"is_auto_name", r.IsAutoName,
+				"is_subagent", r.IsSubagent,
+			)
 			continue
 		}
 		if isClydeScratch(r.WorkspaceRoot) {
+			slog.Debug("session.adopt.skipped",
+				"component", "session",
+				"subcomponent", "adopt",
+				"reason", "clyde_scratch",
+				"transcript", r.TranscriptPath,
+				"workspace", r.WorkspaceRoot,
+			)
 			continue
 		}
 		if r.SessionID == "" {
+			slog.Debug("session.adopt.skipped",
+				"component", "session",
+				"subcomponent", "adopt",
+				"reason", "no_session_id",
+				"transcript", r.TranscriptPath,
+			)
 			continue
 		}
 		if known[r.SessionID] {
+			slog.Debug("session.adopt.skipped",
+				"component", "session",
+				"subcomponent", "adopt",
+				"reason", "already_known",
+				"session_id", r.SessionID,
+			)
 			continue
 		}
-		name := uniqueAdoptedName(r, existingNames)
+		name, nameSource := pickAdoptedName(r, existingNames)
 		existingNames[name] = true
 
 		md := Metadata{
@@ -213,6 +301,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 			TranscriptPath: r.TranscriptPath,
 			WorkspaceRoot:  r.WorkspaceRoot,
 			WorkDir:        r.WorkspaceRoot,
+			DisplayTitle:   r.CustomTitle,
 		}
 		fi, err := os.Stat(r.TranscriptPath)
 		if err == nil {
@@ -231,12 +320,77 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 
 		sess := &Session{Name: name, Metadata: md}
 		if err := store.Create(sess); err != nil {
+			slog.Warn("session.adopt.create_failed",
+				"component", "session",
+				"subcomponent", "adopt",
+				"session", name,
+				"session_id", r.SessionID,
+				"transcript", r.TranscriptPath,
+				slog.Any("err", err),
+			)
 			continue
 		}
+		slog.Info("session.adopt.created",
+			"component", "session",
+			"subcomponent", "adopt",
+			"session", name,
+			"session_id", r.SessionID,
+			"transcript", r.TranscriptPath,
+			"workspace", r.WorkspaceRoot,
+			"name_source", nameSource,
+			"display_title", r.CustomTitle,
+		)
 		adopted = append(adopted, AdoptedSession{Name: name, Metadata: md})
 		known[r.SessionID] = true
 	}
+	slog.Debug("session.adopt.completed",
+		"component", "session",
+		"subcomponent", "adopt",
+		"adopted", len(adopted),
+		"considered", len(results),
+	)
 	return adopted, nil
+}
+
+// pickAdoptedName chooses a session name for an adopted transcript. It
+// prefers the sanitized Claude Code customTitle so clyde verbs accept
+// the user-given chat name directly. Collisions with existing names are
+// resolved with UniqueName. When customTitle is absent or sanitizes to
+// empty (for example an emoji-only title) the function falls back to
+// the workspace-plus-UUID scheme in uniqueAdoptedName. The second return
+// value is a short label of the source used, for structured logs.
+func pickAdoptedName(r DiscoveryResult, taken map[string]bool) (string, string) {
+	if sanitized := Sanitize(r.CustomTitle); sanitized != "" {
+		candidate := UniqueName(sanitized, taken)
+		if candidate != "" && ValidateName(candidate) == nil {
+			slog.Debug("session.adopt.name_picked",
+				"component", "session",
+				"subcomponent", "adopt",
+				"session_id", r.SessionID,
+				"source", "custom_title",
+				"raw_title", r.CustomTitle,
+				"name", candidate,
+			)
+			return candidate, "custom_title"
+		}
+		slog.Debug("session.adopt.name_sanitize_unusable",
+			"component", "session",
+			"subcomponent", "adopt",
+			"session_id", r.SessionID,
+			"raw_title", r.CustomTitle,
+			"sanitized", sanitized,
+		)
+	}
+	fallback := uniqueAdoptedName(r, taken)
+	slog.Debug("session.adopt.name_picked",
+		"component", "session",
+		"subcomponent", "adopt",
+		"session_id", r.SessionID,
+		"source", "workspace_uuid_fallback",
+		"raw_title", r.CustomTitle,
+		"name", fallback,
+	)
+	return fallback, "workspace_uuid_fallback"
 }
 
 // buildKnownUUIDSet returns the set of UUIDs the store already manages.
@@ -274,21 +428,11 @@ func buildExistingNameSet(store *FileStore) (map[string]bool, error) {
 // uniqueAdoptedName generates a registry-safe name for an adopted
 // transcript. The base is a sanitized basename of the workspace root
 // joined with the first eight characters of the session UUID. Collisions
-// are resolved by appending a counter.
+// are resolved with the shared UniqueName helper.
 func uniqueAdoptedName(r DiscoveryResult, taken map[string]bool) string {
 	base := workspaceBaseName(r.WorkspaceRoot)
 	short := safeShortUUID(r.SessionID)
-	candidate := fmt.Sprintf("%s-%s", base, short)
-	if !taken[candidate] {
-		return candidate
-	}
-	for i := 2; i < 1000; i++ {
-		c := fmt.Sprintf("%s-%s-%d", base, short, i)
-		if !taken[c] {
-			return c
-		}
-	}
-	return candidate
+	return UniqueName(fmt.Sprintf("%s-%s", base, short), taken)
 }
 
 func workspaceBaseName(root string) string {
