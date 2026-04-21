@@ -67,10 +67,9 @@ func clearRect(scr tcell.Screen, r Rect) {
 }
 
 // ColorDimOverlay is the background tone used behind modal overlays so
-// the active pane stands out. The pane itself redraws with the terminal
-// default background, which reads as a clear lifted panel against the
-// dimmed backdrop.
-var ColorDimOverlay = tcell.Color235
+// the active pane stands out. Lighter than the main dashboard fill so
+// the dimmed layer reads clearly behind centered modals.
+var ColorDimOverlay = tcell.Color251
 
 // dimBackground paints a darker background over every cell in the
 // screen so the pane on top reads as a lifted panel. Cells are

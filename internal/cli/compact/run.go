@@ -106,12 +106,20 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 		return runAutoCalibrate(cmd.Context(), out, sess, model)
 	}
 
+	// Target can come from either the positional [target] arg or the
+	// --target flag. The flag wins when both are present so scripts
+	// can be position-independent.
 	target := 0
-	if len(args) == 2 {
-		n, err := ParseTokenCount(args[1])
-		if err != nil {
-			slog.Warn("cli.compact.invalid_target", "session", name, "target_raw", args[1], slog.Any("err", err))
-			return fmt.Errorf("invalid target %q: %w", args[1], err)
+	targetFlag, _ := cmd.Flags().GetString("target")
+	targetRaw := strings.TrimSpace(targetFlag)
+	if targetRaw == "" && len(args) == 2 {
+		targetRaw = args[1]
+	}
+	if targetRaw != "" {
+		n, perr := ParseTokenCount(targetRaw)
+		if perr != nil {
+			slog.Warn("cli.compact.invalid_target", "session", name, "target_raw", targetRaw, slog.Any("err", perr))
+			return fmt.Errorf("invalid target %q: %w", targetRaw, perr)
 		}
 		target = n
 	}
@@ -166,8 +174,22 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 			return calErr
 		}
 		if !ok {
-			slog.Warn("cli.compact.calibration_missing", "session", name, "session_id", sess.Metadata.SessionID)
-			return fmt.Errorf("session %q has no calibration. Run a real /context against this session, then:\n  clyde compact %s --calibrate=<static_overhead_from_context>", name, name)
+			// Auto-probe on miss. Spawning claude with /context is the
+			// only way to learn the session's static overhead and we
+			// know how to do it transparently, so running it
+			// automatically is strictly better than refusing the
+			// command and asking the user to do the probe themselves.
+			slog.Info("cli.compact.calibration_auto_probe", "session", name, "session_id", sess.Metadata.SessionID)
+			_, _ = fmt.Fprintf(out, "no calibration on file; probing claude /context for static overhead (30-60 seconds)...\n")
+			if err := runAutoCalibrate(cmd.Context(), out, sess, model); err != nil {
+				slog.Error("cli.compact.calibration_auto_probe_failed", "session", name, "session_id", sess.Metadata.SessionID, slog.Any("err", err))
+				return err
+			}
+			cal, ok, calErr = compactengine.LoadCalibration(sess.Metadata.SessionID)
+			if calErr != nil || !ok {
+				slog.Error("cli.compact.calibration_post_probe_missing", "session", name, "session_id", sess.Metadata.SessionID, slog.Any("err", calErr))
+				return fmt.Errorf("auto-probe finished but calibration still missing for %q", name)
+			}
 		}
 		staticOverhead = cal.StaticOverhead
 	}
@@ -186,25 +208,54 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 	ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Minute)
 	defer cancel()
 
+	mode := ModePreview
+	if apply {
+		mode = ModeApply
+	}
+
+	// Phase 1: upfront info panel. Every number we can show without
+	// touching the network goes here so the user sees the full picture
+	// before the long calculation begins.
 	if target > 0 {
-		currentTotal := 0
-		// Best-effort cache lookup for the live /context total. Never
-		// probes (would duplicate the planner's counting work); shows a
-		// muted "current ctx" row when available so the user can see
-		// why the chat status bar shows ~800k while static is only 78k.
+		thinking, images, toolPairs, chatTurns := categoryCounts(slice)
+		currentTotal, maxTokens := 0, 0
+		calibDate := ""
 		layer := sessionctx.NewDefault(sess, model, "")
 		if u, uerr := layer.Usage(ctx, sessionctx.UsageOptions{MaxAge: 24 * time.Hour}); uerr == nil {
 			currentTotal = u.TotalTokens
+			maxTokens = u.MaxTokens
 		}
-		renderHeader(out, sess.Name, model, target, staticOverhead, reserved, currentTotal)
+		if cal, ok, _ := compactengine.LoadCalibration(sess.Metadata.SessionID); ok {
+			calibDate = cal.CapturedAt.UTC().Format("2006-01-02")
+		}
+		RenderUpfrontPanel(out, UpfrontStats{
+			SessionName:   sess.Name,
+			SessionID:     sess.Metadata.SessionID,
+			Model:         model,
+			Mode:          mode,
+			CurrentTotal:  currentTotal,
+			MaxTokens:     maxTokens,
+			Target:        target,
+			StaticFloor:   staticOverhead,
+			Reserved:      reserved,
+			Thinking:      thinking,
+			Images:        images,
+			ToolPairs:     toolPairs,
+			ChatTurns:     chatTurns,
+			StrippersText: strippersDescribe(strippers),
+			TargetDate:    calibDate,
+		})
 	}
 
-	slog.Info("cli.compact.preview.run_plan.started", "session", name, "target", target)
+	// Phase 2: rolling spinner during the target loop. Mode banner
+	// stays visible on every frame so destructive runs cannot be
+	// confused for preview runs.
+	slog.Info("cli.compact.preview.run_plan.started", "session", name, "target", target, "mode", mode.Label())
 	isTTY := isTerminal(out)
 	var progress *progressView
 	var onIter func(compactengine.IterationRecord)
 	if target > 0 {
-		progress = newProgressView(out, target, 0, isTTY)
+		progress = newProgressView(out, target, mode, isTTY)
 		onIter = progress.Update
 	}
 	planRes, err := compactengine.RunPlan(ctx, compactengine.PlanInput{
@@ -225,13 +276,41 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 	}
 	slog.Info("cli.compact.preview.run_plan.completed", "session", name, "hit_target", planRes.HitTarget)
 
-	runPlanPreview(out, sess, slice, target, staticOverhead, reserved, model, strippers, planRes)
+	// Phase 3: result box. Shape depends on mode and target.
+	if target == 0 {
+		RenderNoTarget(out, mode, sess.Name, strippers, planRes, len(planRes.BoundaryTail), len(slice.PostBoundary))
+	} else if !apply {
+		RenderFinalPreview(out, planRes, target, staticOverhead, reserved)
+	}
 
 	if !apply {
-		_, _ = fmt.Fprintln(out, "\n(preview only, pass --apply to mutate)")
 		slog.Info("cli.compact.preview.completed", "session", name, "applied", false)
 		return nil
 	}
 
-	return runApply(out, sess, slice, strippers, target, planRes, force)
+	// Before mutating the transcript, optionally ask claude -p for a
+	// recap of the dropped portion and inject it into the synthetic
+	// header. The recap helps the continuing agent pick up work the
+	// deterministic header cannot represent (intents, decisions, open
+	// threads).
+	if summarize, _ := cmd.Flags().GetBool("summarize"); summarize {
+		_, _ = fmt.Fprintln(out, "summarizing dropped content via claude -p (30-60s)...")
+		summary, sumErr := compactengine.SummarizeDropped(ctx, slice, planRes.Options, compactengine.SummarizeOptions{
+			Model: model,
+		})
+		if sumErr != nil {
+			slog.Warn("cli.compact.summarize_failed_continuing", "session", name, slog.Any("err", sumErr))
+			_, _ = fmt.Fprintf(out, "summary failed (%v); applying without summary\n", sumErr)
+		} else if summary != "" {
+			planRes.Options.Summary = summary
+			planRes.BoundaryTail = compactengine.Synthesize(slice, planRes.Options)
+			slog.Info("cli.compact.summarize_injected", "session", name, "summary_bytes", len(summary))
+		}
+	}
+
+	if err := runApply(out, sess, slice, strippers, target, planRes, force); err != nil {
+		return err
+	}
+	RenderFinalApply(out, planRes, target, staticOverhead, reserved, path)
+	return nil
 }

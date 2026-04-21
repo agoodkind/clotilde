@@ -89,6 +89,8 @@ both work.`,
 	cmd.Flags().String("model", DefaultModel, "Model name passed to count_tokens; must match the live session's model")
 	cmd.Flags().Bool("force", false, "Bypass the fresh-mtime concurrency guard during --apply")
 	cmd.Flags().Bool("refresh", false, "Force a fresh context probe; bust both the in-process and on-disk cache tiers")
+	cmd.Flags().String("target", "", "Compaction target token count (e.g. 200k, 120,000, 1.2m). Overrides the positional [target] arg when both are present.")
+	cmd.Flags().Bool("summarize", true, "On --apply, generate an LLM recap of dropped content via `claude -p` and inject it into the synthetic header. Use --summarize=false to skip.")
 
 	return cmd
 }

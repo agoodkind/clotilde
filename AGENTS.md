@@ -21,8 +21,11 @@ clyde hook sessionstart     -> Claude Code SessionStart hook
 clyde mcp                   -> MCP stdio server (search/list/context)
 clyde resume <name|uuid>    -> resolve clyde name -> claude --resume <uuid>
 clyde -r / --resume <x>     -> rewritten by dispatch to `clyde resume <x>`
-anything else               -> ForwardToClaude (transparent passthrough)
+clyde exec|api ...          -> ClassifyArgs passthrough -> claude (no post-TUI for api; same for -p/--print)
+anything else               -> cobra; unknown -> ForwardToClaudeThenDashboard (TTY may open TUI after exit)
 ```
+
+`compact`, `daemon`, and `mcp` are **clyde-owned** names; the real `claude` binary also defines `compact`, `daemon`, and `mcp` with different behavior, so users who need the stock subcommands should invoke `claude` directly. After forward, `cmd/root.go` skips the post-claude TUI for `api`, `-p`/`--print`, and a set of common one-shot first-arg subcommands (aligned with Claude Code `cli.tsx` / `main.tsx`).
 
 Developer tooling: **`cmd/clyde-tui-qa`** drives the real TUI for QA (see the section near the end of this file). It is not part of the default user surface.
 

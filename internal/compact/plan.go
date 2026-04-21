@@ -67,12 +67,31 @@ type PlanResult struct {
 }
 
 // IterationRecord is one row of the iteration log printed in the
-// preview output.
+// preview output. It also carries the current category-breakdown
+// counts so the CLI can render a live dashboard showing exactly what
+// has been stripped as the loop progresses.
 type IterationRecord struct {
 	Step       string // human-readable description
 	TailTokens int    // count_tokens result after this step
 	CtxTotal   int    // static + tail + reserved
 	Delta      int    // ctx - target (negative = OK)
+
+	// ThinkingDropped is true once DropThinking is on.
+	ThinkingDropped bool
+	// ImagesPlaceholder is true once ImagesAsPlaceholder is on.
+	ImagesPlaceholder bool
+
+	// Tool pair counts by current fidelity level. Sum equals the
+	// total number of tool pairs in PostBoundary.
+	ToolsFull     int
+	ToolsLineOnly int
+	ToolsDropped  int
+
+	// Chat turn counts. Total is the count of user/assistant turns
+	// in PostBoundary. Dropped grows as the planner drops oldest
+	// turns; Refine may un-drop some at the tail of the run.
+	ChatTurnsTotal   int
+	ChatTurnsDropped int
 }
 
 // RunPlan drives the target loop. When Target == 0 it just synthesizes
@@ -116,18 +135,52 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 		defer cancel()
 	}
 
-	measure := func(label string, prevCtx int) (int, int, error) {
+	// Precompute totals that do not change across iterations. The
+	// breakdown in each IterationRecord references these so the CLI
+	// dashboard can render progress bars.
+	totalToolPairs := len(in.Slice.PairIndex)
+	totalChatTurns := 0
+	for _, e := range in.Slice.PostBoundary {
+		if e.Type == "user" || e.Type == "assistant" {
+			totalChatTurns++
+		}
+	}
+
+	measure := func(label string, prevCtx int) (IterationRecord, error) {
 		array := Synthesize(in.Slice, opts)
 		tail, err := in.Counter.CountSyntheticUser(ctx, array)
 		if err != nil {
-			return 0, 0, fmt.Errorf("count_tokens after %q: %w", label, err)
+			return IterationRecord{}, fmt.Errorf("count_tokens after %q: %w", label, err)
 		}
 		ctxTotal := in.StaticOverhead + tail + in.Reserved
+
+		// Compute current fidelity breakdown from opts. ToolsFull is
+		// the implicit residual after counting overrides so the three
+		// tool counts always sum to totalToolPairs.
+		toolsLineOnly, toolsDropped := 0, 0
+		for _, lvl := range opts.ToolDetailOverride {
+			switch lvl {
+			case ToolDetailLineOnly:
+				toolsLineOnly++
+			case ToolDetailDrop:
+				toolsDropped++
+			}
+		}
+		toolsFull := totalToolPairs - toolsLineOnly - toolsDropped
+		chatDropped := len(opts.DroppedChatEntries)
+
 		record := IterationRecord{
-			Step:       label,
-			TailTokens: tail,
-			CtxTotal:   ctxTotal,
-			Delta:      ctxTotal - in.Target,
+			Step:              label,
+			TailTokens:        tail,
+			CtxTotal:          ctxTotal,
+			Delta:             ctxTotal - in.Target,
+			ThinkingDropped:   opts.DropThinking,
+			ImagesPlaceholder: opts.ImagesAsPlaceholder,
+			ToolsFull:         toolsFull,
+			ToolsLineOnly:     toolsLineOnly,
+			ToolsDropped:      toolsDropped,
+			ChatTurnsTotal:    totalChatTurns,
+			ChatTurnsDropped:  chatDropped,
 		}
 		if in.OnIteration != nil {
 			in.OnIteration(record)
@@ -140,20 +193,16 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 			}
 			fmt.Fprintf(in.Out, "  iter  %-44s tail=%d  ctx=%d  %s\n", label, tail, ctxTotal, tag)
 		}
-		return tail, ctxTotal, nil
+		return record, nil
 	}
 
 	var log []IterationRecord
-	tail, ctxTotal, err := measure("baseline", 0)
+	rec, err := measure("baseline (no transforms)", 0)
 	if err != nil {
 		return nil, err
 	}
-	log = append(log, IterationRecord{
-		Step:       "baseline (no transforms)",
-		TailTokens: tail,
-		CtxTotal:   ctxTotal,
-		Delta:      ctxTotal - in.Target,
-	})
+	tail, ctxTotal := rec.TailTokens, rec.CtxTotal
+	log = append(log, rec)
 	baseline := tail
 
 	if ctxTotal <= in.Target {
@@ -171,13 +220,12 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 	// It carries no signal across turn boundaries in the live API.
 	if !opts.DropThinking {
 		opts.DropThinking = true
-		tail, ctxTotal, err = measure("drop thinking", ctxTotal)
+		rec, err = measure("drop thinking", ctxTotal)
 		if err != nil {
 			return nil, err
 		}
-		log = append(log, IterationRecord{
-			Step: "drop thinking", TailTokens: tail, CtxTotal: ctxTotal, Delta: ctxTotal - in.Target,
-		})
+		tail, ctxTotal = rec.TailTokens, rec.CtxTotal
+		log = append(log, rec)
 		if ctxTotal <= in.Target {
 			return finalize(in, opts, baseline, tail, log, true), nil
 		}
@@ -186,13 +234,12 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 	// Step 2: images.
 	if (in.Strippers.Images || in.Strippers.Any() && allImpliedByTarget(in.Strippers)) && !opts.ImagesAsPlaceholder {
 		opts.ImagesAsPlaceholder = true
-		tail, ctxTotal, err = measure("replace images with placeholders", ctxTotal)
+		rec, err = measure("replace images with placeholders", ctxTotal)
 		if err != nil {
 			return nil, err
 		}
-		log = append(log, IterationRecord{
-			Step: "replace images with placeholders", TailTokens: tail, CtxTotal: ctxTotal, Delta: ctxTotal - in.Target,
-		})
+		tail, ctxTotal = rec.TailTokens, rec.CtxTotal
+		log = append(log, rec)
 		if ctxTotal <= in.Target {
 			return finalize(in, opts, baseline, tail, log, true), nil
 		}
@@ -212,13 +259,12 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 				opts.ToolDetailOverride[id] = ToolDetailLineOnly
 			}
 			label := fmt.Sprintf("tools full -> line-only (oldest %d)", batchEnd-i)
-			tail, ctxTotal, err = measure(label, ctxTotal)
+			rec, err = measure(label, ctxTotal)
 			if err != nil {
 				return nil, err
 			}
-			log = append(log, IterationRecord{
-				Step: label, TailTokens: tail, CtxTotal: ctxTotal, Delta: ctxTotal - in.Target,
-			})
+			tail, ctxTotal = rec.TailTokens, rec.CtxTotal
+			log = append(log, rec)
 			i = batchEnd
 		}
 		if ctxTotal <= in.Target {
@@ -235,13 +281,12 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 				opts.ToolDetailOverride[id] = ToolDetailDrop
 			}
 			label := fmt.Sprintf("tools line-only -> drop (oldest %d)", batchEnd-i)
-			tail, ctxTotal, err = measure(label, ctxTotal)
+			rec, err = measure(label, ctxTotal)
 			if err != nil {
 				return nil, err
 			}
-			log = append(log, IterationRecord{
-				Step: label, TailTokens: tail, CtxTotal: ctxTotal, Delta: ctxTotal - in.Target,
-			})
+			tail, ctxTotal = rec.TailTokens, rec.CtxTotal
+			log = append(log, rec)
 			i = batchEnd
 		}
 		if ctxTotal <= in.Target {
@@ -250,32 +295,92 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 	}
 
 	// Step 5: chat. Drop oldest text turns while preserving the most
-	// recent assistant + its preceding user.
+	// recent assistant + its preceding user. Uses an adaptive batch
+	// size: starts at ChatBatchSize, then shrinks as we approach the
+	// target so we land near target rather than punching through.
+	// After the main loop, a refine phase un-drops turns one at a time
+	// until adding one more would exceed the target.
 	if in.Strippers.Chat {
 		dropOrder := chatDropOrder(in.Slice)
 		i := 0
+		prevCtx := ctxTotal
+		droppedIdxHistory := []int{} // track indices so refine can revert
 		for i < len(dropOrder) && ctxTotal > in.Target {
-			batchEnd := i + in.ChatBatchSize
+			deltaOver := ctxTotal - in.Target
+			batchSize := in.ChatBatchSize
+			// Estimate tokens per turn from the last observed drop and
+			// size the batch so it should land within one batch of the
+			// target. Bias slightly high so we still hit or cross it.
+			if len(log) > 0 {
+				lastDrop := prevCtx - ctxTotal
+				lastBatch := in.ChatBatchSize
+				if lastDrop > 0 {
+					tokensPerTurn := lastDrop / maxInt(lastBatch, 1)
+					if tokensPerTurn > 0 {
+						estNeeded := (deltaOver / tokensPerTurn) + 1
+						if estNeeded < batchSize {
+							batchSize = maxInt(estNeeded, 1)
+						}
+					}
+				}
+			}
+			batchEnd := i + batchSize
 			if batchEnd > len(dropOrder) {
 				batchEnd = len(dropOrder)
 			}
 			for _, ei := range dropOrder[i:batchEnd] {
 				opts.DroppedChatEntries[ei] = true
+				droppedIdxHistory = append(droppedIdxHistory, ei)
 			}
 			label := fmt.Sprintf("drop oldest chat turns (%d)", batchEnd-i)
-			tail, ctxTotal, err = measure(label, ctxTotal)
+			prevCtx = ctxTotal
+			rec, err = measure(label, ctxTotal)
 			if err != nil {
 				return nil, err
 			}
-			log = append(log, IterationRecord{
-				Step: label, TailTokens: tail, CtxTotal: ctxTotal, Delta: ctxTotal - in.Target,
-			})
+			tail, ctxTotal = rec.TailTokens, rec.CtxTotal
+			log = append(log, rec)
 			i = batchEnd
+		}
+
+		// Refine: if we crossed under target, walk the last batch back
+		// one turn at a time until re-adding one more would push us
+		// over. Lands close to target without undershooting wildly.
+		if ctxTotal <= in.Target && len(droppedIdxHistory) > 1 {
+			for k := len(droppedIdxHistory) - 1; k >= 0; k-- {
+				candidate := droppedIdxHistory[k]
+				delete(opts.DroppedChatEntries, candidate)
+				label := "refine: restore newest dropped turn"
+				testRec, measureErr := measure(label, ctxTotal)
+				if measureErr != nil {
+					// Put it back; abort refine.
+					opts.DroppedChatEntries[candidate] = true
+					break
+				}
+				if testRec.CtxTotal > in.Target {
+					// Restoring this turn would push us over. Put it
+					// back and stop.
+					opts.DroppedChatEntries[candidate] = true
+					break
+				}
+				// Keep the restore and continue.
+				tail, ctxTotal = testRec.TailTokens, testRec.CtxTotal
+				log = append(log, testRec)
+			}
 		}
 	}
 
 	hit := ctxTotal <= in.Target
 	return finalize(in, opts, baseline, tail, log, hit), nil
+}
+
+// maxInt is a tiny helper to avoid importing golang.org/x/exp or
+// introducing a generics constraint just for this file.
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // applyStrippersFully sets opts to the most aggressive variant of each

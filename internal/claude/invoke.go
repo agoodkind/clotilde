@@ -71,6 +71,18 @@ func Resume(clydeRoot string, sess *session.Session, settingsFile string, additi
 	return invokeInteractive(args, env, sess.Metadata.WorkDir)
 }
 
+// StartNewInteractive runs claude without --resume for a new named session.
+// env must set CLYDE_SESSION_NAME so the SessionStart hook can adopt the row.
+// settingsFile may be empty; remote-control and settings injection match Resume.
+func StartNewInteractive(env map[string]string, settingsFile string, workDir string) error {
+	args := []string{}
+	args = appendCommonArgs(args, settingsFile)
+	if remoteControlEnabled(settingsFile) {
+		return invokeInteractivePTY(args, env, workDir, "")
+	}
+	return invokeInteractive(args, env, workDir)
+}
+
 // ClaudeBinaryPathFunc is a function that returns the path to the claude binary.
 // This is set by the cmd package to allow overriding for tests.
 var ClaudeBinaryPathFunc func() string = func() string { return "claude" }

@@ -16,6 +16,10 @@ const (
 	// ModeResumeFlag: user called --resume / -r (claude's native flag form).
 	// Rewrite to the clyde resume subcommand before cobra sees it.
 	ModeResumeFlag
+
+	// ModeResumeNoArgDashboard: bare -r, --resume, or `resume` with no target.
+	// main.go strips argv so the root Run opens the TUI (same as plain clyde).
+	ModeResumeNoArgDashboard
 )
 
 // clydeSubcommands is the set of subcommand names that clyde owns.
@@ -42,12 +46,20 @@ var passthroughSubcommands = map[string]bool{
 //
 // Decision table:
 //
-//	--resume <uuid> / -r <uuid>          → ModeResumeFlag  (rewrite to: resume <uuid>)
-//	<known clyde subcommand>               → ModeClyde       (no rewrite)
+//	--resume / -r (no second token)      → ModeResumeNoArgDashboard (main strips argv to TUI)
+//	resume (no sub-args)                 → ModeResumeNoArgDashboard
+//	--resume <x> / -r <x>                → ModeResumeFlag  (rewrite to: resume <x>)
+//	<known clyde subcommand>             → ModeClyde       (no rewrite)
 //	<claude-internal subcommand>         → ModePassthrough (forward verbatim)
 //	--print / -p                         → ModePassthrough (non-interactive query)
-//	stdin not a TTY + no subcommand      → ModePassthrough (pipe / script mode)
-//	anything else (unknown flags/cmds)   → ModeClyde       (let cobra handle / passthrough)
+//	anything else (unknown flags/cmds)   → ModeClyde       (cobra; unknown → ForwardToClaudeThenDashboard)
+//
+// TTY versus pipe for forwarded invocations is not decided here; see
+// ForwardToClaudeThenDashboard in root.go (interactive TTY may open the TUI
+// after claude exits; api, print, and many one-shot first-arg subcommands skip it).
+//
+// Claude argv surface (authoritative for parity checks): claude-code
+// entrypoints/cli.tsx (fast paths before main.js) plus src/main.tsx (Commander).
 func ClassifyArgs(args []string) (mode InvocationMode, rewritten []string) {
 	log := slog.Default().With("component", "cli", "subcomponent", "dispatch")
 	var firstArg string
@@ -69,6 +81,17 @@ func ClassifyArgs(args []string) (mode InvocationMode, rewritten []string) {
 		return ModeClyde, args
 	}
 
+	// Bare `clyde resume` (no name or uuid): open dashboard like plain `clyde`.
+	if len(args) == 1 && args[0] == "resume" {
+		log.Info("cli.args.classify.decided",
+			"argc", len(args),
+			"first_arg", args[0],
+			"mode", "resume_no_arg_dashboard",
+			"decision", "bare_resume_subcommand",
+		)
+		return ModeResumeNoArgDashboard, nil
+	}
+
 	first := firstArg
 	isPassthrough := passthroughSubcommands[first]
 	isClyde := clydeSubcommands[first]
@@ -77,6 +100,16 @@ func ClassifyArgs(args []string) (mode InvocationMode, rewritten []string) {
 
 	// ── Resume flag forms ──────────────────────────────────────────────────────
 	if first == "--resume" || first == "-r" {
+		if len(args) == 1 {
+			log.Info("cli.args.classify.decided",
+				"argc", len(args),
+				"first_arg", first,
+				"mode", "resume_no_arg_dashboard",
+				"decision", "bare_resume_flag",
+				"is_resume", isResume,
+			)
+			return ModeResumeNoArgDashboard, nil
+		}
 		rewritten = append([]string{"resume"}, args[1:]...)
 		log.Info("cli.args.classify.decided",
 			"argc", len(args),

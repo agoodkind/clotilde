@@ -40,9 +40,8 @@ import (
 // RunDashboard is the entrypoint for `clyde` with no subcommand. It
 // boots the tcell TUI dashboard for managing existing sessions
 // (resume, delete, rename, view, remote-control toggle, send-to,
-// tail-transcript). Session creation is no longer wired in; the user
-// creates sessions via `claude` (passthrough) and clyde adopts them
-// in the background.
+// tail-transcript). New sessions from the TUI launch `claude` with
+// CLYDE_SESSION_NAME set; the SessionStart hook adopts the row.
 func RunDashboard(cmd *cobra.Command, args []string) {
 	// Non-interactive (piped) invocation: forward to real claude.
 	if !isatty.IsTerminal(os.Stdin.Fd()) {
@@ -55,6 +54,12 @@ func RunDashboard(cmd *cobra.Command, args []string) {
 		return
 	}
 
+	runDashboardTUI()
+}
+
+// runDashboardTUI opens the session dashboard. Caller must ensure stdin and
+// stdout are TTYs (see RunDashboard).
+func runDashboardTUI() {
 	store, err := session.NewGlobalFileStore()
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Failed to initialize session storage: %v\n", err)
@@ -85,8 +90,9 @@ func RunDashboard(cmd *cobra.Command, args []string) {
 		"sessions", len(sessions),
 	)
 
-	cb := buildAppCallbacks(store, sessions)
-	app := ui.NewApp(sessions, cb)
+	dashboardCwd, _ := os.Getwd()
+	cb := buildAppCallbacks(store, sessions, dashboardCwd)
+	app := ui.NewApp(sessions, cb, ui.AppOptions{DashboardLaunchCWD: dashboardCwd})
 	app.PreWarmStats()
 
 	if err := app.Run(); err != nil {
@@ -130,12 +136,14 @@ func runDiscoveryAdoption(store *session.FileStore) {
 }
 
 // buildAppCallbacks wires store + helpers into a ui.AppCallbacks.
-// Start/Incognito/SetBasedir are intentionally nil: session creation
-// went away with the cull. The TUI checks for nil and disables those
-// keybindings, so the dashboard simply omits the "new session" path.
-func buildAppCallbacks(store session.Store, _ []*session.Session) ui.AppCallbacks {
+// dashboardLaunchCWD is the process cwd when RunDashboard started; it
+// is the default basedir for "new session" without picking a folder.
+func buildAppCallbacks(store session.Store, _ []*session.Session, dashboardLaunchCWD string) ui.AppCallbacks {
 	return ui.AppCallbacks{
 		Store: store,
+		StartSessionWithBasedir: func(basedir string) error {
+			return startNewSessionInDir(basedir, store, dashboardLaunchCWD)
+		},
 		ResumeSession: func(sess *session.Session) error {
 			return resumeSession(sess, store)
 		},
@@ -329,6 +337,10 @@ func buildAppCallbacks(store session.Store, _ []*session.Session) ui.AppCallback
 // the exit code. Used by the dispatch path and by RunDashboard's
 // piped-input shortcut.
 func ForwardToClaude(args []string) int {
+	return runClaudeWithEnv(args, os.Environ())
+}
+
+func runClaudeWithEnv(args []string, env []string) int {
 	claudePath, err := exec.LookPath("claude")
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "clyde: cannot find claude binary: %v\n", err)
@@ -342,17 +354,161 @@ func ForwardToClaude(args []string) int {
 		"component", "cli",
 		"argc", len(args),
 	)
-	cmd := exec.Command(claudePath, args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if runErr := cmd.Run(); runErr != nil {
-		if cmd.ProcessState != nil {
-			return cmd.ProcessState.ExitCode()
+	c := exec.Command(claudePath, args...)
+	c.Stdin = os.Stdin
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	c.Env = env
+	if runErr := c.Run(); runErr != nil {
+		if c.ProcessState != nil {
+			return c.ProcessState.ExitCode()
 		}
 		return 1
 	}
 	return 0
+}
+
+// claudePassthroughFirstArgSkipsPostSessionTUI lists argv[0] values that
+// usually run a one-shot or long-lived non-dashboard claude subcommand (see
+// claude-code entrypoints/cli.tsx fast paths and main.tsx program.command
+// registrations). When clyde forwards to claude and these are the first
+// token, skip the post-claude TUI (same intent as api / print).
+var claudePassthroughFirstArgSkipsPostSessionTUI = map[string]struct{}{
+	"agents":             {},
+	"assistant":          {},
+	"attach":             {},
+	"auth":               {},
+	"auto-mode":          {},
+	"bridge":             {},
+	"daemon":             {},
+	"doctor":             {},
+	"environment-runner": {},
+	"install":            {},
+	"kill":               {},
+	"logs":               {},
+	"plugin":             {},
+	"plugins":            {},
+	"ps":                 {},
+	"rc":                 {},
+	"remote":             {},
+	"remote-control":     {},
+	"self-hosted-runner": {},
+	"server":             {},
+	"setup-token":        {},
+	"sync":               {},
+	"update":             {},
+	"upgrade":            {},
+}
+
+// passthroughSkipsPostSessionTUI reports args that should not open the
+// dashboard after claude exits (non-interactive or API-style invocations).
+func passthroughSkipsPostSessionTUI(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	if args[0] == "api" {
+		return true
+	}
+	if _, skip := claudePassthroughFirstArgSkipsPostSessionTUI[args[0]]; skip {
+		return true
+	}
+	for _, a := range args {
+		if a == "-p" || a == "--print" {
+			return true
+		}
+	}
+	return false
+}
+
+// ForwardToClaudeThenDashboard runs claude like ForwardToClaude, but for an
+// interactive terminal it assigns CLYDE_SESSION_NAME when unset so the
+// SessionStart hook adopts the session, then opens the TUI when claude exits.
+// Pipe and print-style invocations behave like ForwardToClaude only.
+func ForwardToClaudeThenDashboard(args []string) int {
+	if passthroughSkipsPostSessionTUI(args) {
+		return ForwardToClaude(args)
+	}
+	if !isatty.IsTerminal(os.Stdin.Fd()) || !isatty.IsTerminal(os.Stdout.Fd()) {
+		return ForwardToClaude(args)
+	}
+	env := os.Environ()
+	if os.Getenv("CLYDE_SESSION_NAME") == "" {
+		store, serr := session.NewGlobalFileStore()
+		if serr == nil {
+			name, nerr := nextChatSessionName(store)
+			if nerr == nil {
+				env = append(env, "CLYDE_SESSION_NAME="+name)
+				slog.Info("forward.passthrough_wrapped",
+					"component", "cli",
+					"session", name,
+				)
+			}
+		}
+	}
+	_ = runClaudeWithEnv(args, env)
+	runDashboardTUI()
+	return 0
+}
+
+// nextChatSessionName returns a new registry-safe chat-* name that does not
+// collide with existing session directories.
+func nextChatSessionName(store session.Store) (string, error) {
+	list, err := store.List()
+	if err != nil {
+		return "", err
+	}
+	taken := make(map[string]bool, len(list))
+	for _, s := range list {
+		taken[s.Name] = true
+	}
+	base := "chat-" + time.Now().UTC().Format("20060102-150405")
+	name := session.UniqueName(base, taken)
+	if taken[name] {
+		return "", fmt.Errorf("could not allocate a unique session name")
+	}
+	return name, nil
+}
+
+// startNewSessionInDir launches claude for a new named session in workDir.
+// basedir may be empty; dashboardFallbackCWD is used when the trimmed path is empty.
+func startNewSessionInDir(basedir string, store session.Store, dashboardFallbackCWD string) error {
+	workDir := strings.TrimSpace(basedir)
+	if workDir == "" {
+		workDir = strings.TrimSpace(dashboardFallbackCWD)
+	}
+	if workDir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("resolve working directory: %w", err)
+		}
+		workDir = wd
+	}
+
+	name, err := nextChatSessionName(store)
+	if err != nil {
+		return err
+	}
+
+	env := map[string]string{"CLYDE_SESSION_NAME": name}
+	_, _ = fmt.Fprintf(os.Stdout, "Starting new session %q in %s\n\n", name, workDir)
+	slog.Info("session.new.started",
+		"component", "cli",
+		"session", name,
+		"workdir", workDir,
+	)
+
+	err = claude.StartNewInteractive(env, "", workDir)
+	if err != nil {
+		return err
+	}
+	sess, gerr := store.Get(name)
+	if gerr == nil && sess != nil {
+		if fs, ok := store.(*session.FileStore); ok {
+			autoUpdateContext(fs, sess)
+		}
+		printResumeInstructions(sess)
+	}
+	return nil
 }
 
 // resumeSession runs claude --resume against an existing clyde

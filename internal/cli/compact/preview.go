@@ -131,43 +131,6 @@ func categoryCounts(slice *compactengine.Slice) (thinking, images, toolPairs, ch
 	return
 }
 
-// runPlanPreview renders the final summary after RunPlan finishes.
-// The iteration log itself is streamed live by progressView during the
-// loop; this function only draws the end-of-run summary box.
-func runPlanPreview(
-	out io.Writer,
-	sess *session.Session,
-	slice *compactengine.Slice,
-	target, staticOverhead, reserved int,
-	model string,
-	s compactengine.Strippers,
-	res *compactengine.PlanResult,
-) {
-	slog.Info("cli.compact.preview.plan.started",
-		"session", sess.Name,
-		"session_id", sess.Metadata.SessionID,
-		"target", target,
-		"model", model,
-	)
-	if target > 0 {
-		renderFinal(out, res, target, staticOverhead, reserved)
-		slog.Info("cli.compact.preview.plan.completed",
-			"session", sess.Name,
-			"session_id", sess.Metadata.SessionID,
-			"hit_target", res.HitTarget,
-			"baseline_tail", res.BaselineTail,
-			"final_tail", res.FinalTail,
-		)
-		return
-	}
-	renderNoTarget(out, sess.Name, s, res, len(res.BoundaryTail), len(slice.PostBoundary))
-	slog.Info("cli.compact.preview.plan.completed",
-		"session", sess.Name,
-		"session_id", sess.Metadata.SessionID,
-		"boundary_blocks", len(res.BoundaryTail),
-	)
-}
-
 func strippersDescribe(s compactengine.Strippers) string {
 	var parts []string
 	if s.Thinking {

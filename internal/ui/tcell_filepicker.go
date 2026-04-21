@@ -118,6 +118,37 @@ func (p *FilePickerOverlay) recomputeVisible() {
 	if p.cursor < 0 {
 		p.cursor = 0
 	}
+	p.syncOffsetForCursor()
+}
+
+// filePickerViewportH is the default list height when syncing scroll from
+// key handlers before Draw runs with the real box size.
+const filePickerViewportH = 16
+
+func (p *FilePickerOverlay) syncOffsetForCursor() {
+	p.syncOffsetForCursorWithHeight(filePickerViewportH)
+}
+
+func (p *FilePickerOverlay) syncOffsetForCursorWithHeight(listH int) {
+	if len(p.visible) == 0 {
+		p.offset = 0
+		return
+	}
+	if listH < 1 {
+		listH = 1
+	}
+	if p.cursor < p.offset {
+		p.offset = p.cursor
+	}
+	if p.cursor >= p.offset+listH {
+		p.offset = p.cursor - listH + 1
+	}
+	if p.offset < 0 {
+		p.offset = 0
+	}
+	if len(p.visible) <= listH {
+		p.offset = 0
+	}
 }
 
 func (p *FilePickerOverlay) Draw(scr tcell.Screen, r Rect) {
@@ -138,7 +169,7 @@ func (p *FilePickerOverlay) Draw(scr tcell.Screen, r Rect) {
 	if p.Title != "" {
 		drawString(scr, box.X+2, box.Y, StyleDefault.Foreground(ColorAccent).Bold(true), " "+p.Title+" ", box.W-4)
 	}
-	drawString(scr, box.X+2, box.Y+1, StyleSubtext.Bold(true), "📁 "+p.cwd, box.W-4)
+	drawString(scr, box.X+2, box.Y+1, StyleSubtext.Bold(true), "cwd: "+p.cwd, box.W-4)
 
 	// Input bar. The underline shows the editable region; cursor mark
 	// lives at the end of the buffer so the user sees the typing point.
@@ -150,12 +181,7 @@ func (p *FilePickerOverlay) Draw(scr tcell.Screen, r Rect) {
 	listTop := box.Y + 4
 	listH := box.H - 6
 	maxRow := listTop + listH
-	if p.cursor < p.offset {
-		p.offset = p.cursor
-	}
-	if p.cursor >= p.offset+listH {
-		p.offset = p.cursor - listH + 1
-	}
+	p.syncOffsetForCursorWithHeight(listH)
 
 	y := listTop
 	for vi := p.offset; vi < len(p.visible) && y < maxRow; vi++ {
@@ -236,9 +262,11 @@ func (p *FilePickerOverlay) handleKey(e *tcell.EventKey) bool {
 		return true
 	case tcell.KeyHome:
 		p.cursor = 0
+		p.syncOffsetForCursor()
 		return true
 	case tcell.KeyEnd:
 		p.cursor = imax(0, len(p.visible)-1)
+		p.syncOffsetForCursor()
 		return true
 	case tcell.KeyEnter, tcell.KeyLF:
 		p.activate()
@@ -322,6 +350,7 @@ func (p *FilePickerOverlay) move(delta int) {
 	if p.cursor >= len(p.visible) {
 		p.cursor = len(p.visible) - 1
 	}
+	p.syncOffsetForCursor()
 }
 
 func (p *FilePickerOverlay) activate() {

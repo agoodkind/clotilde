@@ -44,7 +44,10 @@ func NewOptionsModal(title string, entries []OptionsModalEntry) *OptionsModal {
 }
 
 func (m *OptionsModal) Draw(scr tcell.Screen, r Rect) {
-	w := 56
+	w := r.W - 8
+	if w < 40 {
+		w = 40
+	}
 	if w > r.W-4 {
 		w = r.W - 4
 	}

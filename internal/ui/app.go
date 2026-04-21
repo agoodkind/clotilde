@@ -36,6 +36,9 @@ type AppOptions struct {
 	// ReturnTo, when non-nil, pre-selects the given session in the table.
 	// The header banner prompts the user to resume or pick something else.
 	ReturnTo *session.Session
+	// DashboardLaunchCWD is the process working directory when the dashboard
+	// started. It is the default for "new session" without opening the picker.
+	DashboardLaunchCWD string
 }
 
 // AppCallbacks provides hooks the TUI calls to perform actions.
@@ -297,6 +300,9 @@ type App struct {
 	// `fn()`-only callback so the resume cycle can be exercised
 	// without touching a real terminal.
 	suspendImpl func(fn func())
+
+	// dashboardLaunchCWD is cwd when clyde started the TUI; used for New chat default.
+	dashboardLaunchCWD string
 }
 
 // NewApp creates and returns the clyde TUI.
@@ -323,6 +329,7 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	// replace this before driving events so the resume cycle can be
 	// exercised without touching a real terminal.
 	a.suspendImpl = a.suspendAndRun
+	a.dashboardLaunchCWD = strings.TrimSpace(opt.DashboardLaunchCWD)
 
 	// Seed visible indexes with all sessions, unsorted for now.
 	a.rebuildVisible()
@@ -365,6 +372,10 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 // three choices: Return to session, Go back to session list, Quit clyde.
 // Quit is highlighted by default so a single Enter press exits.
 func (a *App) openReturnPrompt(sess *session.Session) {
+	if sess == nil {
+		slog.Warn("returnprompt.open skipped", "reason", "nil_session")
+		return
+	}
 	prompt := &ReturnPrompt{
 		SessionName: sess.Name,
 		Stats:       a.buildReturnPromptStats(sess),
@@ -398,7 +409,22 @@ func (a *App) openReturnPrompt(sess *session.Session) {
 	}
 	prompt.OnCancel = func() { a.overlay = nil }
 	a.overlay = prompt
-	slog.Info("returnprompt.opened", "session", sess.Name)
+	slog.Info("returnprompt.opened",
+		"session", sess.Name,
+		"overlay", fmt.Sprintf("%T", a.overlay),
+		"screen", fmt.Sprintf("%p", a.screen))
+}
+
+func (a *App) ensureReturnPrompt(sess *session.Session, source string) {
+	if sess == nil {
+		slog.Warn("returnprompt.ensure skipped", "source", source, "reason", "nil_session")
+		return
+	}
+	if _, ok := a.overlay.(*ReturnPrompt); ok {
+		return
+	}
+	slog.Warn("returnprompt.ensure_reopen", "source", source, "session", sess.Name, "overlay", fmt.Sprintf("%T", a.overlay))
+	a.openReturnPrompt(sess)
 }
 
 // resumeSession is the row-agnostic resume path used when the prompt's
@@ -409,15 +435,16 @@ func (a *App) resumeSession(sess *session.Session) {
 	if sess == nil || a.cb.ResumeSession == nil {
 		return
 	}
-	slog.Info("resume.start", "session", sess.Name, "uuid", sess.Metadata.SessionID)
+	slog.Info("resume.start", "session", sess.Name, "uuid", sess.Metadata.SessionID, "path", "resumeSession")
 	a.suspendImpl(func() { _ = a.cb.ResumeSession(sess) })
-	slog.Info("resume.exit", "session", sess.Name)
+	slog.Info("resume.exit", "session", sess.Name, "path", "resumeSession")
 	a.refreshSessions()
+	sessionForPrompt := sess
 	if updated := a.findSessionByName(sess.Name); updated != nil {
-		a.openReturnPrompt(updated)
-	} else {
-		a.openReturnPrompt(sess)
+		sessionForPrompt = updated
 	}
+	a.openReturnPrompt(sessionForPrompt)
+	a.ensureReturnPrompt(sessionForPrompt, "resumeSession")
 }
 
 // buildReturnPromptStats gathers the stat rows shown at the top of the
@@ -470,6 +497,7 @@ func (a *App) Run() error {
 	if err := a.initScreen(); err != nil {
 		return err
 	}
+	slog.Info("tui.run.started", "screen", fmt.Sprintf("%p", a.screen))
 	// Defer a sequenced teardown that always disables the alt-screen
 	// modes we turned on. macOS Terminal and iTerm both leave the
 	// cursor and mouse-tracking state half-set when only Fini runs.
@@ -537,6 +565,8 @@ func (a *App) Run() error {
 	go a.runLastUsedTicker(stopLastUsed)
 	defer close(stopLastUsed)
 
+	nilEventStreak := 0
+	reinitAttemptedAfterNil := false
 	for a.running {
 		if a.screen == nil {
 			slog.Error("tui.loop screen is nil, exiting")
@@ -554,8 +584,43 @@ func (a *App) Run() error {
 			if !a.running {
 				return nil
 			}
-			slog.Warn("tui.loop nil event with running=true; sleeping briefly")
-			time.Sleep(20 * time.Millisecond)
+			nilEventStreak++
+			slog.Warn("tui.loop nil event with running=true",
+				"nil_event_streak", nilEventStreak,
+				"screen", fmt.Sprintf("%p", a.screen),
+				"reinit_attempted", reinitAttemptedAfterNil)
+			if nilEventStreak < 2 {
+				slog.Debug("tui.loop nil event temporary; sleeping briefly")
+				time.Sleep(20 * time.Millisecond)
+				continue
+			}
+
+			if !reinitAttemptedAfterNil {
+				reinitAttemptedAfterNil = true
+				slog.Warn("tui.loop attempting screen reinit after repeated nil events")
+				a.teardownScreen()
+				if err := a.initScreen(); err != nil {
+					slog.Error("tui.loop reinit failed after repeated nil events", "error", err)
+					a.running = false
+					continue
+				}
+				nilEventStreak = 0
+				slog.Info("tui.loop reinit succeeded after repeated nil events", "screen", fmt.Sprintf("%p", a.screen))
+				a.draw()
+				continue
+			}
+
+			slog.Error("tui.loop repeated nil events with running=true; terminating",
+				"screen", fmt.Sprintf("%p", a.screen),
+				"nil_event_streak", nilEventStreak)
+			a.running = false
+			continue
+		}
+		nilEventStreak = 0
+		reinitAttemptedAfterNil = false
+		slog.Debug("tui.loop dispatching event", "event", fmt.Sprintf("%T", ev))
+		if a.screen == nil {
+			slog.Debug("tui.loop screen became nil before dispatch")
 			continue
 		}
 		a.handleEvent(ev)
@@ -887,10 +952,12 @@ func (a *App) teardownScreen() {
 	if a.screen == nil {
 		return
 	}
+	slog.Debug("tui.teardownScreen.start", "screen", fmt.Sprintf("%p", a.screen))
 	a.screen.DisableMouse()
 	a.screen.DisableFocus()
 	a.screen.ShowCursor(0, 0)
 	a.screen.Fini()
+	slog.Debug("tui.teardownScreen.fini", "screen", fmt.Sprintf("%p", a.screen))
 	a.screen = nil
 
 	// Reset escape sequences, emitted in a single write so a
@@ -914,6 +981,7 @@ func (a *App) teardownScreen() {
 
 // initScreen allocates a tcell screen and enables mouse + focus.
 func (a *App) initScreen() error {
+	slog.Info("tui.initScreen.start", "current_screen", fmt.Sprintf("%p", a.screen))
 	scr, err := tcell.NewScreen()
 	if err != nil {
 		return fmt.Errorf("tcell NewScreen: %w", err)
@@ -925,6 +993,7 @@ func (a *App) initScreen() error {
 	scr.EnableFocus()
 	scr.Clear()
 	a.screen = scr
+	slog.Info("tui.initScreen.success", "screen", fmt.Sprintf("%p", a.screen))
 	return nil
 }
 
@@ -1939,22 +2008,23 @@ func (a *App) resumeRow(row int) {
 		return
 	}
 	sess := a.sessions[a.visibleIdx[row]]
-	slog.Info("resume.start", "session", sess.Name, "row", row, "uuid", sess.Metadata.SessionID)
+	slog.Info("resume.start", "session", sess.Name, "row", row, "uuid", sess.Metadata.SessionID, "path", "resumeRow")
 	a.suspendImpl(func() {
 		_ = a.cb.ResumeSession(sess)
 	})
-	slog.Info("resume.exit", "session", sess.Name)
+	slog.Info("resume.exit", "session", sess.Name, "path", "resumeRow")
 	// After claude exits, refresh the row's metadata (LastAccessed,
 	// Context, etc.) and pop the post-session ReturnPrompt so the user
 	// has the same Resume / List / Quit choices they get from the CLI
 	// resume path. Without this, repeated resume-from-dashboard cycles
 	// silently drop the user back to the table with no indication.
 	a.refreshSessions()
+	sessionForPrompt := sess
 	if updated := a.findSessionByName(sess.Name); updated != nil {
-		a.openReturnPrompt(updated)
-	} else {
-		a.openReturnPrompt(sess)
+		sessionForPrompt = updated
 	}
+	a.openReturnPrompt(sessionForPrompt)
+	a.ensureReturnPrompt(sessionForPrompt, "resumeRow")
 	// Re-select the row (refreshSessions resets selection on deselect).
 	for vi, idx := range a.visibleIdx {
 		if a.sessions[idx].Name == sess.Name {
@@ -1966,7 +2036,48 @@ func (a *App) resumeRow(row int) {
 }
 
 func (a *App) newSession() {
-	a.openNewSessionPrompt()
+	a.openNewStarterModal()
+}
+
+func (a *App) defaultLaunchCWD() string {
+	if s := strings.TrimSpace(a.dashboardLaunchCWD); s != "" {
+		return s
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return cwd
+}
+
+// openNewStarterModal offers a fast default (cwd where clyde started) or the file picker.
+func (a *App) openNewStarterModal() {
+	cwd := a.defaultLaunchCWD()
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+	entries := []OptionsModalEntry{
+		{
+			Label:  "Start in this directory",
+			Hint:   shortPath(cwd),
+			Action: func() {
+				a.closeOverlay()
+				a.openNewSessionTypeModal(cwd)
+			},
+		},
+		{
+			Label:  "Choose folder",
+			Hint:   "browse",
+			Action: func() {
+				a.closeOverlay()
+				a.openNewSessionPrompt()
+			},
+		},
+	}
+	modal := NewOptionsModal("New chat", entries)
+	modal.OnCancel = func() { a.closeOverlay() }
+	a.overlay = modal
+	a.mode = StatusFilter
 }
 
 // openNewSessionPrompt opens the file picker so the user can navigate
@@ -2965,8 +3076,10 @@ func (a *App) suspendAndRun(fn func()) {
 		fn()
 		return
 	}
+	slog.Info("tui.suspend.start", "screen", fmt.Sprintf("%p", a.screen))
 	slog.Info("tui.suspend teardown")
 	a.teardownScreen()
+	slog.Info("tui.suspend teardown complete", "screen", fmt.Sprintf("%p", a.screen))
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -2975,6 +3088,7 @@ func (a *App) suspendAndRun(fn func()) {
 		}()
 		fn()
 	}()
+	slog.Info("tui.suspend callback complete")
 	slog.Info("tui.suspend reinit")
 	if err := a.initScreen(); err != nil {
 		slog.Error("tui.suspend reinit failed", "error", err)

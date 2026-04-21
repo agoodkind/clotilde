@@ -14,8 +14,9 @@
 //	clyde hook sessionstart     -> Claude Code SessionStart hook
 //	clyde mcp                   -> MCP stdio server (in-chat search/list/context)
 //	clyde resume <name|uuid>    -> resolve clyde name then claude --resume <uuid>
+//	clyde -r / --resume         -> TUI (same as no args; bare flag opens dashboard)
 //	clyde -r / --resume <x>     -> rewritten to `clyde resume <x>` by ClassifyArgs
-//	anything else               -> ForwardToClaude (transparent passthrough)
+//	anything else               -> unknown -> ForwardToClaudeThenDashboard (see cmd/root.go)
 package main
 
 import (
@@ -58,7 +59,9 @@ func main() {
 		mode, rewritten := cmd.ClassifyArgs(os.Args[1:])
 		switch mode {
 		case cmd.ModePassthrough:
-			os.Exit(cmd.ForwardToClaude(os.Args[1:]))
+			os.Exit(cmd.ForwardToClaudeThenDashboard(os.Args[1:]))
+		case cmd.ModeResumeNoArgDashboard:
+			os.Args = os.Args[:1]
 		case cmd.ModeResumeFlag:
 			os.Args = append(os.Args[:1], rewritten...)
 		}
@@ -93,7 +96,7 @@ func main() {
 
 	if err := root.Execute(); err != nil {
 		if strings.HasPrefix(err.Error(), "unknown command") {
-			os.Exit(cmd.ForwardToClaude(os.Args[1:]))
+			os.Exit(cmd.ForwardToClaudeThenDashboard(os.Args[1:]))
 		}
 		_, _ = fmt.Fprintln(f.IOStreams.Err, "Error:", err)
 		os.Exit(1)

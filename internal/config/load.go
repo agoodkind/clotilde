@@ -31,7 +31,7 @@ func loadConfig(dir string) (*Config, error) {
 		if err := applyLoggingDefaultsAndValidate(&cfg); err != nil {
 			return nil, fmt.Errorf("invalid %s: %w", tomlPath, err)
 		}
-		slog.Info("config.load.loaded",
+		slog.Debug("config.load.loaded",
 			"component", "config",
 			"subcomponent", "load",
 			"format", "toml",
@@ -50,7 +50,7 @@ func loadConfig(dir string) (*Config, error) {
 		if err := applyLoggingDefaultsAndValidate(&cfg); err != nil {
 			return nil, err
 		}
-		slog.Info("config.load.loaded",
+		slog.Debug("config.load.loaded",
 			"component", "config",
 			"subcomponent", "load",
 			"format", "json",
