@@ -44,15 +44,15 @@ type Counter interface {
 type PlanInput struct {
 	Slice          *Slice
 	Strippers      Strippers
-	Target         int           // /context total ceiling, 0 = no target
-	StaticOverhead int           // calibrated overhead, ignored when Target == 0
-	Reserved       int           // reserved buffer (default 13_000)
-	Counter        Counter       // required when Target > 0
-	Out            io.Writer     // fallback streaming sink when OnIteration nil
+	Target         int                   // /context total ceiling, 0 = no target
+	StaticOverhead int                   // calibrated overhead, ignored when Target == 0
+	Reserved       int                   // reserved buffer (default 13_000)
+	Counter        Counter               // required when Target > 0
+	Out            io.Writer             // fallback streaming sink when OnIteration nil
 	OnIteration    func(IterationRecord) // preferred: called after each measure
-	BatchSize      int           // tool demotion batch size; default 8
-	ChatBatchSize  int           // chat-drop batch size; default 4
-	StopTimeout    time.Duration // max wall time for whole loop; 0 = no limit
+	BatchSize      int                   // tool demotion batch size; default 8
+	ChatBatchSize  int                   // chat-drop batch size; default 4
+	StopTimeout    time.Duration         // max wall time for whole loop; 0 = no limit
 }
 
 // PlanResult holds the final synthesis options plus the iteration log
@@ -97,7 +97,8 @@ type IterationRecord struct {
 // RunPlan drives the target loop. When Target == 0 it just synthesizes
 // once with the requested strippers and returns. When Target > 0 it
 // iterates, calling count_tokens after each demotion batch, and stops
-// the moment static + tail + reserved <= target.
+// when it reaches target exactly or cannot reduce further without
+// crossing below target.
 func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 	if in.Slice == nil {
 		return nil, fmt.Errorf("plan: nil slice")
@@ -106,7 +107,7 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 		in.BatchSize = 32
 	}
 	if in.ChatBatchSize <= 0 {
-		in.ChatBatchSize = 64
+		in.ChatBatchSize = 4
 	}
 	if in.Target > 0 && in.Counter == nil {
 		return nil, fmt.Errorf("plan: target set but no token counter")
@@ -146,7 +147,22 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 		}
 	}
 
-	measure := func(label string, prevCtx int) (IterationRecord, error) {
+	emitRecord := func(record IterationRecord) {
+		if in.OnIteration != nil {
+			in.OnIteration(record)
+		} else if in.Out != nil {
+			tag := "OK"
+			if record.Delta > 0 {
+				tag = fmt.Sprintf("+%d over", record.Delta)
+			} else {
+				tag = fmt.Sprintf("-%d under", -record.Delta)
+			}
+			fmt.Fprintf(in.Out, "  iter  %-44s tail=%d  ctx=%d  %s\n",
+				record.Step, record.TailTokens, record.CtxTotal, tag)
+		}
+	}
+
+	measure := func(label string) (IterationRecord, error) {
 		array := Synthesize(in.Slice, opts)
 		tail, err := in.Counter.CountSyntheticUser(ctx, array)
 		if err != nil {
@@ -182,28 +198,24 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 			ChatTurnsTotal:    totalChatTurns,
 			ChatTurnsDropped:  chatDropped,
 		}
-		if in.OnIteration != nil {
-			in.OnIteration(record)
-		} else if in.Out != nil {
-			tag := "OK"
-			if record.Delta > 0 {
-				tag = fmt.Sprintf("+%d over", record.Delta)
-			} else {
-				tag = fmt.Sprintf("-%d under", -record.Delta)
-			}
-			fmt.Fprintf(in.Out, "  iter  %-44s tail=%d  ctx=%d  %s\n", label, tail, ctxTotal, tag)
-		}
 		return record, nil
 	}
 
 	var log []IterationRecord
-	rec, err := measure("baseline (no transforms)", 0)
+	rec, err := measure("baseline (no transforms)")
 	if err != nil {
 		return nil, err
 	}
 	tail, ctxTotal := rec.TailTokens, rec.CtxTotal
 	log = append(log, rec)
+	emitRecord(rec)
 	baseline := tail
+
+	accept := func(next IterationRecord) {
+		tail, ctxTotal = next.TailTokens, next.CtxTotal
+		log = append(log, next)
+		emitRecord(next)
+	}
 
 	if ctxTotal <= in.Target {
 		return &PlanResult{
@@ -220,12 +232,16 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 	// It carries no signal across turn boundaries in the live API.
 	if !opts.DropThinking {
 		opts.DropThinking = true
-		rec, err = measure("drop thinking", ctxTotal)
+		rec, err = measure("drop thinking")
 		if err != nil {
 			return nil, err
 		}
-		tail, ctxTotal = rec.TailTokens, rec.CtxTotal
-		log = append(log, rec)
+		if rec.CtxTotal < in.Target {
+			// Skip this coarse step if it would cross below the floor.
+			opts.DropThinking = false
+		} else {
+			accept(rec)
+		}
 		if ctxTotal <= in.Target {
 			return finalize(in, opts, baseline, tail, log, true), nil
 		}
@@ -234,12 +250,16 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 	// Step 2: images.
 	if (in.Strippers.Images || in.Strippers.Any() && allImpliedByTarget(in.Strippers)) && !opts.ImagesAsPlaceholder {
 		opts.ImagesAsPlaceholder = true
-		rec, err = measure("replace images with placeholders", ctxTotal)
+		rec, err = measure("replace images with placeholders")
 		if err != nil {
 			return nil, err
 		}
-		tail, ctxTotal = rec.TailTokens, rec.CtxTotal
-		log = append(log, rec)
+		if rec.CtxTotal < in.Target {
+			// Skip this coarse step if it would cross below the floor.
+			opts.ImagesAsPlaceholder = false
+		} else {
+			accept(rec)
+		}
 		if ctxTotal <= in.Target {
 			return finalize(in, opts, baseline, tail, log, true), nil
 		}
@@ -248,23 +268,59 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 	// Steps 3 and 4: tools (full -> line-only, then line-only -> drop).
 	if in.Strippers.Tools {
 		toolIDs := orderedToolUseIDs(in.Slice)
+		nearTargetBrake := maxInt(20_000, in.Target/10)
 		// Demote oldest first to line-only.
 		i := 0
+		lastStepUnits := 0
+		lastStepAmount := 0
 		for i < len(toolIDs) && ctxTotal > in.Target {
-			batchEnd := i + in.BatchSize
+			deltaOver := ctxTotal - in.Target
+			batchSize := in.BatchSize
+			if lastStepUnits > 0 && lastStepAmount > 0 {
+				tokensPerUnit := maxInt(lastStepAmount/lastStepUnits, 1)
+				needed := maxInt(deltaOver/tokensPerUnit, 1)
+				if needed < batchSize {
+					batchSize = needed
+				}
+			}
+			if deltaOver <= nearTargetBrake {
+				batchSize = minInt(batchSize, 4)
+			}
+			if deltaOver <= nearTargetBrake/2 {
+				batchSize = minInt(batchSize, 2)
+			}
+			if deltaOver <= nearTargetBrake/4 {
+				batchSize = 1
+			}
+			batchEnd := i + batchSize
 			if batchEnd > len(toolIDs) {
 				batchEnd = len(toolIDs)
 			}
+			stepUnits := batchEnd - i
 			for _, id := range toolIDs[i:batchEnd] {
 				opts.ToolDetailOverride[id] = ToolDetailLineOnly
 			}
-			label := fmt.Sprintf("tools full -> line-only (oldest %d)", batchEnd-i)
-			rec, err = measure(label, ctxTotal)
+			label := fmt.Sprintf("tools full -> line-only (oldest %d)", stepUnits)
+			rec, err = measure(label)
 			if err != nil {
 				return nil, err
 			}
-			tail, ctxTotal = rec.TailTokens, rec.CtxTotal
-			log = append(log, rec)
+			if rec.CtxTotal < in.Target {
+				// Revert this batch and hand off to later phases
+				// (chat) for finer-grained steps.
+				for _, id := range toolIDs[i:batchEnd] {
+					delete(opts.ToolDetailOverride, id)
+				}
+				if batchSize > 1 {
+					lastStepUnits = 0
+					lastStepAmount = 0
+					continue
+				}
+				break
+			}
+			lastStepUnits = stepUnits
+			lastStepAmount = maxInt(ctxTotal-rec.CtxTotal, 0)
+			accept(rec)
 			i = batchEnd
 		}
 		if ctxTotal <= in.Target {
@@ -272,21 +328,56 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 		}
 		// Demote oldest first to drop.
 		i = 0
+		lastStepUnits = 0
+		lastStepAmount = 0
 		for i < len(toolIDs) && ctxTotal > in.Target {
-			batchEnd := i + in.BatchSize
+			deltaOver := ctxTotal - in.Target
+			batchSize := in.BatchSize
+			if lastStepUnits > 0 && lastStepAmount > 0 {
+				tokensPerUnit := maxInt(lastStepAmount/lastStepUnits, 1)
+				needed := maxInt(deltaOver/tokensPerUnit, 1)
+				if needed < batchSize {
+					batchSize = needed
+				}
+			}
+			if deltaOver <= nearTargetBrake {
+				batchSize = minInt(batchSize, 4)
+			}
+			if deltaOver <= nearTargetBrake/2 {
+				batchSize = minInt(batchSize, 2)
+			}
+			if deltaOver <= nearTargetBrake/4 {
+				batchSize = 1
+			}
+			batchEnd := i + batchSize
 			if batchEnd > len(toolIDs) {
 				batchEnd = len(toolIDs)
 			}
+			stepUnits := batchEnd - i
 			for _, id := range toolIDs[i:batchEnd] {
 				opts.ToolDetailOverride[id] = ToolDetailDrop
 			}
-			label := fmt.Sprintf("tools line-only -> drop (oldest %d)", batchEnd-i)
-			rec, err = measure(label, ctxTotal)
+			label := fmt.Sprintf("tools line-only -> drop (oldest %d)", stepUnits)
+			rec, err = measure(label)
 			if err != nil {
 				return nil, err
 			}
-			tail, ctxTotal = rec.TailTokens, rec.CtxTotal
-			log = append(log, rec)
+			if rec.CtxTotal < in.Target {
+				// Revert this batch and hand off to chat for finer
+				// control near the floor.
+				for _, id := range toolIDs[i:batchEnd] {
+					opts.ToolDetailOverride[id] = ToolDetailLineOnly
+				}
+				if batchSize > 1 {
+					lastStepUnits = 0
+					lastStepAmount = 0
+					continue
+				}
+				break
+			}
+			lastStepUnits = stepUnits
+			lastStepAmount = maxInt(ctxTotal-rec.CtxTotal, 0)
+			accept(rec)
 			i = batchEnd
 		}
 		if ctxTotal <= in.Target {
@@ -298,29 +389,32 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 	// recent assistant + its preceding user. Uses an adaptive batch
 	// size: starts at ChatBatchSize, then shrinks as we approach the
 	// target so we land near target rather than punching through.
-	// After the main loop, a refine phase un-drops turns one at a time
-	// until adding one more would exceed the target.
+	// If a candidate drop would cross below target, the planner reverts
+	// it and stops (or retries with a smaller batch).
 	if in.Strippers.Chat {
 		dropOrder := chatDropOrder(in.Slice)
 		i := 0
 		prevCtx := ctxTotal
-		droppedIdxHistory := []int{} // track indices so refine can revert
+		lastDropTurns := 0
+		lastDropAmount := 0
+		nearTargetBrake := maxInt(20_000, in.Target/10)
 		for i < len(dropOrder) && ctxTotal > in.Target {
 			deltaOver := ctxTotal - in.Target
 			batchSize := in.ChatBatchSize
-			// Estimate tokens per turn from the last observed drop and
-			// size the batch so it should land within one batch of the
-			// target. Bias slightly high so we still hit or cross it.
-			if len(log) > 0 {
-				lastDrop := prevCtx - ctxTotal
-				lastBatch := in.ChatBatchSize
-				if lastDrop > 0 {
-					tokensPerTurn := lastDrop / maxInt(lastBatch, 1)
-					if tokensPerTurn > 0 {
-						estNeeded := (deltaOver / tokensPerTurn) + 1
-						if estNeeded < batchSize {
-							batchSize = maxInt(estNeeded, 1)
-						}
+			// First chat drop has no prior estimate; keep it
+			// conservative. Also apply a near-target brake so chat
+			// drops walk one turn at a time before crossing under.
+			if lastDropTurns == 0 || deltaOver <= nearTargetBrake {
+				batchSize = 1
+			} else if lastDropAmount > 0 {
+				// Estimate tokens per turn from the last observed drop
+				// and size the batch so it should land within one batch
+				// of the target.
+				tokensPerTurn := lastDropAmount / lastDropTurns
+				if tokensPerTurn > 0 {
+					estNeeded := (deltaOver / tokensPerTurn) + 1
+					if estNeeded < batchSize {
+						batchSize = maxInt(estNeeded, 1)
 					}
 				}
 			}
@@ -330,43 +424,29 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 			}
 			for _, ei := range dropOrder[i:batchEnd] {
 				opts.DroppedChatEntries[ei] = true
-				droppedIdxHistory = append(droppedIdxHistory, ei)
 			}
 			label := fmt.Sprintf("drop oldest chat turns (%d)", batchEnd-i)
-			prevCtx = ctxTotal
-			rec, err = measure(label, ctxTotal)
+			rec, err = measure(label)
 			if err != nil {
 				return nil, err
 			}
-			tail, ctxTotal = rec.TailTokens, rec.CtxTotal
-			log = append(log, rec)
-			i = batchEnd
-		}
-
-		// Refine: if we crossed under target, walk the last batch back
-		// one turn at a time until re-adding one more would push us
-		// over. Lands close to target without undershooting wildly.
-		if ctxTotal <= in.Target && len(droppedIdxHistory) > 1 {
-			for k := len(droppedIdxHistory) - 1; k >= 0; k-- {
-				candidate := droppedIdxHistory[k]
-				delete(opts.DroppedChatEntries, candidate)
-				label := "refine: restore newest dropped turn"
-				testRec, measureErr := measure(label, ctxTotal)
-				if measureErr != nil {
-					// Put it back; abort refine.
-					opts.DroppedChatEntries[candidate] = true
-					break
+			if rec.CtxTotal < in.Target {
+				// Undo this drop; near the floor we must not cross below.
+				for _, ei := range dropOrder[i:batchEnd] {
+					delete(opts.DroppedChatEntries, ei)
 				}
-				if testRec.CtxTotal > in.Target {
-					// Restoring this turn would push us over. Put it
-					// back and stop.
-					opts.DroppedChatEntries[candidate] = true
-					break
+				if batchSize > 1 {
+					lastDropTurns = 0
+					lastDropAmount = 0
+					continue
 				}
-				// Keep the restore and continue.
-				tail, ctxTotal = testRec.TailTokens, testRec.CtxTotal
-				log = append(log, testRec)
+				break
 			}
+			accept(rec)
+			lastDropTurns = batchEnd - i
+			lastDropAmount = maxInt(prevCtx-ctxTotal, 0)
+			prevCtx = ctxTotal
+			i = batchEnd
 		}
 	}
 
@@ -378,6 +458,13 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 // introducing a generics constraint just for this file.
 func maxInt(a, b int) int {
 	if a > b {
+		return a
+	}
+	return b
+}
+
+func minInt(a, b int) int {
+	if a < b {
 		return a
 	}
 	return b

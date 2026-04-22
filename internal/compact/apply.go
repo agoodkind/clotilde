@@ -1,8 +1,10 @@
 package compact
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -112,6 +114,9 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("post-apply stat: %w", err)
 	}
+	if err := validateAppendedJSONL(path, preOffset); err != nil {
+		return nil, fmt.Errorf("validate appended jsonl: %w", err)
+	}
 
 	res := &ApplyResult{
 		BoundaryUUID:    boundaryUUID,
@@ -137,6 +142,60 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 	}
 	res.LedgerPath = ledgerPath
 	return res, nil
+}
+
+func validateAppendedJSONL(path string, preOffset int64) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open transcript: %w", err)
+	}
+	defer f.Close()
+	if _, err := f.Seek(preOffset, io.SeekStart); err != nil {
+		return fmt.Errorf("seek transcript: %w", err)
+	}
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024), 5*1024*1024)
+	lines := make([]string, 0, 2)
+	for len(lines) < 2 && scanner.Scan() {
+		line := string(scanner.Bytes())
+		if line == "" {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("read transcript tail: %w", err)
+	}
+	if len(lines) < 2 {
+		return fmt.Errorf("expected 2 appended lines, found %d", len(lines))
+	}
+	var boundary struct {
+		Type           string `json:"type"`
+		Subtype        string `json:"subtype"`
+		CompactPayload struct {
+			PreCompactTokenCount int `json:"preCompactTokenCount"`
+		} `json:"compactMetadata"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &boundary); err != nil {
+		return fmt.Errorf("unmarshal boundary line: %w", err)
+	}
+	if boundary.Type != "system" || boundary.Subtype != "compact_boundary" {
+		return fmt.Errorf("boundary line has unexpected type/subtype: %s/%s", boundary.Type, boundary.Subtype)
+	}
+	var synthetic struct {
+		Type           string `json:"type"`
+		CompactSummary bool   `json:"isCompactSummary"`
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &synthetic); err != nil {
+		return fmt.Errorf("unmarshal synthetic line: %w", err)
+	}
+	if synthetic.Type != "user" || !synthetic.CompactSummary {
+		return fmt.Errorf("synthetic line missing compact summary marker")
+	}
+	if boundary.CompactPayload.PreCompactTokenCount < 0 {
+		return fmt.Errorf("boundary pre-compact token count is invalid: %d", boundary.CompactPayload.PreCompactTokenCount)
+	}
+	return nil
 }
 
 func lastChainUUID(slice *Slice) string {

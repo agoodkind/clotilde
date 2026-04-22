@@ -92,3 +92,22 @@ func TestExtractModelAndLastTime_EmptyPath(t *testing.T) {
 		t.Errorf("expected zero time, got %v", ts)
 	}
 }
+
+func TestExtractRawModelAndLastTime(t *testing.T) {
+	transcript := `{"type":"assistant","timestamp":"2025-01-01T10:00:00Z","message":{"model":"claude-opus-4-20250514","content":"first"}}
+{"type":"user","timestamp":"2025-01-01T10:00:10Z","message":{"content":"ok"}}
+{"type":"assistant","timestamp":"2025-01-01T10:00:20Z","message":{"model":"claude-sonnet-4-5-20250929","content":"second"}}`
+
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	if err := os.WriteFile(path, []byte(transcript), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	model, ts := claude.ExtractRawModelAndLastTime(path)
+	if model != "claude-sonnet-4-5-20250929" {
+		t.Fatalf("model: got %q", model)
+	}
+	if ts.IsZero() {
+		t.Fatal("expected non-zero timestamp, got zero")
+	}
+}

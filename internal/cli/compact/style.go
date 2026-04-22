@@ -36,14 +36,15 @@ func (m Mode) Label() string {
 }
 
 var (
-	styleTitle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
-	styleKey   = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Width(14)
-	styleVal   = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	styleNum   = lipgloss.NewStyle().Foreground(lipgloss.Color("48")).Bold(true)
-	styleMuted = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-	styleBad   = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true)
-	styleGood  = lipgloss.NewStyle().Foreground(lipgloss.Color("48")).Bold(true)
-	styleWarn  = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	styleTitle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
+	styleKey     = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Width(14)
+	stylePaneKey = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Width(17)
+	styleVal     = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	styleNum     = lipgloss.NewStyle().Foreground(lipgloss.Color("48")).Bold(true)
+	styleMuted   = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	styleBad     = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true)
+	styleGood    = lipgloss.NewStyle().Foreground(lipgloss.Color("48")).Bold(true)
+	styleWarn    = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 
 	// Mode ribbons. Preview uses calm cyan; apply uses hot red with a
 	// bang so destructive runs scream visually.
@@ -57,6 +58,11 @@ var (
 				Foreground(lipgloss.Color("15")).
 				Background(lipgloss.Color("160")).
 				Padding(0, 1)
+	styleRibbonUndo = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("15")).
+			Background(lipgloss.Color("33")).
+			Padding(0, 1)
 
 	stylePreviewBox = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -65,6 +71,10 @@ var (
 	styleApplyBox = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("160")).
+			Padding(0, 1)
+	styleUndoBox = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("33")).
 			Padding(0, 1)
 	styleMutedBox = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -129,7 +139,7 @@ func RenderUpfrontPanel(w io.Writer, s UpfrontStats) {
 		styleTitle.Render("compact") + "   " + ribbon(s.Mode),
 		"",
 		kv("session", s.SessionName),
-		kv("uuid", styleMuted.Render(shortUUID(s.SessionID))),
+		kv("uuid", styleMuted.Render(s.SessionID)),
 		kv("model", s.Model),
 	}
 
@@ -194,6 +204,7 @@ type progressView struct {
 	mode      Mode
 	isTTY     bool
 	startedAt time.Time
+	upfront   UpfrontStats
 
 	// Shared state written by Update and read by the ticker goroutine.
 	// The mutex protects reads and writes. Contention is negligible.
@@ -204,6 +215,12 @@ type progressView struct {
 	lastRec       compactengine.IterationRecord
 	frame         int
 	lastLineCount int
+	completed     bool
+	finalRes      *compactengine.PlanResult
+	finalStatic   int
+	finalReserved int
+	finalPath     string
+	finalApplied  bool
 
 	// Ticker goroutine lifecycle channels.
 	stop chan struct{}
@@ -216,18 +233,20 @@ const spinnerFPS = 16
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-func newProgressView(w io.Writer, target int, mode Mode, isTTY bool) *progressView {
+func newProgressView(w io.Writer, target int, mode Mode, isTTY bool, upfront UpfrontStats) *progressView {
 	p := &progressView{
 		w:         w,
 		target:    target,
 		mode:      mode,
 		isTTY:     isTTY,
 		startedAt: time.Now(),
+		upfront:   upfront,
 		stop:      make(chan struct{}),
 		done:      make(chan struct{}),
 	}
 	if isTTY {
 		go p.animate()
+		p.draw()
 	} else {
 		close(p.done)
 	}
@@ -291,22 +310,7 @@ func (p *progressView) draw() {
 		ctxStr = "?"
 	}
 
-	lines := []string{
-		fmt.Sprintf("%s %s  %s  %s",
-			spin,
-			p.modeLabel(),
-			styleMuted.Render(fmt.Sprintf("iter %d · %s", iter, elapsed)),
-			styleMuted.Render("· "+step)),
-		fmt.Sprintf("  %s %s → %s  %s",
-			styleKey.Render("ctx"),
-			styleNum.Render(ctxStr),
-			humanInt(p.target),
-			deltaText(rec.Delta)),
-		renderBreakdownRow("thinking", categoryStateThinking(rec)),
-		renderBreakdownRow("images", categoryStateImages(rec)),
-		renderBreakdownRow("tools", categoryStateTools(rec)),
-		renderBreakdownRow("chat", categoryStateChat(rec)),
-	}
+	lines := p.composePanelLines(spin, elapsed, iter, rec, step, ctxStr)
 
 	var buf strings.Builder
 	// Move cursor up prevLines (if any) and clear each line so we can
@@ -328,6 +332,104 @@ func (p *progressView) draw() {
 	fmt.Fprint(p.w, buf.String())
 }
 
+func (p *progressView) composePanelLines(
+	spin string,
+	elapsed time.Duration,
+	iter int,
+	rec compactengine.IterationRecord,
+	step string,
+	ctxStr string,
+) []string {
+	status := "running planner"
+	if iter == 0 {
+		status = "starting"
+	}
+	if p.completed {
+		status = "finished"
+	}
+	phase := phaseFromStep(rec.Step)
+	if phase == "" {
+		phase = "n/a"
+	}
+	alwaysKept := p.upfront.StaticFloor + p.upfront.Reserved
+	messageBudget := p.target - alwaysKept
+	if messageBudget < 0 {
+		messageBudget = 0
+	}
+	currentTotal := rec.CtxTotal
+	messageTokensNowCount := rec.TailTokens
+	delta := rec.Delta
+	if p.completed && p.finalRes != nil {
+		currentTotal = p.finalStatic + p.finalRes.FinalTail + p.finalReserved
+		messageTokensNowCount = p.finalRes.FinalTail
+		delta = currentTotal - p.target
+	}
+	if currentTotal > 0 {
+		ctxStr = humanInt(currentTotal)
+	}
+	messageTokensNow := "?"
+	if messageTokensNowCount > 0 {
+		messageTokensNow = humanInt(messageTokensNowCount)
+	}
+	deltaText := deltaTextFriendly(delta)
+	header := fmt.Sprintf("%s %s  %s", spin, p.modeLabel(), styleMuted.Render(fmt.Sprintf("time %s", elapsed)))
+	if p.completed {
+		header = fmt.Sprintf("%s %s  %s", styleGood.Render("✓"), p.modeLabel(), styleMuted.Render(fmt.Sprintf("finished in %s", elapsed)))
+	}
+	lines := []string{
+		header,
+		"  " + styleTitle.Render("run"),
+		renderPaneRow("status", styleVal.Render(status)),
+		renderPaneRow("step", styleVal.Render(fmt.Sprintf("%d", iter))),
+		renderPaneRow("now doing", styleVal.Render(phase)),
+		"  " + styleMuted.Render(strings.Repeat("─", 62)),
+		"  " + styleTitle.Render("target"),
+		renderPaneRow("current total", styleNum.Render(ctxStr)),
+		renderPaneRow("target limit", styleNum.Render(humanInt(p.target))),
+		renderPaneRow("over/under target", deltaText),
+		"  " + styleMuted.Render(strings.Repeat("─", 62)),
+		"  " + styleTitle.Render("token math"),
+		renderPaneRow("equation", styleMuted.Render("current total = always-kept + message tokens")),
+		renderPaneRow("check", styleNum.Render(ctxStr)+styleMuted.Render(fmt.Sprintf(" = %s + %s", humanInt(alwaysKept), messageTokensNow))),
+		renderPaneRow("static tokens", styleNum.Render(humanInt(p.upfront.StaticFloor))),
+		renderPaneRow("safety buffer", styleNum.Render(humanInt(p.upfront.Reserved))),
+		renderPaneRow("always-kept", styleNum.Render(humanInt(alwaysKept))+styleMuted.Render(" (= static + safety)")),
+		renderPaneRow("message tokens", styleNum.Render(messageTokensNow)),
+		renderPaneRow("message budget", styleNum.Render(humanInt(messageBudget))+styleMuted.Render(" (= target - always-kept)")),
+		"  " + styleMuted.Render(strings.Repeat("─", 62)),
+		"  " + styleTitle.Render("what changed"),
+		renderBreakdownRow("thinking", categoryStateThinking(rec)),
+		renderBreakdownRow("images", categoryStateImages(rec)),
+		renderBreakdownRow("tools", categoryStateTools(rec)),
+		renderBreakdownRow("chat", categoryStateChat(rec)),
+	}
+	if p.completed && p.finalRes != nil {
+		after := p.finalStatic + p.finalRes.FinalTail + p.finalReserved
+		reduction := 0
+		if p.finalRes.BaselineTail > 0 {
+			reduction = int(float64(p.finalRes.BaselineTail-p.finalRes.FinalTail) / float64(p.finalRes.BaselineTail) * 100)
+		}
+		lines = append(lines,
+			"  "+styleMuted.Render(strings.Repeat("─", 62)),
+			"  "+styleTitle.Render("result"),
+			renderPaneRow("message tokens", styleVal.Render(fmt.Sprintf("%s -> %s", humanInt(p.finalRes.BaselineTail), humanInt(p.finalRes.FinalTail)))),
+			renderPaneRow("total reduction", styleVal.Render(fmt.Sprintf("%d%%", reduction))),
+			renderPaneRow("final total", styleNum.Render(humanInt(after))),
+			renderPaneRow("target limit", styleNum.Render(humanInt(p.target))),
+			renderPaneRow("over/under target", deltaTextFriendly(after-p.target)),
+		)
+		if p.finalApplied {
+			lines = append(lines, renderPaneRow("transcript", styleMuted.Render(p.finalPath)))
+		} else {
+			lines = append(lines, "  "+styleMuted.Render("note: nothing was written. pass --apply to mutate."))
+		}
+	}
+	if len(step) > 0 && !p.completed {
+		lines = append(lines, "  "+styleMuted.Render("detail: "+step))
+	}
+	return lines
+}
+
 // deltaText formats a ctx-to-target delta as colored "+X over" or
 // "-X under" suitable for inline display.
 func deltaText(d int) string {
@@ -335,6 +437,58 @@ func deltaText(d int) string {
 		return styleBad.Render(fmt.Sprintf("+%s over", humanInt(d)))
 	}
 	return styleGood.Render(fmt.Sprintf("-%s under", humanInt(-d)))
+}
+
+func deltaTextFriendly(d int) string {
+	if d > 0 {
+		return styleBad.Render(fmt.Sprintf("+%s (over target)", humanInt(d)))
+	}
+	if d < 0 {
+		return styleGood.Render(fmt.Sprintf("within target by %s", humanInt(-d)))
+	}
+	return styleGood.Render("0 (on target)")
+}
+
+func phaseFromStep(step string) string {
+	switch {
+	case strings.HasPrefix(step, "drop oldest chat turns"):
+		return "chat drop"
+	case strings.HasPrefix(step, "refine: restore"):
+		return "chat refine (restore)"
+	case strings.HasPrefix(step, "tools full -> line-only"):
+		return "tools pass 1/2 (full -> line-only)"
+	case strings.HasPrefix(step, "tools line-only -> drop"):
+		return "tools pass 2/2 (line-only -> drop)"
+	case strings.HasPrefix(step, "drop thinking"):
+		return "drop thinking"
+	case strings.HasPrefix(step, "replace images with placeholders"):
+		return "images placeholder"
+	case strings.HasPrefix(step, "baseline (no transforms)"):
+		return "baseline"
+	}
+	return ""
+}
+
+func RenderIterationLog(w io.Writer, iterations []compactengine.IterationRecord) {
+	if len(iterations) == 0 {
+		return
+	}
+	lines := []string{
+		styleTitle.Render("passes"),
+		"  step                                              ctx       gap       delta",
+	}
+	for _, rec := range iterations {
+		step := strings.TrimSpace(rec.Step)
+		if len(step) > 40 {
+			step = step[:37] + "..."
+		}
+		lines = append(lines, fmt.Sprintf("  %-40s  %-8s  %-8s  %s",
+			step,
+			styleNum.Render(humanInt(rec.CtxTotal)),
+			styleNum.Render(humanInt(rec.TailTokens)),
+			deltaText(rec.Delta)))
+	}
+	fmt.Fprintln(w, strings.Join(lines, "\n"))
 }
 
 // categoryStateThinking / categoryStateImages / categoryStateTools /
@@ -387,7 +541,11 @@ func categoryStateChat(r compactengine.IterationRecord) string {
 // renderBreakdownRow formats a label + value row with consistent
 // indentation so the live dashboard aligns cleanly.
 func renderBreakdownRow(label, value string) string {
-	return "  " + styleKey.Render(label) + value
+	return renderPaneRow(label, value)
+}
+
+func renderPaneRow(label, value string) string {
+	return "  " + stylePaneKey.Render(label) + " " + value
 }
 
 // segment is one colored slice of a stacked bar.
@@ -457,34 +615,28 @@ func (p *progressView) Update(r compactengine.IterationRecord) {
 		p.mode.Label(), iter, step, humanInt(r.CtxTotal), tag)
 }
 
-// Finish stops the ticker and clears the dashboard. The function
-// blocks until the ticker goroutine has exited so the next print does
-// not race with the ticker.
+// Finish stops the ticker. The function blocks until the ticker
+// goroutine has exited so the next print does not race with the
+// ticker. The final live frame remains visible on TTY.
 func (p *progressView) Finish() {
 	if !p.isTTY {
 		return
 	}
 	close(p.stop)
 	<-p.done
+}
 
+func (p *progressView) Complete(res *compactengine.PlanResult, static, reserved int, applied bool, transcriptPath string) {
 	p.mu.Lock()
-	lines := p.lastLineCount
+	p.completed = true
+	p.finalRes = res
+	p.finalStatic = static
+	p.finalReserved = reserved
+	p.finalApplied = applied
+	p.finalPath = transcriptPath
 	p.mu.Unlock()
-
-	if lines > 0 {
-		// Move up to the top of the dashboard and clear each row so
-		// the next render starts with a clean canvas.
-		var buf strings.Builder
-		fmt.Fprintf(&buf, "\x1b[%dF", lines)
-		for i := 0; i < lines; i++ {
-			buf.WriteString("\x1b[2K")
-			if i < lines-1 {
-				buf.WriteString("\n")
-			}
-		}
-		// Return cursor to the top of the cleared area.
-		fmt.Fprintf(&buf, "\x1b[%dF", lines-1)
-		fmt.Fprint(p.w, buf.String())
+	if p.isTTY {
+		p.draw()
 	}
 }
 
@@ -593,6 +745,45 @@ func RenderFinalApply(w io.Writer, res *compactengine.PlanResult, target, static
 		styleMuted.Render("to revert: clyde compact <session> --undo"),
 	)
 	fmt.Fprintln(w, styleApplyBox.Render(strings.Join(rows, "\n")))
+}
+
+func RenderUndoResult(
+	w io.Writer,
+	sessionName string,
+	sessionID string,
+	transcriptPath string,
+	ledgerPath string,
+	entry compactengine.LedgerEntry,
+	preBytes int64,
+	postBytes int64,
+) {
+	snapshot := styleMuted.Render("none")
+	if entry.SnapshotPath != "" {
+		snapshot = styleVal.Render(entry.SnapshotPath)
+	}
+
+	verdict := styleGood.Render("✓ UNDID · transcript restored")
+	if entry.SnapshotPath != "" && postBytes != entry.PreApplyOffset {
+		verdict = styleWarn.Render("⚠ UNDID · snapshot fallback")
+	}
+
+	rows := []string{
+		styleTitle.Render("result") + "   " + styleRibbonUndo.Render(" UNDO · revert last apply ") + "   " + verdict,
+		"",
+		kv("session", sessionName),
+		kv("session uuid", styleMuted.Render(shortUUID(sessionID))),
+		kv("applied at", entry.Timestamp.UTC().Format(time.RFC3339)),
+		kv("transcript", styleMuted.Render(transcriptPath)),
+		kv("ledger", styleMuted.Render(ledgerPath)),
+		kv("target", styleMuted.Render(humanInt(entry.Target))),
+		kv("boundary uuid", shortUUID(entry.BoundaryUUID)),
+		kv("synthetic uuid", shortUUID(entry.SyntheticUUID)),
+		kv("snapshot", snapshot),
+		"",
+		kv("transcript bytes", fmt.Sprintf("%s → %s", humanInt(int(preBytes)), humanInt(int(postBytes)))),
+		kv("bytes delta", fmt.Sprintf("%s", humanInt(int(postBytes-preBytes)))),
+	}
+	fmt.Fprintln(w, styleUndoBox.Render(strings.Join(rows, "\n")))
 }
 
 // RenderNoTarget prints a compact summary for the strippers-only path

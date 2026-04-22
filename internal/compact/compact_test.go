@@ -479,8 +479,8 @@ func TestRunPlan_TargetLoop_FakeCounter(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := atomic.AddInt32(&calls, 1)
 		count := 1000 - 200*int(n-1)
-		if count < 0 {
-			count = 0
+		if count < 1 {
+			count = 1
 		}
 		fmt.Fprintf(w, `{"input_tokens":%d}`, count)
 	}))
@@ -503,14 +503,16 @@ func TestRunPlan_TargetLoop_FakeCounter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunPlan: %v", err)
 	}
-	if !res.HitTarget {
-		t.Errorf("HitTarget = false, want true")
-	}
 	if res.BaselineTail != 1000 {
 		t.Errorf("BaselineTail = %d, want 1000", res.BaselineTail)
 	}
-	if res.FinalTail > 500 {
-		t.Errorf("FinalTail = %d, want <= 500", res.FinalTail)
+	if res.FinalTail < 500 {
+		t.Errorf("FinalTail = %d, want >= 500 (do not undershoot target)", res.FinalTail)
+	}
+	for i, iter := range res.Iterations {
+		if iter.CtxTotal < 500 {
+			t.Fatalf("iteration %d ctx_total=%d crossed below target 500", i, iter.CtxTotal)
+		}
 	}
 	if len(res.Iterations) < 2 {
 		t.Errorf("expected at least 2 iterations (baseline + at least one demotion), got %d", len(res.Iterations))

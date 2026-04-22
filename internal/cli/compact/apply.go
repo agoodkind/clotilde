@@ -44,6 +44,7 @@ func runApply(
 		)
 		return err
 	}
+	_, _ = fmt.Fprintln(out, "  verified appended transcript lines as valid JSON boundary/synthetic pair")
 	_, _ = fmt.Fprintf(out, "\napplied:\n  boundary uuid:   %s\n  synthetic uuid:  %s\n  pre-apply bytes: %d\n  post-apply bytes: %d\n  snapshot:        %s\n  ledger:          %s\n",
 		res.BoundaryUUID, res.SyntheticUUID, res.PreApplyOffset, res.PostApplyOffset, res.SnapshotPath, res.LedgerPath)
 	slog.Info("cli.compact.apply.completed",

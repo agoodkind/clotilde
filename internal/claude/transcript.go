@@ -406,6 +406,15 @@ func FormatModelFamily(fullModel string) string {
 // than calling ExtractLastModel and LastTranscriptTime separately.
 // Returns empty string and zero time if the transcript is missing or unreadable.
 func ExtractModelAndLastTime(transcriptPath string) (string, time.Time) {
+	model, ts := ExtractRawModelAndLastTime(transcriptPath)
+	return FormatModelFamily(model), ts
+}
+
+// ExtractRawModelAndLastTime reads the transcript tail once and returns the
+// last assistant model ID exactly as written in the transcript plus the
+// timestamp of the last entry. Returns empty string and zero time if the
+// transcript is missing or unreadable.
+func ExtractRawModelAndLastTime(transcriptPath string) (string, time.Time) {
 	type entry struct {
 		Type      string    `json:"type"`
 		Timestamp time.Time `json:"timestamp"`
@@ -429,5 +438,5 @@ func ExtractModelAndLastTime(transcriptPath string) (string, time.Time) {
 	if err != nil {
 		return "", time.Time{}
 	}
-	return FormatModelFamily(lastModel), lastTime
+	return strings.TrimSpace(lastModel), lastTime
 }

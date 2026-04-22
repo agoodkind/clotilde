@@ -10,8 +10,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"goodkind.io/clyde/internal/claude"
 	"goodkind.io/clyde/internal/cli"
 	compactengine "goodkind.io/clyde/internal/compact"
+	"goodkind.io/clyde/internal/session"
 	"goodkind.io/clyde/internal/sessionctx"
 )
 
@@ -55,6 +57,28 @@ func mergeTypeFlag(s *compactengine.Strippers, csv string) error {
 		}
 	}
 	return nil
+}
+
+func resolveModelLikeTUI(
+	store session.Store,
+	sess *session.Session,
+	fallback string,
+) (countModel string, displayModel string, source string) {
+	if sess != nil && sess.Metadata.TranscriptPath != "" {
+		rawModel, _ := claude.ExtractRawModelAndLastTime(sess.Metadata.TranscriptPath)
+		rawModel = strings.TrimSpace(rawModel)
+		if rawModel != "" {
+			return rawModel, claude.FormatModelFamily(rawModel), "transcript"
+		}
+	}
+	if store != nil && sess != nil && strings.TrimSpace(sess.Name) != "" {
+		settings, err := store.LoadSettings(sess.Name)
+		if err == nil && settings != nil && strings.TrimSpace(settings.Model) != "" {
+			settingsModel := strings.TrimSpace(settings.Model)
+			return settingsModel, settingsModel, "settings"
+		}
+	}
+	return fallback, fallback, "fallback"
 }
 
 func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
@@ -134,6 +158,20 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 	force, _ := cmd.Flags().GetBool("force")
 	reserved, _ := cmd.Flags().GetInt("reserved")
 	model, _ := cmd.Flags().GetString("model")
+	modelDisplay := model
+	modelExplicit := cmd.Flags().Changed("model")
+	showPasses, _ := cmd.Flags().GetBool("show-passes")
+	if !modelExplicit {
+		resolvedModel, resolvedDisplayModel, resolvedSource := resolveModelLikeTUI(store, sess, model)
+		model = resolvedModel
+		modelDisplay = resolvedDisplayModel
+		slog.Info("cli.compact.model_resolved",
+			"session", name,
+			"model_count", model,
+			"model_display", modelDisplay,
+			"source", resolvedSource,
+		)
+	}
 
 	strippers := compactengine.Strippers{
 		Tools:    flagTools,
@@ -194,17 +232,6 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 		staticOverhead = cal.StaticOverhead
 	}
 
-	var counter compactengine.Counter
-	if target > 0 {
-		key, err := compactengine.AnthropicAPIKey()
-		if err != nil {
-			slog.Error("cli.compact.api_key_failed", "session", name, slog.Any("err", err))
-			return err
-		}
-		layer := sessionctx.NewDefault(sess, model, key)
-		counter = &layerCounter{layer: layer, model: model}
-	}
-
 	ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Minute)
 	defer cancel()
 
@@ -212,10 +239,17 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 	if apply {
 		mode = ModeApply
 	}
+	if target > 0 {
+		// Emit immediate feedback before any potentially slow context
+		// usage probe or token-count setup work.
+		_, _ = fmt.Fprintf(out, "starting compact %s for %s; gathering startup stats...\n",
+			strings.ToLower(mode.Label()), sess.Name)
+	}
 
 	// Phase 1: upfront info panel. Every number we can show without
 	// touching the network goes here so the user sees the full picture
 	// before the long calculation begins.
+	var upfrontStats UpfrontStats
 	if target > 0 {
 		thinking, images, toolPairs, chatTurns := categoryCounts(slice)
 		currentTotal, maxTokens := 0, 0
@@ -228,10 +262,10 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 		if cal, ok, _ := compactengine.LoadCalibration(sess.Metadata.SessionID); ok {
 			calibDate = cal.CapturedAt.UTC().Format("2006-01-02")
 		}
-		RenderUpfrontPanel(out, UpfrontStats{
+		upfrontStats = UpfrontStats{
 			SessionName:   sess.Name,
 			SessionID:     sess.Metadata.SessionID,
-			Model:         model,
+			Model:         modelDisplay,
 			Mode:          mode,
 			CurrentTotal:  currentTotal,
 			MaxTokens:     maxTokens,
@@ -244,7 +278,21 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 			ChatTurns:     chatTurns,
 			StrippersText: strippersDescribe(strippers),
 			TargetDate:    calibDate,
-		})
+		}
+		if !isTerminal(out) {
+			RenderUpfrontPanel(out, upfrontStats)
+		}
+	}
+
+	var counter compactengine.Counter
+	if target > 0 {
+		key, keyErr := compactengine.AnthropicAPIKey()
+		if keyErr != nil {
+			slog.Error("cli.compact.api_key_failed", "session", name, slog.Any("err", keyErr))
+			return keyErr
+		}
+		layer := sessionctx.NewDefault(sess, model, key)
+		counter = &layerCounter{layer: layer, model: model}
 	}
 
 	// Phase 2: rolling spinner during the target loop. Mode banner
@@ -255,7 +303,7 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 	var progress *progressView
 	var onIter func(compactengine.IterationRecord)
 	if target > 0 {
-		progress = newProgressView(out, target, mode, isTTY)
+		progress = newProgressView(out, target, mode, isTTY, upfrontStats)
 		onIter = progress.Update
 	}
 	planRes, err := compactengine.RunPlan(ctx, compactengine.PlanInput{
@@ -276,10 +324,17 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 	}
 	slog.Info("cli.compact.preview.run_plan.completed", "session", name, "hit_target", planRes.HitTarget)
 
-	// Phase 3: result box. Shape depends on mode and target.
+	// Phase 3: result box. Keep TTY focused on the single live pane.
+	// show-passes remains available for non-TTY logs and debugging.
+	if target > 0 && isTTY && progress != nil {
+		progress.Complete(planRes, staticOverhead, reserved, apply, path)
+	}
+	if target > 0 && showPasses && !isTTY {
+		RenderIterationLog(out, planRes.Iterations)
+	}
 	if target == 0 {
 		RenderNoTarget(out, mode, sess.Name, strippers, planRes, len(planRes.BoundaryTail), len(slice.PostBoundary))
-	} else if !apply {
+	} else if !apply && !isTTY {
 		RenderFinalPreview(out, planRes, target, staticOverhead, reserved)
 	}
 
@@ -311,6 +366,8 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 	if err := runApply(out, sess, slice, strippers, target, planRes, force); err != nil {
 		return err
 	}
-	RenderFinalApply(out, planRes, target, staticOverhead, reserved, path)
+	if !isTTY {
+		RenderFinalApply(out, planRes, target, staticOverhead, reserved, path)
+	}
 	return nil
 }

@@ -1,9 +1,9 @@
 package compact
 
 import (
-	"fmt"
 	"io"
 	"log/slog"
+	"os"
 
 	compactengine "goodkind.io/clyde/internal/compact"
 	"goodkind.io/clyde/internal/session"
@@ -25,9 +25,17 @@ func runUndo(out io.Writer, sess *session.Session, path string) error {
 		)
 		return err
 	}
-	_, _ = fmt.Fprintf(out, "undid %s apply (boundary=%s, synthetic=%s); transcript truncated to %d bytes\n",
-		entry.Timestamp.UTC().Format("2006-01-02 15:04:05Z"),
-		shortUUID(entry.BoundaryUUID), shortUUID(entry.SyntheticUUID), entry.PreApplyOffset)
+	ledgerPath, ledgerErr := compactengine.LedgerPath(sess.Metadata.SessionID)
+	if ledgerErr != nil {
+		slog.Warn("cli.compact.undo.ledger_path_failed", "session", sess.Name, slog.Any("err", ledgerErr))
+	}
+	stat, statErr := os.Stat(path)
+	postBytes := int64(-1)
+	if statErr == nil {
+		postBytes = stat.Size()
+	}
+	preBytes := entry.PreApplyOffset
+	RenderUndoResult(out, sess.Name, sess.Metadata.SessionID, path, ledgerPath, entry, preBytes, postBytes)
 	slog.Info("cli.compact.undo.completed",
 		"session", sess.Name,
 		"session_id", sess.Metadata.SessionID,
