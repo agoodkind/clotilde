@@ -48,7 +48,11 @@ func (c *Client) spawn(ctx context.Context, r Request) (io.ReadCloser, func() er
 	args := buildArgs(r)
 
 	cmd := exec.CommandContext(ctx, c.cfg.Binary, args...)
-	cmd.Dir = c.cfg.ScratchDir
+	if r.WorkspaceDir != "" {
+		cmd.Dir = r.WorkspaceDir
+	} else {
+		cmd.Dir = c.cfg.ScratchDir
+	}
 	cmd.Env = c.buildEnv()
 
 	stdout, err := cmd.StdoutPipe()
@@ -170,7 +174,14 @@ func buildArgs(r Request) []string {
 		"--verbose",
 		"--dangerously-skip-permissions",
 	}
-	if r.SessionID != "" {
+	switch {
+	case r.Resume && r.SessionID != "":
+		// Resume reads the synthesized transcript at
+		// ~/.claude/projects/<sanitize(cwd)>/<session-id>.jsonl and
+		// loads the history verbatim. Incompatible with --session-id
+		// (which would create a fresh session), so drop it.
+		args = append(args, "--resume", r.SessionID)
+	case r.SessionID != "":
 		// Stable per-conversation UUID lets Claude Code reuse the same
 		// transcript file across back-to-back invocations, which
 		// stabilizes the byte sequence the upstream prompt cache hashes
@@ -182,8 +193,26 @@ func buildArgs(r Request) []string {
 	if sys != "" {
 		args = append(args, "--append-system-prompt", sys)
 	}
-	args = append(args, renderPrompt(r.Messages))
+	args = append(args, renderPromptForRequest(r))
 	return args
+}
+
+// renderPromptForRequest returns the positional prompt for the CLI
+// invocation. In the legacy path (r.Resume==false) we flatten the
+// whole history into the prompt. In the resume path the history
+// lives in the transcript file on disk, so we pass only the latest
+// user message and let Claude continue from there.
+func renderPromptForRequest(r Request) string {
+	if !r.Resume {
+		return renderPrompt(r.Messages)
+	}
+	for i := len(r.Messages) - 1; i >= 0; i-- {
+		m := r.Messages[i]
+		if m.Role == "user" {
+			return m.Content
+		}
+	}
+	return ""
 }
 
 // buildEnv returns the env slice for the subprocess, optionally

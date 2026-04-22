@@ -110,19 +110,21 @@ func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort
 	if err != nil {
 		return anthropic.Request{}, err
 	}
-	if instr := jsonSpec.SystemPrompt(false); instr != "" {
-		if tr.System == "" {
-			tr.System = instr
-		} else {
-			tr.System = tr.System + "\n\n" + instr
-		}
-	}
+	// Drop the CLI prefix from tr.System if TranslateRequest already
+	// folded it in. It becomes its own typed block below so the cache
+	// marker can be stamped on just the prefix without dragging the
+	// caller's system text into the cache key.
 	prefix := s.anthr.SystemPromptPrefix()
-	if !strings.HasPrefix(tr.System, prefix) {
-		if tr.System == "" {
-			tr.System = prefix
+	callerSystem := tr.System
+	if strings.HasPrefix(callerSystem, prefix) {
+		callerSystem = strings.TrimPrefix(callerSystem, prefix)
+		callerSystem = strings.TrimPrefix(callerSystem, "\n\n")
+	}
+	if instr := jsonSpec.SystemPrompt(false); instr != "" {
+		if callerSystem == "" {
+			callerSystem = instr
 		} else {
-			tr.System = prefix + "\n\n" + tr.System
+			callerSystem = callerSystem + "\n\n" + instr
 		}
 	}
 
@@ -135,11 +137,41 @@ func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort
 	billingHeader := anthropic.BuildAttributionHeader(cliVersion, entry)
 	// CLYDE_PROBE_BILLING mutates the billing line for debugging.
 	billingHeader = mutateBillingForProbe(billingHeader, cliVersion, entry)
-	if billingHeader != "" {
-		tr.System = billingHeader + "\n" + tr.System
+
+	cachingEnabled := true
+	if v := s.cfg.ClientIdentity.PromptCachingEnabled; v != nil {
+		cachingEnabled = *v
 	}
+	tr.System = ""
+	ttl := strings.TrimSpace(s.cfg.ClientIdentity.PromptCacheTTL)
+	if ttl != "" && ttl != "5m" && ttl != "1h" {
+		ttl = ""
+	}
+	scope := strings.TrimSpace(s.cfg.ClientIdentity.PromptCacheScope)
+	if scope != "" && scope != "global" && scope != "org" {
+		scope = ""
+	}
+	sysBlocks := buildSystemBlocks(billingHeader, prefix, callerSystem, ttl, scope, cachingEnabled)
 
 	out := toAnthropicAPIRequest(tr, stripContextSuffix(model.ClaudeModel))
+	out.SystemBlocks = sysBlocks
+
+	// Microcompact runs after translation but is logically part of
+	// prompt shaping; we do it here (not in toAnthropicAPIRequest) so
+	// the config knobs live on the server and the work becomes
+	// observable via slog. Must run before applyCacheBreakpoints is
+	// re-run in the future, but today applyCacheBreakpoints already
+	// fired inside toAnthropicAPIRequest on unmutated content; since
+	// it marks the LAST user text (a fresh turn, never a cleared
+	// tool_result) the ordering is safe.
+	microEnabled := true
+	if v := s.cfg.ClientIdentity.MicrocompactEnabled; v != nil {
+		microEnabled = *v
+	}
+	if microEnabled {
+		cleared, bytes := applyMicrocompact(out.Messages, s.cfg.ClientIdentity.MicrocompactKeepRecent)
+		logMicrocompact(s.log, "", model.Alias, cleared, bytes, s.cfg.ClientIdentity.MicrocompactKeepRecent)
+	}
 	// Per-model anthropic-beta extras from configured suffix map.
 	out.ExtraBetas = derivePerRequestBetas(model, s.cfg.ClientIdentity.PerContextBetas)
 	if effort != "" && len(model.Efforts) > 0 {
@@ -149,13 +181,39 @@ func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort
 	case ThinkingAdaptive:
 		out.Thinking = &anthropic.Thinking{Type: "adaptive"}
 	case ThinkingEnabled:
-		budget := model.MaxOutputTokens - 1
-		if budget <= 0 {
-			budget = 8000
+		// Mirror the canonical Claude Code CLI formula. See
+		// claude-code-source-code-full/src/services/api/claude.ts:1617-1628
+		// and src/utils/context.ts:219 (getMaxThinkingTokensForModel
+		// returns upperLimit - 1). The CLI sends max_tokens equal to
+		// the model's full output cap and budget_tokens equal to
+		// max_tokens - 1, letting the model self-limit thinking.
+		//
+		// When MaxOutputTokens is populated in the registry (the
+		// common case, set per family in the toml) we override the
+		// caller's max_tokens so the model has real room to both
+		// think and answer. The OpenAI response still reports the
+		// true completion_tokens from Anthropic, so the caller's UI
+		// sees the honest post-turn cost.
+		//
+		// When MaxOutputTokens is zero (misconfigured family) we
+		// fall back to the caller's max_tokens and derive the
+		// budget from it, floored at Anthropic's documented 1024
+		// minimum for thinking. This stays data-driven and never
+		// hardcodes a model identifier.
+		cap := model.MaxOutputTokens
+		if cap <= 0 {
+			cap = out.MaxTokens
 		}
+		if cap < 1025 {
+			// Anthropic thinking requires budget_tokens >= 1024 and
+			// max_tokens > budget_tokens. Promote both to the
+			// smallest pair that satisfies both constraints.
+			cap = 1025
+		}
+		out.MaxTokens = cap
 		out.Thinking = &anthropic.Thinking{
 			Type:         "enabled",
-			BudgetTokens: budget,
+			BudgetTokens: cap - 1,
 		}
 	case ThinkingDisabled:
 		out.Thinking = &anthropic.Thinking{Type: "disabled"}
@@ -216,6 +274,62 @@ func toAnthropicAPIRequest(tr tooltrans.AnthRequest, claudeModel string) anthrop
 		Tools:      tools,
 		ToolChoice: tc,
 	}
+}
+
+// buildSystemBlocks assembles the typed system-prompt array with
+// cache_control markers matching what the live CLI sends. Order:
+//
+//	0: billing attribution line (no cache_control; the cch component
+//	   varies per request so it cannot share a cache key with
+//	   subsequent turns).
+//	1: CLI system prompt prefix (ephemeral 1h; stable across all
+//	   requests for the session lifetime).
+//	2: caller-supplied system text plus any JSON-mode instruction
+//	   (ephemeral 1h; stable while the client reuses the same system).
+//
+// Empty inputs are skipped so the wire never carries zero-length
+// blocks. When cachingEnabled is false all markers are omitted and
+// the blocks ship plain; the array form still communicates the three
+// logical segments to the server, which accepts either shape.
+func buildSystemBlocks(billing, prefix, callerSystem, ttl, scope string, cachingEnabled bool) []anthropic.SystemBlock {
+	// Scope applies only to the CLI-prefix block. The caller-system
+	// block stays session-scoped because its content varies per
+	// caller and does not benefit from a global key. Mirrors
+	// splitSysPromptPrefix in src/utils/api.ts:321 where the static
+	// CLI prefix gets cacheScope='global' and dynamic blocks get
+	// cacheScope=null.
+	var cacheMarker *anthropic.CacheControl
+	var prefixMarker *anthropic.CacheControl
+	if cachingEnabled {
+		cacheMarker = &anthropic.CacheControl{Type: "ephemeral", TTL: ttl}
+		prefixMarker = &anthropic.CacheControl{Type: "ephemeral", TTL: ttl, Scope: scope}
+	}
+	var out []anthropic.SystemBlock
+	if strings.TrimSpace(billing) != "" {
+		out = append(out, anthropic.SystemBlock{
+			Type: "text",
+			Text: billing,
+			// Billing line is intentionally uncached: cch varies per
+			// request, so caching would produce immediate misses and
+			// waste a marker slot. Mirrors CLI behavior at
+			// src/services/api/claude.ts:3230 (cacheScope: null).
+		})
+	}
+	if strings.TrimSpace(prefix) != "" {
+		out = append(out, anthropic.SystemBlock{
+			Type:         "text",
+			Text:         prefix,
+			CacheControl: prefixMarker,
+		})
+	}
+	if strings.TrimSpace(callerSystem) != "" {
+		out = append(out, anthropic.SystemBlock{
+			Type:         "text",
+			Text:         callerSystem,
+			CacheControl: cacheMarker,
+		})
+	}
+	return out
 }
 
 // applyCacheBreakpoints stamps ephemeral cache_control markers on the
@@ -527,6 +641,8 @@ func (s *Server) collectOAuth(w http.ResponseWriter, ctx context.Context, req an
 	s.logCacheUsageAnthropic(ctx, "anthropic", reqID, model.Alias, anthUsage)
 	chatemit.LogCompleted(s.log, ctx, chatemit.CompletedAttrs{
 		Backend:             "anthropic",
+		Path:                "oauth",
+		SessionID:           reqID,
 		RequestID:           reqID,
 		Alias:               model.Alias,
 		ModelID:             req.Model,
@@ -535,6 +651,7 @@ func (s *Server) collectOAuth(w http.ResponseWriter, ctx context.Context, req an
 		TokensOut:           u.CompletionTokens,
 		CacheReadTokens:     anthUsage.CacheReadInputTokens,
 		CacheCreationTokens: anthUsage.CacheCreationInputTokens,
+		CacheTTL:            s.cfg.ClientIdentity.PromptCacheTTL,
 		DurationMs:          time.Since(started).Milliseconds(),
 		Stream:              false,
 	})
@@ -546,11 +663,25 @@ func (s *Server) collectOAuth(w http.ResponseWriter, ctx context.Context, req an
 // so OpenAI clients that display the breakdown see cache efficiency;
 // cache-creation tokens have no OpenAI-canonical field and are only
 // reported via slog.
+// usageFromAnthropic converts an upstream usage block into the
+// OpenAI response shape. OpenAI's convention is that prompt_tokens
+// represents the total input sent (including cached and
+// cache-created tokens), and prompt_tokens_details.cached_tokens is
+// a subset-of breakdown. Anthropic's native shape splits them:
+// input_tokens is only the uncached portion, and cache_read /
+// cache_creation are separate counters. Clients like Cursor compute
+// "context used" from prompt_tokens + completion_tokens, so if we
+// only forward Anthropic's input_tokens the UI undercounts by tens
+// of thousands of tokens the moment caching kicks in. Sum the three
+// Anthropic counters into a single OpenAI prompt_tokens to match
+// what Cursor expects; prompt_tokens_details.cached_tokens still
+// exposes the cache-read breakdown for tools that know to read it.
 func usageFromAnthropic(a anthropic.Usage) Usage {
+	totalInput := a.InputTokens + a.CacheReadInputTokens + a.CacheCreationInputTokens
 	u := Usage{
-		PromptTokens:     a.InputTokens,
+		PromptTokens:     totalInput,
 		CompletionTokens: a.OutputTokens,
-		TotalTokens:      a.InputTokens + a.OutputTokens,
+		TotalTokens:      totalInput + a.OutputTokens,
 	}
 	if a.CacheReadInputTokens > 0 {
 		u.PromptTokensDetails = &PromptTokensDetails{CachedTokens: a.CacheReadInputTokens}
@@ -676,6 +807,8 @@ func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthrop
 	s.logCacheUsageAnthropic(r.Context(), "anthropic", reqID, model.Alias, anthUsage)
 	chatemit.LogCompleted(s.log, r.Context(), chatemit.CompletedAttrs{
 		Backend:             "anthropic",
+		Path:                "oauth",
+		SessionID:           reqID,
 		RequestID:           reqID,
 		Alias:               model.Alias,
 		ModelID:             req.Model,
@@ -684,6 +817,7 @@ func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthrop
 		TokensOut:           finalUsage.CompletionTokens,
 		CacheReadTokens:     anthUsage.CacheReadInputTokens,
 		CacheCreationTokens: anthUsage.CacheCreationInputTokens,
+		CacheTTL:            s.cfg.ClientIdentity.PromptCacheTTL,
 		DurationMs:          time.Since(started).Milliseconds(),
 		Stream:              true,
 	})

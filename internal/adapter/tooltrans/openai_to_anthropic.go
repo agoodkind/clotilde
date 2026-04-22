@@ -257,6 +257,21 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage) ([]AnthConten
 		switch p.Type {
 		case "text":
 			text := stripNotice(p.Text, msgIdx, partIdx)
+			// Strip the "Thinking" blockquote we injected into the
+			// stream on the previous turn. Our adapter renders
+			// thinking_delta events as markdown blockquote content so
+			// Cursor shows the reasoning during streaming. When
+			// Cursor sends the chat history back on the next turn
+			// that blockquote rides along as part of the assistant
+			// message. If we forwarded it verbatim to Anthropic we
+			// would (a) bust the prompt cache because the prior
+			// assistant bytes no longer match what Anthropic
+			// originally produced, (b) re-bill the thinking as
+			// visible tokens every turn, and (c) confuse the model
+			// by feeding it its own internal reasoning as prior
+			// output. Stripping here restores the clean answer only
+			// and keeps the cached prefix byte-stable across turns.
+			text = stripThinkingBlockquote(text)
 			if strings.TrimSpace(text) == "" {
 				continue
 			}
@@ -430,4 +445,27 @@ func translateToolChoice(raw json.RawMessage) (*AnthToolChoice, error) {
 		return &AnthToolChoice{Type: "tool", Name: obj.Function.Name}, nil
 	}
 	return &AnthToolChoice{Type: "auto"}, nil
+}
+
+// thinkingBlockquoteRE matches the "Thinking" collapsible the
+// adapter injects into assistant content during streaming. The
+// sentinel comment pair (<!--clyde-thinking-->…<!--/clyde-thinking-->)
+// makes the block unambiguously ours so we do not risk stripping a
+// legitimate <details> the user or model embedded in the answer.
+// The (?s) flag lets the inner . match newlines because the wrapper
+// spans multiple lines by construction.
+var thinkingBlockquoteRE = regexp.MustCompile(`(?s)<!--clyde-thinking-->.*?<!--/clyde-thinking-->\s*`)
+
+// stripThinkingBlockquote removes every clyde-thinking sentinel
+// block from text. Matches the envelope anywhere in the assistant
+// message (not just at the start) so multi-block answers with
+// interleaved thinking all get cleaned. Idempotent: returns text
+// unchanged when the sentinel is absent.
+func stripThinkingBlockquote(text string) string {
+	if !strings.Contains(text, "<!--clyde-thinking-->") {
+		// Fast path for the common case (no thinking wrapper in
+		// this turn).
+		return text
+	}
+	return thinkingBlockquoteRE.ReplaceAllString(text, "")
 }

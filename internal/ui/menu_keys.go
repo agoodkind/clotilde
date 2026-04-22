@@ -66,6 +66,12 @@ func HandleMenuKey(ev *tcell.EventKey, cursor *int, count int, opts MenuKeyOptio
 		return true
 	case tcell.KeyRune:
 		r := ev.Rune()
+		if r == ' ' {
+			if opts.OnActivate != nil {
+				opts.OnActivate(*cursor)
+			}
+			return true
+		}
 		if opts.EnableJK {
 			switch r {
 			case 'k':

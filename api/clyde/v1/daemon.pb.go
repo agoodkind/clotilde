@@ -82,6 +82,64 @@ func (SubscribeRegistryResponse_Kind) EnumDescriptor() ([]byte, []int) {
 	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{12, 0}
 }
 
+type CompactEvent_Kind int32
+
+const (
+	CompactEvent_KIND_UNSPECIFIED    CompactEvent_Kind = 0
+	CompactEvent_KIND_STATUS         CompactEvent_Kind = 1
+	CompactEvent_KIND_UPFRONT        CompactEvent_Kind = 2
+	CompactEvent_KIND_ITERATION      CompactEvent_Kind = 3
+	CompactEvent_KIND_FINAL          CompactEvent_Kind = 4
+	CompactEvent_KIND_APPLY_MUTATION CompactEvent_Kind = 5
+)
+
+// Enum value maps for CompactEvent_Kind.
+var (
+	CompactEvent_Kind_name = map[int32]string{
+		0: "KIND_UNSPECIFIED",
+		1: "KIND_STATUS",
+		2: "KIND_UPFRONT",
+		3: "KIND_ITERATION",
+		4: "KIND_FINAL",
+		5: "KIND_APPLY_MUTATION",
+	}
+	CompactEvent_Kind_value = map[string]int32{
+		"KIND_UNSPECIFIED":    0,
+		"KIND_STATUS":         1,
+		"KIND_UPFRONT":        2,
+		"KIND_ITERATION":      3,
+		"KIND_FINAL":          4,
+		"KIND_APPLY_MUTATION": 5,
+	}
+)
+
+func (x CompactEvent_Kind) Enum() *CompactEvent_Kind {
+	p := new(CompactEvent_Kind)
+	*p = x
+	return p
+}
+
+func (x CompactEvent_Kind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (CompactEvent_Kind) Descriptor() protoreflect.EnumDescriptor {
+	return file_clyde_v1_daemon_proto_enumTypes[1].Descriptor()
+}
+
+func (CompactEvent_Kind) Type() protoreflect.EnumType {
+	return &file_clyde_v1_daemon_proto_enumTypes[1]
+}
+
+func (x CompactEvent_Kind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use CompactEvent_Kind.Descriptor instead.
+func (CompactEvent_Kind) EnumDescriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{36, 0}
+}
+
 type AcquireSessionRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionName   string                 `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
@@ -1575,6 +1633,890 @@ func (x *SendToSessionResponse) GetDelivered() bool {
 	return false
 }
 
+type CompactStrippers struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Thinking      bool                   `protobuf:"varint,1,opt,name=thinking,proto3" json:"thinking,omitempty"`
+	Images        bool                   `protobuf:"varint,2,opt,name=images,proto3" json:"images,omitempty"`
+	Tools         bool                   `protobuf:"varint,3,opt,name=tools,proto3" json:"tools,omitempty"`
+	Chat          bool                   `protobuf:"varint,4,opt,name=chat,proto3" json:"chat,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CompactStrippers) Reset() {
+	*x = CompactStrippers{}
+	mi := &file_clyde_v1_daemon_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompactStrippers) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompactStrippers) ProtoMessage() {}
+
+func (x *CompactStrippers) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompactStrippers.ProtoReflect.Descriptor instead.
+func (*CompactStrippers) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *CompactStrippers) GetThinking() bool {
+	if x != nil {
+		return x.Thinking
+	}
+	return false
+}
+
+func (x *CompactStrippers) GetImages() bool {
+	if x != nil {
+		return x.Images
+	}
+	return false
+}
+
+func (x *CompactStrippers) GetTools() bool {
+	if x != nil {
+		return x.Tools
+	}
+	return false
+}
+
+func (x *CompactStrippers) GetChat() bool {
+	if x != nil {
+		return x.Chat
+	}
+	return false
+}
+
+type CompactRunRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	SessionName    string                 `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
+	TargetTokens   int32                  `protobuf:"varint,2,opt,name=target_tokens,json=targetTokens,proto3" json:"target_tokens,omitempty"`
+	ReservedTokens int32                  `protobuf:"varint,3,opt,name=reserved_tokens,json=reservedTokens,proto3" json:"reserved_tokens,omitempty"`
+	Model          string                 `protobuf:"bytes,4,opt,name=model,proto3" json:"model,omitempty"`
+	ModelExplicit  bool                   `protobuf:"varint,5,opt,name=model_explicit,json=modelExplicit,proto3" json:"model_explicit,omitempty"`
+	Strippers      *CompactStrippers      `protobuf:"bytes,6,opt,name=strippers,proto3" json:"strippers,omitempty"`
+	Summarize      bool                   `protobuf:"varint,7,opt,name=summarize,proto3" json:"summarize,omitempty"`
+	Force          bool                   `protobuf:"varint,8,opt,name=force,proto3" json:"force,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *CompactRunRequest) Reset() {
+	*x = CompactRunRequest{}
+	mi := &file_clyde_v1_daemon_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompactRunRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompactRunRequest) ProtoMessage() {}
+
+func (x *CompactRunRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompactRunRequest.ProtoReflect.Descriptor instead.
+func (*CompactRunRequest) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *CompactRunRequest) GetSessionName() string {
+	if x != nil {
+		return x.SessionName
+	}
+	return ""
+}
+
+func (x *CompactRunRequest) GetTargetTokens() int32 {
+	if x != nil {
+		return x.TargetTokens
+	}
+	return 0
+}
+
+func (x *CompactRunRequest) GetReservedTokens() int32 {
+	if x != nil {
+		return x.ReservedTokens
+	}
+	return 0
+}
+
+func (x *CompactRunRequest) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+func (x *CompactRunRequest) GetModelExplicit() bool {
+	if x != nil {
+		return x.ModelExplicit
+	}
+	return false
+}
+
+func (x *CompactRunRequest) GetStrippers() *CompactStrippers {
+	if x != nil {
+		return x.Strippers
+	}
+	return nil
+}
+
+func (x *CompactRunRequest) GetSummarize() bool {
+	if x != nil {
+		return x.Summarize
+	}
+	return false
+}
+
+func (x *CompactRunRequest) GetForce() bool {
+	if x != nil {
+		return x.Force
+	}
+	return false
+}
+
+type CompactUpfront struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	SessionName     string                 `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
+	SessionId       string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Model           string                 `protobuf:"bytes,3,opt,name=model,proto3" json:"model,omitempty"`
+	CurrentTotal    int32                  `protobuf:"varint,4,opt,name=current_total,json=currentTotal,proto3" json:"current_total,omitempty"`
+	MaxTokens       int32                  `protobuf:"varint,5,opt,name=max_tokens,json=maxTokens,proto3" json:"max_tokens,omitempty"`
+	TargetTokens    int32                  `protobuf:"varint,6,opt,name=target_tokens,json=targetTokens,proto3" json:"target_tokens,omitempty"`
+	StaticFloor     int32                  `protobuf:"varint,7,opt,name=static_floor,json=staticFloor,proto3" json:"static_floor,omitempty"`
+	ReservedTokens  int32                  `protobuf:"varint,8,opt,name=reserved_tokens,json=reservedTokens,proto3" json:"reserved_tokens,omitempty"`
+	ThinkingBlocks  int32                  `protobuf:"varint,9,opt,name=thinking_blocks,json=thinkingBlocks,proto3" json:"thinking_blocks,omitempty"`
+	ImageBlocks     int32                  `protobuf:"varint,10,opt,name=image_blocks,json=imageBlocks,proto3" json:"image_blocks,omitempty"`
+	ToolPairs       int32                  `protobuf:"varint,11,opt,name=tool_pairs,json=toolPairs,proto3" json:"tool_pairs,omitempty"`
+	ChatTurns       int32                  `protobuf:"varint,12,opt,name=chat_turns,json=chatTurns,proto3" json:"chat_turns,omitempty"`
+	StrippersText   string                 `protobuf:"bytes,13,opt,name=strippers_text,json=strippersText,proto3" json:"strippers_text,omitempty"`
+	CalibrationDate string                 `protobuf:"bytes,14,opt,name=calibration_date,json=calibrationDate,proto3" json:"calibration_date,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *CompactUpfront) Reset() {
+	*x = CompactUpfront{}
+	mi := &file_clyde_v1_daemon_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompactUpfront) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompactUpfront) ProtoMessage() {}
+
+func (x *CompactUpfront) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompactUpfront.ProtoReflect.Descriptor instead.
+func (*CompactUpfront) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *CompactUpfront) GetSessionName() string {
+	if x != nil {
+		return x.SessionName
+	}
+	return ""
+}
+
+func (x *CompactUpfront) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *CompactUpfront) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+func (x *CompactUpfront) GetCurrentTotal() int32 {
+	if x != nil {
+		return x.CurrentTotal
+	}
+	return 0
+}
+
+func (x *CompactUpfront) GetMaxTokens() int32 {
+	if x != nil {
+		return x.MaxTokens
+	}
+	return 0
+}
+
+func (x *CompactUpfront) GetTargetTokens() int32 {
+	if x != nil {
+		return x.TargetTokens
+	}
+	return 0
+}
+
+func (x *CompactUpfront) GetStaticFloor() int32 {
+	if x != nil {
+		return x.StaticFloor
+	}
+	return 0
+}
+
+func (x *CompactUpfront) GetReservedTokens() int32 {
+	if x != nil {
+		return x.ReservedTokens
+	}
+	return 0
+}
+
+func (x *CompactUpfront) GetThinkingBlocks() int32 {
+	if x != nil {
+		return x.ThinkingBlocks
+	}
+	return 0
+}
+
+func (x *CompactUpfront) GetImageBlocks() int32 {
+	if x != nil {
+		return x.ImageBlocks
+	}
+	return 0
+}
+
+func (x *CompactUpfront) GetToolPairs() int32 {
+	if x != nil {
+		return x.ToolPairs
+	}
+	return 0
+}
+
+func (x *CompactUpfront) GetChatTurns() int32 {
+	if x != nil {
+		return x.ChatTurns
+	}
+	return 0
+}
+
+func (x *CompactUpfront) GetStrippersText() string {
+	if x != nil {
+		return x.StrippersText
+	}
+	return ""
+}
+
+func (x *CompactUpfront) GetCalibrationDate() string {
+	if x != nil {
+		return x.CalibrationDate
+	}
+	return ""
+}
+
+type CompactIteration struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Iteration         int32                  `protobuf:"varint,1,opt,name=iteration,proto3" json:"iteration,omitempty"`
+	Step              string                 `protobuf:"bytes,2,opt,name=step,proto3" json:"step,omitempty"`
+	TailTokens        int32                  `protobuf:"varint,3,opt,name=tail_tokens,json=tailTokens,proto3" json:"tail_tokens,omitempty"`
+	CtxTotal          int32                  `protobuf:"varint,4,opt,name=ctx_total,json=ctxTotal,proto3" json:"ctx_total,omitempty"`
+	Delta             int32                  `protobuf:"varint,5,opt,name=delta,proto3" json:"delta,omitempty"`
+	ThinkingDropped   bool                   `protobuf:"varint,6,opt,name=thinking_dropped,json=thinkingDropped,proto3" json:"thinking_dropped,omitempty"`
+	ImagesPlaceholder bool                   `protobuf:"varint,7,opt,name=images_placeholder,json=imagesPlaceholder,proto3" json:"images_placeholder,omitempty"`
+	ToolsFull         int32                  `protobuf:"varint,8,opt,name=tools_full,json=toolsFull,proto3" json:"tools_full,omitempty"`
+	ToolsLineOnly     int32                  `protobuf:"varint,9,opt,name=tools_line_only,json=toolsLineOnly,proto3" json:"tools_line_only,omitempty"`
+	ToolsDropped      int32                  `protobuf:"varint,10,opt,name=tools_dropped,json=toolsDropped,proto3" json:"tools_dropped,omitempty"`
+	ChatTurnsTotal    int32                  `protobuf:"varint,11,opt,name=chat_turns_total,json=chatTurnsTotal,proto3" json:"chat_turns_total,omitempty"`
+	ChatTurnsDropped  int32                  `protobuf:"varint,12,opt,name=chat_turns_dropped,json=chatTurnsDropped,proto3" json:"chat_turns_dropped,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *CompactIteration) Reset() {
+	*x = CompactIteration{}
+	mi := &file_clyde_v1_daemon_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompactIteration) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompactIteration) ProtoMessage() {}
+
+func (x *CompactIteration) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompactIteration.ProtoReflect.Descriptor instead.
+func (*CompactIteration) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *CompactIteration) GetIteration() int32 {
+	if x != nil {
+		return x.Iteration
+	}
+	return 0
+}
+
+func (x *CompactIteration) GetStep() string {
+	if x != nil {
+		return x.Step
+	}
+	return ""
+}
+
+func (x *CompactIteration) GetTailTokens() int32 {
+	if x != nil {
+		return x.TailTokens
+	}
+	return 0
+}
+
+func (x *CompactIteration) GetCtxTotal() int32 {
+	if x != nil {
+		return x.CtxTotal
+	}
+	return 0
+}
+
+func (x *CompactIteration) GetDelta() int32 {
+	if x != nil {
+		return x.Delta
+	}
+	return 0
+}
+
+func (x *CompactIteration) GetThinkingDropped() bool {
+	if x != nil {
+		return x.ThinkingDropped
+	}
+	return false
+}
+
+func (x *CompactIteration) GetImagesPlaceholder() bool {
+	if x != nil {
+		return x.ImagesPlaceholder
+	}
+	return false
+}
+
+func (x *CompactIteration) GetToolsFull() int32 {
+	if x != nil {
+		return x.ToolsFull
+	}
+	return 0
+}
+
+func (x *CompactIteration) GetToolsLineOnly() int32 {
+	if x != nil {
+		return x.ToolsLineOnly
+	}
+	return 0
+}
+
+func (x *CompactIteration) GetToolsDropped() int32 {
+	if x != nil {
+		return x.ToolsDropped
+	}
+	return 0
+}
+
+func (x *CompactIteration) GetChatTurnsTotal() int32 {
+	if x != nil {
+		return x.ChatTurnsTotal
+	}
+	return 0
+}
+
+func (x *CompactIteration) GetChatTurnsDropped() int32 {
+	if x != nil {
+		return x.ChatTurnsDropped
+	}
+	return 0
+}
+
+type CompactApplyMutation struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	BoundaryUuid    string                 `protobuf:"bytes,1,opt,name=boundary_uuid,json=boundaryUuid,proto3" json:"boundary_uuid,omitempty"`
+	SyntheticUuid   string                 `protobuf:"bytes,2,opt,name=synthetic_uuid,json=syntheticUuid,proto3" json:"synthetic_uuid,omitempty"`
+	PreApplyOffset  int64                  `protobuf:"varint,3,opt,name=pre_apply_offset,json=preApplyOffset,proto3" json:"pre_apply_offset,omitempty"`
+	PostApplyOffset int64                  `protobuf:"varint,4,opt,name=post_apply_offset,json=postApplyOffset,proto3" json:"post_apply_offset,omitempty"`
+	SnapshotPath    string                 `protobuf:"bytes,5,opt,name=snapshot_path,json=snapshotPath,proto3" json:"snapshot_path,omitempty"`
+	LedgerPath      string                 `protobuf:"bytes,6,opt,name=ledger_path,json=ledgerPath,proto3" json:"ledger_path,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *CompactApplyMutation) Reset() {
+	*x = CompactApplyMutation{}
+	mi := &file_clyde_v1_daemon_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompactApplyMutation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompactApplyMutation) ProtoMessage() {}
+
+func (x *CompactApplyMutation) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompactApplyMutation.ProtoReflect.Descriptor instead.
+func (*CompactApplyMutation) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *CompactApplyMutation) GetBoundaryUuid() string {
+	if x != nil {
+		return x.BoundaryUuid
+	}
+	return ""
+}
+
+func (x *CompactApplyMutation) GetSyntheticUuid() string {
+	if x != nil {
+		return x.SyntheticUuid
+	}
+	return ""
+}
+
+func (x *CompactApplyMutation) GetPreApplyOffset() int64 {
+	if x != nil {
+		return x.PreApplyOffset
+	}
+	return 0
+}
+
+func (x *CompactApplyMutation) GetPostApplyOffset() int64 {
+	if x != nil {
+		return x.PostApplyOffset
+	}
+	return 0
+}
+
+func (x *CompactApplyMutation) GetSnapshotPath() string {
+	if x != nil {
+		return x.SnapshotPath
+	}
+	return ""
+}
+
+func (x *CompactApplyMutation) GetLedgerPath() string {
+	if x != nil {
+		return x.LedgerPath
+	}
+	return ""
+}
+
+type CompactFinal struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	BaselineTail   int32                  `protobuf:"varint,1,opt,name=baseline_tail,json=baselineTail,proto3" json:"baseline_tail,omitempty"`
+	FinalTail      int32                  `protobuf:"varint,2,opt,name=final_tail,json=finalTail,proto3" json:"final_tail,omitempty"`
+	HitTarget      bool                   `protobuf:"varint,3,opt,name=hit_target,json=hitTarget,proto3" json:"hit_target,omitempty"`
+	TargetTokens   int32                  `protobuf:"varint,4,opt,name=target_tokens,json=targetTokens,proto3" json:"target_tokens,omitempty"`
+	StaticFloor    int32                  `protobuf:"varint,5,opt,name=static_floor,json=staticFloor,proto3" json:"static_floor,omitempty"`
+	ReservedTokens int32                  `protobuf:"varint,6,opt,name=reserved_tokens,json=reservedTokens,proto3" json:"reserved_tokens,omitempty"`
+	TranscriptPath string                 `protobuf:"bytes,7,opt,name=transcript_path,json=transcriptPath,proto3" json:"transcript_path,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *CompactFinal) Reset() {
+	*x = CompactFinal{}
+	mi := &file_clyde_v1_daemon_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompactFinal) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompactFinal) ProtoMessage() {}
+
+func (x *CompactFinal) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompactFinal.ProtoReflect.Descriptor instead.
+func (*CompactFinal) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *CompactFinal) GetBaselineTail() int32 {
+	if x != nil {
+		return x.BaselineTail
+	}
+	return 0
+}
+
+func (x *CompactFinal) GetFinalTail() int32 {
+	if x != nil {
+		return x.FinalTail
+	}
+	return 0
+}
+
+func (x *CompactFinal) GetHitTarget() bool {
+	if x != nil {
+		return x.HitTarget
+	}
+	return false
+}
+
+func (x *CompactFinal) GetTargetTokens() int32 {
+	if x != nil {
+		return x.TargetTokens
+	}
+	return 0
+}
+
+func (x *CompactFinal) GetStaticFloor() int32 {
+	if x != nil {
+		return x.StaticFloor
+	}
+	return 0
+}
+
+func (x *CompactFinal) GetReservedTokens() int32 {
+	if x != nil {
+		return x.ReservedTokens
+	}
+	return 0
+}
+
+func (x *CompactFinal) GetTranscriptPath() string {
+	if x != nil {
+		return x.TranscriptPath
+	}
+	return ""
+}
+
+type CompactEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Sequence      int32                  `protobuf:"varint,1,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	Kind          CompactEvent_Kind      `protobuf:"varint,2,opt,name=kind,proto3,enum=clyde.v1.CompactEvent_Kind" json:"kind,omitempty"`
+	Message       string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
+	Upfront       *CompactUpfront        `protobuf:"bytes,4,opt,name=upfront,proto3" json:"upfront,omitempty"`
+	Iteration     *CompactIteration      `protobuf:"bytes,5,opt,name=iteration,proto3" json:"iteration,omitempty"`
+	Final         *CompactFinal          `protobuf:"bytes,6,opt,name=final,proto3" json:"final,omitempty"`
+	ApplyMutation *CompactApplyMutation  `protobuf:"bytes,7,opt,name=apply_mutation,json=applyMutation,proto3" json:"apply_mutation,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CompactEvent) Reset() {
+	*x = CompactEvent{}
+	mi := &file_clyde_v1_daemon_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompactEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompactEvent) ProtoMessage() {}
+
+func (x *CompactEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompactEvent.ProtoReflect.Descriptor instead.
+func (*CompactEvent) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *CompactEvent) GetSequence() int32 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+func (x *CompactEvent) GetKind() CompactEvent_Kind {
+	if x != nil {
+		return x.Kind
+	}
+	return CompactEvent_KIND_UNSPECIFIED
+}
+
+func (x *CompactEvent) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *CompactEvent) GetUpfront() *CompactUpfront {
+	if x != nil {
+		return x.Upfront
+	}
+	return nil
+}
+
+func (x *CompactEvent) GetIteration() *CompactIteration {
+	if x != nil {
+		return x.Iteration
+	}
+	return nil
+}
+
+func (x *CompactEvent) GetFinal() *CompactFinal {
+	if x != nil {
+		return x.Final
+	}
+	return nil
+}
+
+func (x *CompactEvent) GetApplyMutation() *CompactApplyMutation {
+	if x != nil {
+		return x.ApplyMutation
+	}
+	return nil
+}
+
+type CompactUndoRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionName   string                 `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CompactUndoRequest) Reset() {
+	*x = CompactUndoRequest{}
+	mi := &file_clyde_v1_daemon_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompactUndoRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompactUndoRequest) ProtoMessage() {}
+
+func (x *CompactUndoRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompactUndoRequest.ProtoReflect.Descriptor instead.
+func (*CompactUndoRequest) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *CompactUndoRequest) GetSessionName() string {
+	if x != nil {
+		return x.SessionName
+	}
+	return ""
+}
+
+type CompactUndoResponse struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	SessionName    string                 `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
+	SessionId      string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	TranscriptPath string                 `protobuf:"bytes,3,opt,name=transcript_path,json=transcriptPath,proto3" json:"transcript_path,omitempty"`
+	LedgerPath     string                 `protobuf:"bytes,4,opt,name=ledger_path,json=ledgerPath,proto3" json:"ledger_path,omitempty"`
+	AppliedAt      string                 `protobuf:"bytes,5,opt,name=applied_at,json=appliedAt,proto3" json:"applied_at,omitempty"`
+	TargetTokens   int32                  `protobuf:"varint,6,opt,name=target_tokens,json=targetTokens,proto3" json:"target_tokens,omitempty"`
+	BoundaryUuid   string                 `protobuf:"bytes,7,opt,name=boundary_uuid,json=boundaryUuid,proto3" json:"boundary_uuid,omitempty"`
+	SyntheticUuid  string                 `protobuf:"bytes,8,opt,name=synthetic_uuid,json=syntheticUuid,proto3" json:"synthetic_uuid,omitempty"`
+	SnapshotPath   string                 `protobuf:"bytes,9,opt,name=snapshot_path,json=snapshotPath,proto3" json:"snapshot_path,omitempty"`
+	PreApplyOffset int64                  `protobuf:"varint,10,opt,name=pre_apply_offset,json=preApplyOffset,proto3" json:"pre_apply_offset,omitempty"`
+	PostUndoBytes  int64                  `protobuf:"varint,11,opt,name=post_undo_bytes,json=postUndoBytes,proto3" json:"post_undo_bytes,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *CompactUndoResponse) Reset() {
+	*x = CompactUndoResponse{}
+	mi := &file_clyde_v1_daemon_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompactUndoResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompactUndoResponse) ProtoMessage() {}
+
+func (x *CompactUndoResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompactUndoResponse.ProtoReflect.Descriptor instead.
+func (*CompactUndoResponse) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *CompactUndoResponse) GetSessionName() string {
+	if x != nil {
+		return x.SessionName
+	}
+	return ""
+}
+
+func (x *CompactUndoResponse) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *CompactUndoResponse) GetTranscriptPath() string {
+	if x != nil {
+		return x.TranscriptPath
+	}
+	return ""
+}
+
+func (x *CompactUndoResponse) GetLedgerPath() string {
+	if x != nil {
+		return x.LedgerPath
+	}
+	return ""
+}
+
+func (x *CompactUndoResponse) GetAppliedAt() string {
+	if x != nil {
+		return x.AppliedAt
+	}
+	return ""
+}
+
+func (x *CompactUndoResponse) GetTargetTokens() int32 {
+	if x != nil {
+		return x.TargetTokens
+	}
+	return 0
+}
+
+func (x *CompactUndoResponse) GetBoundaryUuid() string {
+	if x != nil {
+		return x.BoundaryUuid
+	}
+	return ""
+}
+
+func (x *CompactUndoResponse) GetSyntheticUuid() string {
+	if x != nil {
+		return x.SyntheticUuid
+	}
+	return ""
+}
+
+func (x *CompactUndoResponse) GetSnapshotPath() string {
+	if x != nil {
+		return x.SnapshotPath
+	}
+	return ""
+}
+
+func (x *CompactUndoResponse) GetPreApplyOffset() int64 {
+	if x != nil {
+		return x.PreApplyOffset
+	}
+	return 0
+}
+
+func (x *CompactUndoResponse) GetPostUndoBytes() int64 {
+	if x != nil {
+		return x.PostUndoBytes
+	}
+	return 0
+}
+
 var File_clyde_v1_daemon_proto protoreflect.FileDescriptor
 
 const file_clyde_v1_daemon_proto_rawDesc = "" +
@@ -1681,7 +2623,110 @@ const file_clyde_v1_daemon_proto_rawDesc = "" +
 	"\x04text\x18\x02 \x01(\tR\x04text\"Z\n" +
 	"\x15SendToSessionResponse\x12#\n" +
 	"\rbytes_written\x18\x01 \x01(\x05R\fbytesWritten\x12\x1c\n" +
-	"\tdelivered\x18\x02 \x01(\bR\tdelivered2\xf5\b\n" +
+	"\tdelivered\x18\x02 \x01(\bR\tdelivered\"p\n" +
+	"\x10CompactStrippers\x12\x1a\n" +
+	"\bthinking\x18\x01 \x01(\bR\bthinking\x12\x16\n" +
+	"\x06images\x18\x02 \x01(\bR\x06images\x12\x14\n" +
+	"\x05tools\x18\x03 \x01(\bR\x05tools\x12\x12\n" +
+	"\x04chat\x18\x04 \x01(\bR\x04chat\"\xaf\x02\n" +
+	"\x11CompactRunRequest\x12!\n" +
+	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12#\n" +
+	"\rtarget_tokens\x18\x02 \x01(\x05R\ftargetTokens\x12'\n" +
+	"\x0freserved_tokens\x18\x03 \x01(\x05R\x0ereservedTokens\x12\x14\n" +
+	"\x05model\x18\x04 \x01(\tR\x05model\x12%\n" +
+	"\x0emodel_explicit\x18\x05 \x01(\bR\rmodelExplicit\x128\n" +
+	"\tstrippers\x18\x06 \x01(\v2\x1a.clyde.v1.CompactStrippersR\tstrippers\x12\x1c\n" +
+	"\tsummarize\x18\a \x01(\bR\tsummarize\x12\x14\n" +
+	"\x05force\x18\b \x01(\bR\x05force\"\xf9\x03\n" +
+	"\x0eCompactUpfront\x12!\n" +
+	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12\x14\n" +
+	"\x05model\x18\x03 \x01(\tR\x05model\x12#\n" +
+	"\rcurrent_total\x18\x04 \x01(\x05R\fcurrentTotal\x12\x1d\n" +
+	"\n" +
+	"max_tokens\x18\x05 \x01(\x05R\tmaxTokens\x12#\n" +
+	"\rtarget_tokens\x18\x06 \x01(\x05R\ftargetTokens\x12!\n" +
+	"\fstatic_floor\x18\a \x01(\x05R\vstaticFloor\x12'\n" +
+	"\x0freserved_tokens\x18\b \x01(\x05R\x0ereservedTokens\x12'\n" +
+	"\x0fthinking_blocks\x18\t \x01(\x05R\x0ethinkingBlocks\x12!\n" +
+	"\fimage_blocks\x18\n" +
+	" \x01(\x05R\vimageBlocks\x12\x1d\n" +
+	"\n" +
+	"tool_pairs\x18\v \x01(\x05R\ttoolPairs\x12\x1d\n" +
+	"\n" +
+	"chat_turns\x18\f \x01(\x05R\tchatTurns\x12%\n" +
+	"\x0estrippers_text\x18\r \x01(\tR\rstrippersText\x12)\n" +
+	"\x10calibration_date\x18\x0e \x01(\tR\x0fcalibrationDate\"\xb6\x03\n" +
+	"\x10CompactIteration\x12\x1c\n" +
+	"\titeration\x18\x01 \x01(\x05R\titeration\x12\x12\n" +
+	"\x04step\x18\x02 \x01(\tR\x04step\x12\x1f\n" +
+	"\vtail_tokens\x18\x03 \x01(\x05R\n" +
+	"tailTokens\x12\x1b\n" +
+	"\tctx_total\x18\x04 \x01(\x05R\bctxTotal\x12\x14\n" +
+	"\x05delta\x18\x05 \x01(\x05R\x05delta\x12)\n" +
+	"\x10thinking_dropped\x18\x06 \x01(\bR\x0fthinkingDropped\x12-\n" +
+	"\x12images_placeholder\x18\a \x01(\bR\x11imagesPlaceholder\x12\x1d\n" +
+	"\n" +
+	"tools_full\x18\b \x01(\x05R\ttoolsFull\x12&\n" +
+	"\x0ftools_line_only\x18\t \x01(\x05R\rtoolsLineOnly\x12#\n" +
+	"\rtools_dropped\x18\n" +
+	" \x01(\x05R\ftoolsDropped\x12(\n" +
+	"\x10chat_turns_total\x18\v \x01(\x05R\x0echatTurnsTotal\x12,\n" +
+	"\x12chat_turns_dropped\x18\f \x01(\x05R\x10chatTurnsDropped\"\xfe\x01\n" +
+	"\x14CompactApplyMutation\x12#\n" +
+	"\rboundary_uuid\x18\x01 \x01(\tR\fboundaryUuid\x12%\n" +
+	"\x0esynthetic_uuid\x18\x02 \x01(\tR\rsyntheticUuid\x12(\n" +
+	"\x10pre_apply_offset\x18\x03 \x01(\x03R\x0epreApplyOffset\x12*\n" +
+	"\x11post_apply_offset\x18\x04 \x01(\x03R\x0fpostApplyOffset\x12#\n" +
+	"\rsnapshot_path\x18\x05 \x01(\tR\fsnapshotPath\x12\x1f\n" +
+	"\vledger_path\x18\x06 \x01(\tR\n" +
+	"ledgerPath\"\x8b\x02\n" +
+	"\fCompactFinal\x12#\n" +
+	"\rbaseline_tail\x18\x01 \x01(\x05R\fbaselineTail\x12\x1d\n" +
+	"\n" +
+	"final_tail\x18\x02 \x01(\x05R\tfinalTail\x12\x1d\n" +
+	"\n" +
+	"hit_target\x18\x03 \x01(\bR\thitTarget\x12#\n" +
+	"\rtarget_tokens\x18\x04 \x01(\x05R\ftargetTokens\x12!\n" +
+	"\fstatic_floor\x18\x05 \x01(\x05R\vstaticFloor\x12'\n" +
+	"\x0freserved_tokens\x18\x06 \x01(\x05R\x0ereservedTokens\x12'\n" +
+	"\x0ftranscript_path\x18\a \x01(\tR\x0etranscriptPath\"\xd6\x03\n" +
+	"\fCompactEvent\x12\x1a\n" +
+	"\bsequence\x18\x01 \x01(\x05R\bsequence\x12/\n" +
+	"\x04kind\x18\x02 \x01(\x0e2\x1b.clyde.v1.CompactEvent.KindR\x04kind\x12\x18\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\x122\n" +
+	"\aupfront\x18\x04 \x01(\v2\x18.clyde.v1.CompactUpfrontR\aupfront\x128\n" +
+	"\titeration\x18\x05 \x01(\v2\x1a.clyde.v1.CompactIterationR\titeration\x12,\n" +
+	"\x05final\x18\x06 \x01(\v2\x16.clyde.v1.CompactFinalR\x05final\x12E\n" +
+	"\x0eapply_mutation\x18\a \x01(\v2\x1e.clyde.v1.CompactApplyMutationR\rapplyMutation\"|\n" +
+	"\x04Kind\x12\x14\n" +
+	"\x10KIND_UNSPECIFIED\x10\x00\x12\x0f\n" +
+	"\vKIND_STATUS\x10\x01\x12\x10\n" +
+	"\fKIND_UPFRONT\x10\x02\x12\x12\n" +
+	"\x0eKIND_ITERATION\x10\x03\x12\x0e\n" +
+	"\n" +
+	"KIND_FINAL\x10\x04\x12\x17\n" +
+	"\x13KIND_APPLY_MUTATION\x10\x05\"7\n" +
+	"\x12CompactUndoRequest\x12!\n" +
+	"\fsession_name\x18\x01 \x01(\tR\vsessionName\"\xa8\x03\n" +
+	"\x13CompactUndoResponse\x12!\n" +
+	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12'\n" +
+	"\x0ftranscript_path\x18\x03 \x01(\tR\x0etranscriptPath\x12\x1f\n" +
+	"\vledger_path\x18\x04 \x01(\tR\n" +
+	"ledgerPath\x12\x1d\n" +
+	"\n" +
+	"applied_at\x18\x05 \x01(\tR\tappliedAt\x12#\n" +
+	"\rtarget_tokens\x18\x06 \x01(\x05R\ftargetTokens\x12#\n" +
+	"\rboundary_uuid\x18\a \x01(\tR\fboundaryUuid\x12%\n" +
+	"\x0esynthetic_uuid\x18\b \x01(\tR\rsyntheticUuid\x12#\n" +
+	"\rsnapshot_path\x18\t \x01(\tR\fsnapshotPath\x12(\n" +
+	"\x10pre_apply_offset\x18\n" +
+	" \x01(\x03R\x0epreApplyOffset\x12&\n" +
+	"\x0fpost_undo_bytes\x18\v \x01(\x03R\rpostUndoBytes2\xd1\n" +
+	"\n" +
 	"\fClydeService\x12S\n" +
 	"\x0eAcquireSession\x12\x1f.clyde.v1.AcquireSessionRequest\x1a .clyde.v1.AcquireSessionResponse\x12S\n" +
 	"\x0eReleaseSession\x12\x1f.clyde.v1.ReleaseSessionRequest\x1a .clyde.v1.ReleaseSessionResponse\x12D\n" +
@@ -1695,7 +2740,10 @@ const file_clyde_v1_daemon_proto_rawDesc = "" +
 	"\x14UpdateGlobalSettings\x12%.clyde.v1.UpdateGlobalSettingsRequest\x1a&.clyde.v1.UpdateGlobalSettingsResponse\x12J\n" +
 	"\vListBridges\x12\x1c.clyde.v1.ListBridgesRequest\x1a\x1d.clyde.v1.ListBridgesResponse\x12U\n" +
 	"\x0eTailTranscript\x12\x1f.clyde.v1.TailTranscriptRequest\x1a .clyde.v1.TailTranscriptResponse0\x01\x12P\n" +
-	"\rSendToSession\x12\x1e.clyde.v1.SendToSessionRequest\x1a\x1f.clyde.v1.SendToSessionResponseB\x84\x01\n" +
+	"\rSendToSession\x12\x1e.clyde.v1.SendToSessionRequest\x1a\x1f.clyde.v1.SendToSessionResponse\x12G\n" +
+	"\x0eCompactPreview\x12\x1b.clyde.v1.CompactRunRequest\x1a\x16.clyde.v1.CompactEvent0\x01\x12E\n" +
+	"\fCompactApply\x12\x1b.clyde.v1.CompactRunRequest\x1a\x16.clyde.v1.CompactEvent0\x01\x12J\n" +
+	"\vCompactUndo\x12\x1c.clyde.v1.CompactUndoRequest\x1a\x1d.clyde.v1.CompactUndoResponseB\x84\x01\n" +
 	"\fcom.clyde.v1B\vDaemonProtoP\x01Z&goodkind.io/clyde/api/clyde/v1;clydev1\xa2\x02\x03CXX\xaa\x02\bClyde.V1\xca\x02\bClyde\\V1\xe2\x02\x14Clyde\\V1\\GPBMetadata\xea\x02\tClyde::V1b\x06proto3"
 
 var (
@@ -1710,78 +2758,100 @@ func file_clyde_v1_daemon_proto_rawDescGZIP() []byte {
 	return file_clyde_v1_daemon_proto_rawDescData
 }
 
-var file_clyde_v1_daemon_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_clyde_v1_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
+var file_clyde_v1_daemon_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_clyde_v1_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 39)
 var file_clyde_v1_daemon_proto_goTypes = []any{
 	(SubscribeRegistryResponse_Kind)(0),   // 0: clyde.v1.SubscribeRegistryResponse.Kind
-	(*AcquireSessionRequest)(nil),         // 1: clyde.v1.AcquireSessionRequest
-	(*AcquireSessionResponse)(nil),        // 2: clyde.v1.AcquireSessionResponse
-	(*ReleaseSessionRequest)(nil),         // 3: clyde.v1.ReleaseSessionRequest
-	(*ReleaseSessionResponse)(nil),        // 4: clyde.v1.ReleaseSessionResponse
-	(*HookEventRequest)(nil),              // 5: clyde.v1.HookEventRequest
-	(*HookEventResponse)(nil),             // 6: clyde.v1.HookEventResponse
-	(*ListActiveSessionsRequest)(nil),     // 7: clyde.v1.ListActiveSessionsRequest
-	(*ListActiveSessionsResponse)(nil),    // 8: clyde.v1.ListActiveSessionsResponse
-	(*ActiveSession)(nil),                 // 9: clyde.v1.ActiveSession
-	(*TriggerScanRequest)(nil),            // 10: clyde.v1.TriggerScanRequest
-	(*TriggerScanResponse)(nil),           // 11: clyde.v1.TriggerScanResponse
-	(*SubscribeRegistryRequest)(nil),      // 12: clyde.v1.SubscribeRegistryRequest
-	(*SubscribeRegistryResponse)(nil),     // 13: clyde.v1.SubscribeRegistryResponse
-	(*RenameSessionRequest)(nil),          // 14: clyde.v1.RenameSessionRequest
-	(*RenameSessionResponse)(nil),         // 15: clyde.v1.RenameSessionResponse
-	(*DeleteSessionRequest)(nil),          // 16: clyde.v1.DeleteSessionRequest
-	(*DeleteSessionResponse)(nil),         // 17: clyde.v1.DeleteSessionResponse
-	(*Settings)(nil),                      // 18: clyde.v1.Settings
-	(*UpdateSessionSettingsRequest)(nil),  // 19: clyde.v1.UpdateSessionSettingsRequest
-	(*UpdateSessionSettingsResponse)(nil), // 20: clyde.v1.UpdateSessionSettingsResponse
-	(*GlobalDefaults)(nil),                // 21: clyde.v1.GlobalDefaults
-	(*UpdateGlobalSettingsRequest)(nil),   // 22: clyde.v1.UpdateGlobalSettingsRequest
-	(*UpdateGlobalSettingsResponse)(nil),  // 23: clyde.v1.UpdateGlobalSettingsResponse
-	(*Bridge)(nil),                        // 24: clyde.v1.Bridge
-	(*ListBridgesRequest)(nil),            // 25: clyde.v1.ListBridgesRequest
-	(*ListBridgesResponse)(nil),           // 26: clyde.v1.ListBridgesResponse
-	(*TailTranscriptRequest)(nil),         // 27: clyde.v1.TailTranscriptRequest
-	(*TailTranscriptResponse)(nil),        // 28: clyde.v1.TailTranscriptResponse
-	(*SendToSessionRequest)(nil),          // 29: clyde.v1.SendToSessionRequest
-	(*SendToSessionResponse)(nil),         // 30: clyde.v1.SendToSessionResponse
+	(CompactEvent_Kind)(0),                // 1: clyde.v1.CompactEvent.Kind
+	(*AcquireSessionRequest)(nil),         // 2: clyde.v1.AcquireSessionRequest
+	(*AcquireSessionResponse)(nil),        // 3: clyde.v1.AcquireSessionResponse
+	(*ReleaseSessionRequest)(nil),         // 4: clyde.v1.ReleaseSessionRequest
+	(*ReleaseSessionResponse)(nil),        // 5: clyde.v1.ReleaseSessionResponse
+	(*HookEventRequest)(nil),              // 6: clyde.v1.HookEventRequest
+	(*HookEventResponse)(nil),             // 7: clyde.v1.HookEventResponse
+	(*ListActiveSessionsRequest)(nil),     // 8: clyde.v1.ListActiveSessionsRequest
+	(*ListActiveSessionsResponse)(nil),    // 9: clyde.v1.ListActiveSessionsResponse
+	(*ActiveSession)(nil),                 // 10: clyde.v1.ActiveSession
+	(*TriggerScanRequest)(nil),            // 11: clyde.v1.TriggerScanRequest
+	(*TriggerScanResponse)(nil),           // 12: clyde.v1.TriggerScanResponse
+	(*SubscribeRegistryRequest)(nil),      // 13: clyde.v1.SubscribeRegistryRequest
+	(*SubscribeRegistryResponse)(nil),     // 14: clyde.v1.SubscribeRegistryResponse
+	(*RenameSessionRequest)(nil),          // 15: clyde.v1.RenameSessionRequest
+	(*RenameSessionResponse)(nil),         // 16: clyde.v1.RenameSessionResponse
+	(*DeleteSessionRequest)(nil),          // 17: clyde.v1.DeleteSessionRequest
+	(*DeleteSessionResponse)(nil),         // 18: clyde.v1.DeleteSessionResponse
+	(*Settings)(nil),                      // 19: clyde.v1.Settings
+	(*UpdateSessionSettingsRequest)(nil),  // 20: clyde.v1.UpdateSessionSettingsRequest
+	(*UpdateSessionSettingsResponse)(nil), // 21: clyde.v1.UpdateSessionSettingsResponse
+	(*GlobalDefaults)(nil),                // 22: clyde.v1.GlobalDefaults
+	(*UpdateGlobalSettingsRequest)(nil),   // 23: clyde.v1.UpdateGlobalSettingsRequest
+	(*UpdateGlobalSettingsResponse)(nil),  // 24: clyde.v1.UpdateGlobalSettingsResponse
+	(*Bridge)(nil),                        // 25: clyde.v1.Bridge
+	(*ListBridgesRequest)(nil),            // 26: clyde.v1.ListBridgesRequest
+	(*ListBridgesResponse)(nil),           // 27: clyde.v1.ListBridgesResponse
+	(*TailTranscriptRequest)(nil),         // 28: clyde.v1.TailTranscriptRequest
+	(*TailTranscriptResponse)(nil),        // 29: clyde.v1.TailTranscriptResponse
+	(*SendToSessionRequest)(nil),          // 30: clyde.v1.SendToSessionRequest
+	(*SendToSessionResponse)(nil),         // 31: clyde.v1.SendToSessionResponse
+	(*CompactStrippers)(nil),              // 32: clyde.v1.CompactStrippers
+	(*CompactRunRequest)(nil),             // 33: clyde.v1.CompactRunRequest
+	(*CompactUpfront)(nil),                // 34: clyde.v1.CompactUpfront
+	(*CompactIteration)(nil),              // 35: clyde.v1.CompactIteration
+	(*CompactApplyMutation)(nil),          // 36: clyde.v1.CompactApplyMutation
+	(*CompactFinal)(nil),                  // 37: clyde.v1.CompactFinal
+	(*CompactEvent)(nil),                  // 38: clyde.v1.CompactEvent
+	(*CompactUndoRequest)(nil),            // 39: clyde.v1.CompactUndoRequest
+	(*CompactUndoResponse)(nil),           // 40: clyde.v1.CompactUndoResponse
 }
 var file_clyde_v1_daemon_proto_depIdxs = []int32{
-	9,  // 0: clyde.v1.ListActiveSessionsResponse.sessions:type_name -> clyde.v1.ActiveSession
+	10, // 0: clyde.v1.ListActiveSessionsResponse.sessions:type_name -> clyde.v1.ActiveSession
 	0,  // 1: clyde.v1.SubscribeRegistryResponse.kind:type_name -> clyde.v1.SubscribeRegistryResponse.Kind
-	18, // 2: clyde.v1.UpdateSessionSettingsRequest.settings:type_name -> clyde.v1.Settings
-	21, // 3: clyde.v1.UpdateGlobalSettingsRequest.defaults:type_name -> clyde.v1.GlobalDefaults
-	24, // 4: clyde.v1.ListBridgesResponse.bridges:type_name -> clyde.v1.Bridge
-	1,  // 5: clyde.v1.ClydeService.AcquireSession:input_type -> clyde.v1.AcquireSessionRequest
-	3,  // 6: clyde.v1.ClydeService.ReleaseSession:input_type -> clyde.v1.ReleaseSessionRequest
-	5,  // 7: clyde.v1.ClydeService.HookEvent:input_type -> clyde.v1.HookEventRequest
-	7,  // 8: clyde.v1.ClydeService.ListActiveSessions:input_type -> clyde.v1.ListActiveSessionsRequest
-	10, // 9: clyde.v1.ClydeService.TriggerScan:input_type -> clyde.v1.TriggerScanRequest
-	12, // 10: clyde.v1.ClydeService.SubscribeRegistry:input_type -> clyde.v1.SubscribeRegistryRequest
-	14, // 11: clyde.v1.ClydeService.RenameSession:input_type -> clyde.v1.RenameSessionRequest
-	16, // 12: clyde.v1.ClydeService.DeleteSession:input_type -> clyde.v1.DeleteSessionRequest
-	19, // 13: clyde.v1.ClydeService.UpdateSessionSettings:input_type -> clyde.v1.UpdateSessionSettingsRequest
-	22, // 14: clyde.v1.ClydeService.UpdateGlobalSettings:input_type -> clyde.v1.UpdateGlobalSettingsRequest
-	25, // 15: clyde.v1.ClydeService.ListBridges:input_type -> clyde.v1.ListBridgesRequest
-	27, // 16: clyde.v1.ClydeService.TailTranscript:input_type -> clyde.v1.TailTranscriptRequest
-	29, // 17: clyde.v1.ClydeService.SendToSession:input_type -> clyde.v1.SendToSessionRequest
-	2,  // 18: clyde.v1.ClydeService.AcquireSession:output_type -> clyde.v1.AcquireSessionResponse
-	4,  // 19: clyde.v1.ClydeService.ReleaseSession:output_type -> clyde.v1.ReleaseSessionResponse
-	6,  // 20: clyde.v1.ClydeService.HookEvent:output_type -> clyde.v1.HookEventResponse
-	8,  // 21: clyde.v1.ClydeService.ListActiveSessions:output_type -> clyde.v1.ListActiveSessionsResponse
-	11, // 22: clyde.v1.ClydeService.TriggerScan:output_type -> clyde.v1.TriggerScanResponse
-	13, // 23: clyde.v1.ClydeService.SubscribeRegistry:output_type -> clyde.v1.SubscribeRegistryResponse
-	15, // 24: clyde.v1.ClydeService.RenameSession:output_type -> clyde.v1.RenameSessionResponse
-	17, // 25: clyde.v1.ClydeService.DeleteSession:output_type -> clyde.v1.DeleteSessionResponse
-	20, // 26: clyde.v1.ClydeService.UpdateSessionSettings:output_type -> clyde.v1.UpdateSessionSettingsResponse
-	23, // 27: clyde.v1.ClydeService.UpdateGlobalSettings:output_type -> clyde.v1.UpdateGlobalSettingsResponse
-	26, // 28: clyde.v1.ClydeService.ListBridges:output_type -> clyde.v1.ListBridgesResponse
-	28, // 29: clyde.v1.ClydeService.TailTranscript:output_type -> clyde.v1.TailTranscriptResponse
-	30, // 30: clyde.v1.ClydeService.SendToSession:output_type -> clyde.v1.SendToSessionResponse
-	18, // [18:31] is the sub-list for method output_type
-	5,  // [5:18] is the sub-list for method input_type
-	5,  // [5:5] is the sub-list for extension type_name
-	5,  // [5:5] is the sub-list for extension extendee
-	0,  // [0:5] is the sub-list for field type_name
+	19, // 2: clyde.v1.UpdateSessionSettingsRequest.settings:type_name -> clyde.v1.Settings
+	22, // 3: clyde.v1.UpdateGlobalSettingsRequest.defaults:type_name -> clyde.v1.GlobalDefaults
+	25, // 4: clyde.v1.ListBridgesResponse.bridges:type_name -> clyde.v1.Bridge
+	32, // 5: clyde.v1.CompactRunRequest.strippers:type_name -> clyde.v1.CompactStrippers
+	1,  // 6: clyde.v1.CompactEvent.kind:type_name -> clyde.v1.CompactEvent.Kind
+	34, // 7: clyde.v1.CompactEvent.upfront:type_name -> clyde.v1.CompactUpfront
+	35, // 8: clyde.v1.CompactEvent.iteration:type_name -> clyde.v1.CompactIteration
+	37, // 9: clyde.v1.CompactEvent.final:type_name -> clyde.v1.CompactFinal
+	36, // 10: clyde.v1.CompactEvent.apply_mutation:type_name -> clyde.v1.CompactApplyMutation
+	2,  // 11: clyde.v1.ClydeService.AcquireSession:input_type -> clyde.v1.AcquireSessionRequest
+	4,  // 12: clyde.v1.ClydeService.ReleaseSession:input_type -> clyde.v1.ReleaseSessionRequest
+	6,  // 13: clyde.v1.ClydeService.HookEvent:input_type -> clyde.v1.HookEventRequest
+	8,  // 14: clyde.v1.ClydeService.ListActiveSessions:input_type -> clyde.v1.ListActiveSessionsRequest
+	11, // 15: clyde.v1.ClydeService.TriggerScan:input_type -> clyde.v1.TriggerScanRequest
+	13, // 16: clyde.v1.ClydeService.SubscribeRegistry:input_type -> clyde.v1.SubscribeRegistryRequest
+	15, // 17: clyde.v1.ClydeService.RenameSession:input_type -> clyde.v1.RenameSessionRequest
+	17, // 18: clyde.v1.ClydeService.DeleteSession:input_type -> clyde.v1.DeleteSessionRequest
+	20, // 19: clyde.v1.ClydeService.UpdateSessionSettings:input_type -> clyde.v1.UpdateSessionSettingsRequest
+	23, // 20: clyde.v1.ClydeService.UpdateGlobalSettings:input_type -> clyde.v1.UpdateGlobalSettingsRequest
+	26, // 21: clyde.v1.ClydeService.ListBridges:input_type -> clyde.v1.ListBridgesRequest
+	28, // 22: clyde.v1.ClydeService.TailTranscript:input_type -> clyde.v1.TailTranscriptRequest
+	30, // 23: clyde.v1.ClydeService.SendToSession:input_type -> clyde.v1.SendToSessionRequest
+	33, // 24: clyde.v1.ClydeService.CompactPreview:input_type -> clyde.v1.CompactRunRequest
+	33, // 25: clyde.v1.ClydeService.CompactApply:input_type -> clyde.v1.CompactRunRequest
+	39, // 26: clyde.v1.ClydeService.CompactUndo:input_type -> clyde.v1.CompactUndoRequest
+	3,  // 27: clyde.v1.ClydeService.AcquireSession:output_type -> clyde.v1.AcquireSessionResponse
+	5,  // 28: clyde.v1.ClydeService.ReleaseSession:output_type -> clyde.v1.ReleaseSessionResponse
+	7,  // 29: clyde.v1.ClydeService.HookEvent:output_type -> clyde.v1.HookEventResponse
+	9,  // 30: clyde.v1.ClydeService.ListActiveSessions:output_type -> clyde.v1.ListActiveSessionsResponse
+	12, // 31: clyde.v1.ClydeService.TriggerScan:output_type -> clyde.v1.TriggerScanResponse
+	14, // 32: clyde.v1.ClydeService.SubscribeRegistry:output_type -> clyde.v1.SubscribeRegistryResponse
+	16, // 33: clyde.v1.ClydeService.RenameSession:output_type -> clyde.v1.RenameSessionResponse
+	18, // 34: clyde.v1.ClydeService.DeleteSession:output_type -> clyde.v1.DeleteSessionResponse
+	21, // 35: clyde.v1.ClydeService.UpdateSessionSettings:output_type -> clyde.v1.UpdateSessionSettingsResponse
+	24, // 36: clyde.v1.ClydeService.UpdateGlobalSettings:output_type -> clyde.v1.UpdateGlobalSettingsResponse
+	27, // 37: clyde.v1.ClydeService.ListBridges:output_type -> clyde.v1.ListBridgesResponse
+	29, // 38: clyde.v1.ClydeService.TailTranscript:output_type -> clyde.v1.TailTranscriptResponse
+	31, // 39: clyde.v1.ClydeService.SendToSession:output_type -> clyde.v1.SendToSessionResponse
+	38, // 40: clyde.v1.ClydeService.CompactPreview:output_type -> clyde.v1.CompactEvent
+	38, // 41: clyde.v1.ClydeService.CompactApply:output_type -> clyde.v1.CompactEvent
+	40, // 42: clyde.v1.ClydeService.CompactUndo:output_type -> clyde.v1.CompactUndoResponse
+	27, // [27:43] is the sub-list for method output_type
+	11, // [11:27] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_clyde_v1_daemon_proto_init() }
@@ -1794,8 +2864,8 @@ func file_clyde_v1_daemon_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_clyde_v1_daemon_proto_rawDesc), len(file_clyde_v1_daemon_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   30,
+			NumEnums:      2,
+			NumMessages:   39,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

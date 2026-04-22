@@ -21,8 +21,8 @@ import (
 //
 // Coverage:
 //   - Initial state: table active, row 0 selected, browse mode.
-//   - Down x3 → row 3 selected.
-//   - Up x1 → row 2 selected.
+//   - Down x3 → row 2 selected (first Down arms row 0).
+//   - Up x1 → row 1 selected.
 //   - g (top) → row 0 selected.
 //   - G (bottom) → last row selected.
 //   - / → opens filter overlay; type "swift" → narrows to one row;
@@ -45,18 +45,18 @@ func TestHappyPath_LaunchAndNavigate(t *testing.T) {
 		t.Errorf("initial overlay should be nil")
 	}
 
-	// Down x3 → row 3.
+	// Down x3 → row 2 (first Down arms row 0).
 	for i := 0; i < 3; i++ {
 		a.handleKey(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
 	}
-	if a.table.SelectedRow != 3 {
-		t.Errorf("after 3×Down, SelectedRow = %d, want 3", a.table.SelectedRow)
+	if a.table.SelectedRow != 2 {
+		t.Errorf("after 3×Down, SelectedRow = %d, want 2", a.table.SelectedRow)
 	}
 
-	// Up x1 → row 2.
+	// Up x1 → row 1.
 	a.handleKey(tcell.NewEventKey(tcell.KeyUp, 0, tcell.ModNone))
-	if a.table.SelectedRow != 2 {
-		t.Errorf("after Up, SelectedRow = %d, want 2", a.table.SelectedRow)
+	if a.table.SelectedRow != 1 {
+		t.Errorf("after Up, SelectedRow = %d, want 1", a.table.SelectedRow)
 	}
 
 	// g (top), G (bottom).
@@ -120,7 +120,7 @@ func TestHappyPath_LaunchAndNavigate(t *testing.T) {
 // 5 consecutive resume cycles via the test seam (suspendImpl
 // stubbed) and asserts each one:
 //   - calls cb.ResumeSession exactly once
-//   - opens the ReturnPrompt overlay afterward
+//   - opens the return-context options overlay afterward
 //   - leaves the table responsive (selection still moves)
 //   - leaves a.running == true (no silent quit)
 //
@@ -156,11 +156,12 @@ func TestHappyPath_ResumeCycleMultipleTimes(t *testing.T) {
 				i, resumeCalls, i)
 		}
 		if a.overlay == nil {
-			t.Fatalf("cycle %d: ReturnPrompt overlay missing after resume",
+			t.Fatalf("cycle %d: return overlay missing after resume",
 				i)
 		}
-		if _, ok := a.overlay.(*ReturnPrompt); !ok {
-			t.Fatalf("cycle %d: overlay type = %T, want *ReturnPrompt",
+		modal, ok := a.overlay.(*OptionsModal)
+		if !ok || modal.Context != OptionsModalContextReturn {
+			t.Fatalf("cycle %d: overlay type = %T, want return-context *OptionsModal",
 				i, a.overlay)
 		}
 		if !a.running {
@@ -168,11 +169,14 @@ func TestHappyPath_ResumeCycleMultipleTimes(t *testing.T) {
 				i)
 		}
 
-		// User dismisses the prompt (List action → overlay = nil).
+		// User dismisses the prompt (List action -> overlay = nil).
 		// Use OnList rather than OnResume so we don't recurse
 		// infinitely via the cycle-test-self path.
-		prompt := a.overlay.(*ReturnPrompt)
-		prompt.OnList()
+		listAction := findModalAction(modal, "Go to session list")
+		if listAction == nil {
+			t.Fatalf("cycle %d: return overlay missing Go to session list action", i)
+		}
+		listAction()
 		if a.overlay != nil {
 			t.Fatalf("cycle %d: OnList should clear overlay", i)
 		}
@@ -215,6 +219,12 @@ func TestHappyPath_ResumeFromOptionsPopup(t *testing.T) {
 	if !ok {
 		t.Fatalf("overlay = %T, want *OptionsModal", a.overlay)
 	}
+	if len(modal.Entries) == 0 {
+		t.Fatal("OptionsModal has no entries")
+	}
+	if modal.Entries[0].Label == "Drive in sidecar" {
+		t.Fatalf("Drive in sidecar should not be first option")
+	}
 
 	// Find the Resume entry and invoke its action.
 	var resumeAction func()
@@ -232,9 +242,10 @@ func TestHappyPath_ResumeFromOptionsPopup(t *testing.T) {
 	if resumeCalls != 1 {
 		t.Errorf("Resume entry should call cb.ResumeSession once, got %d", resumeCalls)
 	}
-	// After resume, overlay should be the ReturnPrompt.
-	if _, ok := a.overlay.(*ReturnPrompt); !ok {
-		t.Errorf("after Resume from popup, overlay = %T, want *ReturnPrompt", a.overlay)
+	// After resume, overlay should be return-context OptionsModal.
+	returnModal, ok := a.overlay.(*OptionsModal)
+	if !ok || returnModal.Context != OptionsModalContextReturn {
+		t.Errorf("after Resume from popup, overlay = %T, want return-context *OptionsModal", a.overlay)
 	}
 }
 

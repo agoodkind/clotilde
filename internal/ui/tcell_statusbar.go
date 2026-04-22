@@ -24,11 +24,62 @@ const (
 type StatusBarWidget struct {
 	Mode     StatusMode
 	Position string // e.g. "Top", "Bot", "45%". Empty means nothing to show.
+	// LegendOverride lets overlays/panels supply a context-specific
+	// legend while reusing the same fixed status bar location.
+	LegendOverride []LegendAction
 	// BridgeCount surfaces the number of active claude --remote-control
 	// sessions. Rendered as a small RC×N badge on the right edge so
 	// the user always sees how many of their sessions are exposed.
 	BridgeCount int
 }
+
+// LegendProvider is implemented by overlays that want to customize
+// the bottom status bar legend while they are the topmost pane.
+type LegendProvider interface {
+	StatusLegendActions() []LegendAction
+}
+
+type legendHint struct {
+	key   string
+	label string
+}
+
+// LegendAction is the allowed catalog of legend entries. All status-bar
+// legends map from these enums so wording stays consistent across modes
+// and overlays.
+type LegendAction int
+
+const (
+	LegendMove LegendAction = iota
+	LegendTopBottom
+	LegendSelectOption
+	LegendSelectDetail
+	LegendFilter
+	LegendNew
+	LegendRefresh
+	LegendHelp
+	LegendQuit
+	LegendSearch
+	LegendView
+	LegendCompact
+	LegendFork
+	LegendDelete
+	LegendEditBasedir
+	LegendClose
+	LegendTypeFilter
+	LegendConfirm
+	LegendClear
+	LegendNext
+	LegendFocus
+	LegendAdjust
+	LegendSelect
+	LegendScroll
+	LegendYesConfirm
+	LegendNoCancel
+	LegendPreview
+	LegendApply
+	LegendUndo
+)
 
 // badgeFor returns the label and background color for a mode.
 func badgeFor(m StatusMode) (string, tcell.Color) {
@@ -53,45 +104,116 @@ func badgeFor(m StatusMode) (string, tcell.Color) {
 
 // legendFor returns styled segments for the keybinding hints.
 func legendFor(m StatusMode) []TextSegment {
-	type kv struct{ key, label string }
-	var pairs []kv
+	var actions []LegendAction
 	switch m {
 	case StatusBrowse:
-		pairs = []kv{
-			{"j/k", "move"}, {"g/G", "top/bot"}, {"enter", "options"},
-			{"space", "detail"}, {"/", "filter"}, {"N", "new"},
-			{"R", "refresh"}, {"?", "help"}, {"q", "quit"},
+		actions = []LegendAction{
+			LegendMove, LegendTopBottom, LegendSelectOption,
+			LegendSelectDetail, LegendFilter, LegendNew,
+			LegendRefresh, LegendHelp, LegendQuit,
 		}
 	case StatusDetail:
-		pairs = []kv{
-			{"enter/O", "options"}, {"/", "search"}, {"v", "view"},
-			{"c", "compact"}, {"f", "fork"}, {"d", "delete"},
-			{"B", "basedir"}, {"esc", "close"},
+		actions = []LegendAction{
+			LegendSelectOption, LegendSearch, LegendView,
+			LegendCompact, LegendFork, LegendDelete,
+			LegendEditBasedir, LegendClose,
 		}
 	case StatusFilter:
-		pairs = []kv{{"type", "filter"}, {"enter", "confirm"}, {"esc", "clear"}}
+		actions = []LegendAction{LegendTypeFilter, LegendConfirm, LegendClear}
 	case StatusSearch:
-		pairs = []kv{{"tab", "next"}, {"enter", "search"}, {"esc", "cancel"}}
+		actions = []LegendAction{LegendNext, LegendSearch, LegendClose}
 	case StatusCompact:
-		pairs = []kv{{"tab", "next"}, {"enter", "apply"}, {"esc", "cancel"}}
+		actions = []LegendAction{LegendFocus, LegendAdjust, LegendSelect, LegendClose}
 	case StatusView:
-		pairs = []kv{{"↑↓", "scroll"}, {"q/esc", "close"}}
+		actions = []LegendAction{LegendScroll, LegendClose}
 	case StatusConfirm:
-		pairs = []kv{{"y", "confirm"}, {"n/esc", "cancel"}}
+		actions = []LegendAction{LegendYesConfirm, LegendNoCancel}
 	}
+	return legendSegmentsFromActions(actions)
+}
+
+func legendSegmentsFromActions(actions []LegendAction) []TextSegment {
 	barBg := StyleStatusBar
 	keyStyle := barBg.Foreground(ColorText).Bold(true)
 	labelStyle := barBg.Foreground(ColorMuted)
 
 	var segs []TextSegment
-	for i, p := range pairs {
+	for i, action := range actions {
+		hint, ok := legendHintForAction(action)
+		if !ok {
+			continue
+		}
 		if i > 0 {
 			segs = append(segs, TextSegment{Text: "  ", Style: barBg})
 		}
-		segs = append(segs, TextSegment{Text: p.key, Style: keyStyle})
-		segs = append(segs, TextSegment{Text: " " + p.label, Style: labelStyle})
+		segs = append(segs, TextSegment{Text: hint.key, Style: keyStyle})
+		segs = append(segs, TextSegment{Text: " " + hint.label, Style: labelStyle})
 	}
 	return segs
+}
+
+func legendHintForAction(action LegendAction) (legendHint, bool) {
+	switch action {
+	case LegendMove:
+		return legendHint{key: "j/k", label: "move"}, true
+	case LegendTopBottom:
+		return legendHint{key: "g/G", label: "top/bot"}, true
+	case LegendSelectOption:
+		return legendHint{key: "enter/O", label: "select option"}, true
+	case LegendSelectDetail:
+		return legendHint{key: "space", label: "select detail"}, true
+	case LegendFilter:
+		return legendHint{key: "/", label: "filter"}, true
+	case LegendNew:
+		return legendHint{key: "N", label: "new"}, true
+	case LegendRefresh:
+		return legendHint{key: "R", label: "refresh"}, true
+	case LegendHelp:
+		return legendHint{key: "?", label: "help"}, true
+	case LegendQuit:
+		return legendHint{key: "q", label: "quit"}, true
+	case LegendSearch:
+		return legendHint{key: "/", label: "search"}, true
+	case LegendView:
+		return legendHint{key: "v", label: "view"}, true
+	case LegendCompact:
+		return legendHint{key: "c", label: "compact"}, true
+	case LegendFork:
+		return legendHint{key: "f", label: "fork"}, true
+	case LegendDelete:
+		return legendHint{key: "d", label: "delete"}, true
+	case LegendEditBasedir:
+		return legendHint{key: "B", label: "edit basedir"}, true
+	case LegendClose:
+		return legendHint{key: "esc", label: "close"}, true
+	case LegendTypeFilter:
+		return legendHint{key: "type", label: "filter"}, true
+	case LegendConfirm:
+		return legendHint{key: "enter", label: "confirm"}, true
+	case LegendClear:
+		return legendHint{key: "esc", label: "clear"}, true
+	case LegendNext:
+		return legendHint{key: "tab", label: "next"}, true
+	case LegendFocus:
+		return legendHint{key: "↑↓", label: "focus"}, true
+	case LegendAdjust:
+		return legendHint{key: "←→", label: "adjust"}, true
+	case LegendSelect:
+		return legendHint{key: "enter/spc", label: "select"}, true
+	case LegendScroll:
+		return legendHint{key: "↑↓", label: "scroll"}, true
+	case LegendYesConfirm:
+		return legendHint{key: "y", label: "confirm"}, true
+	case LegendNoCancel:
+		return legendHint{key: "n/esc", label: "cancel"}, true
+	case LegendPreview:
+		return legendHint{key: "p", label: "preview"}, true
+	case LegendApply:
+		return legendHint{key: "a", label: "apply"}, true
+	case LegendUndo:
+		return legendHint{key: "u", label: "undo"}, true
+	}
+	return legendHint{}, false
 }
 
 // Draw renders the status bar into r (r.H should be 1).
@@ -109,7 +231,12 @@ func (s *StatusBarWidget) Draw(scr tcell.Screen, r Rect) {
 	x += 2
 
 	// Legend
-	segs := legendFor(s.Mode)
+	var segs []TextSegment
+	if len(s.LegendOverride) == 0 {
+		segs = legendFor(s.Mode)
+	} else {
+		segs = legendSegmentsFromActions(s.LegendOverride)
+	}
 	for _, seg := range segs {
 		if x >= r.X+r.W {
 			break

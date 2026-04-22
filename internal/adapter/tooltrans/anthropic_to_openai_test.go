@@ -2,6 +2,7 @@ package tooltrans
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -110,7 +111,7 @@ func TestStreamToolTranslator(t *testing.T) {
 	}
 }
 
-func TestStreamThinkingForwardsReasoningContent(t *testing.T) {
+func TestStreamThinkingEmitsBlockquoteContent(t *testing.T) {
 	t.Parallel()
 	tr := NewStreamTranslator("chatcmpl-th", "alias")
 	chunks, _, _, _, err := tr.HandleEvent("content_block_delta", []byte(`{
@@ -124,7 +125,18 @@ func TestStreamThinkingForwardsReasoningContent(t *testing.T) {
 	if len(chunks) != 1 {
 		t.Fatalf("want 1 chunk, got %d", len(chunks))
 	}
-	if chunks[0].Choices[0].Delta.ReasoningContent != "x" {
-		t.Fatalf("reasoning_content = %q", chunks[0].Choices[0].Delta.ReasoningContent)
+	got := chunks[0].Choices[0].Delta
+	// The new shape puts the thinking into delta.content wrapped in
+	// a clyde-thinking sentinel and blockquote header. The
+	// reasoning / reasoning_content fields are unused because Cursor
+	// BYOK does not read them.
+	if !strings.Contains(got.Content, "<!--clyde-thinking-->") {
+		t.Fatalf("missing opening sentinel: %q", got.Content)
+	}
+	if !strings.Contains(got.Content, "x") {
+		t.Fatalf("missing thinking text: %q", got.Content)
+	}
+	if got.Reasoning != "" || got.ReasoningContent != "" {
+		t.Fatalf("reasoning fields must stay empty, got %+v", got)
 	}
 }

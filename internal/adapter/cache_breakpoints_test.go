@@ -97,7 +97,9 @@ func TestUsageFromAnthropicMapsCacheRead(t *testing.T) {
 		CacheReadInputTokens:     4000,
 	}
 	u := usageFromAnthropic(in)
-	if u.PromptTokens != 120 || u.CompletionTokens != 30 || u.TotalTokens != 150 {
+	// prompt_tokens must include the cached + cache-creation portions
+	// to match OpenAI semantics: 120 uncached + 800 written + 4000 read.
+	if u.PromptTokens != 4920 || u.CompletionTokens != 30 || u.TotalTokens != 4950 {
 		t.Fatalf("unexpected core usage: %+v", u)
 	}
 	if u.PromptTokensDetails == nil || u.PromptTokensDetails.CachedTokens != 4000 {
@@ -109,5 +111,106 @@ func TestUsageFromAnthropicOmitsDetailsWhenNoCache(t *testing.T) {
 	u := usageFromAnthropic(anthropic.Usage{InputTokens: 10, OutputTokens: 2})
 	if u.PromptTokensDetails != nil {
 		t.Fatalf("PromptTokensDetails should be nil when no cache read: %+v", u.PromptTokensDetails)
+	}
+}
+
+func TestBuildSystemBlocksEnabledStampsPrefixAndCaller(t *testing.T) {
+	blocks := buildSystemBlocks("x-anthropic-billing-header: v=1", "cli-prefix", "caller sys text", "", "", true)
+	if len(blocks) != 3 {
+		t.Fatalf("want 3 blocks, got %d: %+v", len(blocks), blocks)
+	}
+	if blocks[0].CacheControl != nil {
+		t.Fatalf("billing block must not carry cache_control")
+	}
+	if blocks[1].CacheControl == nil || blocks[1].CacheControl.Type != "ephemeral" {
+		t.Fatalf("prefix block missing ephemeral cache marker: %+v", blocks[1].CacheControl)
+	}
+	if blocks[1].CacheControl.TTL != "" {
+		t.Fatalf("default TTL should be empty (Anthropic 5m default), got %q", blocks[1].CacheControl.TTL)
+	}
+	if blocks[2].CacheControl == nil || blocks[2].CacheControl.Type != "ephemeral" {
+		t.Fatalf("caller block missing ephemeral cache marker: %+v", blocks[2].CacheControl)
+	}
+}
+
+func TestBuildSystemBlocksStampsScopeOnPrefixOnly(t *testing.T) {
+	blocks := buildSystemBlocks("billing", "prefix", "caller", "", "global", true)
+	if len(blocks) != 3 {
+		t.Fatalf("want 3 blocks, got %d", len(blocks))
+	}
+	if blocks[1].CacheControl == nil || blocks[1].CacheControl.Scope != "global" {
+		t.Fatalf("prefix block missing scope=global: %+v", blocks[1].CacheControl)
+	}
+	if blocks[2].CacheControl == nil || blocks[2].CacheControl.Scope != "" {
+		t.Fatalf("caller block should not carry scope: %+v", blocks[2].CacheControl)
+	}
+}
+
+func TestBuildSystemBlocksHonorsExplicit1hTTL(t *testing.T) {
+	blocks := buildSystemBlocks("billing", "prefix", "caller", "1h", "", true)
+	for i, b := range blocks[1:] {
+		if b.CacheControl == nil || b.CacheControl.TTL != "1h" {
+			t.Fatalf("block %d missing 1h TTL: %+v", i+1, b.CacheControl)
+		}
+	}
+}
+
+func TestBuildSystemBlocksSkipsEmptyInputs(t *testing.T) {
+	blocks := buildSystemBlocks("", "cli-prefix", "", "", "", true)
+	if len(blocks) != 1 {
+		t.Fatalf("want 1 block, got %d: %+v", len(blocks), blocks)
+	}
+	if blocks[0].Text != "cli-prefix" || blocks[0].CacheControl == nil {
+		t.Fatalf("unexpected single block: %+v", blocks[0])
+	}
+}
+
+func TestBuildSystemBlocksDisabledStripsMarkers(t *testing.T) {
+	blocks := buildSystemBlocks("billing", "prefix", "caller", "", "", false)
+	for i, b := range blocks {
+		if b.CacheControl != nil {
+			t.Fatalf("block %d carried cache_control when caching disabled: %+v", i, b)
+		}
+	}
+}
+
+func TestRequestMarshalEmitsSystemArray(t *testing.T) {
+	r := anthropic.Request{
+		Model:     "claude-model",
+		MaxTokens: 64,
+		SystemBlocks: []anthropic.SystemBlock{
+			{Type: "text", Text: "billing"},
+			{Type: "text", Text: "prefix", CacheControl: &anthropic.CacheControl{Type: "ephemeral", TTL: "1h"}},
+		},
+	}
+	raw, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, `"system":[`) {
+		t.Fatalf("system not emitted as array: %s", body)
+	}
+	if !strings.Contains(body, `"cache_control":{"type":"ephemeral","ttl":"1h"}`) {
+		t.Fatalf("missing 1h ttl marker: %s", body)
+	}
+	if strings.Count(body, `"system"`) != 1 {
+		t.Fatalf("system emitted twice: %s", body)
+	}
+}
+
+func TestRequestMarshalFallsBackToStringSystem(t *testing.T) {
+	r := anthropic.Request{
+		Model:     "claude-model",
+		MaxTokens: 64,
+		System:    "plain string",
+	}
+	raw, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, `"system":"plain string"`) {
+		t.Fatalf("string system not emitted: %s", body)
 	}
 }

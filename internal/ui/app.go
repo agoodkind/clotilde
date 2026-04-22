@@ -99,6 +99,12 @@ type AppCallbacks struct {
 	// runs when the TUI exits. Errors are silently tolerated: the
 	// fallback poller still runs.
 	SubscribeRegistry func() (events <-chan SessionEvent, cancel func(), err error)
+	// CompactPreview streams compact progress events in preview mode.
+	CompactPreview func(req CompactRunRequest) (events <-chan CompactEvent, cancel func(), err error)
+	// CompactApply streams compact progress events in apply mode.
+	CompactApply func(req CompactRunRequest) (events <-chan CompactEvent, cancel func(), err error)
+	// CompactUndo rolls back the latest compact apply for a session.
+	CompactUndo func(sessionName string) (*CompactUndoResult, error)
 }
 
 // SessionEvent is the UI-facing copy of the daemon SubscribeRegistryResponse. The
@@ -205,6 +211,7 @@ type App struct {
 	sidecar          *SidecarPanel
 	sidecarSessionID string
 	sidecarCancel    func() // cancels the daemon TailTranscript stream
+	compactCancel    func() // cancels in-flight compact preview/apply stream
 
 	// Overlays (one at a time)
 	overlay Widget
@@ -303,7 +310,24 @@ type App struct {
 
 	// dashboardLaunchCWD is cwd when clyde started the TUI; used for New chat default.
 	dashboardLaunchCWD string
+
+	// Return flow trace state is used to stitch resume/prompt freeze
+	// paths across event-loop boundaries and make state transitions
+	// observable in slog JSON traces.
+	returnPathState   returnPathState
+	returnPathSession *session.Session
 }
+
+// returnPathState captures the resumability lifecycle during pause/return.
+type returnPathState string
+
+const (
+	returnPathStateDashboardActive     returnPathState = "dashboard_active"
+	returnPathStateSuspendedForResume  returnPathState = "suspended_for_resume"
+	returnPathStateResumingTerminal    returnPathState = "resuming_terminal"
+	returnPathStateReturnPromptPending returnPathState = "return_prompt_pending"
+	returnPathStateReturnPromptVisible returnPathState = "return_prompt_visible"
+)
 
 // NewApp creates and returns the clyde TUI.
 func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *App {
@@ -324,6 +348,7 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 		recentlyUpdatedAt:  make(map[string]time.Time),
 		sortCol:            SortColUsed,
 		sortAsc:            false,
+		returnPathState:    returnPathStateDashboardActive,
 	}
 	// Default suspendImpl: real teardown / exec / reinit. Tests
 	// replace this before driving events so the resume cycle can be
@@ -355,6 +380,7 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	// banner. The row is located after any sorting or filtering so that
 	// the activation highlights the correct index.
 	if opt.ReturnTo != nil {
+		a.returnPathSession = opt.ReturnTo
 		for vi, idx := range a.visibleIdx {
 			if a.sessions[idx].Name == opt.ReturnTo.Name {
 				a.table.Active = true
@@ -368,6 +394,45 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	return a
 }
 
+func (a *App) isCurrentReturnPathSession(sess *session.Session) bool {
+	if a.returnPathSession == nil || sess == nil {
+		return false
+	}
+	return a.returnPathSession.Metadata.SessionID == sess.Metadata.SessionID
+}
+
+func (a *App) trackReturnPathState(state returnPathState, source string, sess *session.Session) {
+	prev := a.returnPathState
+	if prev == "" {
+		prev = returnPathStateDashboardActive
+	}
+	if prev == state {
+		return
+	}
+	a.returnPathState = state
+	fields := []any{
+		"component", "tui",
+		"subcomponent", "return_path",
+		"source", source,
+		"from_state", string(prev),
+		"to_state", string(state),
+	}
+	if sess != nil {
+		fields = append(fields,
+			"session", sess.Name,
+			"session_id", sess.Metadata.SessionID,
+		)
+	}
+	slog.Info("tui.return_path.transition", fields...)
+}
+
+func (a *App) closeReturnPrompt(sess *session.Session, source string) {
+	a.overlay = nil
+	if a.returnPathState == returnPathStateReturnPromptVisible || a.returnPathState == returnPathStateReturnPromptPending {
+		a.trackReturnPathState(returnPathStateDashboardActive, "returnprompt."+source, sess)
+	}
+}
+
 // openReturnPrompt shows the post-session modal with session stats and
 // three choices: Return to session, Go back to session list, Quit clyde.
 // Quit is highlighted by default so a single Enter press exits.
@@ -376,39 +441,70 @@ func (a *App) openReturnPrompt(sess *session.Session) {
 		slog.Warn("returnprompt.open skipped", "reason", "nil_session")
 		return
 	}
-	prompt := &ReturnPrompt{
-		SessionName: sess.Name,
-		Stats:       a.buildReturnPromptStats(sess),
-		Index:       3, // Quit is the default highlighted option
+	close := func() {
+		a.closeReturnPrompt(sess, "closed")
 	}
-	prompt.OnResume = func() {
-		a.overlay = nil
-		// Re-locate the row by name. The table selection may have been
-		// reset by a refresh cycle, which previously made repeated
-		// Resume clicks silently no-op on the third or later round trip.
-		// When the row is filtered out (active filter no longer matches),
-		// resume the session directly so the user is never silently dropped.
-		row := a.findVisibleRowByName(sess.Name)
-		if row < 0 {
-			slog.Warn("returnprompt.onresume row not visible, resuming directly",
-				"session", sess.Name)
-			a.resumeSession(sess)
-			return
-		}
-		a.table.SelectedRow = row
-		a.resumeRow(row)
+	if a.isCurrentReturnPathSession(sess) {
+		a.trackReturnPathState(returnPathStateReturnPromptPending, "returnprompt.enter", sess)
 	}
-	prompt.OnCompact = func() {
-		a.overlay = nil
-		a.openRichCompactForm(sess)
+	sessionEntries := a.sessionOptionsEntries(sess, close)
+	returnEntries := []OptionsModalEntry{
+		{
+			Label: "Quit clyde",
+			Hint:  "q",
+			Action: func() {
+				a.closeReturnPrompt(sess, "quit")
+				a.running = false
+			},
+		},
+		{
+			Label: "Go to session list",
+			Hint:  "esc/list",
+			Action: func() {
+				a.closeReturnPrompt(sess, "dismiss")
+			},
+		},
+		{
+			Label: "Return back to chat",
+			Hint:  "enter",
+			Action: func() {
+				a.closeReturnPrompt(sess, "return_to_chat")
+				row := a.findVisibleRowByName(sess.Name)
+				if row < 0 {
+					slog.Warn("returnprompt.onresume row not visible, resuming directly",
+						"session", sess.Name)
+					a.resumeSession(sess)
+					return
+				}
+				a.table.SelectedRow = row
+				a.resumeRow(row)
+			},
+		},
+		{
+			Label: "Compact this session...",
+			Hint:  "c",
+			Action: func() {
+				a.closeReturnPrompt(sess, "compact")
+				a.openRichCompactForm(sess)
+			},
+		},
 	}
-	prompt.OnList = func() { a.overlay = nil }
-	prompt.OnQuit = func() {
-		a.overlay = nil
+	statsSegments, statsLoading := a.buildSessionStatsSegments(sess)
+	modal := NewOptionsModal("Session exited: "+sess.Name, sessionEntries)
+	modal.Context = OptionsModalContextReturn
+	modal.TopEntries = returnEntries
+	modal.resetCursor()
+	modal.OnCancel = close
+	modal.OnQuit = func() {
+		a.closeReturnPrompt(sess, "quit")
 		a.running = false
 	}
-	prompt.OnCancel = func() { a.overlay = nil }
-	a.overlay = prompt
+	modal.StatsSegments = statsSegments
+	modal.StatsLoading = statsLoading
+	a.overlay = modal
+	if a.isCurrentReturnPathSession(sess) {
+		a.trackReturnPathState(returnPathStateReturnPromptVisible, "returnprompt.visible", sess)
+	}
 	slog.Info("returnprompt.opened",
 		"session", sess.Name,
 		"overlay", fmt.Sprintf("%T", a.overlay),
@@ -420,10 +516,16 @@ func (a *App) ensureReturnPrompt(sess *session.Session, source string) {
 		slog.Warn("returnprompt.ensure skipped", "source", source, "reason", "nil_session")
 		return
 	}
-	if _, ok := a.overlay.(*ReturnPrompt); ok {
-		return
+	if modal, ok := a.overlay.(*OptionsModal); ok {
+		if modal.Context == OptionsModalContextReturn {
+			if a.isCurrentReturnPathSession(sess) {
+				a.trackReturnPathState(returnPathStateReturnPromptVisible, "ensureReturnPrompt.while_visible", sess)
+			}
+			return
+		}
 	}
 	slog.Warn("returnprompt.ensure_reopen", "source", source, "session", sess.Name, "overlay", fmt.Sprintf("%T", a.overlay))
+	a.trackReturnPathState(returnPathStateReturnPromptPending, "ensureReturnPrompt.reopen", sess)
 	a.openReturnPrompt(sess)
 }
 
@@ -436,52 +538,47 @@ func (a *App) resumeSession(sess *session.Session) {
 		return
 	}
 	slog.Info("resume.start", "session", sess.Name, "uuid", sess.Metadata.SessionID, "path", "resumeSession")
-	a.suspendImpl(func() { _ = a.cb.ResumeSession(sess) })
+	a.returnPathSession = sess
+	a.trackReturnPathState(returnPathStateSuspendedForResume, "resumeSession.before_suspend", sess)
+	a.suspendImpl(func() {
+		a.trackReturnPathState(returnPathStateResumingTerminal, "resumeSession.callback", sess)
+		_ = a.cb.ResumeSession(sess)
+	})
 	slog.Info("resume.exit", "session", sess.Name, "path", "resumeSession")
-	a.refreshSessions()
+	a.trackReturnPathState(returnPathStateReturnPromptPending, "resumeSession.after_suspend", sess)
+	// Open the return prompt immediately after resume exits. A synchronous
+	// refresh can block on large stores and make the app appear frozen before
+	// the prompt is shown.
 	sessionForPrompt := sess
-	if updated := a.findSessionByName(sess.Name); updated != nil {
-		sessionForPrompt = updated
-	}
 	a.openReturnPrompt(sessionForPrompt)
 	a.ensureReturnPrompt(sessionForPrompt, "resumeSession")
 }
 
-// buildReturnPromptStats gathers the stat rows shown at the top of the
-// post-session modal. Values come from the session metadata, the
-// modelCache / statsCache, and on-demand fallbacks when the cache
-// has not been populated for this session yet.
-//
-// Earlier this rendered "- -" dashes whenever PreWarmStats had not
-// reached the just-exited session, which was the common case after
-// `clyde resume <name>` jumped straight into a session that the
-// dashboard never displayed. The fallback now reads the model from
-// the transcript tail (cheap; ~5ms) and runs QuickStats on the
-// transcript file (cheap; ~30ms on a 5MB chain). Both populate the
-// caches as a side effect so subsequent dashboard renders skip the
-// re-read.
-func (a *App) buildReturnPromptStats(sess *session.Session) []ReturnPromptStat {
-	dash := "- -"
-
-	// Model: cache to on-demand ExtractModel callback fallback.
-	model := a.modelCache[sess.Name]
-	if (model == "" || model == "-") && a.cb.ExtractModel != nil {
-		model = a.cb.ExtractModel(sess)
-		if model != "" && model != "-" {
-			a.modelCache[sess.Name] = model
-		}
+func (a *App) cachedDetailForSession(sess *session.Session) (SessionDetail, bool) {
+	if sess == nil {
+		return SessionDetail{}, false
 	}
-
-	stats := []ReturnPromptStat{
-		{Label: "Model", Value: valueOr(model, dash)},
-		{Label: "Basedir", Value: shortPath(sess.Metadata.WorkspaceRoot)},
+	a.detailMu.Lock()
+	cached, ok := a.detailCache[sess.Name]
+	a.detailMu.Unlock()
+	if ok {
+		return cached, false
 	}
+	// Never block overlay opening on transcript extraction; schedule a
+	// background load and render with a lightweight placeholder until
+	// cache is warm.
+	a.loadDetailAsync(sess)
+	return SessionDetail{Model: valueOr(a.modelCache[sess.Name], "-")}, true
+}
 
-	stats = append(stats,
-		ReturnPromptStat{Label: "Created", Value: sess.Metadata.Created.Format("2006-01-02 15:04")},
-		ReturnPromptStat{Label: "Last used", Value: util.FormatRelativeTime(lastUsedTime(sess))},
-	)
-	return stats
+func (a *App) buildSessionStatsSegments(sess *session.Session) ([][]TextSegment, bool) {
+	if sess == nil {
+		return nil, false
+	}
+	detail, loading := a.cachedDetailForSession(sess)
+	view := NewDetailsView()
+	view.LookupBridge = a.bridgeFor
+	return view.buildLeft(sess, detail), loading
 }
 
 // valueOr returns v if it is non-empty and not a placeholder, else fallback.
@@ -658,6 +755,20 @@ func (a *App) runSpinnerTicker(stop <-chan struct{}) {
 // contents differ from the last snapshot. The main loop calls
 // softRefreshSessions in response, which preserves selection.
 type storeChanged struct{}
+
+type compactStreamEvent struct {
+	event CompactEvent
+}
+
+type compactStreamDone struct {
+	action string
+	err    error
+}
+
+type compactUndoDone struct {
+	result *CompactUndoResult
+	err    error
+}
 
 // runStoreWatcher polls the session store every five seconds for changes.
 // A fingerprint of (name, metadata mtime) pairs acts as a change signal
@@ -1051,6 +1162,31 @@ func (a *App) handleEvent(ev tcell.Event) {
 			_ = d
 		case storeChanged:
 			a.softRefreshSessions()
+		case compactStreamEvent:
+			if panel, ok := a.overlay.(*CompactPanel); ok {
+				panel.ApplyCompactEvent(d.event)
+			}
+		case compactStreamDone:
+			a.compactCancel = nil
+			if panel, ok := a.overlay.(*CompactPanel); ok {
+				panel.SetBusy(d.action, false)
+				if d.err != nil {
+					panel.ApplyCompactEvent(CompactEvent{
+						Kind:    "status",
+						Message: fmt.Sprintf("%s failed: %v", d.action, d.err),
+					})
+				} else {
+					panel.ApplyCompactEvent(CompactEvent{
+						Kind:    "status",
+						Message: d.action + " completed",
+					})
+				}
+			}
+		case compactUndoDone:
+			if panel, ok := a.overlay.(*CompactPanel); ok {
+				panel.SetBusy("undo", false)
+				panel.SetUndoResult(d.result, d.err)
+			}
 		default:
 			// Several call sites post the *App itself as the payload to
 			// request a generic table repaint (see PostEvent calls in
@@ -1504,6 +1640,10 @@ func (a *App) draw() {
 	// Status bar
 	a.status.Mode = a.mode
 	a.status.Position = a.positionTextFor()
+	a.status.LegendOverride = nil
+	if provider, ok := a.overlay.(LegendProvider); ok {
+		a.status.LegendOverride = provider.StatusLegendActions()
+	}
 	a.bridgeMu.RLock()
 	a.status.BridgeCount = len(a.bridges)
 	a.bridgeMu.RUnlock()
@@ -1524,35 +1664,69 @@ func (a *App) draw() {
 
 func (a *App) layout() {
 	w, h := a.screen.Size()
-	a.headerRect = Rect{X: 0, Y: 0, W: w, H: 1}
-
-	// Table takes the available width and hugs content height, with header.
-	tableTop := 1
-	statusH := 1
-	statusY := h - statusH
-	if statusY < 2 {
-		statusY = 2
+	if w <= 0 || h <= 0 {
+		a.headerRect = Rect{}
+		a.tableRect = Rect{}
+		a.detailRect = Rect{}
+		a.statusRect = Rect{}
+		return
 	}
+
+	headerH := 1
+	if h < 2 {
+		headerH = 0
+	}
+	statusH := 1
+	if h-headerH < 1 {
+		statusH = 0
+	}
+	a.headerRect = Rect{X: 0, Y: 0, W: w, H: headerH}
+	statusY := h - statusH
 	a.statusRect = Rect{X: 0, Y: statusY, W: w, H: statusH}
 
+	contentTop := headerH
+	availableH := h - headerH - statusH
+	if availableH < 0 {
+		availableH = 0
+	}
+
 	detailH := 0
-	if a.selected != nil {
-		// Details pane is 12 rows or whatever fits, minimum 6.
-		detailH = 12
-		if detailH > h-tableTop-statusH-3 {
-			detailH = imax(6, h-tableTop-statusH-3)
+	if a.selected != nil && availableH >= 5 {
+		desired := 12
+		maxDetail := availableH - 3
+		if maxDetail < 0 {
+			maxDetail = 0
+		}
+		detailH = imin(desired, maxDetail)
+		if detailH < 4 {
+			detailH = 0
 		}
 	}
 
-	// Table takes remaining vertical space above details + status.
-	tableH := statusY - tableTop - detailH
-	if tableH < 3 {
-		tableH = 3
+	tableH := availableH - detailH
+	if tableH < 1 {
+		if detailH > 0 {
+			detailH = imax(0, availableH-1)
+			tableH = availableH - detailH
+		}
 	}
-	a.tableRect = Rect{X: 2, Y: tableTop, W: w - 4, H: tableH}
+	if tableH < 0 {
+		tableH = 0
+	}
 
+	tableX := 2
+	if w < 8 {
+		tableX = 0
+	}
+	tableW := w - (tableX * 2)
+	if tableW < 0 {
+		tableW = 0
+	}
+	a.tableRect = Rect{X: tableX, Y: contentTop, W: tableW, H: tableH}
+
+	a.detailRect = Rect{}
 	if detailH > 0 {
-		a.detailRect = Rect{X: 0, Y: a.tableRect.Y + a.tableRect.H, W: w, H: detailH}
+		a.detailRect = Rect{X: 0, Y: contentTop + tableH, W: w, H: detailH}
 	}
 }
 
@@ -2009,20 +2183,17 @@ func (a *App) resumeRow(row int) {
 	}
 	sess := a.sessions[a.visibleIdx[row]]
 	slog.Info("resume.start", "session", sess.Name, "row", row, "uuid", sess.Metadata.SessionID, "path", "resumeRow")
+	a.returnPathSession = sess
+	a.trackReturnPathState(returnPathStateSuspendedForResume, "resumeRow.before_suspend", sess)
 	a.suspendImpl(func() {
+		a.trackReturnPathState(returnPathStateResumingTerminal, "resumeRow.callback", sess)
 		_ = a.cb.ResumeSession(sess)
 	})
 	slog.Info("resume.exit", "session", sess.Name, "path", "resumeRow")
-	// After claude exits, refresh the row's metadata (LastAccessed,
-	// Context, etc.) and pop the post-session ReturnPrompt so the user
-	// has the same Resume / List / Quit choices they get from the CLI
-	// resume path. Without this, repeated resume-from-dashboard cycles
-	// silently drop the user back to the table with no indication.
-	a.refreshSessions()
+	a.trackReturnPathState(returnPathStateReturnPromptPending, "resumeRow.after_suspend", sess)
+	// Open the post-session ReturnPrompt first. Deferring store refresh avoids
+	// blocking the prompt on a potentially slow session scan.
 	sessionForPrompt := sess
-	if updated := a.findSessionByName(sess.Name); updated != nil {
-		sessionForPrompt = updated
-	}
 	a.openReturnPrompt(sessionForPrompt)
 	a.ensureReturnPrompt(sessionForPrompt, "resumeRow")
 	// Re-select the row (refreshSessions resets selection on deselect).
@@ -2058,16 +2229,16 @@ func (a *App) openNewStarterModal() {
 	}
 	entries := []OptionsModalEntry{
 		{
-			Label:  "Start in this directory",
-			Hint:   shortPath(cwd),
+			Label: "Start in this directory",
+			Hint:  shortPath(cwd),
 			Action: func() {
 				a.closeOverlay()
 				a.openNewSessionTypeModal(cwd)
 			},
 		},
 		{
-			Label:  "Choose folder",
-			Hint:   "browse",
+			Label: "Choose folder",
+			Hint:  "browse",
 			Action: func() {
 				a.closeOverlay()
 				a.openNewSessionPrompt()
@@ -2334,20 +2505,94 @@ func (a *App) openCompactForm() {
 	a.openRichCompactForm(a.selected)
 }
 
-// openRichCompactForm shows a placeholder while the TUI compact form is
-// being rebuilt. The CLI is the supported entry point for compaction.
 func (a *App) openRichCompactForm(sess *session.Session) {
-	title := "Compact"
-	if sess != nil {
-		title = "Compact: " + sess.Name
+	if sess == nil {
+		return
 	}
-	modal := &Modal{
-		Title:   title,
-		Body:    "<TBD>\n\nThe TUI compact form is being rebuilt.\nUse `clyde compact <session> [target] [flags] --apply` from the CLI.",
-		Buttons: []string{"OK"},
+	panel := NewCompactPanel(sess.Name)
+	if sess.Metadata.SessionID != "" {
+		panel.sessionID = sess.Metadata.SessionID
 	}
-	modal.OnChoice = func(int) { a.closeOverlay() }
-	a.overlay = modal
+	if cachedModel, ok := a.modelCache[sess.Name]; ok && cachedModel != "" {
+		panel.model = cachedModel
+	}
+	panel.OnClose = a.closeOverlay
+	panel.OnPreview = func(req CompactRunRequest) {
+		a.startCompactRun(req, false, panel)
+	}
+	panel.OnApply = func(req CompactRunRequest) {
+		a.startCompactRun(req, true, panel)
+	}
+	panel.OnUndo = func() {
+		a.startCompactUndo(sess.Name, panel)
+	}
+	a.overlay = panel
+	a.mode = StatusCompact
+}
+
+func (a *App) startCompactRun(req CompactRunRequest, apply bool, panel *CompactPanel) {
+	var runner func(CompactRunRequest) (<-chan CompactEvent, func(), error)
+	action := "preview"
+	if apply {
+		runner = a.cb.CompactApply
+		action = "apply"
+	} else {
+		runner = a.cb.CompactPreview
+	}
+	if runner == nil {
+		panel.ApplyCompactEvent(CompactEvent{
+			Kind:    "status",
+			Message: "daemon compact RPC unavailable",
+		})
+		return
+	}
+	if a.compactCancel != nil {
+		a.compactCancel()
+		a.compactCancel = nil
+	}
+	panel.SetBusy(action, true)
+	events, cancel, err := runner(req)
+	if err != nil {
+		panel.SetBusy(action, false)
+		panel.ApplyCompactEvent(CompactEvent{
+			Kind:    "status",
+			Message: fmt.Sprintf("%s start failed: %v", action, err),
+		})
+		return
+	}
+	a.compactCancel = cancel
+	go a.runCompactStream(events, action)
+}
+
+func (a *App) runCompactStream(events <-chan CompactEvent, action string) {
+	for ev := range events {
+		if a.screen != nil {
+			_ = a.screen.PostEvent(tcell.NewEventInterrupt(compactStreamEvent{event: ev}))
+		}
+	}
+	if a.screen != nil {
+		_ = a.screen.PostEvent(tcell.NewEventInterrupt(compactStreamDone{action: action}))
+	}
+}
+
+func (a *App) startCompactUndo(sessionName string, panel *CompactPanel) {
+	if a.cb.CompactUndo == nil {
+		panel.ApplyCompactEvent(CompactEvent{
+			Kind:    "status",
+			Message: "daemon compact undo unavailable",
+		})
+		return
+	}
+	panel.SetBusy("undo", true)
+	go func() {
+		result, err := a.cb.CompactUndo(sessionName)
+		if a.screen != nil {
+			_ = a.screen.PostEvent(tcell.NewEventInterrupt(compactUndoDone{
+				result: result,
+				err:    err,
+			}))
+		}
+	}()
 }
 
 func (a *App) openFilter() {
@@ -2621,11 +2866,11 @@ func (a *App) openHelpModal() {
 		{Label: "  E            edit project config in $EDITOR", Disabled: true},
 		{Label: "  G            toggle global remote control default", Disabled: true},
 		{Label: "Compact form", Disabled: true},
-		{Label: "  Tab/Down     next field   Up/Backtab prev", Disabled: true},
+		{Label: "  Up/Down      move focus between rows", Disabled: true},
 		{Label: "  Space        toggle focused checkbox", Disabled: true},
 		{Label: "  Left/Right   adjust slider or focused keep-last", Disabled: true},
 		{Label: "  b            open boundary management overlay", Disabled: true},
-		{Label: "  Enter        apply (or activate focused button)", Disabled: true},
+		{Label: "  Enter/Space  select focused item (Apply asks to confirm)", Disabled: true},
 		{Label: "Compact result", Disabled: true},
 		{Label: "  u            undo last compact (restore backup)", Disabled: true},
 	}
@@ -2764,27 +3009,14 @@ func (a *App) openSessionOptionsFor(sess *session.Session) {
 		return
 	}
 	close := func() { a.closeOverlay() }
-	entries := []OptionsModalEntry{
-		{
-			Label: "Drive in sidecar",
-			Hint:  "needs --remote-control",
-			Action: func() {
-				close()
-				if _, ok := a.bridgeFor(sess); !ok {
-					slog.Warn("sidecar.drive no bridge", "session", sess.Name)
-					return
-				}
-				a.pinSidecar(sess)
-				a.activeTab = 2
-				if a.tabs != nil {
-					a.tabs.SetActive(2)
-				}
-			},
-			Disabled: func() bool {
-				_, ok := a.bridgeFor(sess)
-				return !ok
-			}(),
-		},
+	modal := NewOptionsModal(sess.Name, a.sessionOptionsEntries(sess, close))
+	modal.OnCancel = close
+	modal.StatsSegments, modal.StatsLoading = a.buildSessionStatsSegments(sess)
+	a.overlay = modal
+}
+
+func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []OptionsModalEntry {
+	return []OptionsModalEntry{
 		{
 			Label: "Resume",
 			Hint:  "load this session",
@@ -2820,6 +3052,26 @@ func (a *App) openSessionOptionsFor(sess *session.Session) {
 			},
 		},
 		a.remoteControlEntry(sess, close),
+		{
+			Label: "Drive in sidecar",
+			Hint:  "needs --remote-control",
+			Action: func() {
+				close()
+				if _, ok := a.bridgeFor(sess); !ok {
+					slog.Warn("sidecar.drive no bridge", "session", sess.Name)
+					return
+				}
+				a.pinSidecar(sess)
+				a.activeTab = 2
+				if a.tabs != nil {
+					a.tabs.SetActive(2)
+				}
+			},
+			Disabled: func() bool {
+				_, ok := a.bridgeFor(sess)
+				return !ok
+			}(),
+		},
 		a.openBridgeEntry(sess, close),
 		a.copyBridgeEntry(sess, close),
 		{
@@ -2858,9 +3110,6 @@ func (a *App) openSessionOptionsFor(sess *session.Session) {
 			Disabled: a.cb.DeleteSession == nil,
 		},
 	}
-	modal := NewOptionsModal(sess.Name, entries)
-	modal.OnCancel = close
-	a.overlay = modal
 }
 
 // openRenamePrompt asks for the new session name via an inline input
@@ -2940,6 +3189,10 @@ func (a *App) doFork() {
 }
 
 func (a *App) closeOverlay() {
+	if a.compactCancel != nil {
+		a.compactCancel()
+		a.compactCancel = nil
+	}
 	a.overlay = nil
 	if a.selected != nil {
 		a.mode = StatusDetail

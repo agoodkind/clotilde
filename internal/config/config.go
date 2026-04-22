@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -52,6 +54,7 @@ type LoggingConfig struct {
 
 // LoggingRotation controls file rotation behavior for the unified clyde logger.
 type LoggingRotation struct {
+	Enabled    *bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
 	MaxSizeMB  int   `json:"max_size_mb,omitempty" toml:"max_size_mb,omitempty"`
 	MaxBackups int   `json:"max_backups,omitempty" toml:"max_backups,omitempty"`
 	MaxAgeDays int   `json:"max_age_days,omitempty" toml:"max_age_days,omitempty"`
@@ -286,6 +289,49 @@ type AdapterFallback struct {
 	// "sonnet", "haiku"). Required (non-empty) when Enabled. Every
 	// key must exist in cfg.Families.
 	CLIAliases map[string]string `json:"cliAliases,omitempty" toml:"cli_aliases,omitempty"`
+
+	// TranscriptSynthesisEnabled toggles Phase 3 synthetic transcript
+	// writing. When true, the handler synthesizes a Claude Code JSONL
+	// transcript for every request, writes it to the path Claude will
+	// read, and spawns the CLI with --resume instead of --session-id.
+	// That lets Claude's own prompt-cache + microcompact pipeline fire
+	// on every turn after the first, cutting input-token bill on
+	// fallback sessions by ~50-70%. Default off until field-tested.
+	TranscriptSynthesisEnabled bool `json:"transcriptSynthesisEnabled,omitempty" toml:"transcript_synthesis_enabled,omitempty"`
+
+	// TranscriptWorkspaceDir is the cwd of spawned claude -p
+	// invocations when TranscriptSynthesisEnabled is true. Claude
+	// uses the sanitized form of this path as its projects subdir
+	// name, so the synthesized transcripts land somewhere clearly
+	// labeled and separated from real workspaces. Empty falls back
+	// to `$XDG_STATE_HOME/clyde/adapter-workspaces/<alias>`. The
+	// daemon creates the directory on first use.
+	TranscriptWorkspaceDir string `json:"transcriptWorkspaceDir,omitempty" toml:"transcript_workspace_dir,omitempty"`
+}
+
+// ResolveTranscriptWorkspaceDir returns the cwd to use for the Phase 3
+// synthesized-transcript workflow. When the config supplies an explicit
+// override, that wins. Otherwise it returns a per-alias directory under
+// the user's XDG state home, keeping each model alias's synthesized
+// transcripts in its own subdir under ~/.claude/projects/.
+func (f AdapterFallback) ResolveTranscriptWorkspaceDir(alias string) string {
+	base := f.TranscriptWorkspaceDir
+	if base != "" {
+		return base
+	}
+	state := os.Getenv("XDG_STATE_HOME")
+	if state == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		state = filepath.Join(home, ".local", "state")
+	}
+	slug := alias
+	if slug == "" {
+		slug = "default"
+	}
+	return filepath.Join(state, "clyde", "adapter-workspaces", slug)
 }
 
 // AdapterFallbackShunt opts the fallback dispatcher into routing
@@ -351,6 +397,38 @@ type AdapterClientIdentity struct {
 	// PerContextBetas maps a substring of the wire model id (e.g. a
 	// context suffix) to an extra anthropic-beta flag for that variant.
 	PerContextBetas map[string]string `json:"perContextBetas,omitempty" toml:"per_context_betas,omitempty"`
+	// PromptCachingEnabled toggles the typed-system-blocks form with
+	// cache_control markers on the billing / CLI-prefix / caller-system
+	// blocks. When nil or true, markers are stamped and system is sent
+	// as a typed block array. When false, system is sent as a plain
+	// string (back-compat wire shape). Safety valve if the upstream
+	// identity check ever disagrees with the marker form.
+	PromptCachingEnabled *bool `json:"promptCachingEnabled,omitempty" toml:"prompt_caching_enabled,omitempty"`
+	// PromptCacheTTL selects the cache breakpoint TTL. Empty (default)
+	// uses Anthropic's 5m default (writes cost 1.25x input). "1h"
+	// extends the TTL at a write cost of 2x input; only worthwhile for
+	// long-idle reuse (user pauses 5m+ between turns). Reads are 0.1x
+	// input at either TTL. Anything other than "" / "5m" / "1h" is
+	// ignored and treated as default.
+	PromptCacheTTL string `json:"promptCacheTTL,omitempty" toml:"prompt_cache_ttl,omitempty"`
+	// PromptCacheScope selects the cache_control scope on the CLI
+	// system prefix block. Empty (default) uses session-scoped
+	// caching, same as today. "global" asks Anthropic for a shared
+	// cache key across sessions; only effective on accounts Anthropic
+	// allowlists. "org" scopes to the billing org. Anything else is
+	// ignored. Requires the prompt-caching-scope-2026-01-05 beta
+	// header in [adapter.client_identity.beta_header] to be effective.
+	PromptCacheScope string `json:"promptCacheScope,omitempty" toml:"prompt_cache_scope,omitempty"`
+	// MicrocompactEnabled rewrites aged tool_result bodies to a
+	// placeholder string before sending, mirroring Claude Code's
+	// time-based microcompact. Defaults to true when nil. Set to false
+	// if upstream caching is misbehaving and we need to isolate.
+	MicrocompactEnabled *bool `json:"microcompactEnabled,omitempty" toml:"microcompact_enabled,omitempty"`
+	// MicrocompactKeepRecent is how many most-recent compactable tool
+	// results are kept verbatim. Older ones get cleared. Defaults to
+	// 15 when nil or zero. Match Claude's GrowthBook default when it
+	// diverges.
+	MicrocompactKeepRecent int `json:"microcompactKeepRecent,omitempty" toml:"microcompact_keep_recent,omitempty"`
 }
 
 // AdapterFamily describes one Claude model family and the cross

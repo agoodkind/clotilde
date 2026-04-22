@@ -590,6 +590,109 @@ func TailTranscriptViaDaemon(parent context.Context, sessionID string, startOffs
 	return out, cancel, nil
 }
 
+type CompactRunOptions struct {
+	SessionName   string
+	TargetTokens  int
+	ReservedTokens int
+	Model         string
+	ModelExplicit bool
+	Thinking      bool
+	Images        bool
+	Tools         bool
+	Chat          bool
+	Summarize     bool
+	Force         bool
+}
+
+func CompactPreviewViaDaemon(parent context.Context, in CompactRunOptions) (<-chan *clydev1.CompactEvent, context.CancelFunc, error) {
+	return openCompactStream(parent, in, false)
+}
+
+func CompactApplyViaDaemon(parent context.Context, in CompactRunOptions) (<-chan *clydev1.CompactEvent, context.CancelFunc, error) {
+	return openCompactStream(parent, in, true)
+}
+
+func openCompactStream(parent context.Context, in CompactRunOptions, apply bool) (<-chan *clydev1.CompactEvent, context.CancelFunc, error) {
+	log := daemonClientLog(parent)
+	log.DebugContext(parent, "daemon.client.compact.begin",
+		"session", in.SessionName,
+		"target", in.TargetTokens,
+		"apply", apply,
+	)
+	c, err := ConnectOrStart(parent)
+	if err != nil {
+		log.DebugContext(parent, "daemon.client.compact.connect_failed", "err", err)
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithCancel(parent)
+	req := &clydev1.CompactRunRequest{
+		SessionName:    in.SessionName,
+		TargetTokens:   int32(in.TargetTokens),
+		ReservedTokens: int32(in.ReservedTokens),
+		Model:          in.Model,
+		ModelExplicit:  in.ModelExplicit,
+		Strippers: &clydev1.CompactStrippers{
+			Thinking: in.Thinking,
+			Images:   in.Images,
+			Tools:    in.Tools,
+			Chat:     in.Chat,
+		},
+		Summarize: in.Summarize,
+		Force:     in.Force,
+	}
+	var stream grpc.ServerStreamingClient[clydev1.CompactEvent]
+	if apply {
+		stream, err = c.rpc.CompactApply(ctx, req)
+	} else {
+		stream, err = c.rpc.CompactPreview(ctx, req)
+	}
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.compact.stream_open_failed", "apply", apply, "err", err)
+		cancel()
+		c.conn.Close()
+		return nil, nil, err
+	}
+	log.DebugContext(ctx, "daemon.client.compact.stream_open", "apply", apply)
+	out := make(chan *clydev1.CompactEvent, 64)
+	go func() {
+		defer close(out)
+		defer c.conn.Close()
+		for {
+			ev, recvErr := stream.Recv()
+			if recvErr != nil {
+				log.DebugContext(ctx, "daemon.client.compact.recv_done", "apply", apply, "err", recvErr)
+				return
+			}
+			select {
+			case out <- ev:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, cancel, nil
+}
+
+func CompactUndoViaDaemon(ctx context.Context, sessionName string) (*clydev1.CompactUndoResponse, error) {
+	log := daemonClientLog(ctx)
+	log.DebugContext(ctx, "daemon.client.compact_undo.begin", "session", sessionName)
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.compact_undo.connect_failed", "err", err)
+		return nil, err
+	}
+	defer c.conn.Close()
+	rpcCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	resp, rpcErr := c.rpc.CompactUndo(rpcCtx, &clydev1.CompactUndoRequest{SessionName: sessionName})
+	if rpcErr != nil {
+		log.DebugContext(rpcCtx, "daemon.client.compact_undo.rpc_failed", "err", rpcErr)
+		return nil, rpcErr
+	}
+	log.DebugContext(rpcCtx, "daemon.client.compact_undo.ok", "session", sessionName)
+	return resp, nil
+}
+
 const launchAgentLabel = "io.goodkind.clyde.daemon"
 
 // startDaemon starts the daemon process. On macOS, tries launchctl kickstart

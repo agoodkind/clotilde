@@ -99,18 +99,27 @@ func TestQA_AllWidgets(t *testing.T) {
 		}},
 
 		{"10-returnprompt", 100, 25, func(scr tcell.Screen, r Rect) {
-			rp := &ReturnPrompt{
-				SessionName: "clotilde-tcell-remastered",
-				Index:       3,
-				Stats: []ReturnPromptStat{
-					{Label: "Model", Value: "opus 1M"},
-					{Label: "Basedir", Value: "~/Sites/clotilde"},
-					{Label: "Tokens", Value: "~333k"},
-					{Label: "Messages", Value: "1,723"},
-					{Label: "Compactions", Value: "3"},
-				},
+			m := NewOptionsModal("Session exited: clotilde-tcell-remastered", []OptionsModalEntry{
+				{Label: "Resume", Hint: "r"},
+				{Label: "View transcript", Hint: "v"},
+				{Label: "Compact", Hint: "c"},
+			})
+			m.Context = OptionsModalContextReturn
+			m.TopEntries = []OptionsModalEntry{
+				{Label: "Quit clyde", Hint: "q"},
+				{Label: "Go to session list", Hint: "esc/list"},
+				{Label: "Return back to chat", Hint: "enter"},
+				{Label: "Compact this session...", Hint: "c"},
 			}
-			rp.Draw(scr, r)
+			m.StatsSegments = [][]TextSegment{
+				{{Text: "Identity", Style: StyleDefault.Bold(true)}},
+				{{Text: "  Model", Style: StyleSubtext}, {Text: "opus 1M", Style: StyleDefault}},
+				{{Text: "  Basedir", Style: StyleSubtext}, {Text: "~/Sites/clotilde", Style: StyleDefault}},
+				{{Text: "Timing", Style: StyleDefault.Bold(true)}},
+				{{Text: "  Last used", Style: StyleSubtext}, {Text: "7 minutes ago", Style: StyleDefault}},
+			}
+			m.resetCursor()
+			m.Draw(scr, r)
 		}},
 
 		{"15-filepicker", 100, 25, func(scr tcell.Screen, r Rect) {

@@ -2,20 +2,42 @@ package ui
 
 import (
 	"testing"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 
 	"goodkind.io/clyde/internal/session"
 )
 
-// TestUX_FirstDownMovesToRowOne catches the bug the user reported
-// earlier: "when i key down to get to the first entry it skips
-// right to second line (after two taps of down key)".
-//
-// Expected behavior: on a freshly-launched dashboard with 5 rows,
-// SelectedRow should start at 0, and the FIRST Down keypress should
-// move it to row 1  --  not skip to row 2.
-func TestUX_FirstDownMovesToRowOne(t *testing.T) {
+func TestUX_OpenReturnPromptDoesNotBlockOnDetailExtraction(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 2)
+	defer cleanup()
+	block := make(chan struct{})
+	a.cb.ExtractDetail = func(*session.Session) SessionDetail {
+		<-block
+		return SessionDetail{Model: "opus"}
+	}
+
+	start := time.Now()
+	sess := a.sessions[a.visibleIdx[0]]
+	a.openReturnPrompt(sess)
+	elapsed := time.Since(start)
+
+	if elapsed > 50*time.Millisecond {
+		t.Fatalf("openReturnPrompt blocked on detail extraction: %s", elapsed)
+	}
+	modal, ok := a.overlay.(*OptionsModal)
+	if !ok || modal.Context != OptionsModalContextReturn {
+		t.Fatalf("overlay = %T, want return-context *OptionsModal", a.overlay)
+	}
+
+	close(block)
+}
+
+// TestUX_FirstDownArmsFirstRow verifies first-launch keyboard behavior:
+// the first Down key press should arm/highlight row 0, and only the
+// second Down key press should move to row 1.
+func TestUX_FirstDownArmsFirstRow(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 5)
 	defer cleanup()
 
@@ -29,15 +51,15 @@ func TestUX_FirstDownMovesToRowOne(t *testing.T) {
 		// interacts. That's fine.
 	}
 
-	// ONE Down. Row should move to 1, not 2.
+	// ONE Down. First movement key should arm/highlight row 0.
+	a.table.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+	if a.table.SelectedRow != 0 {
+		t.Errorf("after 1×Down, SelectedRow = %d, want 0 (first row armed)", a.table.SelectedRow)
+	}
+	// Second Down  --  row 1.
 	a.table.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
 	if a.table.SelectedRow != 1 {
-		t.Errorf("after 1×Down, SelectedRow = %d, want 1 (no skip)", a.table.SelectedRow)
-	}
-	// Second Down  --  row 2.
-	a.table.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
-	if a.table.SelectedRow != 2 {
-		t.Errorf("after 2×Down, SelectedRow = %d, want 2", a.table.SelectedRow)
+		t.Errorf("after 2×Down, SelectedRow = %d, want 1", a.table.SelectedRow)
 	}
 }
 
@@ -95,15 +117,17 @@ func TestUX_PostSessionPromptPicksTheListOption(t *testing.T) {
 	if resumeCalls != 1 {
 		t.Fatalf("ResumeSession calls = %d, want 1", resumeCalls)
 	}
-	prompt, ok := a.overlay.(*ReturnPrompt)
-	if !ok {
-		t.Fatalf("overlay = %T, want *ReturnPrompt (post-session pane missing)", a.overlay)
+	modal, ok := a.overlay.(*OptionsModal)
+	if !ok || modal.Context != OptionsModalContextReturn {
+		t.Fatalf("overlay = %T, want return-context *OptionsModal (post-session pane missing)", a.overlay)
 	}
 
-	// User picks "Go back to session list". In the ReturnPrompt
-	// layout, index 2 is List. Activate via OnList directly  --  the
-	// production call site is prompt.OnList().
-	prompt.OnList()
+	// User picks "Go back to session list".
+	listAction := findModalAction(modal, "Go to session list")
+	if listAction == nil {
+		t.Fatalf("return modal missing Go to session list action")
+	}
+	listAction()
 	if a.overlay != nil {
 		t.Errorf("after OnList, overlay = %T, want nil (prompt should dismiss)", a.overlay)
 	}
@@ -134,22 +158,19 @@ func TestUX_ReturnPromptResumeAgainClosesLoop(t *testing.T) {
 
 	for i := 1; i <= 5; i++ {
 		a.resumeRow(0)
-		prompt, ok := a.overlay.(*ReturnPrompt)
-		if !ok {
-			t.Fatalf("cycle %d: overlay = %T, want *ReturnPrompt", i, a.overlay)
+		modal, ok := a.overlay.(*OptionsModal)
+		if !ok || modal.Context != OptionsModalContextReturn {
+			t.Fatalf("cycle %d: overlay = %T, want return-context *OptionsModal", i, a.overlay)
 		}
-		// ReturnPrompt has 4 entries. Default Index should be 3
-		// (Quit) so a single Enter quits  --  BUT our test wants to
-		// trigger Resume. Call prompt.OnResume directly which is
-		// what the UI wires Enter on Index=0 to.
-		if prompt.OnResume == nil {
-			t.Fatalf("cycle %d: ReturnPrompt.OnResume is nil", i)
-		}
-		// Call OnList to reset the loop so the next resumeRow fires
+		// Call List to reset the loop so the next resumeRow fires
 		// from a clean slate (OnResume would recurse through another
 		// resumeRow internally; testing that path is
 		// TestHappyPath_ResumeCycleMultipleTimes).
-		prompt.OnList()
+		listAction := findModalAction(modal, "Go to session list")
+		if listAction == nil {
+			t.Fatalf("cycle %d: return modal missing list action", i)
+		}
+		listAction()
 		if a.overlay != nil {
 			t.Errorf("cycle %d: OnList did not clear overlay", i)
 		}
@@ -252,25 +273,15 @@ func TestUX_PostSessionPaneEnterAcceptsBothCRandLF(t *testing.T) {
 			a.table.Active = true
 			a.resumeRow(0)
 
-			prompt, ok := a.overlay.(*ReturnPrompt)
-			if !ok {
+			modal, ok := a.overlay.(*OptionsModal)
+			if !ok || modal.Context != OptionsModalContextReturn {
 				t.Fatalf("post-session pane missing: overlay = %T", a.overlay)
 			}
-			// Default highlight is Quit (Index 3). One Enter (or LF)
-			// must trigger OnQuit and close the overlay.
-			quitFired := false
-			prompt.OnQuit = func() {
-				quitFired = true
-				a.overlay = nil
-				a.running = false
-			}
+			// Default highlight is Quit. One Enter (or LF) must trigger quit.
 			a.running = true
-			handled := prompt.HandleEvent(tcell.NewEventKey(key, 0, tcell.ModNone))
+			handled := modal.HandleEvent(tcell.NewEventKey(key, 0, tcell.ModNone))
 			if !handled {
 				t.Errorf("HandleEvent returned false for key %v  --  prompt did not consume the press", key)
-			}
-			if !quitFired {
-				t.Errorf("OnQuit did not fire for key %v  --  single press should activate the default highlighted entry", key)
 			}
 			if a.running {
 				t.Errorf("a.running still true after quit activation")
@@ -289,6 +300,20 @@ func keyName(k tcell.Key) string {
 	default:
 		return "Key-other"
 	}
+}
+
+func findModalAction(modal *OptionsModal, label string) func() {
+	for _, entry := range modal.TopEntries {
+		if entry.Label == label {
+			return entry.Action
+		}
+	}
+	for _, entry := range modal.Entries {
+		if entry.Label == label {
+			return entry.Action
+		}
+	}
+	return nil
 }
 
 // TestUX_OpenDetailsSpaceRequiresOneTap counts Space presses to open

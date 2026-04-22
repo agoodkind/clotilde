@@ -27,6 +27,7 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 
+	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/claude"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/daemon"
@@ -290,6 +291,69 @@ func buildAppCallbacks(store session.Store, _ []*session.Session, dashboardLaunc
 			}()
 			return out, cancel, nil
 		},
+		CompactPreview: func(req ui.CompactRunRequest) (<-chan ui.CompactEvent, func(), error) {
+			raw, cancel, err := daemon.CompactPreviewViaDaemon(context.Background(), daemon.CompactRunOptions{
+				SessionName:    req.SessionName,
+				TargetTokens:   req.TargetTokens,
+				ReservedTokens: req.ReservedTokens,
+				Model:          req.Model,
+				ModelExplicit:  req.ModelExplicit,
+				Thinking:       req.Thinking,
+				Images:         req.Images,
+				Tools:          req.Tools,
+				Chat:           req.Chat,
+				Summarize:      req.Summarize,
+				Force:          req.Force,
+			})
+			if err != nil {
+				return nil, nil, err
+			}
+			out := make(chan ui.CompactEvent, 64)
+			go func() {
+				defer close(out)
+				for ev := range raw {
+					out <- compactEventFromProto(ev)
+				}
+			}()
+			return out, cancel, nil
+		},
+		CompactApply: func(req ui.CompactRunRequest) (<-chan ui.CompactEvent, func(), error) {
+			raw, cancel, err := daemon.CompactApplyViaDaemon(context.Background(), daemon.CompactRunOptions{
+				SessionName:    req.SessionName,
+				TargetTokens:   req.TargetTokens,
+				ReservedTokens: req.ReservedTokens,
+				Model:          req.Model,
+				ModelExplicit:  req.ModelExplicit,
+				Thinking:       req.Thinking,
+				Images:         req.Images,
+				Tools:          req.Tools,
+				Chat:           req.Chat,
+				Summarize:      req.Summarize,
+				Force:          req.Force,
+			})
+			if err != nil {
+				return nil, nil, err
+			}
+			out := make(chan ui.CompactEvent, 64)
+			go func() {
+				defer close(out)
+				for ev := range raw {
+					out <- compactEventFromProto(ev)
+				}
+			}()
+			return out, cancel, nil
+		},
+		CompactUndo: func(sessionName string) (*ui.CompactUndoResult, error) {
+			resp, err := daemon.CompactUndoViaDaemon(context.Background(), sessionName)
+			if err != nil {
+				return nil, err
+			}
+			return &ui.CompactUndoResult{
+				AppliedAt:     resp.GetAppliedAt(),
+				BoundaryUUID:  resp.GetBoundaryUuid(),
+				SyntheticUUID: resp.GetSyntheticUuid(),
+			}, nil
+		},
 		ExtractDetail: func(sess *session.Session) ui.SessionDetail {
 			model := "-"
 			if sess.Metadata.TranscriptPath != "" {
@@ -330,6 +394,58 @@ func buildAppCallbacks(store session.Store, _ []*session.Session, dashboardLaunc
 			return ui.SessionDetail{Model: model, Messages: recentMsgs, AllMessages: allMsgs, Tools: tools}
 		},
 	}
+}
+
+func compactEventFromProto(ev *clydev1.CompactEvent) ui.CompactEvent {
+	out := ui.CompactEvent{}
+	switch ev.GetKind() {
+	case clydev1.CompactEvent_KIND_STATUS:
+		out.Kind = "status"
+		out.Message = ev.GetMessage()
+	case clydev1.CompactEvent_KIND_UPFRONT:
+		upfront := ev.GetUpfront()
+		out.Kind = "upfront"
+		out.Upfront = &ui.CompactUpfront{
+			SessionName:    upfront.GetSessionName(),
+			SessionID:      upfront.GetSessionId(),
+			Model:          upfront.GetModel(),
+			CurrentTotal:   int(upfront.GetCurrentTotal()),
+			MaxTokens:      int(upfront.GetMaxTokens()),
+			TargetTokens:   int(upfront.GetTargetTokens()),
+			ReservedTokens: int(upfront.GetReservedTokens()),
+		}
+	case clydev1.CompactEvent_KIND_ITERATION:
+		it := ev.GetIteration()
+		out.Kind = "iteration"
+		out.Iteration = &ui.CompactIteration{
+			Iteration: int(it.GetIteration()),
+			Step:      it.GetStep(),
+			CtxTotal:  int(it.GetCtxTotal()),
+			Delta:     int(it.GetDelta()),
+		}
+	case clydev1.CompactEvent_KIND_FINAL:
+		fin := ev.GetFinal()
+		out.Kind = "final"
+		out.Final = &ui.CompactFinal{
+			FinalTail:      int(fin.GetFinalTail()),
+			TargetTokens:   int(fin.GetTargetTokens()),
+			StaticFloor:    int(fin.GetStaticFloor()),
+			ReservedTokens: int(fin.GetReservedTokens()),
+		}
+	case clydev1.CompactEvent_KIND_APPLY_MUTATION:
+		m := ev.GetApplyMutation()
+		out.Kind = "apply_mutation"
+		out.ApplyMutation = &ui.CompactApplyMutation{
+			BoundaryUUID:  m.GetBoundaryUuid(),
+			SyntheticUUID: m.GetSyntheticUuid(),
+			SnapshotPath:  m.GetSnapshotPath(),
+			LedgerPath:    m.GetLedgerPath(),
+		}
+	default:
+		out.Kind = "status"
+		out.Message = "received compact stream update"
+	}
+	return out
 }
 
 // ForwardToClaude runs the real claude binary (bypassing the shell

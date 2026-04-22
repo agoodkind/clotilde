@@ -25,6 +25,7 @@ import (
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/bridge"
+	compactengine "goodkind.io/clyde/internal/compact"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/session"
 )
@@ -1051,6 +1052,271 @@ func (s *Server) SendToSession(_ context.Context, req *clydev1.SendToSessionRequ
 		return &clydev1.SendToSessionResponse{Delivered: false, BytesWritten: int32(n)}, nil
 	}
 	return &clydev1.SendToSessionResponse{Delivered: true, BytesWritten: int32(n)}, nil
+}
+
+func (s *Server) CompactPreview(
+	req *clydev1.CompactRunRequest,
+	stream clydev1.ClydeService_CompactPreviewServer,
+) error {
+	s.log.Info("daemon.compact.preview.started",
+		"component", "daemon",
+		"subcomponent", "compact",
+		"session", req.GetSessionName(),
+		"target", req.GetTargetTokens(),
+	)
+	return s.runCompact(stream.Context(), req, stream, compactengine.RuntimeModePreview)
+}
+
+func (s *Server) CompactApply(
+	req *clydev1.CompactRunRequest,
+	stream clydev1.ClydeService_CompactApplyServer,
+) error {
+	s.log.Info("daemon.compact.apply.started",
+		"component", "daemon",
+		"subcomponent", "compact",
+		"session", req.GetSessionName(),
+		"target", req.GetTargetTokens(),
+	)
+	return s.runCompact(stream.Context(), req, stream, compactengine.RuntimeModeApply)
+}
+
+func (s *Server) runCompact(
+	ctx context.Context,
+	req *clydev1.CompactRunRequest,
+	stream compactEventStream,
+	mode compactengine.RuntimeMode,
+) error {
+	if req.GetSessionName() == "" {
+		return status.Error(codes.InvalidArgument, "session_name is required")
+	}
+	s.log.Debug("daemon.compact.run.begin",
+		"component", "daemon",
+		"subcomponent", "compact",
+		"session", req.GetSessionName(),
+		"target", req.GetTargetTokens(),
+		"mode", mode,
+	)
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		return status.Errorf(codes.Internal, "store init: %v", err)
+	}
+	sess, err := store.Resolve(req.GetSessionName())
+	if err != nil {
+		return status.Errorf(codes.Internal, "resolve session: %v", err)
+	}
+	if sess == nil {
+		return status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
+	}
+
+	strippers := compactengine.Strippers{}
+	if req.Strippers != nil {
+		strippers = compactengine.Strippers{
+			Thinking: req.Strippers.Thinking,
+			Images:   req.Strippers.Images,
+			Tools:    req.Strippers.Tools,
+			Chat:     req.Strippers.Chat,
+		}
+	}
+	if !strippers.Any() && req.GetTargetTokens() > 0 {
+		strippers.SetAll()
+	}
+
+	var sequence int32
+	send := func(ev *clydev1.CompactEvent) error {
+		sequence++
+		ev.Sequence = sequence
+		return stream.Send(ev)
+	}
+
+	modelForCount := req.GetModel()
+	modelForRender := req.GetModel()
+	if !req.GetModelExplicit() {
+		modelForCount, modelForRender, _ = compactengine.ResolveModelForCounting(store, sess, req.GetModel())
+	}
+	upfront, _, upfrontErr := compactengine.BuildRuntimeUpfront(ctx, compactengine.RuntimeRequest{
+		Session:      sess,
+		Store:        store,
+		TargetTokens: int(req.GetTargetTokens()),
+		Reserved:     int(req.GetReservedTokens()),
+		Model:        modelForCount,
+		Strippers:    strippers,
+	}, modelForRender)
+	if upfrontErr != nil {
+		return status.Errorf(codes.Internal, "build compact upfront: %v", upfrontErr)
+	}
+	if err := send(&clydev1.CompactEvent{
+		Kind: clydev1.CompactEvent_KIND_UPFRONT,
+		Upfront: &clydev1.CompactUpfront{
+			SessionName:     upfront.SessionName,
+			SessionId:       upfront.SessionID,
+			Model:           upfront.Model,
+			CurrentTotal:    int32(upfront.CurrentTotal),
+			MaxTokens:       int32(upfront.MaxTokens),
+			TargetTokens:    int32(upfront.Target),
+			StaticFloor:     int32(upfront.StaticFloor),
+			ReservedTokens:  int32(upfront.Reserved),
+			ThinkingBlocks:  int32(upfront.Thinking),
+			ImageBlocks:     int32(upfront.Images),
+			ToolPairs:       int32(upfront.ToolPairs),
+			ChatTurns:       int32(upfront.ChatTurns),
+			StrippersText:   upfront.StrippersText,
+			CalibrationDate: upfront.TargetDate,
+		},
+	}); err != nil {
+		return err
+	}
+
+	onIteration := func(iter compactengine.RuntimeIteration) {
+		_ = send(&clydev1.CompactEvent{
+			Kind: clydev1.CompactEvent_KIND_ITERATION,
+			Iteration: &clydev1.CompactIteration{
+				Iteration:         sequence,
+				Step:              iter.Iteration.Step,
+				TailTokens:        int32(iter.Iteration.TailTokens),
+				CtxTotal:          int32(iter.Iteration.CtxTotal),
+				Delta:             int32(iter.Iteration.Delta),
+				ThinkingDropped:   iter.Iteration.ThinkingDropped,
+				ImagesPlaceholder: iter.Iteration.ImagesPlaceholder,
+				ToolsFull:         int32(iter.Iteration.ToolsFull),
+				ToolsLineOnly:     int32(iter.Iteration.ToolsLineOnly),
+				ToolsDropped:      int32(iter.Iteration.ToolsDropped),
+				ChatTurnsTotal:    int32(iter.Iteration.ChatTurnsTotal),
+				ChatTurnsDropped:  int32(iter.Iteration.ChatTurnsDropped),
+			},
+		})
+	}
+
+	result, runErr := compactengine.RunRuntime(ctx, compactengine.RuntimeRequest{
+		Session:       sess,
+		Store:         store,
+		TargetTokens:  int(req.GetTargetTokens()),
+		Reserved:      int(req.GetReservedTokens()),
+		Model:         modelForCount,
+		ModelExplicit: req.GetModelExplicit(),
+		Strippers:     strippers,
+		Summarize:     req.GetSummarize(),
+		Force:         req.GetForce(),
+		Mode:          mode,
+	}, onIteration)
+	if runErr != nil {
+		s.log.Error("daemon.compact.run_failed",
+			"component", "daemon",
+			"subcomponent", "compact",
+			"session", req.GetSessionName(),
+			"err", runErr.Error(),
+		)
+		return status.Errorf(codes.Internal, "compact runtime: %v", runErr)
+	}
+
+	final := &clydev1.CompactFinal{
+		BaselineTail:   int32(result.Plan.BaselineTail),
+		FinalTail:      int32(result.Plan.FinalTail),
+		HitTarget:      result.Plan.HitTarget,
+		TargetTokens:   int32(result.Upfront.Target),
+		StaticFloor:    int32(result.Upfront.StaticFloor),
+		ReservedTokens: int32(result.Upfront.Reserved),
+		TranscriptPath: result.TranscriptPath,
+	}
+	if err := send(&clydev1.CompactEvent{
+		Kind:  clydev1.CompactEvent_KIND_FINAL,
+		Final: final,
+	}); err != nil {
+		return err
+	}
+
+	if result.Apply != nil {
+		if err := send(&clydev1.CompactEvent{
+			Kind: clydev1.CompactEvent_KIND_APPLY_MUTATION,
+			ApplyMutation: &clydev1.CompactApplyMutation{
+				BoundaryUuid:    result.Apply.BoundaryUUID,
+				SyntheticUuid:   result.Apply.SyntheticUUID,
+				PreApplyOffset:  result.Apply.PreApplyOffset,
+				PostApplyOffset: result.Apply.PostApplyOffset,
+				SnapshotPath:    result.Apply.SnapshotPath,
+				LedgerPath:      result.Apply.LedgerPath,
+			},
+		}); err != nil {
+			return err
+		}
+	}
+	s.log.Info("daemon.compact.run_completed",
+		"component", "daemon",
+		"subcomponent", "compact",
+		"session", req.GetSessionName(),
+		"session_id", sess.Metadata.SessionID,
+		"mode", mode,
+		"hit_target", result.Plan.HitTarget,
+		"final_tail", result.Plan.FinalTail,
+	)
+	return nil
+}
+
+func (s *Server) CompactUndo(ctx context.Context, req *clydev1.CompactUndoRequest) (*clydev1.CompactUndoResponse, error) {
+	if req.GetSessionName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "session_name is required")
+	}
+	s.log.Info("daemon.compact.undo.started",
+		"component", "daemon",
+		"subcomponent", "compact",
+		"session", req.GetSessionName(),
+	)
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "store init: %v", err)
+	}
+	sess, err := store.Resolve(req.GetSessionName())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "resolve session: %v", err)
+	}
+	if sess == nil {
+		return nil, status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
+	}
+	path := sess.Metadata.TranscriptPath
+	if path == "" {
+		return nil, status.Error(codes.InvalidArgument, "session has no transcript")
+	}
+	entry, undoErr := compactengine.Undo(sess.Metadata.SessionID, path)
+	if undoErr != nil {
+		s.log.Error("daemon.compact.undo_failed",
+			"component", "daemon",
+			"subcomponent", "compact",
+			"session", req.GetSessionName(),
+			"session_id", sess.Metadata.SessionID,
+			"err", undoErr.Error(),
+		)
+		return nil, status.Errorf(codes.Internal, "undo: %v", undoErr)
+	}
+	ledgerPath, _ := compactengine.LedgerPath(sess.Metadata.SessionID)
+	postBytes := int64(-1)
+	if stat, statErr := os.Stat(path); statErr == nil {
+		postBytes = stat.Size()
+	}
+	resp := &clydev1.CompactUndoResponse{
+		SessionName:    sess.Name,
+		SessionId:      sess.Metadata.SessionID,
+		TranscriptPath: path,
+		LedgerPath:     ledgerPath,
+		AppliedAt:      entry.Timestamp.UTC().Format(time.RFC3339),
+		TargetTokens:   int32(entry.Target),
+		BoundaryUuid:   entry.BoundaryUUID,
+		SyntheticUuid:  entry.SyntheticUUID,
+		SnapshotPath:   entry.SnapshotPath,
+		PreApplyOffset: entry.PreApplyOffset,
+		PostUndoBytes:  postBytes,
+	}
+	s.log.Info("daemon.compact.undo_completed",
+		"component", "daemon",
+		"subcomponent", "compact",
+		"session", req.GetSessionName(),
+		"session_id", sess.Metadata.SessionID,
+		"pre_apply_offset", entry.PreApplyOffset,
+		"post_undo_bytes", postBytes,
+	)
+	return resp, nil
+}
+
+type compactEventStream interface {
+	Send(*clydev1.CompactEvent) error
 }
 
 // injectSocketPath returns the per session Unix socket path the

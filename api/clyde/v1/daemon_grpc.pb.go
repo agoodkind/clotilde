@@ -32,6 +32,9 @@ const (
 	ClydeService_ListBridges_FullMethodName           = "/clyde.v1.ClydeService/ListBridges"
 	ClydeService_TailTranscript_FullMethodName        = "/clyde.v1.ClydeService/TailTranscript"
 	ClydeService_SendToSession_FullMethodName         = "/clyde.v1.ClydeService/SendToSession"
+	ClydeService_CompactPreview_FullMethodName        = "/clyde.v1.ClydeService/CompactPreview"
+	ClydeService_CompactApply_FullMethodName          = "/clyde.v1.ClydeService/CompactApply"
+	ClydeService_CompactUndo_FullMethodName           = "/clyde.v1.ClydeService/CompactUndo"
 )
 
 // ClydeServiceClient is the client API for ClydeService service.
@@ -51,6 +54,9 @@ type ClydeServiceClient interface {
 	ListBridges(ctx context.Context, in *ListBridgesRequest, opts ...grpc.CallOption) (*ListBridgesResponse, error)
 	TailTranscript(ctx context.Context, in *TailTranscriptRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TailTranscriptResponse], error)
 	SendToSession(ctx context.Context, in *SendToSessionRequest, opts ...grpc.CallOption) (*SendToSessionResponse, error)
+	CompactPreview(ctx context.Context, in *CompactRunRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CompactEvent], error)
+	CompactApply(ctx context.Context, in *CompactRunRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CompactEvent], error)
+	CompactUndo(ctx context.Context, in *CompactUndoRequest, opts ...grpc.CallOption) (*CompactUndoResponse, error)
 }
 
 type clydeServiceClient struct {
@@ -209,6 +215,54 @@ func (c *clydeServiceClient) SendToSession(ctx context.Context, in *SendToSessio
 	return out, nil
 }
 
+func (c *clydeServiceClient) CompactPreview(ctx context.Context, in *CompactRunRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CompactEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ClydeService_ServiceDesc.Streams[2], ClydeService_CompactPreview_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[CompactRunRequest, CompactEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ClydeService_CompactPreviewClient = grpc.ServerStreamingClient[CompactEvent]
+
+func (c *clydeServiceClient) CompactApply(ctx context.Context, in *CompactRunRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CompactEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ClydeService_ServiceDesc.Streams[3], ClydeService_CompactApply_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[CompactRunRequest, CompactEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ClydeService_CompactApplyClient = grpc.ServerStreamingClient[CompactEvent]
+
+func (c *clydeServiceClient) CompactUndo(ctx context.Context, in *CompactUndoRequest, opts ...grpc.CallOption) (*CompactUndoResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CompactUndoResponse)
+	err := c.cc.Invoke(ctx, ClydeService_CompactUndo_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ClydeServiceServer is the server API for ClydeService service.
 // All implementations should embed UnimplementedClydeServiceServer
 // for forward compatibility.
@@ -226,6 +280,9 @@ type ClydeServiceServer interface {
 	ListBridges(context.Context, *ListBridgesRequest) (*ListBridgesResponse, error)
 	TailTranscript(*TailTranscriptRequest, grpc.ServerStreamingServer[TailTranscriptResponse]) error
 	SendToSession(context.Context, *SendToSessionRequest) (*SendToSessionResponse, error)
+	CompactPreview(*CompactRunRequest, grpc.ServerStreamingServer[CompactEvent]) error
+	CompactApply(*CompactRunRequest, grpc.ServerStreamingServer[CompactEvent]) error
+	CompactUndo(context.Context, *CompactUndoRequest) (*CompactUndoResponse, error)
 }
 
 // UnimplementedClydeServiceServer should be embedded to have
@@ -273,6 +330,15 @@ func (UnimplementedClydeServiceServer) TailTranscript(*TailTranscriptRequest, gr
 }
 func (UnimplementedClydeServiceServer) SendToSession(context.Context, *SendToSessionRequest) (*SendToSessionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SendToSession not implemented")
+}
+func (UnimplementedClydeServiceServer) CompactPreview(*CompactRunRequest, grpc.ServerStreamingServer[CompactEvent]) error {
+	return status.Error(codes.Unimplemented, "method CompactPreview not implemented")
+}
+func (UnimplementedClydeServiceServer) CompactApply(*CompactRunRequest, grpc.ServerStreamingServer[CompactEvent]) error {
+	return status.Error(codes.Unimplemented, "method CompactApply not implemented")
+}
+func (UnimplementedClydeServiceServer) CompactUndo(context.Context, *CompactUndoRequest) (*CompactUndoResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CompactUndo not implemented")
 }
 func (UnimplementedClydeServiceServer) testEmbeddedByValue() {}
 
@@ -514,6 +580,46 @@ func _ClydeService_SendToSession_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ClydeService_CompactPreview_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(CompactRunRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ClydeServiceServer).CompactPreview(m, &grpc.GenericServerStream[CompactRunRequest, CompactEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ClydeService_CompactPreviewServer = grpc.ServerStreamingServer[CompactEvent]
+
+func _ClydeService_CompactApply_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(CompactRunRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ClydeServiceServer).CompactApply(m, &grpc.GenericServerStream[CompactRunRequest, CompactEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ClydeService_CompactApplyServer = grpc.ServerStreamingServer[CompactEvent]
+
+func _ClydeService_CompactUndo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CompactUndoRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).CompactUndo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_CompactUndo_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).CompactUndo(ctx, req.(*CompactUndoRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ClydeService_ServiceDesc is the grpc.ServiceDesc for ClydeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -565,6 +671,10 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "SendToSession",
 			Handler:    _ClydeService_SendToSession_Handler,
 		},
+		{
+			MethodName: "CompactUndo",
+			Handler:    _ClydeService_CompactUndo_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -575,6 +685,16 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "TailTranscript",
 			Handler:       _ClydeService_TailTranscript_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "CompactPreview",
+			Handler:       _ClydeService_CompactPreview_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "CompactApply",
+			Handler:       _ClydeService_CompactApply_Handler,
 			ServerStreams: true,
 		},
 	},

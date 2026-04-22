@@ -264,6 +264,15 @@ func (t *TableWidget) MoveUp(n int) {
 	if len(t.Rows) == 0 {
 		return
 	}
+	if !t.Active {
+		t.Active = true
+		t.SelectedRow = clamp(t.SelectedRow, 0, len(t.Rows)-1)
+		t.ensureVisible()
+		if t.OnSelect != nil {
+			t.OnSelect(t.SelectedRow)
+		}
+		return
+	}
 	t.Active = true
 	t.SelectedRow = clamp(t.SelectedRow-n, 0, len(t.Rows)-1)
 	t.ensureVisible()
@@ -275,6 +284,15 @@ func (t *TableWidget) MoveUp(n int) {
 // MoveDown moves selection down by n rows.
 func (t *TableWidget) MoveDown(n int) {
 	if len(t.Rows) == 0 {
+		return
+	}
+	if !t.Active {
+		t.Active = true
+		t.SelectedRow = clamp(t.SelectedRow, 0, len(t.Rows)-1)
+		t.ensureVisible()
+		if t.OnSelect != nil {
+			t.OnSelect(t.SelectedRow)
+		}
 		return
 	}
 	t.Active = true

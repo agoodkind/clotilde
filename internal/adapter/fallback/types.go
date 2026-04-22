@@ -24,6 +24,21 @@ type Request struct {
 	ToolChoice string
 	RequestID  string
 	SessionID  string
+
+	// Resume, when true, switches the CLI invocation from
+	// `--session-id <uuid>` (fresh) to `--resume <uuid>` (load from
+	// disk). Callers are responsible for writing a valid synthesized
+	// transcript to the path Claude will look up before setting this.
+	// When true, the positional prompt is just the final user message;
+	// the history rides on disk via the transcript file.
+	Resume bool
+
+	// WorkspaceDir, when non-empty, overrides the cwd of the spawned
+	// claude -p subprocess. Used for Phase 3 transcript synthesis so
+	// the synthesized JSONL lands in a dedicated claude projects
+	// subdir rather than the daemon's scratch dir. Empty means use the
+	// client's configured ScratchDir.
+	WorkspaceDir string
 }
 
 // Usage is the token accounting echoed back from the result frame.

@@ -18,6 +18,7 @@
 level = "debug"
 
 [logging.rotation]
+enabled = true
 max_size_mb = 5
 max_backups = 5
 max_age_days = 14
@@ -30,7 +31,7 @@ max_kb = 32
 [adapter]
 enabled = true
 direct_oauth = true
-default_model = "clyde-opus-4-7-high-1m"
+default_model = "clyde-opus-4-7"
 
 [adapter.notices]
 enabled = true

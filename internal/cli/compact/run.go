@@ -197,6 +197,36 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 		slog.Warn("cli.compact.chat_requires_target", "session", name)
 		return fmt.Errorf("--chat requires a positive target token count")
 	}
+	if target > 0 {
+		mode := ModePreview
+		if apply {
+			mode = ModeApply
+		}
+		isTTY := isTerminal(out)
+		summarize, _ := cmd.Flags().GetBool("summarize")
+		_, _ = fmt.Fprintf(out, "starting compact %s for %s; gathering startup stats...\n",
+			strings.ToLower(mode.Label()), sess.Name)
+		daemonErr := runCompactViaDaemon(cmd.Context(), out, compactDaemonRunInput{
+			SessionName:    sess.Name,
+			Mode:           mode,
+			Target:         target,
+			Reserved:       reserved,
+			Model:          model,
+			ModelExplicit:  modelExplicit,
+			Strippers:      strippers,
+			Summarize:      summarize,
+			Force:          force,
+			ShowPasses:     showPasses && !isTTY,
+			IsTTY:          isTTY,
+			TranscriptPath: path,
+		})
+		if daemonErr == nil {
+			slog.Info("cli.compact.completed_via_daemon", "session", name, "mode", mode.Label())
+			return nil
+		}
+		slog.Error("cli.compact.daemon_path_failed", "session", name, slog.Any("err", daemonErr))
+		return daemonErr
+	}
 
 	slice, err := compactengine.LoadSlice(path)
 	if err != nil {
@@ -256,8 +286,8 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 		calibDate := ""
 		layer := sessionctx.NewDefault(sess, model, "")
 		if u, uerr := layer.Usage(ctx, sessionctx.UsageOptions{MaxAge: 24 * time.Hour}); uerr == nil {
-			currentTotal = u.TotalTokens
-			maxTokens = u.MaxTokens
+			currentTotal = u.ContextUsage.TotalTokens
+			maxTokens = u.ContextUsage.MaxTokens
 		}
 		if cal, ok, _ := compactengine.LoadCalibration(sess.Metadata.SessionID); ok {
 			calibDate = cal.CapturedAt.UTC().Format("2006-01-02")

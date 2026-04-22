@@ -25,7 +25,15 @@ func mergeOAuthStreamChunks(reqID, modelAlias string, chunks []tooltrans.OpenAIS
 		}
 		delta := ch.Choices[0].Delta
 		text.WriteString(delta.Content)
-		reasoning.WriteString(delta.ReasoningContent)
+		// Prefer the newer delta.reasoning field when both are set;
+		// fall back to reasoning_content. Either accumulator mirrors
+		// the chunks that the streaming translator emitted so non
+		// streaming mergers reconstruct the full chain of thought.
+		if delta.Reasoning != "" {
+			reasoning.WriteString(delta.Reasoning)
+		} else {
+			reasoning.WriteString(delta.ReasoningContent)
+		}
 		refusalText.WriteString(delta.Refusal)
 		for _, tc := range delta.ToolCalls {
 			slot := toolAcc[tc.Index]
@@ -59,6 +67,11 @@ func mergeOAuthStreamChunks(reqID, modelAlias string, chunks []tooltrans.OpenAIS
 		Content: json.RawMessage(strconv.Quote(outText)),
 	}
 	if reasoning.Len() > 0 {
+		// Emit both field names so consumers that read only
+		// message.reasoning (LM Studio, o3-mini, gpt-oss) or only
+		// message.reasoning_content (DeepSeek-R1, Vercel AI SDK
+		// compatible) see the same chain of thought.
+		msg.Reasoning = reasoning.String()
 		msg.ReasoningContent = reasoning.String()
 	}
 	if refusalText.Len() > 0 {

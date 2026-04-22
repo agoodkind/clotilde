@@ -21,6 +21,7 @@ import (
 
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/gklog"
+	"goodkind.io/gklog/version"
 )
 
 const (
@@ -51,6 +52,19 @@ func Setup(cfg config.LoggingConfig) (io.Closer, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nopCloser{}, fmt.Errorf("slogger: mkdir %s: %w", filepath.Dir(path), err)
 	}
+	rotationEnabled := true
+	if cfg.Rotation.Enabled != nil {
+		rotationEnabled = *cfg.Rotation.Enabled
+	}
+	if !rotationEnabled {
+		file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			return nopCloser{}, fmt.Errorf("slogger: open json log file %s: %w", path, err)
+		}
+		logger := slog.New(slog.NewJSONHandler(file, &slog.HandlerOptions{Level: parseJSONMinLevel(level)}))
+		slog.SetDefault(logger.With("build", version.String()))
+		return file, nil
+	}
 	// stdout is reserved for command output (so CLI subcommands like
 	// `clyde compact clone-for-test --print-name` produce machine-
 	// parseable single-line output). slog goes to the rotated JSONL
@@ -80,6 +94,19 @@ func Setup(cfg config.LoggingConfig) (io.Closer, error) {
 
 func boolPtr(v bool) *bool {
 	return &v
+}
+
+func parseJSONMinLevel(level string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "info":
+		return slog.LevelInfo
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelDebug
+	}
 }
 
 // defaultPath resolves the unified JSONL path. Honors the env override

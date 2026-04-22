@@ -123,7 +123,10 @@ func TranslateStream(r io.Reader, modelAlias, completionID string, sink StreamSi
 						Model:   modelAlias,
 						Choices: []StreamChoice{{
 							Index: 0,
-							Delta: StreamDelta{ReasoningContent: c.Thinking},
+							Delta: StreamDelta{
+							Reasoning:        c.Thinking,
+							ReasoningContent: c.Thinking,
+						},
 						}},
 					}
 					if firstText {

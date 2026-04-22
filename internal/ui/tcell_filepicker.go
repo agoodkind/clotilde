@@ -208,7 +208,7 @@ func (p *FilePickerOverlay) Draw(scr tcell.Screen, r Rect) {
 		drawString(scr, box.X+2, listTop, StyleMuted, hint, box.W-4)
 	}
 
-	hint := "  type to filter · / descend · enter open · s commit cwd · esc back"
+	hint := "  type to filter · / descend · enter select/open · s commit cwd · esc back"
 	drawString(scr, box.X+2, box.Y+box.H-1, StyleMuted, hint, box.W-4)
 }
 
@@ -381,4 +381,3 @@ func (p *FilePickerOverlay) activate() {
 	}
 	p.changeDir(filepath.Join(p.cwd, e.Name))
 }
-

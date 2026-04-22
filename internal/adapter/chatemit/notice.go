@@ -33,8 +33,19 @@ func EvaluateNoticeFromHeaders(h http.Header, noticesEnabled bool, claim noticeC
 	return notice
 }
 
+// noticeSentinelText wraps an upstream rate-limit / usage notice in
+// HTML-comment sentinels so tooltrans.stripNotice can remove the
+// whole envelope from chat history on the next turn (keeping the
+// Anthropic-side cache prefix byte-stable). The visible payload is
+// a compact markdown blockquote with a small-font inner span so the
+// notice reads as a subtle UI affordance rather than shouting at
+// the user. The leading blank line isolates the notice from any
+// preceding assistant content.
 func noticeSentinelText(text string) string {
-	return fmt.Sprintf("<!--clyde-notice-->[System message: %s]<!--/clyde-notice-->\n\n", text)
+	return fmt.Sprintf(
+		"<!--clyde-notice-->\n> <sub>⚡ %s</sub>\n<!--/clyde-notice-->\n\n",
+		text,
+	)
 }
 
 func openAINoticeChunk(reqID, modelAlias, text string) tooltrans.OpenAIStreamChunk {

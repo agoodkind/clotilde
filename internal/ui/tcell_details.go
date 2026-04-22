@@ -351,6 +351,8 @@ func (d *DetailsView) Draw(scr tcell.Screen, r Rect) {
 	rightX := inner.X + leftW + 1
 	rightW := inner.W - leftW - 1
 	if rightW < 15 {
+		d.LeftRect = inner
+		d.RightRect = Rect{}
 		d.Left.Draw(scr, inner)
 		return
 	}

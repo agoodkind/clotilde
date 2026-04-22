@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +16,69 @@ import (
 	"goodkind.io/clyde/internal/adapter/fallback"
 	"goodkind.io/clyde/internal/adapter/finishreason"
 )
+
+// writeFallbackTranscript materializes a synthesized Claude Code
+// transcript on disk so the subsequent `claude -p --resume` call can
+// read conversation history from the JSONL rather than reprocessing
+// a flattened positional prompt. Writes under
+// ~/.claude/projects/<sanitize(workspaceDir)>/<session-id>.jsonl.
+//
+// Only prior turns are serialized (msgs[:-1] effectively), because the
+// last user message rides in as the positional prompt on spawn. When
+// the message set is shorter than one turn, writing is skipped and
+// the caller falls back to the legacy --session-id path.
+func (s *Server) writeFallbackTranscript(ctx context.Context, workspaceDir, sessionID string, msgs []fallback.Message) error {
+	// Ensure the cwd exists so claude -p does not fail at spawn with
+	// a missing directory. The mkdir is idempotent.
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir workspace: %w", err)
+	}
+	// Find the final user message so we can exclude it from the
+	// transcript (it becomes the positional prompt).
+	lastUser := -1
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			lastUser = i
+			break
+		}
+	}
+	if lastUser <= 0 {
+		// No prior history to materialize; the handler stays on the
+		// legacy --session-id path and does a fresh conversation.
+		return fmt.Errorf("no prior turns to synthesize")
+	}
+	priorMsgs := msgs[:lastUser]
+	lines, err := fallback.SynthesizeTranscript(priorMsgs, sessionID, workspaceDir, time.Now())
+	if err != nil {
+		return fmt.Errorf("synthesize: %w", err)
+	}
+	claudeHome := claudeConfigHome()
+	path := fallback.TranscriptPath(claudeHome, workspaceDir, sessionID)
+	if err := fallback.WriteTranscript(path, lines); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+	s.log.LogAttrs(ctx, slog.LevelDebug, "fallback.transcript.written",
+		slog.String("session_id", sessionID),
+		slog.String("path", path),
+		slog.Int("lines", len(lines)),
+		slog.Int("prior_turns", lastUser),
+	)
+	return nil
+}
+
+// claudeConfigHome resolves $CLAUDE_CONFIG_HOME, falling back to
+// ~/.claude. Matches the resolution in
+// src/utils/sessionStorage.ts:202-204.
+func claudeConfigHome() string {
+	if v := os.Getenv("CLAUDE_CONFIG_HOME"); v != "" {
+		return v
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".claude"
+	}
+	return filepath.Join(home, ".claude")
+}
 
 // handleFallback fulfils a chat completion via the local `claude`
 // CLI in `-p --output-format stream-json` mode. It is the third
@@ -122,6 +187,7 @@ func (s *Server) handleFallback(w http.ResponseWriter, r *http.Request, req Chat
 		}
 	}
 
+	sessionID := deriveFallbackSessionID(msgs, model.Alias)
 	fbReq := fallback.Request{
 		Model:      model.CLIAlias,
 		System:     system,
@@ -129,7 +195,34 @@ func (s *Server) handleFallback(w http.ResponseWriter, r *http.Request, req Chat
 		Tools:      buildFallbackTools(req),
 		ToolChoice: parseFallbackToolChoice(req.ToolChoice),
 		RequestID:  reqID,
-		SessionID:  deriveFallbackSessionID(msgs, model.Alias),
+		SessionID:  sessionID,
+	}
+	// Phase 3: synthesize a Claude Code transcript on disk so the CLI
+	// --resumes it instead of re-flattening history every turn. Opt-in
+	// via [adapter.fallback].transcript_synthesis_enabled. When on,
+	// the write lands under a dedicated workspace dir (never mingles
+	// with real workspaces or clyde sessions) and we pass --resume so
+	// Claude's own prompt caching pipeline fires on every turn.
+	if s.cfg.Fallback.TranscriptSynthesisEnabled && len(msgs) > 0 && sessionID != "" {
+		workspaceDir := s.cfg.Fallback.ResolveTranscriptWorkspaceDir(model.Alias)
+		if workspaceDir != "" {
+			if err := s.writeFallbackTranscript(r.Context(), workspaceDir, sessionID, msgs); err != nil {
+				s.log.LogAttrs(r.Context(), slog.LevelWarn, "fallback.transcript.write_failed",
+					slog.String("request_id", reqID),
+					slog.String("session_id", sessionID),
+					slog.String("workspace_dir", workspaceDir),
+					slog.Any("err", err),
+				)
+			} else {
+				fbReq.Resume = true
+				fbReq.WorkspaceDir = workspaceDir
+				s.log.LogAttrs(r.Context(), slog.LevelDebug, "fallback.transcript.resumed",
+					slog.String("request_id", reqID),
+					slog.String("session_id", sessionID),
+					slog.Int("prior_turns", len(msgs)-1),
+				)
+			}
+		}
 	}
 
 	started := time.Now()
@@ -184,6 +277,7 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 	}
 	msg := ChatMessage{Role: "assistant"}
 	if result.ReasoningContent != "" {
+		msg.Reasoning = result.ReasoningContent
 		msg.ReasoningContent = result.ReasoningContent
 	}
 	if result.Refusal != "" {
@@ -229,6 +323,8 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 		result.Usage.PromptTokens, result.Usage.CacheCreationInputTokens, result.Usage.CacheReadInputTokens)
 	chatemit.LogCompleted(s.log, ctx, chatemit.CompletedAttrs{
 		Backend:             "fallback",
+		Path:                fallbackPathLabel(req),
+		SessionID:           req.SessionID,
 		RequestID:           reqID,
 		Alias:               model.Alias,
 		ModelID:             req.Model,
@@ -237,10 +333,22 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 		TokensOut:           usage.CompletionTokens,
 		CacheReadTokens:     result.Usage.CacheReadInputTokens,
 		CacheCreationTokens: result.Usage.CacheCreationInputTokens,
+		CacheTTL:            s.cfg.ClientIdentity.PromptCacheTTL,
 		DurationMs:          time.Since(started).Milliseconds(),
 		Stream:              false,
 	})
 	return nil
+}
+
+// fallbackPathLabel picks the dispatch tag for log events based on
+// whether the request rides the synthesized-transcript resume
+// pathway. Used by the cost aggregator to compare cache efficiency
+// across legs.
+func fallbackPathLabel(req fallback.Request) string {
+	if req.Resume {
+		return "fallback_resume"
+	}
+	return "fallback_flat"
 }
 
 // streamFallback streams stream-json from the CLI. When tools are
@@ -289,6 +397,7 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 			case "text":
 				delta.Content = ev.Text
 			case "reasoning":
+				delta.Reasoning = ev.Text
 				delta.ReasoningContent = ev.Text
 			default:
 				return nil
@@ -336,6 +445,7 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 						Index: 0,
 						Delta: StreamDelta{
 							Role:             "assistant",
+							Reasoning:        rc,
 							ReasoningContent: rc,
 						},
 					}},
@@ -379,6 +489,7 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 		} else {
 			d := StreamDelta{Role: "assistant", Content: sr.Text}
 			if rc := strings.TrimSpace(sr.ReasoningContent); rc != "" {
+				d.Reasoning = rc
 				d.ReasoningContent = rc
 			}
 			_ = emit(StreamChunk{
@@ -416,6 +527,8 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 		sr.Usage.PromptTokens, sr.Usage.CacheCreationInputTokens, sr.Usage.CacheReadInputTokens)
 	chatemit.LogCompleted(s.log, r.Context(), chatemit.CompletedAttrs{
 		Backend:             "fallback",
+		Path:                fallbackPathLabel(req),
+		SessionID:           req.SessionID,
 		RequestID:           reqID,
 		Alias:               model.Alias,
 		ModelID:             req.Model,
@@ -424,6 +537,7 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 		TokensOut:           finalUsage.CompletionTokens,
 		CacheReadTokens:     sr.Usage.CacheReadInputTokens,
 		CacheCreationTokens: sr.Usage.CacheCreationInputTokens,
+		CacheTTL:            s.cfg.ClientIdentity.PromptCacheTTL,
 		DurationMs:          time.Since(started).Milliseconds(),
 		Stream:              true,
 	})

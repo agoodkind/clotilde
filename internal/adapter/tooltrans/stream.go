@@ -23,6 +23,13 @@ type StreamTranslator struct {
 	lastStopReason     string
 	lastOutputTokens   int
 	visibleText        strings.Builder
+
+	// thinkingOpen tracks whether we've already written the opening
+	// <think> tag into the content stream for the current Anthropic
+	// thinking block. Subsequent thinking_delta events within the same
+	// block append without re-opening; the closing </think> is emitted
+	// on the matching content_block_stop.
+	thinkingOpen bool
 }
 
 // NewStreamTranslator builds per-request stream state.
@@ -148,11 +155,36 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 			})
 			return []OpenAIStreamChunk{ch}, false, "", nil, nil
 		case "thinking_delta":
-			delta := OpenAIStreamDelta{ReasoningContent: ev.Delta.Thinking}
+			// Cursor BYOK 3.2 does not parse any reasoning field on
+			// stream deltas (the installed workbench only reads
+			// delta.content and delta.tool_calls). Emitting thinking
+			// as delta.reasoning / delta.reasoning_content buys us
+			// nothing for the observed consumer today. Collapsibles
+			// (<details>) block progressive render because the
+			// markdown renderer waits for the closing tag. Plain
+			// blockquote content renders line by line as it streams,
+			// which is the shape that already worked in Cursor.
+			//
+			// Sentinel HTML comments bookend the block so
+			// stripThinkingBlockquote in openai_to_anthropic.go can
+			// remove the whole envelope on the return trip, keeping
+			// the Anthropic cached prefix byte-stable across turns.
+			text := ev.Delta.Thinking
+			var contentOut string
+			if !t.thinkingOpen {
+				contentOut = "<!--clyde-thinking-->\n> **💭 Thinking**\n> \n> " + strings.ReplaceAll(text, "\n", "\n> ")
+				t.thinkingOpen = true
+			} else {
+				contentOut = strings.ReplaceAll(text, "\n", "\n> ")
+			}
+			delta := OpenAIStreamDelta{
+				Content: contentOut,
+			}
 			if !t.seenRole {
 				delta.Role = "assistant"
 				t.seenRole = true
 			}
+			t.visibleText.WriteString(contentOut)
 			ch := t.baseChunk(delta)
 			return []OpenAIStreamChunk{ch}, false, "", nil, nil
 		default:
@@ -160,6 +192,19 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 		}
 
 	case "content_block_stop":
+		// When an Anthropic thinking block ends emit the closing
+		// sentinel comment plus a blank line so the blockquote
+		// terminates cleanly before the visible answer streams.
+		// stripThinkingBlockquote on the return trip matches the
+		// full envelope including the trailing whitespace so the
+		// cached prefix stays byte-stable across turns.
+		if t.currentBlockType == "thinking" && t.thinkingOpen {
+			t.currentBlockType = ""
+			t.thinkingOpen = false
+			return []OpenAIStreamChunk{t.baseChunk(OpenAIStreamDelta{
+				Content: "\n<!--/clyde-thinking-->\n\n",
+			})}, false, "", nil, nil
+		}
 		t.currentBlockType = ""
 		return nil, false, "", nil, nil
 

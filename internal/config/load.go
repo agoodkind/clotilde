@@ -122,6 +122,10 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 	if cfg.Logging.Rotation.MaxSizeMB <= 0 {
 		cfg.Logging.Rotation.MaxSizeMB = 5
 	}
+	if cfg.Logging.Rotation.Enabled == nil {
+		v := true
+		cfg.Logging.Rotation.Enabled = &v
+	}
 	if cfg.Logging.Rotation.MaxBackups < 0 {
 		return fmt.Errorf("logging.rotation.max_backups must be >= 0")
 	}

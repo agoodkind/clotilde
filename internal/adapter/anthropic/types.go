@@ -46,9 +46,28 @@ type OAuthSource interface {
 // treats everything up to and including this element as cacheable.
 // TTL is optional: empty means 5 minutes; "1h" requires the
 // extended-cache-ttl-2025-04-11 beta.
+// Scope widens the cache key beyond the current org:
+//   - "" (default): session-scoped, per-OAuth-token.
+//   - "global": Anthropic-wide shared cache, eligible on accounts
+//     that GrowthBook allowlists. Requires the
+//     prompt-caching-scope-2026-01-05 beta.
+//   - "org": organization-wide. Same beta.
+// Only set scope when matching the live CLI wire shape; it changes
+// the cache key and can mask bugs in breakpoint placement.
 type CacheControl struct {
-	Type string `json:"type"`
-	TTL  string `json:"ttl,omitempty"`
+	Type  string `json:"type"`
+	TTL   string `json:"ttl,omitempty"`
+	Scope string `json:"scope,omitempty"`
+}
+
+// SystemBlock is one element of the typed array form of the system
+// prompt. The API accepts system as either a plain string or an
+// array of typed text blocks. The array form is required when any
+// element carries a cache_control marker.
+type SystemBlock struct {
+	Type         string        `json:"type"` // always "text" today
+	Text         string        `json:"text"`
+	CacheControl *CacheControl `json:"cache_control,omitempty"`
 }
 
 // ContentBlock is one element in a message content array or a streamed
@@ -120,9 +139,15 @@ type ToolChoice struct {
 }
 
 // Request is the subset of the /v1/messages body we generate.
+// System and SystemBlocks are mutually exclusive on the wire; the
+// custom MarshalJSON emits SystemBlocks as "system":[...] when
+// populated, otherwise falls back to the plain string form for
+// back-compat. Callers building typed system blocks should set
+// SystemBlocks and leave System empty.
 type Request struct {
 	Model        string        `json:"model"`
 	System       string        `json:"system,omitempty"`
+	SystemBlocks []SystemBlock `json:"-"`
 	Messages     []Message     `json:"messages"`
 	MaxTokens    int           `json:"max_tokens"`
 	Stream       bool          `json:"stream"`
@@ -144,6 +169,41 @@ type Request struct {
 	// outbound anthropic-beta header. Use for per-model / per-request
 	// flags the static config does not already include. Not serialized.
 	ExtraBetas []string `json:"-"`
+}
+
+// MarshalJSON emits SystemBlocks as an array under "system" when
+// present so typed blocks with cache_control markers land on the
+// wire. Falls back to the plain string form otherwise.
+func (r Request) MarshalJSON() ([]byte, error) {
+	type alias Request
+	base := alias(r)
+	base.SystemBlocks = nil
+	if len(r.SystemBlocks) == 0 {
+		return json.Marshal(base)
+	}
+	// SystemBlocks wins. Clear the string form on the wire so we do
+	// not double-emit system.
+	base.System = ""
+	encoded, err := json.Marshal(base)
+	if err != nil {
+		return nil, err
+	}
+	// Splice "system":<blocks> into the encoded object. This is
+	// cheaper than a second struct definition mirroring every field.
+	blocks, err := json.Marshal(r.SystemBlocks)
+	if err != nil {
+		return nil, err
+	}
+	insertion := []byte(`"system":` + string(blocks) + `,`)
+	// Insert just after the opening brace.
+	if len(encoded) < 2 || encoded[0] != '{' {
+		return nil, json.Unmarshal(encoded, nil) // should never happen
+	}
+	out := make([]byte, 0, len(encoded)+len(insertion))
+	out = append(out, '{')
+	out = append(out, insertion...)
+	out = append(out, encoded[1:]...)
+	return out, nil
 }
 
 // OutputConfig is the wire shape that wraps effort and (later) other

@@ -23,6 +23,7 @@ func streamChunkFromTooltrans(och tooltrans.OpenAIStreamChunk) StreamChunk {
 			Delta: StreamDelta{
 				Role:             c.Delta.Role,
 				Content:          c.Delta.Content,
+				Reasoning:        c.Delta.Reasoning,
 				ReasoningContent: c.Delta.ReasoningContent,
 				Refusal:          c.Delta.Refusal,
 			},

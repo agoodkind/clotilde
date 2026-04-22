@@ -62,12 +62,20 @@ type OpenAIFunction struct {
 }
 
 // OpenAIMessage is one chat message.
+//
+// Reasoning / ReasoningContent carry chain-of-thought in the two
+// wire conventions for non-stream responses. Reasoning
+// (`message.reasoning`) matches LM Studio / vLLM / SGLang / o3-mini
+// / gpt-oss. ReasoningContent (`message.reasoning_content`) matches
+// DeepSeek-R1 and older Vercel AI SDK. We emit both in parallel so
+// whichever consumer reads either gets the data.
 type OpenAIMessage struct {
 	Role             string                    `json:"role"`
 	Content          json.RawMessage           `json:"content,omitempty"`
 	Name             string                    `json:"name,omitempty"`
 	ToolCalls        []OpenAIToolCall          `json:"tool_calls,omitempty"`
 	ToolCallID       string                    `json:"tool_call_id,omitempty"`
+	Reasoning        string                    `json:"reasoning,omitempty"`
 	ReasoningContent string                    `json:"reasoning_content,omitempty"`
 	Refusal          string                    `json:"refusal,omitempty"`
 	Annotations      []OpenAIMessageAnnotation `json:"annotations,omitempty"`
@@ -188,9 +196,25 @@ type OpenAIStreamChoice struct {
 }
 
 // OpenAIStreamDelta is the incremental message body.
+//
+// Reasoning / ReasoningContent carry chain-of-thought deltas. Two
+// field names are emitted in parallel to match the two wire
+// conventions in the wild:
+//
+//   - Reasoning: `delta.reasoning` (LM Studio, vLLM, SGLang,
+//     o3-mini, gpt-oss). Cursor's cloud-side BYOK relay reads this
+//     field and maps it into the native Thinking bubble on the
+//     editor side, so users see the collapsible widget instead of
+//     plain text.
+//   - ReasoningContent: `delta.reasoning_content` (DeepSeek-R1,
+//     Vercel AI SDK openai-compatible provider, gptel). Older name.
+//
+// Sending both is zero-cost: clients only read one. Empty values
+// omit entirely per the json tags.
 type OpenAIStreamDelta struct {
 	Role             string           `json:"role,omitempty"`
 	Content          string           `json:"content,omitempty"`
+	Reasoning        string           `json:"reasoning,omitempty"`
 	ReasoningContent string           `json:"reasoning_content,omitempty"`
 	ToolCalls        []OpenAIToolCall `json:"tool_calls,omitempty"`
 	Refusal          string           `json:"refusal,omitempty"`
