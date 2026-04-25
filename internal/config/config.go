@@ -389,6 +389,12 @@ type AdapterOAuth struct {
 	AnthropicVersion string   `json:"anthropicVersion,omitempty" toml:"anthropic_version,omitempty"`
 	KeychainService  string   `json:"keychainService,omitempty" toml:"keychain_service,omitempty"`
 	Scopes           []string `json:"scopes,omitempty" toml:"scopes,omitempty"`
+	// ToolResultCacheReferenceEnabled controls whether Clyde emits
+	// tool_result.cache_reference on the direct Anthropic OAuth path.
+	// Default is false because the live Anthropic /v1/messages OAuth
+	// tool-followup path rejected this field in production and MITM
+	// captures of the official Claude CLI succeeded without it.
+	ToolResultCacheReferenceEnabled bool `json:"toolResultCacheReferenceEnabled,omitempty" toml:"tool_result_cache_reference_enabled,omitempty"`
 }
 
 // ValidateOAuthFields returns an error if any required field is empty.

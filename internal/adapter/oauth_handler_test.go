@@ -64,7 +64,7 @@ func TestBuildAnthropicWireThinkingDisplaySummarizedWhenEnabled(t *testing.T) {
 		Thinking:        ThinkingEnabled,
 	}
 
-	out, err := srv.buildAnthropicWire(req, model, "", JSONResponseSpec{})
+	out, err := srv.buildAnthropicWire(req, model, "", JSONResponseSpec{}, "req-test")
 	if err != nil {
 		t.Fatalf("buildAnthropicWire: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestBuildAnthropicWireOpus47EnabledNormalizesToAdaptive(t *testing.T) {
 		Thinking:        ThinkingEnabled,
 	}
 
-	out, err := srv.buildAnthropicWire(req, model, EffortMedium, JSONResponseSpec{})
+	out, err := srv.buildAnthropicWire(req, model, EffortMedium, JSONResponseSpec{}, "req-test")
 	if err != nil {
 		t.Fatalf("buildAnthropicWire: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestBuildAnthropicWireHaikuEnabledStaysManual(t *testing.T) {
 		Thinking:        ThinkingEnabled,
 	}
 
-	out, err := srv.buildAnthropicWire(req, model, "", JSONResponseSpec{})
+	out, err := srv.buildAnthropicWire(req, model, "", JSONResponseSpec{}, "req-test")
 	if err != nil {
 		t.Fatalf("buildAnthropicWire: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestBuildAnthropicWireThinkingDisplaySummarizedWhenAdaptive(t *testing.T) {
 		Thinking:        ThinkingAdaptive,
 	}
 
-	out, err := srv.buildAnthropicWire(req, model, "", JSONResponseSpec{})
+	out, err := srv.buildAnthropicWire(req, model, "", JSONResponseSpec{}, "req-test")
 	if err != nil {
 		t.Fatalf("buildAnthropicWire: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestBuildAnthropicWireThinkingDisabledHasNoDisplay(t *testing.T) {
 		Thinking:        ThinkingDisabled,
 	}
 
-	out, err := srv.buildAnthropicWire(req, model, "", JSONResponseSpec{})
+	out, err := srv.buildAnthropicWire(req, model, "", JSONResponseSpec{}, "req-test")
 	if err != nil {
 		t.Fatalf("buildAnthropicWire: %v", err)
 	}

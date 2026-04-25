@@ -22,7 +22,7 @@ func TestApplyCacheBreakpointsStampsLastToolAndLastUserText(t *testing.T) {
 		{Name: "first_tool"},
 		{Name: "second_tool"},
 	}
-	applyCacheBreakpoints(msgs, tools)
+	applyCacheBreakpoints(msgs, tools, false)
 
 	if tools[0].CacheControl != nil {
 		t.Fatalf("non-last tool marked")
@@ -50,7 +50,7 @@ func TestApplyCacheBreakpointsStampsAssistantTailAndSkipsThinkingTail(t *testing
 		}},
 	}
 	tools := []anthropic.Tool{{Name: "only_tool"}}
-	applyCacheBreakpoints(msgs, tools)
+	applyCacheBreakpoints(msgs, tools, false)
 
 	if tools[0].CacheControl == nil {
 		t.Fatalf("tool marker should apply even on single-message calls")
@@ -64,11 +64,11 @@ func TestApplyCacheBreakpointsStampsAssistantTailAndSkipsThinkingTail(t *testing
 }
 
 func TestApplyCacheBreakpointsNoToolsOrMessagesIsNoop(t *testing.T) {
-	applyCacheBreakpoints(nil, nil)
-	applyCacheBreakpoints([]anthropic.Message{}, []anthropic.Tool{})
+	applyCacheBreakpoints(nil, nil, false)
+	applyCacheBreakpoints([]anthropic.Message{}, []anthropic.Tool{}, false)
 }
 
-func TestApplyCacheBreakpointsAddsCacheReferenceToPriorToolResults(t *testing.T) {
+func TestApplyCacheBreakpointsLeavesPriorToolResultsPlainByDefault(t *testing.T) {
 	msgs := []anthropic.Message{
 		{Role: "user", Content: []anthropic.ContentBlock{
 			{Type: "tool_result", ToolUseID: "toolu_1", Content: "result 1"},
@@ -76,12 +76,32 @@ func TestApplyCacheBreakpointsAddsCacheReferenceToPriorToolResults(t *testing.T)
 		}},
 		{Role: "assistant", Content: []anthropic.ContentBlock{{Type: "text", Text: "assistant turn"}}},
 	}
-	applyCacheBreakpoints(msgs, nil)
-	if msgs[0].Content[0].CacheReference != "toolu_1" {
-		t.Fatalf("tool_result cache_reference = %q want toolu_1", msgs[0].Content[0].CacheReference)
+	stats := applyCacheBreakpoints(msgs, nil, false)
+	if msgs[0].Content[0].CacheReference != "" {
+		t.Fatalf("tool_result cache_reference = %q want empty by default", msgs[0].Content[0].CacheReference)
 	}
 	if msgs[1].Content[0].CacheControl == nil {
 		t.Fatalf("assistant boundary message should carry cache marker")
+	}
+	if stats.ToolResultCandidates != 1 || stats.ToolResultApplied != 0 {
+		t.Fatalf("unexpected tool_result stats: %+v", stats)
+	}
+}
+
+func TestApplyCacheBreakpointsCanEnableCacheReferenceOnPriorToolResults(t *testing.T) {
+	msgs := []anthropic.Message{
+		{Role: "user", Content: []anthropic.ContentBlock{
+			{Type: "tool_result", ToolUseID: "toolu_1", Content: "result 1"},
+			{Type: "text", Text: "follow-up"},
+		}},
+		{Role: "assistant", Content: []anthropic.ContentBlock{{Type: "text", Text: "assistant turn"}}},
+	}
+	stats := applyCacheBreakpoints(msgs, nil, true)
+	if msgs[0].Content[0].CacheReference != "toolu_1" {
+		t.Fatalf("tool_result cache_reference = %q want toolu_1", msgs[0].Content[0].CacheReference)
+	}
+	if stats.ToolResultCandidates != 1 || stats.ToolResultApplied != 1 {
+		t.Fatalf("unexpected tool_result stats: %+v", stats)
 	}
 }
 
@@ -98,7 +118,7 @@ func TestToAnthropicAPIRequestSerializesCacheControl(t *testing.T) {
 		},
 		MaxTokens: 64,
 	}
-	req := toAnthropicAPIRequest(tr, "claude-model")
+	req, _ := toAnthropicAPIRequest(tr, "claude-model", false)
 	raw, err := json.Marshal(req)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -113,7 +133,7 @@ func TestToAnthropicAPIRequestSerializesCacheControl(t *testing.T) {
 	}
 }
 
-func TestToAnthropicAPIRequestSerializesCacheReferenceOnPriorToolResult(t *testing.T) {
+func TestToAnthropicAPIRequestOmitsCacheReferenceOnPriorToolResultByDefault(t *testing.T) {
 	tr := tooltrans.AnthRequest{
 		System: "sys",
 		Messages: []tooltrans.AnthMessage{
@@ -125,7 +145,30 @@ func TestToAnthropicAPIRequestSerializesCacheReferenceOnPriorToolResult(t *testi
 		},
 		MaxTokens: 64,
 	}
-	req := toAnthropicAPIRequest(tr, "claude-model")
+	req, _ := toAnthropicAPIRequest(tr, "claude-model", false)
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	body := string(raw)
+	if strings.Contains(body, `"cache_reference":"toolu_1"`) {
+		t.Fatalf("unexpected cache_reference on prior tool_result by default: %s", body)
+	}
+}
+
+func TestToAnthropicAPIRequestCanSerializeCacheReferenceOnPriorToolResult(t *testing.T) {
+	tr := tooltrans.AnthRequest{
+		System: "sys",
+		Messages: []tooltrans.AnthMessage{
+			{Role: "user", Content: []tooltrans.AnthContentBlock{
+				{Type: "tool_result", ToolUseID: "toolu_1", ResultContent: "result"},
+				{Type: "text", Text: "follow-up"},
+			}},
+			{Role: "assistant", Content: []tooltrans.AnthContentBlock{{Type: "text", Text: "answer"}}},
+		},
+		MaxTokens: 64,
+	}
+	req, stats := toAnthropicAPIRequest(tr, "claude-model", true)
 	raw, err := json.Marshal(req)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -133,6 +176,9 @@ func TestToAnthropicAPIRequestSerializesCacheReferenceOnPriorToolResult(t *testi
 	body := string(raw)
 	if !strings.Contains(body, `"cache_reference":"toolu_1"`) {
 		t.Fatalf("missing cache_reference on prior tool_result: %s", body)
+	}
+	if stats.ToolResultCandidates != 1 || stats.ToolResultApplied != 1 {
+		t.Fatalf("unexpected tool_result stats: %+v", stats)
 	}
 }
 

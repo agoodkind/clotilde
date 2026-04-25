@@ -71,9 +71,10 @@ func Setup(cfg config.LoggingConfig, role ProcessRole) (io.Closer, error) {
 		if err != nil {
 			return nopCloser{}, fmt.Errorf("slogger: open json log file %s: %w", path, err)
 		}
-		logger := slog.New(slog.NewJSONHandler(file, &slog.HandlerOptions{Level: parseJSONMinLevel(level)}))
+		lockedFile := gklog.NewLockedWriteCloser(path, file)
+		logger := slog.New(slog.NewJSONHandler(lockedFile, &slog.HandlerOptions{Level: parseJSONMinLevel(level)}))
 		slog.SetDefault(logger.With("build", version.String()))
-		return file, nil
+		return lockedFile, nil
 	}
 	// stdout is reserved for command output (so CLI subcommands like
 	// `clyde compact clone-for-test --print-name` produce machine-

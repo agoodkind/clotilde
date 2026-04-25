@@ -62,7 +62,7 @@ func (s *Server) handleOAuth(w http.ResponseWriter, r *http.Request, req ChatReq
 
 	jsonSpec := ParseResponseFormat(req.ResponseFormat)
 	trackerKey := requestContextTrackerKey(req, model.Alias)
-	anthReq, err := s.buildAnthropicWire(req, model, effort, jsonSpec)
+	anthReq, err := s.buildAnthropicWire(req, model, effort, jsonSpec, reqID)
 	if err != nil {
 		if err2 := chatemit.EscalateOrWrite(
 			fmt.Errorf("oauth_translate: %w", err),
@@ -94,7 +94,7 @@ func (s *Server) handleOAuth(w http.ResponseWriter, r *http.Request, req ChatReq
 // buildAnthropicWire maps the OpenAI chat request to a native messages body
 // via tooltrans, then applies thinking and effort knobs that are not part of
 // the OpenAI wire shape.
-func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort string, jsonSpec JSONResponseSpec) (anthropic.Request, error) {
+func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort string, jsonSpec JSONResponseSpec, reqID string) (anthropic.Request, error) {
 	raw, err := json.Marshal(req)
 	if err != nil {
 		return anthropic.Request{}, err
@@ -154,7 +154,24 @@ func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort
 	}
 	sysBlocks := buildSystemBlocks(billingHeader, prefix, callerSystem, ttl, scope, cachingEnabled)
 
-	out := toAnthropicAPIRequest(tr, stripContextSuffix(model.ClaudeModel))
+	emitToolResultCacheReference := s.cfg.OAuth.ToolResultCacheReferenceEnabled
+	out, cacheStats := toAnthropicAPIRequest(tr, stripContextSuffix(model.ClaudeModel), emitToolResultCacheReference)
+	if cacheStats.ToolResultCandidates > 0 {
+		level := slog.LevelInfo
+		if emitToolResultCacheReference {
+			level = slog.LevelWarn
+		}
+		s.log.LogAttrs(context.Background(), level, "adapter.cache_breakpoints.tool_result_cache_reference",
+			slog.String("component", "adapter"),
+			slog.String("subcomponent", "oauth"),
+			slog.String("request_id", reqID),
+			slog.String("alias", model.Alias),
+			slog.String("model", stripContextSuffix(model.ClaudeModel)),
+			slog.Bool("enabled", emitToolResultCacheReference),
+			slog.Int("tool_result_candidates", cacheStats.ToolResultCandidates),
+			slog.Int("tool_result_applied", cacheStats.ToolResultApplied),
+		)
+	}
 	out.SystemBlocks = sysBlocks
 
 	// Microcompact runs after translation but is logically part of
@@ -237,7 +254,7 @@ func effectiveThinkingMode(model ResolvedModel) string {
 	return model.Thinking
 }
 
-func toAnthropicAPIRequest(tr tooltrans.AnthRequest, claudeModel string) anthropic.Request {
+func toAnthropicAPIRequest(tr tooltrans.AnthRequest, claudeModel string, emitToolResultCacheReference bool) (anthropic.Request, cacheBreakpointStats) {
 	msgs := make([]anthropic.Message, 0, len(tr.Messages))
 	for _, m := range tr.Messages {
 		blocks := make([]anthropic.ContentBlock, 0, len(m.Content))
@@ -280,7 +297,7 @@ func toAnthropicAPIRequest(tr tooltrans.AnthRequest, claudeModel string) anthrop
 			DisableParallelToolUse: tr.ToolChoice.DisableParallelToolUse,
 		}
 	}
-	applyCacheBreakpoints(msgs, tools)
+	stats := applyCacheBreakpoints(msgs, tools, emitToolResultCacheReference)
 	return anthropic.Request{
 		Model:      claudeModel,
 		System:     tr.System,
@@ -289,7 +306,7 @@ func toAnthropicAPIRequest(tr tooltrans.AnthRequest, claudeModel string) anthrop
 		Stream:     false,
 		Tools:      tools,
 		ToolChoice: tc,
-	}
+	}, stats
 }
 
 // buildSystemBlocks assembles the typed system-prompt array with
@@ -348,18 +365,25 @@ func buildSystemBlocks(billing, prefix, callerSystem, ttl, scope string, caching
 	return out
 }
 
-// applyCacheBreakpoints stamps the message-level cache_control marker and
-// cache_reference fields that the live Claude CLI sends. The message marker
-// lands on the last eligible block of the last message, and prior user
-// tool_result blocks get cache_reference values so Anthropic can preserve the
-// cached prefix across turns.
-func applyCacheBreakpoints(msgs []anthropic.Message, tools []anthropic.Tool) {
+type cacheBreakpointStats struct {
+	ToolResultCandidates int
+	ToolResultApplied    int
+}
+
+// applyCacheBreakpoints stamps the message-level cache_control marker matching
+// the live Claude CLI. tool_result.cache_reference is separately gated because
+// the direct Anthropic OAuth /v1/messages tool-followup path rejected it in
+// production, while official Claude CLI MITM captures on successful tool turns
+// did not include it. Keep the knob for controlled upstream experiments rather
+// than assuming every Claude transport accepts the cached-MC shape.
+func applyCacheBreakpoints(msgs []anthropic.Message, tools []anthropic.Tool, emitToolResultCacheReference bool) cacheBreakpointStats {
+	var stats cacheBreakpointStats
 	ephemeral := &anthropic.CacheControl{Type: "ephemeral"}
 	if len(tools) > 0 {
 		tools[len(tools)-1].CacheControl = ephemeral
 	}
 	if len(msgs) == 0 {
-		return
+		return stats
 	}
 	lastCCMsg := -1
 	markerIndex := len(msgs) - 1
@@ -373,7 +397,7 @@ func applyCacheBreakpoints(msgs []anthropic.Message, tools []anthropic.Tool) {
 		break
 	}
 	if lastCCMsg < 0 {
-		return
+		return stats
 	}
 	for i := 0; i < lastCCMsg; i++ {
 		if msgs[i].Role != "user" {
@@ -384,9 +408,15 @@ func applyCacheBreakpoints(msgs []anthropic.Message, tools []anthropic.Tool) {
 			if block.Type != "tool_result" || strings.TrimSpace(block.ToolUseID) == "" {
 				continue
 			}
+			stats.ToolResultCandidates++
+			if !emitToolResultCacheReference {
+				continue
+			}
 			block.CacheReference = block.ToolUseID
+			stats.ToolResultApplied++
 		}
 	}
+	return stats
 }
 
 func cacheableMessageBoundaryBlock(role, blockType string) bool {
