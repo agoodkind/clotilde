@@ -216,6 +216,7 @@ type ProviderStats struct {
 	OutputTokens            int64
 	CacheReadTokens         int64
 	CacheCreationTokens     int64
+	DerivedCacheCreationTokens int64
 	HitRatio                float64
 	EstimatedCostMicrocents int64
 	LastSeen                time.Time
@@ -4379,6 +4380,7 @@ func (a *App) drawStatsTab(r Rect) {
 				row{label: "Output", value: formatTokenCount64(provider.OutputTokens), style: StyleSubtext},
 				row{label: "Cache read", value: formatTokenCount64(provider.CacheReadTokens), style: StyleSubtext},
 				row{label: "Cache create", value: formatTokenCount64(provider.CacheCreationTokens), style: StyleSubtext},
+				row{label: "Cache create (derived)", value: formatTokenCount64(provider.DerivedCacheCreationTokens), style: StyleSubtext},
 				row{label: "Est. cost", value: formatCostMicrocents(provider.EstimatedCostMicrocents), style: StyleSubtext},
 			)
 			if !provider.LastSeen.IsZero() {

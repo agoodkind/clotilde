@@ -28,6 +28,7 @@ type RequestEvent struct {
 	TokensOut             int
 	CacheReadTokens       int
 	CacheCreationTokens   int
+	DerivedCacheCreationTokens int
 	CostMicrocents        int64
 	DurationMs            int64
 	Err                   string
@@ -45,6 +46,7 @@ type CompletedAttrs struct {
 	TokensOut           int
 	CacheReadTokens     int
 	CacheCreationTokens int
+	DerivedCacheCreationTokens int
 	DurationMs          int64
 	Stream              bool
 
@@ -101,6 +103,7 @@ func LogCompleted(log *slog.Logger, ctx context.Context, attrs CompletedAttrs) {
 		slog.Int("tokens_out", attrs.TokensOut),
 		slog.Int("cache_read_tokens", attrs.CacheReadTokens),
 		slog.Int("cache_creation_tokens", attrs.CacheCreationTokens),
+		slog.Int("derived_cache_creation_tokens", attrs.DerivedCacheCreationTokens),
 		slog.String("cache_ttl", attrs.CacheTTL),
 		slog.Float64("cache_hit_ratio", hitRatio),
 		slog.Int64("duration_ms", attrs.DurationMs),
@@ -256,6 +259,7 @@ func LogTerminal(log *slog.Logger, ctx context.Context, sink RequestEventSink, e
 		slog.Int("completion_tokens", ev.TokensOut),
 		slog.Int("cache_read_tokens", ev.CacheReadTokens),
 		slog.Int("cache_creation_tokens", ev.CacheCreationTokens),
+		slog.Int("derived_cache_creation_tokens", ev.DerivedCacheCreationTokens),
 		slog.Int64("cost_microcents", ev.CostMicrocents),
 		slog.Int64("duration_ms", ev.DurationMs),
 		slog.String("error", ev.Err),

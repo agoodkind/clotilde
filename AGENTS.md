@@ -317,169 +317,189 @@ the options popup, Sidecar tab for tail/send). The standalone
 - **Settings scope**: `settings.json` should only contain session-specific settings (model, permissions), not global config (hooks, MCP, UI)
 - **Native integration**: Use `--settings` flag to pass settings, let Claude Code handle merging with global/project configs
 
-## Clyde unified slog standard (P0)
+## Structured logging and observability
 
-Every operation in the clyde codebase MUST emit at least one
-structured `slog` event. No exceptions. This includes ticks, clicks,
-switches, plumb operations, hook fires, file reads, network calls,
-state mutations, and decisions. The unified JSONL trace at
-`$XDG_STATE_HOME/clyde/clyde.jsonl` is the only way we can
-debug across the daemon + adapter + TUI + hooks + MCP.
+Use structured `log/slog` logging across the repo, and treat observability as a product feature: logs should be detailed enough to reconstruct what happened, but selective enough that the important events still stand out.
 
-### The setup
+### The goal
 
-`internal/slogger` wraps `goodkind.io/gklog` for process setup (`Setup`
-only). Request scoped loggers on `context.Context` use `goodkind.io/gklog`
-(`WithLogger`, `LoggerFromContext`, and optional `L`).
+The goal is not "log every line" and it is not "log only errors". The target is:
 
-At process start (daemon main, CLI root command, hook entrypoints):
+- one event at every meaningful boundary: process start, request start, external call, state mutation, retry, fallback, and completion
+- enough fields to explain what the code decided and how long it took
+- low-noise handling for hot paths, polling loops, and large payloads
 
-```go
-import "goodkind.io/clyde/internal/slogger"
-import "goodkind.io/clyde/internal/config"
+If a production issue would leave you asking "what code path did we take, with which inputs, and why," add logging there. If a path emits the same record hundreds of times per second, reduce or reshape it before adding more.
 
-cfg := config.LoggingConfig{
-    // loaded from config.toml
-}
-closer, err := slogger.Setup(cfg)
-if err != nil {
-    // Init failed; gklog returned an error. log via slog.Default
-    // (stderr text fallback) and exit.
-    slog.Error("slogger setup failed", "err", err)
-    os.Exit(1)
-}
-defer closer.Close()
-```
+### Setup
 
-`slogger.Setup` calls `gklog.New` with the JSONL file path, which:
+Prefer one repo-local setup path at process start, then use `slog` directly everywhere else.
 
-- Writes JSON to `$XDG_STATE_HOME/clyde/clyde.jsonl` with
-  configurable rotation from `[logging.rotation]`.
-- Writes no JSON to stdout so CLI command output remains stable.
-- Annotates every record with `build` from `goodkind.io/gklog/version`.
-- Calls `slog.SetDefault` so the rest of the codebase just uses `slog`.
+When a repo uses `goodkind.io/gklog`, `gklog.New` is the generic factory. It can tee logs to JSON stdout, a rotating JSON file, a rotating text file, and optional email alerts. It annotates every record with `build` from `goodkind.io/gklog/version`. It returns `(*slog.Logger, io.Closer, error)`, and the caller is responsible for calling `slog.SetDefault(logger)` if the repo wants package-level `slog.Info(...)` calls to use that logger.
 
-### Emitting events
-
-Use Go's standard `log/slog` directly. No wrapper, no helper:
+Typical pattern:
 
 ```go
-slog.Info("adapter.chat.completed",
-    "request_id", reqID,
-    "session", sessionName,
-    "model", model.Alias,
-    "tokens_in", usage.PromptTokens,
-    "tokens_out", usage.CompletionTokens,
-    "duration_ms", time.Since(started).Milliseconds(),
+import (
+    "log/slog"
+
+    "goodkind.io/gklog"
 )
+
+func setupLogging() (func(), error) {
+    logger, closer, err := gklog.New(gklog.Config{
+        JSONLogFile:   "/var/log/myapp/app.jsonl",
+        DisableStdout: true,
+        JSONMinLevel:  "info",
+    })
+    if err != nil {
+        return nil, err
+    }
+    slog.SetDefault(logger)
+    return func() {
+        _ = closer.Close()
+    }, nil
+}
 ```
 
-For request-scoped fields, attach them to a logger and stash in ctx:
+Notes for `gklog` semantics:
+
+- `DisableStdout: false` enables JSON logs on stdout. That is useful for systemd, journald, containers, and platforms that scrape stdout.
+- `DisableStdout: true` is usually the right choice when stdout is part of the program's user-facing or machine-readable contract.
+- `JSONLogFile` and `TextLogFile` are optional and can be enabled together.
+- `Rotation` applies to the file handlers. `gklog` uses locked writers so multiple processes writing the same log path do not interleave records.
+- `EmailSend` plus `EmailTo` enables an email alert handler with threshold and cooldown controls. Use this for rare operator-facing alerts, not routine app flow.
+- `JSONMinLevel` controls the JSON stdout and JSON file handlers. Empty or unknown values default to `debug` in `gklog`.
+
+If the repo wraps `gklog` in its own setup package, keep the wrapper thin. The wrapper should choose paths, levels, and outputs, then install the logger. Business code should still call `slog` directly.
+
+### Request-scoped fields
+
+Attach stable per-request or per-job fields once at the boundary, then store the logger on `context.Context`.
 
 ```go
-import "goodkind.io/gklog"
+import (
+    "log/slog"
+    "net/http"
 
-func handleChat(w http.ResponseWriter, r *http.Request) {
-    reqID := newRequestID()
+    "goodkind.io/gklog"
+)
+
+func handleRequest(w http.ResponseWriter, r *http.Request) {
+    requestID := newRequestID()
     log := slog.Default().With(
-        "request_id", reqID,
-        "component", "adapter",
+        "request_id", requestID,
+        "component", "http",
     )
     ctx := gklog.WithLogger(r.Context(), log)
-    // ...downstream code does:
-    //   gklog.LoggerFromContext(ctx).InfoContext(ctx, "step.parsed", "ms", n)
+
+    gklog.LoggerFromContext(ctx).InfoContext(ctx, "http.request.started",
+        "method", r.Method,
+        "path", r.URL.Path,
+    )
+
+    // ... pass ctx through the stack ...
 }
 ```
 
-### Required field conventions
+`gklog.WithLogger(ctx, log)` stores the logger on the context. `gklog.LoggerFromContext(ctx)` returns that logger, or `slog.Default()` when none was stored. `gklog.L(ctx)` is a short alias.
 
-`gklog` automatically attaches `build`. The caller MUST supply the
-event message as the first argument (the slog convention) and SHOULD
-include the keys below whenever they apply, so cross-component
-queries join cleanly:
+### What to log
 
-| Key            | Meaning                                               |
-| -------------- | ----------------------------------------------------- |
-| `component`    | Subsystem owning the call (`adapter`, `compact`, ...) |
-| `subcomponent` | Internal emitter inside a top-level component         |
-| `request_id`   | Per-incoming-request correlation id                   |
-| `session`      | Clyde session name                                    |
-| `session_id`   | Claude session UUID                                   |
-| `transcript`   | Absolute path to the JSONL transcript on disk         |
-| `model`        | Resolved Claude model name                            |
-| `alias`        | Public model alias (clyde-haiku, ...)                 |
-| `tokens_in`    | Prompt tokens                                         |
-| `tokens_out`   | Completion tokens                                     |
-| `duration_ms`  | Operation latency in milliseconds                     |
-| `err`          | Error message string (only set on Error)              |
+Prefer events at these points:
 
-Levels:
+- process lifecycle: startup, shutdown, config load, migration, background worker start and stop
+- request or job lifecycle: accepted, validated, dispatched, completed, canceled, timed out
+- external boundaries: database calls, filesystem writes, subprocesses, RPC, HTTP, queues
+- control-flow decisions: retries, fallbacks, cache hits and misses, feature-flag branches, degraded mode
+- state changes: create, update, delete, enqueue, prune, compact, reconcile
+- failures: returned errors, partial failures, recovered panics, dropped work
 
-- `slog.Debug(msg, ...)` for inner loops, ticks, polls.
-- `slog.Info(msg, ...)` for state mutations and significant decisions.
-- `slog.Warn(msg, ...)` for recovered or degraded paths.
-- `slog.Error(msg, ...)` for failures.
+Prefer fields that make those events queryable and comparable:
 
-Event names use dot-separated `component.subject.verb` form, lowercase
-snake_case where multi-word: `adapter.chat.completed`,
-`compact.boundary.lifted`, `verify.context.probe.parsed`.
+| Key | Meaning |
+| --- | --- |
+| `component` | Top-level subsystem (`api`, `worker`, `store`, `adapter`) |
+| `subcomponent` | Narrower emitter inside that subsystem |
+| `request_id` | Correlation id for one incoming request or job |
+| `trace_id` | Distributed trace or upstream correlation id when available |
+| `session` | Human-oriented session, tenant, or job name when relevant |
+| `session_id` | Stable UUID or internal identifier when relevant |
+| `model` | Resolved model or backend choice when applicable |
+| `duration_ms` | Elapsed latency in milliseconds |
+| `attempt` | Retry number or delivery attempt |
+| `count` | Item count for batch work |
+| `path` | File or route involved in the operation |
+| `status` | Outcome summary (`ok`, `retry`, `timeout`, `dropped`) |
+| `err` | Error value on `Warn` or `Error` events |
 
-### adapter.chat.raw logging
+Use the event message as the event name. Prefer a stable dot-separated form such as `http.request.completed`, `worker.job.retried`, or `store.snapshot.loaded`.
 
-`adapter.chat.raw` is controlled by `[logging.body]`:
+### Levels and noise budget
 
-| Mode        | Captured fields                     |
-| ----------- | ----------------------------------- |
-| `summary`   | `body_summary`                      |
-| `whitelist` | `body_summary` and sanitized `body` |
-| `raw`       | `body_summary` and full raw `body`  |
-| `off`       | no `adapter.chat.raw` event         |
+Use levels to keep logs useful:
 
-When `mode = "whitelist"`, the sanitized body keeps request metadata and
-`messages`, trims each message content to 2 KiB, strips tool parameter
-schemas, and caps the logged body at `[logging.body].max_kb`.
+- `slog.Debug` for hot-path detail, loop internals, polls, and verbose diagnostic breadcrumbs
+- `slog.Info` for meaningful lifecycle events, state changes, and one-per-operation summaries
+- `slog.Warn` for degraded paths, retries, partial failures, and unexpected-but-recovered conditions
+- `slog.Error` for failures that affect correctness, availability, or operator action
+
+Avoid unusable logs by shaping noisy paths instead of deleting observability:
+
+- Emit one `Info` summary for the whole operation, and keep per-step detail at `Debug`.
+- Log retries individually only when they are rare; otherwise log a final summary with `attempt_count`.
+- Do not dump full request or response bodies by default.
+- For large payloads, log metadata such as type, size, count, and selected ids.
+- For polling loops, emit periodic summaries or state-transition logs instead of one record per tick.
+- For high-volume success paths, consider logging only start and completion, with counts and latency.
+
+A good rule is: a healthy steady-state request should usually produce a small handful of `Info` events, not dozens.
+
+### Sensitive or large payloads
+
+Treat request bodies, prompts, tokens, credentials, and personal data as opt-in logging.
+
+If the repo needs body logging, define an explicit policy with modes such as:
+
+- `off`: do not log bodies
+- `summary`: log shape only, such as message count, byte size, tool count, or content types
+- `whitelist`: log a sanitized subset with truncation and redaction
+- `raw`: log the full payload only for tightly controlled local debugging or isolated environments
+
+When using `whitelist`, prefer these safeguards:
+
+- trim long strings to a fixed size
+- remove auth headers, secrets, API keys, tokens, cookies, and passwords
+- strip large generated schemas or repeated boilerplate
+- cap the total logged payload size
 
 ### Banned patterns
 
-`make slog-audit` rejects any production .go file containing:
+Do not bypass the structured logger for production diagnostics.
 
-- `fmt.Print`, `fmt.Println`, `fmt.Printf` (bare stdout writes).
-- `log.Print*`, `log.Fatal*`, `log.Panic*` (stdlib log goes nowhere
-  structured).
+Reject or avoid:
 
-Allowed (these go through writers the test harness can capture):
+- `fmt.Print`, `fmt.Println`, `fmt.Printf` for operational logging
+- `log.Print*`, `log.Fatal*`, `log.Panic*` from the stdlib `log` package for operational logging
 
-- `fmt.Fprint*` to a writer (`cmd.OutOrStdout()`, `os.Stderr` in
-  bootstrap-only paths).
-- `slog.Info / Debug / Warn / Error` directly. The wrapper at
-  `internal/slogger` only handles initialization (`Setup`);
-  there is no banned slog method.
+Allowed:
 
-Exempt files (audit walks past them):
+- `fmt.Fprint*` to an explicit writer when the command intentionally produces user-facing output
+- `os.Stderr` writes in bootstrap-only failure paths before logging is initialized
+- `slog.Debug`, `slog.Info`, `slog.Warn`, and `slog.Error` for normal diagnostics
 
-- `_test.go` files -- tests can use any logging shape.
-- `scripts/`, `research/`, `vendor/`, `node_modules/`.
-- `cmd/version.go`, `cmd/completion.go` -- bootstrap output before
-  the slog system is initialized.
+### Review and audit
 
-### Audit tool
+If the repo has a logging audit target, keep it strict enough to catch unstructured logging and obvious blind spots. If it does not, add one.
 
-`make slog-audit` greps the tree, prints per-package counts and the
-first 30 offending call sites, exits non-zero on hits. CI runs this
-on every PR. Local runs let contributors find their own violations
-before pushing.
+The audit should check at least:
 
-The audit is a first-line smell test, not an authority. A clean audit
-means no banned patterns leaked through; it does not mean coverage is
-sufficient. Every file passing the audit can still be drastically
-under-logged. When you find yourself thinking "this is enough logging,"
-it is not. Add more events: every branch taken, every value chosen,
-every retry, every fallback, every silent default, every conditional
-short-circuit, every loop iteration that touches state. The cost of
-an extra `slog.Debug` is bytes; the cost of a missing one is a
-debugging session that ends with "we have no idea what happened."
-Default to over-logging; trim only when an event proves itself
-permanently useless across many real incidents.
+- production files do not use bare stdout logging for diagnostics
+- process entrypoints initialize logging before meaningful work starts
+- new subsystems emit lifecycle and failure events
+- hot paths keep verbose detail behind `Debug` or a similar gate
+
+A clean audit is not proof that observability is complete. Use incident retrospectives, failing tests, and real debugging sessions to decide where the next fields or events should go.
 
 ## TUI QA harness (`clyde-tui-qa`)
 

@@ -27,6 +27,7 @@ type providerAggregate struct {
 	OutputTokens            int64
 	CacheReadTokens         int64
 	CacheCreationTokens     int64
+	DerivedCacheCreationTokens int64
 	EstimatedCostMicrocents int64
 	LastSeenUnix            int64
 	Error                   string
@@ -142,6 +143,7 @@ func requestEventFromLogRecord(msg string, rec map[string]any) (chatemit.Request
 		TokensOut:           intValue(rec, "completion_tokens"),
 		CacheReadTokens:     intValue(rec, "cache_read_tokens"),
 		CacheCreationTokens: intValue(rec, "cache_creation_tokens"),
+		DerivedCacheCreationTokens: intValue(rec, "derived_cache_creation_tokens"),
 		CostMicrocents:      int64Value(rec, "cost_microcents"),
 		DurationMs:          int64Value(rec, "duration_ms"),
 		Err:                 stringValue(rec, "error"),
@@ -270,6 +272,7 @@ func (h *providerStatsHub) apply(ev chatemit.RequestEvent, broadcast bool) {
 		agg.OutputTokens += int64(ev.TokensOut)
 		agg.CacheReadTokens += int64(ev.CacheReadTokens)
 		agg.CacheCreationTokens += int64(ev.CacheCreationTokens)
+		agg.DerivedCacheCreationTokens += int64(ev.DerivedCacheCreationTokens)
 		agg.EstimatedCostMicrocents += ev.CostMicrocents
 		if ev.Err != "" {
 			agg.Error = ev.Err
@@ -296,6 +299,7 @@ func (h *providerStatsHub) protoFor(agg *providerAggregate) *clydev1.ProviderSta
 		OutputTokens:            agg.OutputTokens,
 		CacheReadTokens:         agg.CacheReadTokens,
 		CacheCreationTokens:     agg.CacheCreationTokens,
+		DerivedCacheCreationTokens: agg.DerivedCacheCreationTokens,
 		HitRatio:                hitRatio,
 		EstimatedCostMicrocents: agg.EstimatedCostMicrocents,
 		LastSeenUnix:            agg.LastSeenUnix,

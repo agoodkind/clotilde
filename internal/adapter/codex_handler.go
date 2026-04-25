@@ -64,6 +64,7 @@ type codexRunResult struct {
 	FinishReason      string
 	ReasoningSignaled bool
 	ReasoningVisible  bool
+	DerivedCacheCreationTokens int
 }
 
 type codexReasoningStreamState struct {
@@ -107,6 +108,47 @@ func codexReasoningTokens(raw map[string]any) int {
 
 func codexReasoningPlaceholder() string {
 	return tooltrans.ThinkingInlineOpen() + tooltrans.ThinkingInlineClose()
+}
+
+func logCodexTransportEvent(
+	log *slog.Logger,
+	ctx context.Context,
+	requestID string,
+	msg string,
+	attrs ...slog.Attr,
+) {
+	if log == nil {
+		log = slog.Default()
+	}
+	base := []slog.Attr{
+		slog.String("component", "adapter"),
+		slog.String("subcomponent", "codex"),
+		slog.String("request_id", requestID),
+	}
+	base = append(base, attrs...)
+	log.LogAttrs(ctx, slog.LevelDebug, msg, base...)
+}
+
+func logCodexReasoningEvent(
+	log *slog.Logger,
+	ctx context.Context,
+	requestID string,
+	event string,
+	attrs ...slog.Attr,
+) {
+	attrs = append([]slog.Attr{slog.String("event", event)}, attrs...)
+	logCodexTransportEvent(log, ctx, requestID, "adapter.codex.reasoning.event", attrs...)
+}
+
+func logCodexToolingEvent(
+	log *slog.Logger,
+	ctx context.Context,
+	requestID string,
+	event string,
+	attrs ...slog.Attr,
+) {
+	attrs = append([]slog.Attr{slog.String("event", event)}, attrs...)
+	logCodexTransportEvent(log, ctx, requestID, "adapter.codex.tooling.event", attrs...)
 }
 
 func (s *codexReasoningStreamState) nextChunk(open bool, kind string, summaryIdx *int, delta string) string {
@@ -611,6 +653,9 @@ func (s *Server) runCodexAppFallback(
 				Delta string `json:"delta"`
 			}
 			_ = json.Unmarshal(msg.Params, &p)
+			logCodexToolingEvent(s.log, ctx, reqID, msg.Method,
+				slog.Int("delta_len", len(p.Delta)),
+			)
 			if p.Delta != "" {
 				if err := onDelta(p.Delta); err != nil {
 					return out, err
@@ -622,6 +667,11 @@ func (s *Server) runCodexAppFallback(
 			}
 			_ = json.Unmarshal(msg.Params, &p)
 			out.ReasoningSignaled = true
+			logCodexReasoningEvent(s.log, ctx, reqID, msg.Method,
+				slog.Int("summary_index", p.SummaryIndex),
+				slog.Bool("thinking_visible", thinkingVisible),
+				slog.Bool("have_summary_idx", reasoningState.HaveSummaryIdx),
+			)
 			if thinkingVisible {
 				if !reasoningState.HaveSummaryIdx || reasoningState.LastSummaryIdx != p.SummaryIndex {
 					reasoningState.PendingBreak = true
@@ -636,6 +686,11 @@ func (s *Server) runCodexAppFallback(
 			}
 			_ = json.Unmarshal(msg.Params, &p)
 			out.ReasoningSignaled = true
+			logCodexReasoningEvent(s.log, ctx, reqID, msg.Method,
+				slog.Int("summary_index", p.SummaryIndex),
+				slog.Int("delta_len", len(p.Delta)),
+				slog.Bool("thinking_visible_before", thinkingVisible),
+			)
 			if p.Delta != "" {
 				kind := "text"
 				var summaryIdx *int
@@ -650,6 +705,10 @@ func (s *Server) runCodexAppFallback(
 				}
 			}
 		case "turn/completed":
+			logCodexReasoningEvent(s.log, ctx, reqID, msg.Method,
+				slog.Bool("reasoning_signaled", out.ReasoningSignaled),
+				slog.Bool("thinking_visible", thinkingVisible),
+			)
 			if out.ReasoningSignaled && !thinkingVisible {
 				if err := onDelta(codexReasoningPlaceholder()); err != nil {
 					return out, err
@@ -657,6 +716,13 @@ func (s *Server) runCodexAppFallback(
 			}
 			out.ReasoningVisible = thinkingVisible
 			return out, nil
+		default:
+			if strings.HasPrefix(msg.Method, "item/") || strings.HasPrefix(msg.Method, "thread/") || strings.HasPrefix(msg.Method, "turn/") {
+				logCodexToolingEvent(s.log, ctx, reqID, "ignored",
+					slog.String("method", msg.Method),
+					slog.Int("params_bytes", len(msg.Params)),
+				)
+			}
 		}
 	}
 }
@@ -743,6 +809,8 @@ func (s *Server) collectCodex(w http.ResponseWriter, r *http.Request, req ChatRe
 		slog.Int("prompt_tokens", res.Usage.PromptTokens),
 		slog.Int("completion_tokens", res.Usage.CompletionTokens),
 		slog.Int("cache_read_tokens", res.Usage.CachedTokens()),
+		slog.Int("cache_creation_tokens", 0),
+		slog.Int("derived_cache_creation_tokens", res.DerivedCacheCreationTokens),
 		slog.Int64("duration_ms", time.Since(started).Milliseconds()),
 		slog.Bool("stream", false),
 		slog.String("backend", "codex"),
@@ -761,6 +829,8 @@ func (s *Server) collectCodex(w http.ResponseWriter, r *http.Request, req ChatRe
 		TokensIn:        res.Usage.PromptTokens,
 		TokensOut:       res.Usage.CompletionTokens,
 		CacheReadTokens: res.Usage.CachedTokens(),
+		CacheCreationTokens: 0,
+		DerivedCacheCreationTokens: res.DerivedCacheCreationTokens,
 		DurationMs:      time.Since(started).Milliseconds(),
 	})
 	return nil
@@ -872,6 +942,8 @@ func (s *Server) streamCodex(w http.ResponseWriter, r *http.Request, req ChatReq
 		slog.Int("prompt_tokens", res.Usage.PromptTokens),
 		slog.Int("completion_tokens", res.Usage.CompletionTokens),
 		slog.Int("cache_read_tokens", res.Usage.CachedTokens()),
+		slog.Int("cache_creation_tokens", 0),
+		slog.Int("derived_cache_creation_tokens", res.DerivedCacheCreationTokens),
 		slog.Int64("duration_ms", time.Since(started).Milliseconds()),
 		slog.Bool("stream", true),
 		slog.String("backend", "codex"),
@@ -890,6 +962,8 @@ func (s *Server) streamCodex(w http.ResponseWriter, r *http.Request, req ChatReq
 		TokensIn:        res.Usage.PromptTokens,
 		TokensOut:       res.Usage.CompletionTokens,
 		CacheReadTokens: res.Usage.CachedTokens(),
+		CacheCreationTokens: 0,
+		DerivedCacheCreationTokens: res.DerivedCacheCreationTokens,
 		DurationMs:      time.Since(started).Milliseconds(),
 	})
 	return nil

@@ -72,7 +72,7 @@ type codexSessionAcquireResult struct {
 }
 
 type codexManagedTransport interface {
-	runTurn(ctx context.Context, model string, effort any, summary any, prompt string, onDelta func(string) error) (codexRunResult, string, error)
+	runTurn(ctx context.Context, requestID string, model string, effort any, summary any, prompt string, onDelta func(string) error) (codexRunResult, string, error)
 	close() error
 }
 
@@ -84,6 +84,7 @@ type codexManagedSession struct {
 	summary       string
 	system        string
 	lastAssistant string
+	lastCachedInputTokens int
 	createdAt     time.Time
 	lastUsed      time.Time
 
@@ -396,7 +397,7 @@ func (t *codexAppTransport) close() error {
 	return nil
 }
 
-func (t *codexAppTransport) runTurn(ctx context.Context, model string, effort any, summary any, prompt string, onDelta func(string) error) (codexRunResult, string, error) {
+func (t *codexAppTransport) runTurn(ctx context.Context, requestID string, model string, effort any, summary any, prompt string, onDelta func(string) error) (codexRunResult, string, error) {
 	if strings.TrimSpace(prompt) == "" {
 		prompt = " "
 	}
@@ -440,6 +441,9 @@ func (t *codexAppTransport) runTurn(ctx context.Context, model string, effort an
 				Delta string `json:"delta"`
 			}
 			_ = json.Unmarshal(msg.Params, &p)
+			logCodexToolingEvent(nil, ctx, requestID, msg.Method,
+				slog.Int("delta_len", len(p.Delta)),
+			)
 			if p.Delta != "" {
 				assistantText.WriteString(p.Delta)
 				if err := onDelta(p.Delta); err != nil {
@@ -452,6 +456,11 @@ func (t *codexAppTransport) runTurn(ctx context.Context, model string, effort an
 			}
 			_ = json.Unmarshal(msg.Params, &p)
 			out.ReasoningSignaled = true
+			logCodexReasoningEvent(nil, ctx, requestID, msg.Method,
+				slog.Int("summary_index", p.SummaryIndex),
+				slog.Bool("thinking_visible", thinkingVisible),
+				slog.Bool("have_summary_idx", reasoningState.HaveSummaryIdx),
+			)
 			if thinkingVisible {
 				if !reasoningState.HaveSummaryIdx || reasoningState.LastSummaryIdx != p.SummaryIndex {
 					reasoningState.PendingBreak = true
@@ -466,6 +475,11 @@ func (t *codexAppTransport) runTurn(ctx context.Context, model string, effort an
 			}
 			_ = json.Unmarshal(msg.Params, &p)
 			out.ReasoningSignaled = true
+			logCodexReasoningEvent(nil, ctx, requestID, msg.Method,
+				slog.Int("summary_index", p.SummaryIndex),
+				slog.Int("delta_len", len(p.Delta)),
+				slog.Bool("thinking_visible_before", thinkingVisible),
+			)
 			if p.Delta != "" {
 				kind := "text"
 				var summaryIdx *int
@@ -492,18 +506,38 @@ func (t *codexAppTransport) runTurn(ctx context.Context, model string, effort an
 				} `json:"tokenUsage"`
 			}
 			_ = json.Unmarshal(msg.Params, &p)
+			currentCached := p.TokenUsage.Last.CachedInputTokens
+			derivedCacheCreate := currentCached - session.lastCachedInputTokens
+			if derivedCacheCreate < 0 {
+				derivedCacheCreate = 0
+			}
+			logAttrs := []slog.Attr{
+				slog.Int("prompt_tokens", p.TokenUsage.Last.InputTokens),
+				slog.Int("completion_tokens", p.TokenUsage.Last.OutputTokens),
+				slog.Int("cached_input_tokens", currentCached),
+				slog.Int("derived_cache_creation_tokens", derivedCacheCreate),
+				slog.Int("reasoning_output_tokens", p.TokenUsage.Last.ReasoningOutputTokens),
+				slog.Bool("native_cache_creation_metric_available", false),
+			}
+			logCodexToolingEvent(nil, ctx, requestID, msg.Method, logAttrs...)
 			out.Usage = Usage{
 				PromptTokens:     p.TokenUsage.Last.InputTokens,
 				CompletionTokens: p.TokenUsage.Last.OutputTokens,
 				TotalTokens:      p.TokenUsage.Last.TotalTokens,
 			}
-			if p.TokenUsage.Last.CachedInputTokens > 0 {
-				out.Usage.PromptTokensDetails = &PromptTokensDetails{CachedTokens: p.TokenUsage.Last.CachedInputTokens}
+			if currentCached > 0 {
+				out.Usage.PromptTokensDetails = &PromptTokensDetails{CachedTokens: currentCached}
 			}
+			out.DerivedCacheCreationTokens = derivedCacheCreate
+			session.lastCachedInputTokens = currentCached
 			if p.TokenUsage.Last.ReasoningOutputTokens > 0 {
 				out.ReasoningSignaled = true
 			}
 		case "turn/completed":
+			logCodexReasoningEvent(nil, ctx, requestID, msg.Method,
+				slog.Bool("reasoning_signaled", out.ReasoningSignaled),
+				slog.Bool("thinking_visible", thinkingVisible),
+			)
 			if out.ReasoningSignaled && !thinkingVisible {
 				if err := onDelta(codexReasoningPlaceholder()); err != nil {
 					return out, assistantText.String(), err
@@ -511,6 +545,13 @@ func (t *codexAppTransport) runTurn(ctx context.Context, model string, effort an
 			}
 			out.ReasoningVisible = thinkingVisible
 			return out, assistantText.String(), nil
+		default:
+			if strings.HasPrefix(msg.Method, "item/") || strings.HasPrefix(msg.Method, "thread/") || strings.HasPrefix(msg.Method, "turn/") {
+				logCodexToolingEvent(nil, ctx, requestID, "ignored",
+					slog.String("method", msg.Method),
+					slog.Int("params_bytes", len(msg.Params)),
+				)
+			}
 		}
 	}
 }
@@ -608,7 +649,7 @@ func (s *Server) runCodexManaged(
 
 	session.runMu.Lock()
 	defer session.runMu.Unlock()
-	res, assistantText, err := session.transport.runTurn(ctx, spec.Model, effectiveCodexAppEffort(req), effectiveCodexAppSummary(req), prompt, onDelta)
+	res, assistantText, err := session.transport.runTurn(ctx, reqID, spec.Model, effectiveCodexAppEffort(req), effectiveCodexAppSummary(req), prompt, onDelta)
 	if err != nil {
 		s.codexSessions.drop(session, "transport_error")
 		return codexRunResult{}, "", true, err

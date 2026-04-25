@@ -182,6 +182,7 @@ message ProviderStats {
   int64 estimated_cost_microcents = 10;
   int64 last_seen_unix = 11;
   string error = 12;
+  int64 derived_cache_creation_tokens = 13;
 }
 
 message GetProviderStatsResponse {

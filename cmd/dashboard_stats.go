@@ -37,6 +37,7 @@ func providerStatsFromProto(list []*clydev1.ProviderStats) []ui.ProviderStats {
 			OutputTokens:            item.GetOutputTokens(),
 			CacheReadTokens:         item.GetCacheReadTokens(),
 			CacheCreationTokens:     item.GetCacheCreationTokens(),
+			DerivedCacheCreationTokens: item.GetDerivedCacheCreationTokens(),
 			HitRatio:                item.GetHitRatio(),
 			EstimatedCostMicrocents: item.GetEstimatedCostMicrocents(),
 			LastSeen:                time.Unix(item.GetLastSeenUnix(), 0),
