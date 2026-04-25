@@ -3,7 +3,6 @@ package adapter
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -257,14 +256,6 @@ func cacheableMessageBoundaryBlock(role, blockType string) bool {
 	return anthropicbackend.CacheableMessageBoundaryBlock(role, blockType)
 }
 
-// streamEventToTranslatorSSE maps decoded native stream signals to the JSON
-// payloads tooltrans.StreamTranslator.HandleEvent expects for SSE event names
-// (content_block_start, content_block_delta, content_block_stop). Raw SSE is
-// decoded first; this layer re-encodes the subset the translator consumes.
-func streamEventToTranslatorSSE(ev anthropic.StreamEvent) (eventName string, payload []byte, ok bool) {
-	return anthropicbackend.StreamEventToTranslatorSSE(ev)
-}
-
 // runOAuthTranslatorStream drives tooltrans.StreamTranslator from decoded
 // StreamEvents. Both collect and stream paths share this; collect buffers
 // chunks while stream writes SSE frames.
@@ -279,137 +270,11 @@ func (s *Server) runOAuthTranslatorStream(
 }
 
 func (s *Server) collectOAuth(w http.ResponseWriter, ctx context.Context, req anthropic.Request, model ResolvedModel, reqID string, started time.Time, jsonSpec JSONResponseSpec, escalate bool, trackerKey string) error {
-	s.emitRequestStarted(ctx, model, "oauth", reqID, req.Model, false)
-	var buf []tooltrans.OpenAIStreamChunk
 	var notice *anthropic.Notice
-	emit := func(ch tooltrans.OpenAIStreamChunk) error {
-		buf = append(buf, ch)
-		return nil
-	}
 	req.OnHeaders = func(h http.Header) {
 		notice = chatemit.EvaluateNoticeFromHeaders(h, s.cfg.Notices.EnabledOrDefault(), Claim)
 	}
-	anthUsage, anthStopReason, finishReason, err := s.runOAuthTranslatorStream(ctx, req, model, reqID, emit)
-	if err != nil {
-		chatemit.LogFailed(s.log, ctx, chatemit.FailedAttrs{
-			Backend:    "anthropic",
-			Provider:   providerName(model, "oauth"),
-			RequestID:  reqID,
-			Alias:      model.Alias,
-			ModelID:    req.Model,
-			Err:        err,
-			DurationMs: time.Since(started).Milliseconds(),
-		})
-		chatemit.LogTerminal(s.log, ctx, s.deps.RequestEvents, chatemit.RequestEvent{
-			Stage:      chatemit.RequestStageFailed,
-			Provider:   providerName(model, "oauth"),
-			Backend:    model.Backend,
-			RequestID:  reqID,
-			Alias:      model.Alias,
-			ModelID:    req.Model,
-			Stream:     false,
-			DurationMs: time.Since(started).Milliseconds(),
-			Err:        err.Error(),
-		})
-		errMsg := err.Error()
-		if notice != nil {
-			if escalate {
-				// We are about to retry on another backend; release the
-				// notice slot so a successful retry can still deliver it.
-				Unclaim(notice.Kind, notice.ResetsAt)
-				s.log.LogAttrs(ctx, slog.LevelDebug, "adapter.notice.unclaimed_on_escalate",
-					slog.String("subcomponent", "adapter"),
-					slog.String("request_id", reqID),
-					slog.String("alias", model.Alias),
-					slog.String("kind", notice.Kind),
-				)
-			} else {
-				errMsg = errMsg + " · " + notice.Text
-				s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.notice.injected_into_error",
-					slog.String("subcomponent", "adapter"),
-					slog.String("request_id", reqID),
-					slog.String("alias", model.Alias),
-					slog.String("kind", notice.Kind),
-					slog.String("notice_text", notice.Text),
-				)
-			}
-		}
-		if err := chatemit.EscalateOrWrite(
-			err,
-			escalate,
-			func(status int, code, msg string) error {
-				writeError(w, status, code, msg)
-				return nil
-			},
-			http.StatusBadGateway,
-			"upstream_error",
-			errMsg,
-		); err != nil {
-			return err
-		}
-		return nil
-	}
-	rawUsage := usageFromAnthropic(anthUsage)
-	tracked := s.ctxUsage.Track(trackerKey, rawUsage)
-	u := tracked.usage
-	resp := mergeOAuthStreamChunks(reqID, model.Alias, buf, u, finishReason, jsonSpec, anthStopReason)
-	resp, _ = chatemit.NoticeForResponseHeaders(resp, notice, Unclaim, json.Marshal)
-	writeJSON(w, http.StatusOK, resp)
-	if u.PromptTokens != rawUsage.PromptTokens || u.TotalTokens != rawUsage.TotalTokens {
-		s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.context_usage.tracked",
-			slog.String("backend", "anthropic"),
-			slog.String("request_id", reqID),
-			slog.String("alias", model.Alias),
-			slog.Int("raw_prompt_tokens", tracked.rawPrompt),
-			slog.Int("raw_total_tokens", tracked.rawTotal),
-			slog.Int("rolled_output_tokens", tracked.rolledFrom),
-			slog.Int("surfaced_prompt_tokens", u.PromptTokens),
-			slog.Int("surfaced_total_tokens", u.TotalTokens),
-		)
-	}
-	s.logCacheUsageAnthropic(ctx, "anthropic", reqID, model.Alias, anthUsage)
-	chatemit.LogCompleted(s.log, ctx, chatemit.CompletedAttrs{
-		Backend:             "anthropic",
-		Provider:            providerName(model, "oauth"),
-		Path:                "oauth",
-		SessionID:           reqID,
-		RequestID:           reqID,
-		Alias:               model.Alias,
-		ModelID:             req.Model,
-		FinishReason:        finishReason,
-		TokensIn:            u.PromptTokens,
-		TokensOut:           u.CompletionTokens,
-		CacheReadTokens:     anthUsage.CacheReadInputTokens,
-		CacheCreationTokens: anthUsage.CacheCreationInputTokens,
-		CacheTTL:            s.cfg.ClientIdentity.PromptCacheTTL,
-		DurationMs:          time.Since(started).Milliseconds(),
-		Stream:              false,
-	})
-	breakdown := chatemit.EstimateCost(chatemit.CostInputs{
-		ModelID:             req.Model,
-		TTL:                 s.cfg.ClientIdentity.PromptCacheTTL,
-		InputTokens:         u.PromptTokens,
-		OutputTokens:        u.CompletionTokens,
-		CacheCreationTokens: anthUsage.CacheCreationInputTokens,
-		CacheReadTokens:     anthUsage.CacheReadInputTokens,
-	})
-	chatemit.LogTerminal(s.log, ctx, s.deps.RequestEvents, chatemit.RequestEvent{
-		Stage:               chatemit.RequestStageCompleted,
-		Provider:            providerName(model, "oauth"),
-		Backend:             model.Backend,
-		RequestID:           reqID,
-		Alias:               model.Alias,
-		ModelID:             req.Model,
-		Stream:              false,
-		FinishReason:        finishReason,
-		TokensIn:            u.PromptTokens,
-		TokensOut:           u.CompletionTokens,
-		CacheReadTokens:     anthUsage.CacheReadInputTokens,
-		CacheCreationTokens: anthUsage.CacheCreationInputTokens,
-		CostMicrocents:      breakdown.TotalMicrocents,
-		DurationMs:          time.Since(started).Milliseconds(),
-	})
-	return nil
+	return anthropicbackend.CollectResponse(s, w, ctx, req, model, reqID, started, jsonSpec, escalate, trackerKey, &notice)
 }
 
 // usageFromAnthropic converts an upstream usage block into the OpenAI
@@ -471,44 +336,11 @@ func (s *Server) logCacheUsageAnthropic(ctx context.Context, backend, reqID, ali
 // are already flushed and the dispatcher cannot retry without
 // confusing the OpenAI client).
 func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthropic.Request, model ResolvedModel, reqID string, started time.Time, escalate bool, includeUsage bool, trackerKey string) error {
-	s.emitRequestStarted(r.Context(), model, "oauth", reqID, req.Model, true)
-	sw, err := newSSEWriter(w)
-	if err != nil {
-		if err := chatemit.EscalateOrWrite(
-			fmt.Errorf("no_flusher: streaming not supported by transport"),
-			escalate,
-			func(status int, code, msg string) error {
-				writeError(w, status, code, msg)
-				return nil
-			},
-			http.StatusInternalServerError,
-			"no_flusher",
-			err.Error(),
-		); err != nil {
-			return err
-		}
-		return nil
-	}
-
-	// Flush SSE headers immediately so clients (e.g. Cursor) get a
-	// response committal before we wait for the upstream's first byte.
-	// Large prompts spend ~1-3s on TTFT; without an early flush, strict
-	// streaming clients close the connection on timeout.
-	sw.WriteSSEHeaders()
-	s.emitRequestStreamOpened(r.Context(), model, "oauth", reqID, req.Model, true)
-
-	emittedContent := false
-	emit := func(chunk StreamChunk) error {
-		if streamChunkHasVisibleContent(chunk) {
-			emittedContent = true
-		}
-		return sw.EmitStreamChunk(systemFingerprint, chunk)
-	}
-
-	emitTool := func(och tooltrans.OpenAIStreamChunk) error {
-		return emit(streamChunkFromTooltrans(och))
-	}
+	var emitTool func(tooltrans.OpenAIStreamChunk) error
 	req.OnHeaders = func(h http.Header) {
+		if emitTool == nil {
+			return
+		}
 		notice, err := chatemit.NoticeForStreamHeaders(
 			reqID,
 			model.Alias,
@@ -529,143 +361,7 @@ func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthrop
 			)
 		}
 	}
-
-	anthUsage, _, finishReason, err := s.runOAuthTranslatorStream(r.Context(), req, model, reqID, func(ch tooltrans.OpenAIStreamChunk) error {
-		return emitTool(ch)
-	})
-	if err != nil {
-		s.log.LogAttrs(r.Context(), slog.LevelWarn, "adapter.chat.stream_error",
-			slog.String("backend", "anthropic"),
-			slog.String("request_id", reqID),
-			slog.String("alias", model.Alias),
-			slog.String("model", req.Model),
-			slog.Any("err", err),
-		)
-		if escalate && !sw.HasCommittedHeaders() {
-			return err
-		}
-		if !emittedContent {
-			_ = emitActionableStreamError(emit, reqID, model.Alias, err)
-			finishReason = "stop"
-		}
-		chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{
-			Stage:      chatemit.RequestStageFailed,
-			Provider:   providerName(model, "oauth"),
-			Backend:    model.Backend,
-			RequestID:  reqID,
-			Alias:      model.Alias,
-			ModelID:    req.Model,
-			Stream:     true,
-			DurationMs: time.Since(started).Milliseconds(),
-			Err:        err.Error(),
-		})
-	}
-	if err == nil && !emittedContent && finishReason == "" && anthUsage.InputTokens == 0 && anthUsage.OutputTokens == 0 && anthUsage.CacheReadInputTokens == 0 && anthUsage.CacheCreationInputTokens == 0 {
-		streamErr := fmt.Errorf("anthropic stream ended without content; claude authentication may be invalid")
-		s.log.LogAttrs(r.Context(), slog.LevelWarn, "adapter.chat.stream_empty",
-			slog.String("backend", "anthropic"),
-			slog.String("request_id", reqID),
-			slog.String("alias", model.Alias),
-			slog.String("model", req.Model),
-			slog.Any("err", streamErr),
-		)
-		_ = emit(StreamChunk{
-			ID:      reqID,
-			Object:  "chat.completion.chunk",
-			Created: time.Now().Unix(),
-			Model:   model.Alias,
-			Choices: []StreamChoice{{
-				Index: 0,
-				Delta: StreamDelta{
-					Role:    "assistant",
-					Content: "Clyde adapter upstream stream ended before producing content. Claude authentication may be invalid. Run `claude /login`, then retry.",
-				},
-			}},
-		})
-		finishReason = "stop"
-	}
-
-	fr := finishReason
-	_ = chatemit.EmitFinishChunk(emit, reqID, model.Alias, time.Now().Unix(), fr)
-
-	rawFinalUsage := usageFromAnthropic(anthUsage)
-	tracked := s.ctxUsage.Track(trackerKey, rawFinalUsage)
-	finalUsage := tracked.usage
-	if err == nil && emittedContent && finalUsage.PromptTokens == 0 && finalUsage.CompletionTokens == 0 {
-		s.log.LogAttrs(r.Context(), slog.LevelWarn, "adapter.anthropic.usage_missing",
-			slog.String("backend", "anthropic"),
-			slog.String("request_id", reqID),
-			slog.String("alias", model.Alias),
-			slog.String("model", req.Model),
-			slog.String("stop_reason", fr),
-			slog.Int("raw_input_tokens", anthUsage.InputTokens),
-			slog.Int("raw_output_tokens", anthUsage.OutputTokens),
-			slog.Int("raw_cache_read_tokens", anthUsage.CacheReadInputTokens),
-			slog.Int("raw_cache_creation_tokens", anthUsage.CacheCreationInputTokens),
-		)
-	}
-	if finalUsage.PromptTokens != rawFinalUsage.PromptTokens || finalUsage.TotalTokens != rawFinalUsage.TotalTokens {
-		s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.context_usage.tracked",
-			slog.String("backend", "anthropic"),
-			slog.String("request_id", reqID),
-			slog.String("alias", model.Alias),
-			slog.Int("raw_prompt_tokens", tracked.rawPrompt),
-			slog.Int("raw_total_tokens", tracked.rawTotal),
-			slog.Int("rolled_output_tokens", tracked.rolledFrom),
-			slog.Int("surfaced_prompt_tokens", finalUsage.PromptTokens),
-			slog.Int("surfaced_total_tokens", finalUsage.TotalTokens),
-		)
-	}
-	if includeUsage {
-		_ = chatemit.EmitUsageChunk(emit, reqID, model.Alias, time.Now().Unix(), finalUsage)
-	}
-	_ = sw.WriteStreamDone()
-
-	s.logCacheUsageAnthropic(r.Context(), "anthropic", reqID, model.Alias, anthUsage)
-	chatemit.LogCompleted(s.log, r.Context(), chatemit.CompletedAttrs{
-		Backend:             "anthropic",
-		Provider:            providerName(model, "oauth"),
-		Path:                "oauth",
-		SessionID:           reqID,
-		RequestID:           reqID,
-		Alias:               model.Alias,
-		ModelID:             req.Model,
-		FinishReason:        fr,
-		TokensIn:            finalUsage.PromptTokens,
-		TokensOut:           finalUsage.CompletionTokens,
-		CacheReadTokens:     anthUsage.CacheReadInputTokens,
-		CacheCreationTokens: anthUsage.CacheCreationInputTokens,
-		CacheTTL:            s.cfg.ClientIdentity.PromptCacheTTL,
-		DurationMs:          time.Since(started).Milliseconds(),
-		Stream:              true,
-	})
-	breakdown := chatemit.EstimateCost(chatemit.CostInputs{
-		ModelID:             req.Model,
-		TTL:                 s.cfg.ClientIdentity.PromptCacheTTL,
-		InputTokens:         finalUsage.PromptTokens,
-		OutputTokens:        finalUsage.CompletionTokens,
-		CacheCreationTokens: anthUsage.CacheCreationInputTokens,
-		CacheReadTokens:     anthUsage.CacheReadInputTokens,
-	})
-	if err == nil {
-		chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{
-			Stage:               chatemit.RequestStageCompleted,
-			Provider:            providerName(model, "oauth"),
-			Backend:             model.Backend,
-			RequestID:           reqID,
-			Alias:               model.Alias,
-			ModelID:             req.Model,
-			Stream:              true,
-			FinishReason:        fr,
-			TokensIn:            finalUsage.PromptTokens,
-			TokensOut:           finalUsage.CompletionTokens,
-			CacheReadTokens:     anthUsage.CacheReadInputTokens,
-			CacheCreationTokens: anthUsage.CacheCreationInputTokens,
-			CostMicrocents:      breakdown.TotalMicrocents,
-			DurationMs:          time.Since(started).Milliseconds(),
-		})
-	}
-	return nil
+	return anthropicbackend.StreamResponse(s, w, r, req, model, reqID, started, escalate, includeUsage, trackerKey, &emitTool)
 }
 
 // mutateBillingForProbe applies CLYDE_PROBE_BILLING for debugging.

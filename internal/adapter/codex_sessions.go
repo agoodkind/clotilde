@@ -20,6 +20,10 @@ type codexManagedTransport = adaptercodex.ManagedTransport
 type codexManagedSession = adaptercodex.ManagedSession
 type codexSessionManager = adaptercodex.SessionManager
 
+type codexAppTransport struct {
+	*adaptercodex.AppTransport
+}
+
 func normalizeCodexAssistantAnchor(text string) string {
 	return adaptercodex.NormalizeAssistantAnchor(text, sanitizeForUpstreamCache)
 }
@@ -36,116 +40,26 @@ func newCodexSessionManager(log *slog.Logger, start func(spec codexSessionSpec) 
 	return adaptercodex.NewSessionManager(log, start)
 }
 
-type codexAppTransport struct {
-	cancel                context.CancelFunc
-	rpc                   *codexRPCClient
-	threadID              string
-	lastCachedInputTokens int
-}
-
 func newCodexAppTransport(bin string, spec codexSessionSpec) (*codexAppTransport, error) {
-	sessCtx, cancel := context.WithCancel(context.Background())
-	rpc, err := startCodexRPC(sessCtx, bin)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	t := &codexAppTransport{cancel: cancel, rpc: rpc}
-	cleanup := func(err error) (*codexAppTransport, error) {
-		_ = t.close()
-		return nil, err
-	}
-
-	waitFor := func(id int) (codexRPCMsg, error) {
-		for {
-			msg, err := rpc.next()
-			if err != nil {
-				return codexRPCMsg{}, err
-			}
-			if msg.ID == nil || !rpcIDEquals(msg.ID, id) {
-				continue
-			}
-			if msg.Error != nil {
-				return codexRPCMsg{}, fmt.Errorf("codex rpc %s", msg.Error.Message)
-			}
-			return msg, nil
+	t, err := adaptercodex.NewAppTransport(bin, spec, func(ctx context.Context, bin string) (adaptercodex.RPCClient, error) {
+		rpc, err := startCodexRPC(ctx, bin)
+		if err != nil {
+			return nil, err
 		}
-	}
-
-	if err := rpc.send(1, "initialize", map[string]any{
-		"clientInfo": map[string]any{
-			"name":    "clyde-adapter",
-			"title":   "Clyde Adapter",
-			"version": "0.1.0",
-		},
-	}); err != nil {
-		return cleanup(err)
-	}
-	if _, err := waitFor(1); err != nil {
-		return cleanup(err)
-	}
-	rawInit, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": "initialized", "params": map[string]any{}})
-	if _, err := io.WriteString(rpc.stdin, string(rawInit)+"\n"); err != nil {
-		return cleanup(err)
-	}
-	if err := rpc.send(2, "thread/start", map[string]any{
-		"model":                  spec.Model,
-		"cwd":                    ".",
-		"approvalPolicy":         "never",
-		"ephemeral":              true,
-		"serviceName":            "clyde-codex-session",
-		"baseInstructions":       spec.System,
-		"experimentalRawEvents":  false,
-		"persistExtendedHistory": false,
-	}); err != nil {
-		return cleanup(err)
-	}
-	startResp, err := waitFor(2)
+		return codexRPCTransport{client: rpc}, nil
+	})
 	if err != nil {
-		return cleanup(err)
+		return nil, err
 	}
-	var threadResp struct {
-		Thread struct {
-			ID string `json:"id"`
-		} `json:"thread"`
-	}
-	if err := json.Unmarshal(startResp.Result, &threadResp); err != nil {
-		return cleanup(err)
-	}
-	t.threadID = threadResp.Thread.ID
-	return t, nil
+	return &codexAppTransport{AppTransport: t}, nil
 }
-
-func (t *codexAppTransport) close() error {
-	if t == nil {
-		return nil
-	}
-	if t.rpc != nil && t.threadID != "" {
-		_ = t.rpc.send(9, "thread/archive", map[string]any{"threadId": t.threadID})
-	}
-	if t.rpc != nil && t.rpc.stdin != nil {
-		_ = t.rpc.stdin.Close()
-	}
-	if t.cancel != nil {
-		t.cancel()
-	}
-	if t.rpc != nil && t.rpc.cmd != nil && t.rpc.cmd.Process != nil {
-		_ = t.rpc.cmd.Process.Kill()
-	}
-	if t.rpc != nil && t.rpc.stdout != nil {
-		_, _ = io.Copy(io.Discard, t.rpc.stdout)
-	}
-	return nil
-}
-
-func (t *codexAppTransport) Close() error { return t.close() }
 
 func (t *codexAppTransport) runTurn(ctx context.Context, requestID string, model string, effort any, summary any, prompt string, emit func(tooltrans.OpenAIStreamChunk) error) (codexRunResult, string, error) {
 	if strings.TrimSpace(prompt) == "" {
 		prompt = " "
 	}
-	if err := t.rpc.send(3, "turn/start", map[string]any{
-		"threadId":       t.threadID,
+	if err := t.Send(3, "turn/start", map[string]any{
+		"threadId":       t.ThreadID(),
 		"approvalPolicy": "never",
 		"model":          model,
 		"effort":         effort,
@@ -167,11 +81,11 @@ func (t *codexAppTransport) runTurn(ctx context.Context, requestID string, model
 			return out, assistantText.String(), ctx.Err()
 		default:
 		}
-		msg, err := t.rpc.next()
+		msg, err := t.Next()
 		if err != nil {
 			return out, assistantText.String(), err
 		}
-		if msg.ID != nil && rpcIDEquals(msg.ID, 3) {
+		if msg.ID != nil && adaptercodex.RPCIDEquals(msg.ID, 3) {
 			if msg.Error != nil {
 				return out, assistantText.String(), fmt.Errorf("codex turn/start: %s", msg.Error.Message)
 			}
@@ -299,12 +213,12 @@ func (t *codexAppTransport) runTurn(ctx context.Context, requestID string, model
 						CachedInputTokens     int `json:"cachedInputTokens"`
 						OutputTokens          int `json:"outputTokens"`
 						ReasoningOutputTokens int `json:"reasoningOutputTokens"`
-					} `json:"last"`
+			} `json:"last"`
 				} `json:"tokenUsage"`
 			}
 			_ = json.Unmarshal(msg.Params, &p)
 			currentCached := p.TokenUsage.Last.CachedInputTokens
-			derivedCacheCreate := deriveCodexCacheCreationTokens(t.lastCachedInputTokens, currentCached)
+			derivedCacheCreate := deriveCodexCacheCreationTokens(t.CachedInputTokens(), currentCached)
 			logAttrs := []slog.Attr{slog.Int("prompt_tokens", p.TokenUsage.Last.InputTokens), slog.Int("completion_tokens", p.TokenUsage.Last.OutputTokens), slog.Int("cached_input_tokens", currentCached), slog.Int("derived_cache_creation_tokens", derivedCacheCreate), slog.Int("reasoning_output_tokens", p.TokenUsage.Last.ReasoningOutputTokens), slog.Bool("native_cache_creation_metric_available", false)}
 			logCodexToolingEvent(nil, ctx, requestID, msg.Method, logAttrs...)
 			out.Usage = Usage{PromptTokens: p.TokenUsage.Last.InputTokens, CompletionTokens: p.TokenUsage.Last.OutputTokens, TotalTokens: p.TokenUsage.Last.TotalTokens}
@@ -312,7 +226,7 @@ func (t *codexAppTransport) runTurn(ctx context.Context, requestID string, model
 				out.Usage.PromptTokensDetails = &PromptTokensDetails{CachedTokens: currentCached}
 			}
 			out.DerivedCacheCreationTokens = derivedCacheCreate
-			t.lastCachedInputTokens = currentCached
+			t.SetCachedInputTokens(currentCached)
 			if p.TokenUsage.Last.ReasoningOutputTokens > 0 {
 				out.ReasoningSignaled = true
 			}
@@ -402,4 +316,53 @@ func (rt codexManagedRuntime) RunManagedTurn(
 		return codexRunResult{}, "", adaptercodex.ManagedTransportTypeMismatch()
 	}
 	return transport.runTurn(ctx, reqID, spec.Model, effort, summary, prompt, emit)
+}
+
+type codexRPCTransport struct {
+	client *codexRPCClient
+}
+
+func (t codexRPCTransport) Send(id int, method string, params any) error {
+	return t.client.send(id, method, params)
+}
+
+func (t codexRPCTransport) Notify(method string, params any) error {
+	raw, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": method, "params": params})
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(t.client.stdin, string(raw)+"\n")
+	return err
+}
+
+func (t codexRPCTransport) Next() (adaptercodex.RPCMessage, error) {
+	msg, err := t.client.next()
+	if err != nil {
+		return adaptercodex.RPCMessage{}, err
+	}
+	var rpcErr *adaptercodex.RPCError
+	if msg.Error != nil {
+		rpcErr = &adaptercodex.RPCError{Code: msg.Error.Code, Message: msg.Error.Message}
+	}
+	return adaptercodex.RPCMessage{
+		ID:     msg.ID,
+		Method: msg.Method,
+		Params: msg.Params,
+		Result: msg.Result,
+		Error:  rpcErr,
+	}, nil
+}
+
+func (t codexRPCTransport) Close() error {
+	if t.client == nil {
+		return nil
+	}
+	_ = t.client.stdin.Close()
+	if t.client.cmd != nil && t.client.cmd.Process != nil {
+		_ = t.client.cmd.Process.Kill()
+	}
+	if t.client.stdout != nil {
+		_, _ = io.Copy(io.Discard, t.client.stdout)
+	}
+	return nil
 }

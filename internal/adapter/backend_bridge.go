@@ -157,3 +157,53 @@ func (s *Server) SurfaceFallbackFailure(w http.ResponseWriter, anthErr, fbErr er
 func (s *Server) Log() *slog.Logger {
 	return s.log
 }
+
+func (s *Server) NewAnthropicSSEWriter(w http.ResponseWriter) (anthropicbackend.ResponseSSEWriter, error) {
+	return newSSEWriter(w)
+}
+
+func (s *Server) StreamChunkHasVisibleContent(chunk adapteropenai.StreamChunk) bool {
+	return streamChunkHasVisibleContent(chunk)
+}
+
+func (s *Server) EmitActionableStreamError(emit func(adapteropenai.StreamChunk) error, reqID, modelAlias string, err error) error {
+	return emitActionableStreamError(emit, reqID, modelAlias, err)
+}
+
+func (s *Server) RunOAuthTranslatorStream(ctx context.Context, req anthropic.Request, model adaptermodel.ResolvedModel, reqID string, emit func(tooltrans.OpenAIStreamChunk) error) (anthropic.Usage, string, string, error) {
+	return s.runOAuthTranslatorStream(ctx, req, model, reqID, emit)
+}
+
+func (s *Server) TrackAnthropicContextUsage(key string, raw adapteropenai.Usage) anthropicbackend.TrackedUsage {
+	tracked := s.ctxUsage.Track(key, Usage(raw))
+	return anthropicbackend.TrackedUsage{
+		Usage:      adapteropenai.Usage(tracked.usage),
+		RawPrompt:  tracked.rawPrompt,
+		RawTotal:   tracked.rawTotal,
+		RolledFrom: tracked.rolledFrom,
+	}
+}
+
+func (s *Server) MergeAnthropicStreamChunks(reqID, alias string, chunks []tooltrans.OpenAIStreamChunk, usage adapteropenai.Usage, finishReason string, jsonSpec any, anthropicStopReason string) any {
+	return mergeOAuthStreamChunks(reqID, alias, chunks, Usage(usage), finishReason, jsonSpec.(JSONResponseSpec), anthropicStopReason)
+}
+
+func (s *Server) NoticeForResponseHeaders(resp any, notice *anthropic.Notice) (any, error) {
+	out, _ := chatemit.NoticeForResponseHeaders(resp.(ChatResponse), notice, Unclaim, json.Marshal)
+	return out, nil
+}
+
+func (s *Server) CacheTTL() string {
+	return s.cfg.ClientIdentity.PromptCacheTTL
+}
+
+func (s *Server) LogCacheUsageAnthropic(ctx context.Context, backend, reqID, alias string, u anthropic.Usage) {
+	s.logCacheUsageAnthropic(ctx, backend, reqID, alias, u)
+}
+
+func (s *Server) UnclaimNotice(notice *anthropic.Notice) {
+	if notice == nil {
+		return
+	}
+	Unclaim(notice.Kind, notice.ResetsAt)
+}
