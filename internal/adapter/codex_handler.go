@@ -15,7 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"goodkind.io/clyde/internal/adapter/chatemit"
+	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
+	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
@@ -496,8 +497,7 @@ func codexMessageContent(role, textType, text string) codexInputItem {
 }
 
 func codexBaseInstructions(modelName string) string {
-	modelName = strings.TrimSpace(modelName)
-	if text := strings.TrimSpace(codexModelInstructions[modelName]); text != "" {
+	if text := adaptercodex.BaseInstructions(modelName); text != "" {
 		return text
 	}
 	return "You are a helpful assistant."
@@ -526,27 +526,8 @@ func codexPermissionsMessage() codexInputItem {
 	return codexMessageContent("developer", "input_text", codexPermissionsText())
 }
 
-var codexWorkspacePathRE = regexp.MustCompile(`(?m)\bWorkspace Path:\s*([^\n<]+)`)
-
 func codexRequestWorkspacePath(req ChatRequest) string {
-	var sources []string
-	if len(req.Input) > 0 {
-		sources = append(sources, string(req.Input))
-	}
-	for _, m := range req.Messages {
-		sources = append(sources, FlattenContent(m.Content))
-	}
-	for _, source := range sources {
-		match := codexWorkspacePathRE.FindStringSubmatch(source)
-		if len(match) < 2 {
-			continue
-		}
-		path := strings.TrimSpace(match[1])
-		if strings.HasPrefix(path, "/") {
-			return path
-		}
-	}
-	return ""
+	return adaptercursor.WorkspacePath(req)
 }
 
 func codexEnvironmentContextText(workspacePath string) (string, bool) {
@@ -1805,127 +1786,11 @@ func (s *Server) runCodexAppFallback(
 }
 
 func (s *Server) collectCodex(w http.ResponseWriter, r *http.Request, req ChatRequest, model ResolvedModel, effort, reqID string, started time.Time) error {
-	var chunks []tooltrans.OpenAIStreamChunk
-	path := "direct"
-	s.emitRequestStarted(r.Context(), model, path, reqID, model.Alias, false)
-	emit := func(ch tooltrans.OpenAIStreamChunk) error {
-		chunks = append(chunks, ch)
-		return nil
-	}
-	res, err := s.runCodexDirect(r.Context(), req, model, effort, reqID, emit)
-	managed := false
-	if err == nil && s.cfg.Codex.AppFallback {
-		if escalate, reason := codexShouldEscalateDirect(req, chunks, res); escalate {
-			s.log.LogAttrs(r.Context(), slog.LevelWarn, "adapter.codex.direct.degraded",
-				slog.String("request_id", reqID),
-				slog.String("reason", reason),
-				slog.String("alias", model.Alias),
-				slog.String("model", model.ClaudeModel),
-			)
-			err = fmt.Errorf("codex direct degraded: %s", reason)
-		}
-	}
-	if err != nil && s.cfg.Codex.AppFallback {
-		chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{Stage: chatemit.RequestStageFailed, Provider: providerName(model, "direct"), Backend: model.Backend, RequestID: reqID, Alias: model.Alias, ModelID: model.Alias, Stream: false, DurationMs: time.Since(started).Milliseconds(), Err: err.Error()})
-		s.log.LogAttrs(r.Context(), slog.LevelWarn, "adapter.codex.fallback.escalating", slog.String("request_id", reqID), slog.Any("err", err))
-		chunks = nil
-		path = "app"
-		s.emitRequestStarted(r.Context(), model, path, reqID, model.Alias, false)
-		var assistantText string
-		res, assistantText, managed, err = s.runCodexManaged(r.Context(), req, model, effort, reqID, emit)
-		_ = assistantText
-		if !managed && err == nil {
-			res, err = s.runCodexAppFallback(r.Context(), req, reqID, emit)
-		}
-	}
-	if err != nil {
-		chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{Stage: chatemit.RequestStageFailed, Provider: providerName(model, path), Backend: model.Backend, RequestID: reqID, Alias: model.Alias, ModelID: model.Alias, Stream: false, DurationMs: time.Since(started).Milliseconds(), Err: err.Error()})
-		return err
-	}
-	resp := mergeOAuthStreamChunks(reqID, model.Alias, chunks, res.Usage, res.FinishReason, JSONResponseSpec{}, "")
-	writeJSON(w, http.StatusOK, resp)
-	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.chat.completed", slog.String("request_id", reqID), slog.String("model", model.Alias), slog.Int("prompt_tokens", res.Usage.PromptTokens), slog.Int("completion_tokens", res.Usage.CompletionTokens), slog.Int("cache_read_tokens", res.Usage.CachedTokens()), slog.Int("cache_creation_tokens", 0), slog.Int("derived_cache_creation_tokens", res.DerivedCacheCreationTokens), slog.Int64("duration_ms", time.Since(started).Milliseconds()), slog.Bool("stream", false), slog.String("backend", "codex"), slog.Bool("reasoning_signaled", res.ReasoningSignaled), slog.Bool("reasoning_visible", res.ReasoningVisible))
-	chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{Stage: chatemit.RequestStageCompleted, Provider: providerName(model, path), Backend: model.Backend, RequestID: reqID, Alias: model.Alias, ModelID: model.Alias, Stream: false, FinishReason: res.FinishReason, TokensIn: res.Usage.PromptTokens, TokensOut: res.Usage.CompletionTokens, CacheReadTokens: res.Usage.CachedTokens(), CacheCreationTokens: 0, DerivedCacheCreationTokens: res.DerivedCacheCreationTokens, DurationMs: time.Since(started).Milliseconds()})
-	return nil
+	return adaptercodex.Collect(s, w, r, req, model, effort, reqID, started)
 }
 
 func (s *Server) streamCodex(w http.ResponseWriter, r *http.Request, req ChatRequest, model ResolvedModel, effort, reqID string, started time.Time) error {
-	path := "direct"
-	s.emitRequestStarted(r.Context(), model, path, reqID, model.Alias, true)
-	sw, err := newSSEWriter(w)
-	if err != nil {
-		return err
-	}
-	sw.writeSSEHeaders()
-	s.emitRequestStreamOpened(r.Context(), model, path, reqID, model.Alias, true)
-	created := time.Now().Unix()
-	var directChunks []tooltrans.OpenAIStreamChunk
-	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.codex.stream.mode",
-		slog.String("request_id", reqID),
-		slog.String("backend", "codex"),
-		slog.String("alias", model.Alias),
-		slog.String("model", model.ClaudeModel),
-		slog.Bool("app_fallback", s.cfg.Codex.AppFallback),
-		slog.Bool("direct_emit_live", !s.cfg.Codex.AppFallback),
-	)
-	directEmit := func(ch tooltrans.OpenAIStreamChunk) error {
-		directChunks = append(directChunks, ch)
-		if !s.cfg.Codex.AppFallback {
-			return sw.emitStreamChunk(systemFingerprint, streamChunkFromTooltrans(ch))
-		}
-		return nil
-	}
-
-	res, runErr := s.runCodexDirect(r.Context(), req, model, effort, reqID, directEmit)
-	managed := false
-	if runErr == nil && s.cfg.Codex.AppFallback {
-		if escalate, reason := codexShouldEscalateDirect(req, directChunks, res); escalate {
-			s.log.LogAttrs(r.Context(), slog.LevelWarn, "adapter.codex.direct.degraded",
-				slog.String("request_id", reqID),
-				slog.String("reason", reason),
-				slog.String("alias", model.Alias),
-				slog.String("model", model.ClaudeModel),
-			)
-			runErr = fmt.Errorf("codex direct degraded: %s", reason)
-		}
-	}
-	if runErr != nil && s.cfg.Codex.AppFallback {
-		chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{Stage: chatemit.RequestStageFailed, Provider: providerName(model, "direct"), Backend: model.Backend, RequestID: reqID, Alias: model.Alias, ModelID: model.Alias, Stream: true, DurationMs: time.Since(started).Milliseconds(), Err: runErr.Error()})
-		s.log.LogAttrs(r.Context(), slog.LevelWarn, "adapter.codex.fallback.escalating", slog.String("request_id", reqID), slog.Any("err", runErr))
-		path = "app"
-		s.emitRequestStarted(r.Context(), model, path, reqID, model.Alias, true)
-		s.emitRequestStreamOpened(r.Context(), model, path, reqID, model.Alias, true)
-		var assistantText string
-		emit := func(ch tooltrans.OpenAIStreamChunk) error {
-			return sw.emitStreamChunk(systemFingerprint, streamChunkFromTooltrans(ch))
-		}
-		res, assistantText, managed, runErr = s.runCodexManaged(r.Context(), req, model, effort, reqID, emit)
-		_ = assistantText
-		if !managed && runErr == nil {
-			res, runErr = s.runCodexAppFallback(r.Context(), req, reqID, emit)
-		}
-	}
-	if runErr != nil {
-		chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{Stage: chatemit.RequestStageFailed, Provider: providerName(model, path), Backend: model.Backend, RequestID: reqID, Alias: model.Alias, ModelID: model.Alias, Stream: true, DurationMs: time.Since(started).Milliseconds(), Err: runErr.Error()})
-		return runErr
-	}
-	if path == "direct" {
-		if s.cfg.Codex.AppFallback {
-			for _, ch := range directChunks {
-				if err := sw.emitStreamChunk(systemFingerprint, streamChunkFromTooltrans(ch)); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	_ = sw.emitStreamChunk(systemFingerprint, StreamChunk{ID: reqID, Object: "chat.completion.chunk", Created: created, Model: model.Alias, Choices: []StreamChoice{{Index: 0, Delta: StreamDelta{}, FinishReason: &res.FinishReason}}})
-	if req.StreamOptions != nil && req.StreamOptions.IncludeUsage {
-		_ = sw.emitStreamChunk(systemFingerprint, StreamChunk{ID: reqID, Object: "chat.completion.chunk", Created: created, Model: model.Alias, Choices: []StreamChoice{}, Usage: &res.Usage})
-	}
-	_ = sw.writeStreamDone()
-	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.chat.completed", slog.String("request_id", reqID), slog.String("model", model.Alias), slog.Int("prompt_tokens", res.Usage.PromptTokens), slog.Int("completion_tokens", res.Usage.CompletionTokens), slog.Int("cache_read_tokens", res.Usage.CachedTokens()), slog.Int("cache_creation_tokens", 0), slog.Int("derived_cache_creation_tokens", res.DerivedCacheCreationTokens), slog.Int64("duration_ms", time.Since(started).Milliseconds()), slog.Bool("stream", true), slog.String("backend", "codex"), slog.Bool("reasoning_signaled", res.ReasoningSignaled), slog.Bool("reasoning_visible", res.ReasoningVisible))
-	chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{Stage: chatemit.RequestStageCompleted, Provider: providerName(model, path), Backend: model.Backend, RequestID: reqID, Alias: model.Alias, ModelID: model.Alias, Stream: true, FinishReason: res.FinishReason, TokensIn: res.Usage.PromptTokens, TokensOut: res.Usage.CompletionTokens, CacheReadTokens: res.Usage.CachedTokens(), CacheCreationTokens: 0, DerivedCacheCreationTokens: res.DerivedCacheCreationTokens, DurationMs: time.Since(started).Milliseconds()})
-	return nil
+	return adaptercodex.Stream(s, w, r, req, model, effort, reqID, started)
 }
 
 func (s *Server) dispatchCodex(w http.ResponseWriter, r *http.Request, req ChatRequest, model ResolvedModel, effort, reqID string) {

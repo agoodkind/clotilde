@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
+	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
 	"goodkind.io/clyde/internal/adapter/chatemit"
 	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
@@ -26,69 +27,7 @@ import (
 // function writes the error to w (preserving the original behavior)
 // and returns nil.
 func (s *Server) handleOAuth(w http.ResponseWriter, r *http.Request, req ChatRequest, model ResolvedModel, effort, reqID string, escalate bool) error {
-	if s.anthr == nil {
-		if err := chatemit.EscalateOrWrite(
-			fmt.Errorf("oauth_unconfigured: adapter built without anthropic client"),
-			escalate,
-			func(status int, code, msg string) error {
-				writeError(w, status, code, msg)
-				return nil
-			},
-			http.StatusInternalServerError,
-			"oauth_unconfigured",
-			"adapter built without anthropic client; set adapter.direct_oauth=true and restart",
-		); err != nil {
-			return err
-		}
-		return nil
-	}
-	if err := s.acquire(r.Context()); err != nil {
-		if err2 := chatemit.EscalateOrWrite(
-			fmt.Errorf("rate_limited: %w", err),
-			escalate,
-			func(status int, code, msg string) error {
-				writeError(w, status, code, msg)
-				return nil
-			},
-			http.StatusTooManyRequests,
-			"rate_limited",
-			err.Error(),
-		); err2 != nil {
-			return err2
-		}
-		return nil
-	}
-	defer s.release()
-
-	jsonSpec := ParseResponseFormat(req.ResponseFormat)
-	trackerKey := requestContextTrackerKey(req, model.Alias)
-	anthReq, err := s.buildAnthropicWire(req, model, effort, jsonSpec, reqID)
-	if err != nil {
-		if err2 := chatemit.EscalateOrWrite(
-			fmt.Errorf("oauth_translate: %w", err),
-			escalate,
-			func(status int, code, msg string) error {
-				writeError(w, status, code, msg)
-				return nil
-			},
-			http.StatusBadRequest,
-			"invalid_request",
-			err.Error(),
-		); err2 != nil {
-			return err2
-		}
-		return nil
-	}
-
-	started := time.Now()
-	if req.Stream {
-		// Always emit the final usage chunk; many OpenAI-compat clients
-		// (Cursor, etc.) read per-turn token counts from it without setting
-		// stream_options.include_usage.
-		_ = req.StreamOptions
-		return s.streamOAuth(w, r, anthReq, model, reqID, started, escalate, true, trackerKey)
-	}
-	return s.collectOAuth(w, r.Context(), anthReq, model, reqID, started, jsonSpec, escalate, trackerKey)
+	return s.HandleOAuth(w, r, req, model, effort, reqID, escalate)
 }
 
 // buildAnthropicWire maps the OpenAI chat request to a native messages body
@@ -103,7 +42,7 @@ func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort
 	if err := json.Unmarshal(raw, &oaReq); err != nil {
 		return anthropic.Request{}, err
 	}
-	maxTok := anthropicMaxTokens(req.MaxTokens)
+	maxTok := anthropicbackend.MaxTokens(req.MaxTokens)
 	if model.MaxOutputTokens > 0 && maxTok > model.MaxOutputTokens {
 		maxTok = model.MaxOutputTokens
 	}
@@ -155,7 +94,8 @@ func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort
 	sysBlocks := buildSystemBlocks(billingHeader, prefix, callerSystem, ttl, scope, cachingEnabled)
 
 	emitToolResultCacheReference := s.cfg.OAuth.ToolResultCacheReferenceEnabled
-	out, cacheStats := toAnthropicAPIRequest(tr, stripContextSuffix(model.ClaudeModel), emitToolResultCacheReference)
+	strippedModel := anthropicbackend.StripContextSuffix(model.ClaudeModel)
+	out, cacheStats := toAnthropicAPIRequest(tr, strippedModel, emitToolResultCacheReference)
 	if cacheStats.ToolResultCandidates > 0 {
 		level := slog.LevelInfo
 		if emitToolResultCacheReference {
@@ -166,7 +106,7 @@ func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort
 			slog.String("subcomponent", "oauth"),
 			slog.String("request_id", reqID),
 			slog.String("alias", model.Alias),
-			slog.String("model", stripContextSuffix(model.ClaudeModel)),
+			slog.String("model", strippedModel),
 			slog.Bool("enabled", emitToolResultCacheReference),
 			slog.Int("tool_result_candidates", cacheStats.ToolResultCandidates),
 			slog.Int("tool_result_applied", cacheStats.ToolResultApplied),
@@ -195,7 +135,7 @@ func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort
 	if effort != "" && len(model.Efforts) > 0 {
 		out.OutputConfig = &anthropic.OutputConfig{Effort: effort}
 	}
-	switch effectiveThinkingMode(model) {
+	switch anthropicbackend.EffectiveThinkingMode(model, strippedModel) {
 	case ThinkingAdaptive:
 		out.Thinking = &anthropic.Thinking{
 			Type:    "adaptive",
@@ -241,17 +181,6 @@ func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort
 		out.Thinking = &anthropic.Thinking{Type: "disabled"}
 	}
 	return out, nil
-}
-
-func effectiveThinkingMode(model ResolvedModel) string {
-	// Claude Opus 4.7 only supports adaptive thinking upstream. Keep the
-	// `...-thinking-enabled` aliases for compatibility, but normalize them
-	// before we hit Anthropic so the request shape matches the current API.
-	if strings.EqualFold(stripContextSuffix(model.ClaudeModel), "claude-opus-4-7") &&
-		model.Thinking == ThinkingEnabled {
-		return ThinkingAdaptive
-	}
-	return model.Thinking
 }
 
 func toAnthropicAPIRequest(tr tooltrans.AnthRequest, claudeModel string, emitToolResultCacheReference bool) (anthropic.Request, cacheBreakpointStats) {
@@ -871,7 +800,7 @@ func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthrop
 	// response committal before we wait for the upstream's first byte.
 	// Large prompts spend ~1-3s on TTFT; without an early flush, strict
 	// streaming clients close the connection on timeout.
-	sw.writeSSEHeaders()
+	sw.WriteSSEHeaders()
 	s.emitRequestStreamOpened(r.Context(), model, "oauth", reqID, req.Model, true)
 
 	emittedContent := false
@@ -879,7 +808,7 @@ func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthrop
 		if streamChunkHasVisibleContent(chunk) {
 			emittedContent = true
 		}
-		return sw.emitStreamChunk(systemFingerprint, chunk)
+		return sw.EmitStreamChunk(systemFingerprint, chunk)
 	}
 
 	emitTool := func(och tooltrans.OpenAIStreamChunk) error {
@@ -918,7 +847,7 @@ func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthrop
 			slog.String("model", req.Model),
 			slog.Any("err", err),
 		)
-		if escalate && !sw.hasCommittedHeaders() {
+		if escalate && !sw.HasCommittedHeaders() {
 			return err
 		}
 		if !emittedContent {
@@ -996,7 +925,7 @@ func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthrop
 	if includeUsage {
 		_ = chatemit.EmitUsageChunk(emit, reqID, model.Alias, time.Now().Unix(), finalUsage)
 	}
-	_ = sw.writeStreamDone()
+	_ = sw.WriteStreamDone()
 
 	s.logCacheUsageAnthropic(r.Context(), "anthropic", reqID, model.Alias, anthUsage)
 	chatemit.LogCompleted(s.log, r.Context(), chatemit.CompletedAttrs{
@@ -1146,21 +1075,4 @@ func derivePerRequestBetas(model ResolvedModel, perCtx map[string]string) []stri
 		}
 	}
 	return out
-}
-
-// stripContextSuffix removes a bracketed wire suffix from the model id.
-func stripContextSuffix(model string) string {
-	if i := strings.Index(model, "["); i > 0 {
-		return model[:i]
-	}
-	return model
-}
-
-// anthropicMaxTokens picks a max_tokens value: caller-supplied when
-// positive, otherwise the package default.
-func anthropicMaxTokens(req *int) int {
-	if req != nil && *req > 0 {
-		return *req
-	}
-	return anthropic.MaxOutputTokens
 }

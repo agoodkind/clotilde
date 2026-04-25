@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"goodkind.io/clyde/internal/cursorctx"
+	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 )
 
 type trackedUsage struct {
@@ -80,7 +80,7 @@ func shouldResetTrackedContext(prev contextUsageState, raw Usage) bool {
 }
 
 func requestContextTrackerKey(req ChatRequest, modelAlias string) string {
-	if cursor := cursorctx.FromOpenAI(req.User, req.Metadata); cursor.StrongConversationKey() != "" {
+	if cursor := adaptercursor.FromRequest(req); cursor.StrongConversationKey() != "" {
 		return cursor.StrongConversationKey()
 	}
 	if v := strings.TrimSpace(req.User); v != "" {

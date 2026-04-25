@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
+	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	"goodkind.io/clyde/internal/adapter/tooltrans"
-	"goodkind.io/clyde/internal/cursorctx"
 )
 
 const (
@@ -606,8 +606,8 @@ func codexManagedSummary(req ChatRequest) string {
 	return ""
 }
 
-func (s *Server) codexCursorContext(req ChatRequest) cursorctx.Context {
-	return cursorctx.FromOpenAI(req.User, req.Metadata)
+func (s *Server) codexCursorContext(req ChatRequest) adaptercursor.Context {
+	return adaptercursor.FromRequest(req)
 }
 
 func (s *Server) runCodexManaged(

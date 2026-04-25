@@ -415,14 +415,14 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 		return nil
 	}
 
-	sw.writeSSEHeaders()
+	sw.WriteSSEHeaders()
 	s.emitRequestStreamOpened(r.Context(), model, "fallback", reqID, req.Model, true)
 
 	created := time.Now().Unix()
 	firstDelta := true
 
 	emit := func(chunk StreamChunk) error {
-		return sw.emitStreamChunk(systemFingerprint, chunk)
+		return sw.EmitStreamChunk(systemFingerprint, chunk)
 	}
 
 	bufferedTools := len(req.Tools) > 0 && strings.ToLower(strings.TrimSpace(req.ToolChoice)) != "none"
@@ -466,7 +466,7 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 			slog.String("cli_model", req.Model),
 			slog.Any("err", streamErr),
 		)
-		if escalate && !sw.hasCommittedHeaders() {
+		if escalate && !sw.HasCommittedHeaders() {
 			return streamErr
 		}
 		chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{
@@ -573,7 +573,7 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 	if includeUsage {
 		_ = chatemit.EmitUsageChunk(emit, reqID, model.Alias, created, finalUsage)
 	}
-	_ = sw.writeStreamDone()
+	_ = sw.WriteStreamDone()
 	s.logCacheUsage(r.Context(), "fallback", reqID, model.Alias,
 		sr.Usage.PromptTokens, sr.Usage.CacheCreationInputTokens, sr.Usage.CacheReadInputTokens)
 	chatemit.LogCompleted(s.log, r.Context(), chatemit.CompletedAttrs{

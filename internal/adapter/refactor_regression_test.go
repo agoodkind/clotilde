@@ -12,8 +12,8 @@ func TestSSEWriterWriteHeadersIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sw.writeSSEHeaders()
-	sw.writeSSEHeaders()
+	sw.WriteSSEHeaders()
+	sw.WriteSSEHeaders()
 	if rec.Code != http.StatusOK {
 		t.Fatalf("code %d", rec.Code)
 	}

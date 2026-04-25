@@ -61,7 +61,7 @@ func TestNewRegistryFallbackDisabledIsNoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-	for alias, m := range r.models {
+	for alias, m := range r.Models() {
 		if m.CLIAlias != "" {
 			t.Fatalf("alias %q has CLIAlias %q; want empty when fallback disabled", alias, m.CLIAlias)
 		}
@@ -75,7 +75,7 @@ func TestNewRegistryFallbackPopulatesCLIAlias(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-	m, ok := r.models["clyde-haiku-4-5"]
+	m, ok := r.Models()["clyde-haiku-4-5"]
 	if !ok {
 		t.Fatalf("alias missing")
 	}
@@ -645,7 +645,7 @@ func TestNewRegistryFallbackForwardToShuntAcceptsDeclaredShunt(t *testing.T) {
 }
 
 func TestResolveFromConfigFallbackBackend(t *testing.T) {
-	rm := resolveFromConfig("opus-direct", config.AdapterModel{
+	rm := ResolveFromConfig("opus-direct", config.AdapterModel{
 		Backend: BackendFallback,
 		Model:   "opus",
 	})
@@ -711,7 +711,7 @@ func TestNewRegistrySupportsOpus46FamilyAliases(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		m, ok := r.models[tc.alias]
+		m, ok := r.Models()[tc.alias]
 		if !ok {
 			t.Fatalf("alias %q missing", tc.alias)
 		}
@@ -758,7 +758,7 @@ func TestNewRegistryFallbackAssignsCLIToOpus46(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-	m, ok := r.models["clyde-opus-4-6"]
+	m, ok := r.Models()["clyde-opus-4-6"]
 	if !ok {
 		t.Fatalf("alias missing")
 	}

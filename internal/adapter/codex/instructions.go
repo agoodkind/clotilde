@@ -1,4 +1,4 @@
-package adapter
+package codex
 
 import (
 	_ "embed"
@@ -8,20 +8,24 @@ import (
 )
 
 //go:embed codex_model_instructions.json
-var codexModelInstructionsJSON []byte
+var modelInstructionsJSON []byte
 
-var codexModelInstructions = loadCodexModelInstructions()
+var modelInstructions = loadModelInstructions()
 
-type codexModelInstructionCatalog struct {
+type modelInstructionCatalog struct {
 	Models []struct {
 		Slug             string `json:"slug"`
 		BaseInstructions string `json:"base_instructions"`
 	} `json:"models"`
 }
 
-func loadCodexModelInstructions() map[string]string {
-	var catalog codexModelInstructionCatalog
-	if err := json.Unmarshal(codexModelInstructionsJSON, &catalog); err != nil {
+func BaseInstructions(modelName string) string {
+	return strings.TrimSpace(modelInstructions[strings.TrimSpace(modelName)])
+}
+
+func loadModelInstructions() map[string]string {
+	var catalog modelInstructionCatalog
+	if err := json.Unmarshal(modelInstructionsJSON, &catalog); err != nil {
 		slog.Error("adapter.codex.instructions_catalog.parse_failed",
 			"component", "adapter",
 			"subcomponent", "codex",

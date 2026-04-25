@@ -216,14 +216,14 @@ func TestSurfaceFallbackFailurePicksError(t *testing.T) {
 		},
 	}
 	w := httptest.NewRecorder()
-	srv.surfaceFallbackFailure(w, errOAuth("oauth boom"), errOAuth("fb boom"))
+	srv.surfaceFallbackFailure(w, errOAuth("oauth boom"), errOAuth("fb boom"), FallbackEscalationOAuthError)
 	if !strings.Contains(w.Body.String(), "oauth boom") {
 		t.Fatalf("expected oauth_error surfaced; body = %s", w.Body.String())
 	}
 
 	srv.cfg.Fallback.FailureEscalation = FallbackEscalationFallbackError
 	w = httptest.NewRecorder()
-	srv.surfaceFallbackFailure(w, errOAuth("oauth boom"), errOAuth("fb boom"))
+	srv.surfaceFallbackFailure(w, errOAuth("oauth boom"), errOAuth("fb boom"), FallbackEscalationFallbackError)
 	if !strings.Contains(w.Body.String(), "fb boom") {
 		t.Fatalf("expected fallback_error surfaced; body = %s", w.Body.String())
 	}

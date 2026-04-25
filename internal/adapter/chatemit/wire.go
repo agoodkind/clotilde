@@ -1,19 +1,19 @@
 package chatemit
 
-import "goodkind.io/clyde/internal/adapter/tooltrans"
+import adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 
-type ChatResponse = tooltrans.OpenAIChatResponse
-type ChatChoice = tooltrans.OpenAIChatChoice
-type ChatMessage = tooltrans.OpenAIMessage
-type MessageAnnotation = tooltrans.OpenAIMessageAnnotation
-type URLCitation = tooltrans.OpenAIURLCitation
-type ToolCall = tooltrans.OpenAIToolCall
-type ToolCallFunction = tooltrans.OpenAIToolCallFunction
-type LogprobsResult = tooltrans.OpenAILogprobsResult
-type LogprobToken = tooltrans.OpenAILogprobToken
-type TopLogprob = tooltrans.OpenAITopLogprob
-type Usage = tooltrans.OpenAIUsage
-type PromptTokensDetails = tooltrans.OpenAIPromptTokensDetails
-type StreamChunk = tooltrans.OpenAIStreamChunk
-type StreamChoice = tooltrans.OpenAIStreamChoice
-type StreamDelta = tooltrans.OpenAIStreamDelta
+type ChatResponse = adapteropenai.ChatResponse
+type ChatChoice = adapteropenai.ChatChoice
+type ChatMessage = adapteropenai.ChatMessage
+type MessageAnnotation = adapteropenai.MessageAnnotation
+type URLCitation = adapteropenai.URLCitation
+type ToolCall = adapteropenai.ToolCall
+type ToolCallFunction = adapteropenai.ToolCallFunction
+type LogprobsResult = adapteropenai.LogprobsResult
+type LogprobToken = adapteropenai.LogprobToken
+type TopLogprob = adapteropenai.TopLogprob
+type Usage = adapteropenai.Usage
+type PromptTokensDetails = adapteropenai.PromptTokensDetails
+type StreamChunk = adapteropenai.StreamChunk
+type StreamChoice = adapteropenai.StreamChoice
+type StreamDelta = adapteropenai.StreamDelta

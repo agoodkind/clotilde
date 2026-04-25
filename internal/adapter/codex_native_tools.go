@@ -361,16 +361,16 @@ func codexApplyPatchArgs(input string) (string, bool) {
 }
 
 func codexUnwrapApplyPatchInput(input string) string {
-	input = strings.TrimSpace(input)
-	if input == "" {
+	if strings.TrimSpace(input) == "" {
 		return ""
 	}
 	var obj map[string]string
-	if err := json.Unmarshal([]byte(input), &obj); err == nil {
-		if v := strings.TrimSpace(obj["input"]); v != "" {
+	trimmed := strings.TrimSpace(input)
+	if err := json.Unmarshal([]byte(trimmed), &obj); err == nil {
+		if v := obj["input"]; strings.TrimSpace(v) != "" {
 			return v
 		}
-		if v := strings.TrimSpace(obj["patch"]); v != "" {
+		if v := obj["patch"]; strings.TrimSpace(v) != "" {
 			return v
 		}
 	}

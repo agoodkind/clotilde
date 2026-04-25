@@ -1,26 +1,11 @@
-package adapter
+package openai
 
 import (
 	"encoding/json"
 	"fmt"
 	"strings"
-
-	"goodkind.io/clyde/internal/adapter/chatemit"
 )
 
-// ChatRequest models the OpenAI chat.completions payload. Every
-// documented top level field is parsed even when the adapter does
-// not act on it, so clients pass strict schema validators and so
-// the adapter never silently drops a parameter the caller depends
-// on.
-//
-// Tool calling, vision (image content parts), and logprobs are wired on
-// the direct HTTP backend, passed through verbatim on shunts, and (for
-// tools) prompt-injected on the claude -p fallback.
-// audio content parts are rejected with 400 on every backend; vision
-// is rejected on fallback. logprobs handling is config-driven via
-// [adapter.logprobs] (reject vs drop per backend) and forwarded
-// verbatim on shunts.
 type ChatRequest struct {
 	Model            string          `json:"model"`
 	Messages         []ChatMessage   `json:"messages"`
@@ -55,16 +40,11 @@ type ChatRequest struct {
 	Include          []string        `json:"include,omitempty"`
 }
 
-// Reasoning mirrors Responses-style reasoning controls. Cursor sends this
-// shape for ChatGPT models on BYOK.
 type Reasoning struct {
 	Effort  string `json:"effort,omitempty"`
 	Summary string `json:"summary,omitempty"`
 }
 
-// Tool is one entry in the OpenAI request.tools array.
-// Decoder accepts OpenAI canonical and native-messages tool wire shapes
-// and normalizes both into OpenAI canonical form.
 type Tool struct {
 	Type     string             `json:"type"`
 	Function ToolFunctionSchema `json:"function"`
@@ -100,7 +80,6 @@ func (t *Tool) UnmarshalJSON(raw []byte) error {
 	}
 	switch w.Type {
 	case "", "function", "custom":
-		// acceptable native alternate shape
 	default:
 		return fmt.Errorf("tool has unsupported type %q", w.Type)
 	}
@@ -120,9 +99,6 @@ func (t *Tool) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
-// ToolFunctionSchema is the function definition inside a Tool.
-// Parameters carries the JSON schema (kept as raw to avoid having
-// to model the entire JSON Schema vocabulary).
 type ToolFunctionSchema struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
@@ -130,81 +106,156 @@ type ToolFunctionSchema struct {
 	Strict      *bool           `json:"strict,omitempty"`
 }
 
-// Function is the legacy OpenAI functions array. The adapter
-// translates legacy functions into modern tools so downstream code
-// only sees one shape.
 type Function struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 }
 
-// Message and streaming types are aliased from chatemit to keep all OpenAI
-// wire-shape definitions single-sourced.
-type (
-	ChatMessage         = chatemit.ChatMessage
-	MessageAnnotation   = chatemit.MessageAnnotation
-	URLCitation         = chatemit.URLCitation
-	ToolCall            = chatemit.ToolCall
-	ToolCallFunction    = chatemit.ToolCallFunction
-	LogprobsResult      = chatemit.LogprobsResult
-	LogprobToken        = chatemit.LogprobToken
-	TopLogprob          = chatemit.TopLogprob
-	Usage               = chatemit.Usage
-	ChatResponse        = chatemit.ChatResponse
-	ChatChoice          = chatemit.ChatChoice
-	StreamChunk         = chatemit.StreamChunk
-	StreamChoice        = chatemit.StreamChoice
-	StreamDelta         = chatemit.StreamDelta
-	PromptTokensDetails = chatemit.PromptTokensDetails
-)
+type ChatMessage struct {
+	Role             string                `json:"role"`
+	Content          json.RawMessage       `json:"content,omitempty"`
+	Name             string                `json:"name,omitempty"`
+	ToolCalls        []ToolCall            `json:"tool_calls,omitempty"`
+	ToolCallID       string                `json:"tool_call_id,omitempty"`
+	Reasoning        string                `json:"reasoning,omitempty"`
+	ReasoningContent string                `json:"reasoning_content,omitempty"`
+	Refusal          string                `json:"refusal,omitempty"`
+	Annotations      []MessageAnnotation   `json:"annotations,omitempty"`
+}
 
-// ContentPart is one element of a content-parts array on a chat
-// message. Type is one of "text", "image_url", "input_audio",
-// "refusal". The adapter accepts strings as a single text part.
+type MessageAnnotation struct {
+	Type        string       `json:"type"`
+	URLCitation *URLCitation `json:"url_citation,omitempty"`
+}
+
+type URLCitation struct {
+	URL   string `json:"url"`
+	Title string `json:"title,omitempty"`
+}
+
+type ToolCall struct {
+	Index    int              `json:"index"`
+	ID       string           `json:"id,omitempty"`
+	Type     string           `json:"type,omitempty"`
+	Function ToolCallFunction `json:"function,omitempty"`
+}
+
+type ToolCallFunction struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
+}
+
 type ContentPart struct {
 	Type     string         `json:"type"`
 	Text     string         `json:"text,omitempty"`
 	ImageURL *ImageURLPart  `json:"image_url,omitempty"`
 	Audio    *AudioInputRef `json:"input_audio,omitempty"`
 	Refusal  string         `json:"refusal,omitempty"`
+	ToolUseID string        `json:"tool_use_id,omitempty"`
+	Content  json.RawMessage `json:"content,omitempty"`
+	ID       string         `json:"id,omitempty"`
+	Name     string         `json:"name,omitempty"`
+	Input    json.RawMessage `json:"input,omitempty"`
 }
 
-// ImageURLPart is the inner object on a content_parts image_url
-// element. URL accepts both data: URIs and https URLs.
 type ImageURLPart struct {
 	URL    string `json:"url"`
 	Detail string `json:"detail,omitempty"`
 }
 
-// AudioInputRef carries an inline base64 audio payload from a
-// content-parts message. The adapter rejects audio with 400 on
-// every backend today; the direct messages path does not accept
-// audio input on the message content array as of this writing).
 type AudioInputRef struct {
 	Data   string `json:"data"`
 	Format string `json:"format,omitempty"`
 }
 
-// StreamOptions mirrors OpenAI's stream_options. include_usage
-// triggers a terminal chunk carrying usage counts.
 type StreamOptions struct {
 	IncludeUsage bool `json:"include_usage,omitempty"`
 }
 
-// Usage, PromptTokensDetails, and ChatResponse / ChatChoice / Logprobs /
-// StreamChunk / StreamChoice / StreamDelta / LogprobToken / TopLogprob are
-// all aliased via chatemit above to keep the OpenAI wire shape
-// single-sourced in tooltrans. PromptTokensDetails carries the OpenAI
-// cached_tokens breakdown; Usage.CachedTokens() helper reads it safely.
+type ChatResponse struct {
+	ID                string       `json:"id"`
+	Object            string       `json:"object"`
+	Created           int64        `json:"created"`
+	Model             string       `json:"model"`
+	Choices           []ChatChoice `json:"choices"`
+	Usage             *Usage       `json:"usage,omitempty"`
+	SystemFingerprint string       `json:"system_fingerprint,omitempty"`
+}
 
-// ModelsResponse is returned from GET /v1/models.
+type ChatChoice struct {
+	Index        int             `json:"index"`
+	Message      ChatMessage     `json:"message"`
+	Logprobs     *LogprobsResult `json:"logprobs,omitempty"`
+	FinishReason string          `json:"finish_reason"`
+}
+
+type LogprobsResult struct {
+	Content []LogprobToken `json:"content,omitempty"`
+}
+
+type LogprobToken struct {
+	Token       string       `json:"token"`
+	Logprob     float64      `json:"logprob"`
+	Bytes       []int        `json:"bytes,omitempty"`
+	TopLogprobs []TopLogprob `json:"top_logprobs,omitempty"`
+}
+
+type TopLogprob struct {
+	Token   string  `json:"token"`
+	Logprob float64 `json:"logprob"`
+	Bytes   []int   `json:"bytes,omitempty"`
+}
+
+type StreamChunk struct {
+	ID                string         `json:"id"`
+	Object            string         `json:"object"`
+	Created           int64          `json:"created"`
+	Model             string         `json:"model"`
+	Choices           []StreamChoice `json:"choices"`
+	Usage             *Usage         `json:"usage,omitempty"`
+	SystemFingerprint string         `json:"system_fingerprint,omitempty"`
+}
+
+type StreamChoice struct {
+	Index        int             `json:"index"`
+	Delta        StreamDelta     `json:"delta"`
+	Logprobs     *LogprobsResult `json:"logprobs,omitempty"`
+	FinishReason *string         `json:"finish_reason"`
+}
+
+type StreamDelta struct {
+	Role             string     `json:"role,omitempty"`
+	Content          string     `json:"content,omitempty"`
+	Reasoning        string     `json:"reasoning,omitempty"`
+	ReasoningContent string     `json:"reasoning_content,omitempty"`
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+	Refusal          string     `json:"refusal,omitempty"`
+}
+
+type Usage struct {
+	PromptTokens        int                 `json:"prompt_tokens"`
+	CompletionTokens    int                 `json:"completion_tokens"`
+	TotalTokens         int                 `json:"total_tokens"`
+	PromptTokensDetails *PromptTokensDetails `json:"prompt_tokens_details,omitempty"`
+}
+
+type PromptTokensDetails struct {
+	CachedTokens int `json:"cached_tokens"`
+}
+
+func (u Usage) CachedTokens() int {
+	if u.PromptTokensDetails == nil {
+		return 0
+	}
+	return u.PromptTokensDetails.CachedTokens
+}
+
 type ModelsResponse struct {
 	Object string       `json:"object"`
 	Data   []ModelEntry `json:"data"`
 }
 
-// ModelEntry is one row in the models listing.
 type ModelEntry struct {
 	ID            string   `json:"id"`
 	Object        string   `json:"object"`
@@ -217,12 +268,10 @@ type ModelEntry struct {
 	ClaudeModel   string   `json:"claude_model,omitempty"`
 }
 
-// ErrorResponse is the error envelope the adapter returns.
 type ErrorResponse struct {
 	Error ErrorBody `json:"error"`
 }
 
-// ErrorBody follows the OpenAI error shape.
 type ErrorBody struct {
 	Message string `json:"message"`
 	Type    string `json:"type"`
@@ -230,16 +279,17 @@ type ErrorBody struct {
 	Param   string `json:"param,omitempty"`
 }
 
-// FlattenContent converts a ChatMessage.Content value into a single
-// string. OpenAI permits either a plain string or an array of
-// content parts; the adapter accepts both and drops non text parts
-// with a placeholder so the ordering survives. Used by the legacy
-// runner / fallback prompt path; the native translator uses
-// NormalizeContent instead so it can keep image parts intact.
+type ContentKind int
+
+const (
+	ContentKindEmpty ContentKind = iota
+	ContentKindString
+	ContentKindParts
+)
+
 func FlattenContent(raw json.RawMessage) string {
 	parts, kind := NormalizeContent(raw)
 	if kind == ContentKindString {
-		// Single text part already flat.
 		if len(parts) == 0 {
 			return ""
 		}
@@ -267,28 +317,6 @@ func FlattenContent(raw json.RawMessage) string {
 	return b.String()
 }
 
-// ContentKind discriminates the wire shape NormalizeContent saw.
-// Translators use this so a string-shaped message stays a string on
-// the way out (some features only accept the string form).
-type ContentKind int
-
-const (
-	// ContentKindEmpty indicates the field was absent or null.
-	ContentKindEmpty ContentKind = iota
-	// ContentKindString indicates a plain text string.
-	ContentKindString
-	// ContentKindParts indicates a content-parts array.
-	ContentKindParts
-)
-
-// NormalizeContent parses a ChatMessage.Content raw JSON value into
-// a typed []ContentPart slice. Plain strings become a single text
-// part. Returns the part list plus a kind discriminator so callers
-// can tell "the user sent a string" from "the user sent [text]".
-//
-// Unknown part types are preserved verbatim with their Type set so
-// the per-backend translator can decide whether to reject or drop
-// them; NormalizeContent itself never errors.
 func NormalizeContent(raw json.RawMessage) ([]ContentPart, ContentKind) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, ContentKindEmpty
@@ -299,8 +327,6 @@ func NormalizeContent(raw json.RawMessage) ([]ContentPart, ContentKind) {
 	}
 	var parts []ContentPart
 	if err := json.Unmarshal(raw, &parts); err == nil {
-		// Empty Type defaults to "text" so callers can keep their
-		// switch statements terse.
 		for i := range parts {
 			if parts[i].Type == "" {
 				parts[i].Type = "text"
@@ -308,8 +334,5 @@ func NormalizeContent(raw json.RawMessage) ([]ContentPart, ContentKind) {
 		}
 		return parts, ContentKindParts
 	}
-	// Last resort: surface the raw bytes as one text part so the
-	// translator can include them rather than silently dropping the
-	// entire message.
 	return []ContentPart{{Type: "text", Text: string(raw)}}, ContentKindString
 }

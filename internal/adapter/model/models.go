@@ -1,4 +1,4 @@
-package adapter
+package model
 
 import (
 	"fmt"
@@ -503,6 +503,10 @@ func resolveFromConfig(alias string, m config.AdapterModel) ResolvedModel {
 	return out
 }
 
+func ResolveFromConfig(alias string, m config.AdapterModel) ResolvedModel {
+	return resolveFromConfig(alias, m)
+}
+
 func (r *Registry) looksLikeCodexModel(alias string) bool {
 	if !r.codexEnabled {
 		return false
@@ -658,6 +662,14 @@ func (r *Registry) List() []ResolvedModel {
 	out := make([]ResolvedModel, 0, len(r.models))
 	for _, m := range r.models {
 		out = append(out, m)
+	}
+	return out
+}
+
+func (r *Registry) Models() map[string]ResolvedModel {
+	out := make(map[string]ResolvedModel, len(r.models))
+	for alias, resolved := range r.models {
+		out[alias] = resolved
 	}
 	return out
 }

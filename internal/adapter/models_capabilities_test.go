@@ -93,7 +93,7 @@ func TestNewRegistryHappyPathCapabilitiesPropagated(t *testing.T) {
 		t.Fatalf("NewRegistry: %v", err)
 	}
 	found := false
-	for alias, m := range r.models {
+	for alias, m := range r.Models() {
 		if m.FamilySlug != "haiku-4-5" {
 			continue
 		}

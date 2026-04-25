@@ -191,10 +191,10 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 		var extra []OpenAIStreamChunk
 		if t.lastStopReason == "refusal" && t.visibleText.Len() > 0 {
 			extra = append(extra, OpenAIStreamChunk{
-				ID:      t.renderer.reqID,
+				ID:      t.renderer.RequestID(),
 				Object:  "chat.completion.chunk",
-				Created: t.renderer.createdUnix,
-				Model:   t.renderer.modelAlias,
+				Created: t.renderer.CreatedUnix(),
+				Model:   t.renderer.ModelAlias(),
 				Choices: []OpenAIStreamChoice{{Index: 0, Delta: OpenAIStreamDelta{Refusal: t.visibleText.String()}}},
 			})
 		}

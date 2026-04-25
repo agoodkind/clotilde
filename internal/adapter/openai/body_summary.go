@@ -1,4 +1,4 @@
-package adapter
+package openai
 
 import (
 	"encoding/json"
@@ -10,8 +10,6 @@ const (
 	maxContentChars             = 2048
 )
 
-// BodySummary is the compact summary written for adapter.chat.raw when
-// logging.body.mode is set to summary or whitelist.
 type BodySummary struct {
 	Model             string          `json:"model,omitempty"`
 	Stream            bool            `json:"stream"`
@@ -28,7 +26,6 @@ type BodySummary struct {
 	MaxTokens         *int            `json:"max_tokens,omitempty"`
 }
 
-// MsgSummary is a compact representation of a single request message.
 type MsgSummary struct {
 	Role          string `json:"role"`
 	ContentChars  int    `json:"content_chars"`
@@ -37,13 +34,11 @@ type MsgSummary struct {
 	ToolCallID    string `json:"tool_call_id,omitempty"`
 }
 
-// ToolSummary records per-tool metadata without full schema details.
 type ToolSummary struct {
 	Name        string `json:"name"`
 	ParamsChars int    `json:"params_chars"`
 }
 
-// SummarizeChatBody returns a compact summary from raw chat request bytes.
 func SummarizeChatBody(raw []byte) (BodySummary, error) {
 	var req ChatRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
@@ -52,7 +47,6 @@ func SummarizeChatBody(raw []byte) (BodySummary, error) {
 	return SummarizeChatRequest(req), nil
 }
 
-// SummarizeChatRequest returns a compact summary for an already-parsed request.
 func SummarizeChatRequest(req ChatRequest) BodySummary {
 	toolChoice := req.ToolChoice
 	if string(toolChoice) == "null" {
@@ -74,16 +68,10 @@ func SummarizeChatRequest(req ChatRequest) BodySummary {
 	summary.ToolCount = len(req.Tools) + len(req.Functions)
 	summary.Tools = make([]ToolSummary, 0, summary.ToolCount)
 	for _, tool := range req.Tools {
-		summary.Tools = append(summary.Tools, ToolSummary{
-			Name:        tool.Function.Name,
-			ParamsChars: len(tool.Function.Parameters),
-		})
+		summary.Tools = append(summary.Tools, ToolSummary{Name: tool.Function.Name, ParamsChars: len(tool.Function.Parameters)})
 	}
 	for _, fn := range req.Functions {
-		summary.Tools = append(summary.Tools, ToolSummary{
-			Name:        fn.Name,
-			ParamsChars: len(fn.Parameters),
-		})
+		summary.Tools = append(summary.Tools, ToolSummary{Name: fn.Name, ParamsChars: len(fn.Parameters)})
 	}
 
 	msgSummaries := summarizeMessages(req.Messages)
@@ -103,9 +91,6 @@ func summarizeMessages(messages []ChatMessage) []MsgSummary {
 }
 
 func sampleMessages(messages []ChatMessage) []ChatMessage {
-	if len(messages) <= chatBodySummaryMessageLimit {
-		return messages
-	}
 	if len(messages) <= chatBodySummaryMessageLimit*2 {
 		return messages
 	}
@@ -120,10 +105,7 @@ func summarizeMessage(msg ChatMessage) MsgSummary {
 	if len(content) > maxContentChars {
 		content = content[:maxContentChars]
 	}
-	summary := MsgSummary{
-		Role:         msg.Role,
-		ContentChars: len(content),
-	}
+	summary := MsgSummary{Role: msg.Role, ContentChars: len(content)}
 	if len(msg.ToolCalls) > 0 {
 		summary.HasToolCalls = true
 		summary.ToolCallCount = len(msg.ToolCalls)
@@ -138,3 +120,4 @@ func min(a, b int) int {
 	}
 	return b
 }
+

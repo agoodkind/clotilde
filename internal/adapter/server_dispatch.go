@@ -11,8 +11,10 @@ import (
 	"strings"
 	"time"
 
+	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
 	"goodkind.io/clyde/internal/adapter/chatemit"
-	"goodkind.io/clyde/internal/cursorctx"
+	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
+	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	"goodkind.io/gklog"
 )
 
@@ -181,7 +183,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	for _, f := range req.Functions {
 		toolNames = append(toolNames, f.Name)
 	}
-	cursor := cursorctx.FromOpenAI(req.User, req.Metadata)
+	cursor := adaptercursor.FromRequest(req)
 	attrs := []slog.Attr{
 		slog.String("request_id", reqID),
 		slog.String("alias", req.Model),
@@ -219,11 +221,19 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if model.Backend == BackendAnthropic {
-		s.dispatchAnthropicWithFallback(w, r, req, model, effort, reqID, body)
+		anthropicbackend.Dispatch(s, anthropicbackend.FallbackConfig{
+			Enabled:            s.cfg.Fallback.Enabled,
+			Trigger:            s.cfg.Fallback.Trigger,
+			ForwardToShunt:     s.cfg.Fallback.ForwardToShunt.Enabled,
+			ForwardToShuntName: s.cfg.Fallback.ForwardToShunt.Shunt,
+			FailureEscalation:  s.cfg.Fallback.FailureEscalation,
+		}, w, r, req, model, effort, reqID, body)
 		return
 	}
 	if model.Backend == BackendCodex {
-		s.dispatchCodex(w, r, req, model, effort, reqID)
+		if err := adaptercodex.Dispatch(s, w, r, req, model, effort, reqID); err != nil {
+			writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
+		}
 		return
 	}
 
@@ -566,81 +576,12 @@ func (s *Server) handleLegacy(w http.ResponseWriter, r *http.Request) {
 	s.handleChat(w, r)
 }
 
-// dispatchAnthropicWithFallback runs the direct-Anthropic backend
-// (Bearer auth via the OAuth keychain token) and, when the
-// configured trigger covers on_oauth_failure, escalates to either
-// the configured forward_to_shunt or the `claude -p` fallback.
-// FailureEscalation picks whether the Anthropic or the fallback
-// error surfaces when both fail.
-//
-// When fallback is disabled or the trigger does not cover Anthropic
-// failures, the function delegates to s.handleOAuth directly with
-// escalate=false (preserving the pre-fallback behavior).
-func (s *Server) dispatchAnthropicWithFallback(w http.ResponseWriter, r *http.Request, req ChatRequest, model ResolvedModel, effort, reqID string, body []byte) {
-	fb := s.cfg.Fallback
-	escalate := fb.Enabled &&
-		(fb.Trigger == FallbackTriggerOnOAuthFailure || fb.Trigger == FallbackTriggerBoth)
-
-	if !escalate {
-		_ = s.handleOAuth(w, r, req, model, effort, reqID, false)
-		return
-	}
-
-	anthErr := s.handleOAuth(w, r, req, model, effort, reqID, true)
-	if anthErr == nil {
-		return
-	}
-
-	s.log.LogAttrs(r.Context(), slog.LevelWarn, "adapter.fallback.escalating",
-		slog.String("request_id", reqID),
-		slog.String("alias", model.Alias),
-		slog.String("anthropic_err", anthErr.Error()),
-		slog.Bool("forward_to_shunt", fb.ForwardToShunt.Enabled),
-	)
-
-	if fb.ForwardToShunt.Enabled {
-		shunt, ok := s.registry.Shunt(fb.ForwardToShunt.Shunt)
-		if !ok || shunt.BaseURL == "" {
-			s.log.LogAttrs(r.Context(), slog.LevelError, "adapter.fallback.shunt_unconfigured",
-				slog.String("request_id", reqID),
-				slog.String("shunt", fb.ForwardToShunt.Shunt),
-			)
-			s.surfaceFallbackFailure(w, anthErr, fmt.Errorf(
-				"forward_to_shunt %q not configured (base_url empty)", fb.ForwardToShunt.Shunt))
-			return
-		}
-		// Reuse the existing shunt path; ResolvedModel.Shunt is
-		// the lookup key for forwardShunt.
-		shuntModel := model
-		shuntModel.Backend = BackendShunt
-		shuntModel.Shunt = fb.ForwardToShunt.Shunt
-		s.forwardShunt(w, r, shuntModel, body)
-		return
-	}
-
-	if s.fb == nil {
-		s.surfaceFallbackFailure(w, anthErr, fmt.Errorf("fallback client not constructed"))
-		return
-	}
-	if model.CLIAlias == "" {
-		s.surfaceFallbackFailure(w, anthErr, fmt.Errorf(
-			"family %q has no [adapter.fallback.cli_aliases] entry; cannot escalate", model.FamilySlug))
-		return
-	}
-
-	fbErr := s.handleFallback(w, r, req, model, reqID, true)
-	if fbErr == nil {
-		return
-	}
-	s.surfaceFallbackFailure(w, anthErr, fbErr)
-}
-
 // surfaceFallbackFailure writes the error chosen by
 // FailureEscalation. Called only after both attempts have failed
 // and nothing has been written to the wire yet (the escalate=true
 // path returns before any header/byte commits).
-func (s *Server) surfaceFallbackFailure(w http.ResponseWriter, anthErr, fbErr error) {
-	switch s.cfg.Fallback.FailureEscalation {
+func (s *Server) surfaceFallbackFailure(w http.ResponseWriter, anthErr, fbErr error, failureEscalation string) {
+	switch failureEscalation {
 	case FallbackEscalationOAuthError:
 		writeError(w, http.StatusBadGateway, "upstream_error", anthErr.Error())
 	default: // FallbackEscalationFallbackError
