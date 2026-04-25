@@ -352,89 +352,54 @@ func (s *Server) runCodexManaged(
 	reqID string,
 	emit func(tooltrans.OpenAIStreamChunk) error,
 ) (codexRunResult, string, bool, error) {
-	if s.codexSessions == nil {
-		return codexRunResult{}, "", false, nil
-	}
-	cursor := s.codexCursorContext(req)
-	sessionKey := cursor.StrongConversationKey()
-	if sessionKey == "" {
-		s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.codex.session.not_admitted",
-			slog.String("request_id", reqID),
-			slog.String("reason", "missing_cursor_conversation_id"),
-			slog.String("cursor_request_id", cursor.RequestID),
-		)
-		return codexRunResult{}, "", false, nil
-	}
-
-	plan := buildCodexManagedPromptPlan(req.Messages)
-	spec := codexSessionSpec{
-		Key:     sessionKey,
-		Model:   strings.TrimSpace(model.ClaudeModel),
-		Effort:  strings.ToLower(strings.TrimSpace(effort)),
-		Summary: strings.ToLower(strings.TrimSpace(codexManagedSummary(req))),
-		System:  plan.System,
-	}
-	if spec.Model == "" {
-		spec.Model = strings.TrimSpace(model.Alias)
-	}
-
-	acquired, err := s.codexSessions.Acquire(ctx, spec)
-	if err != nil {
-		return codexRunResult{}, "", false, err
-	}
-	session := acquired.Session
-	defer s.codexSessions.Release(session)
-
-	prompt := plan.IncrementalPrompt
-	promptMode := "incremental"
-	resetReason := acquired.ResetReason
-	if acquired.Created {
-		prompt = plan.FullPrompt
-		promptMode = "full"
-	}
-
-	if !acquired.Created {
-		switch {
-		case session.LastAssistant == "" && plan.AssistantAnchor != "":
-			resetReason = "assistant_anchor_missing"
-		case session.LastAssistant != "" && plan.AssistantAnchor == "":
-			resetReason = "assistant_anchor_dropped"
-		case session.LastAssistant != "" && plan.AssistantAnchor != "" && session.LastAssistant != plan.AssistantAnchor:
-			resetReason = "assistant_anchor_mismatch"
-		}
-		if resetReason != "" {
-			s.codexSessions.Drop(session, resetReason)
-			acquired, err = s.codexSessions.Acquire(ctx, spec)
-			if err != nil {
-				return codexRunResult{}, "", false, err
-			}
-			session = acquired.Session
-			defer s.codexSessions.Release(session)
-			prompt = plan.FullPrompt
-			promptMode = "full"
-		}
-	}
-
-	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.codex.session.admitted",
-		slog.String("request_id", reqID),
-		slog.String("session_key", sessionKey),
-		slog.String("cursor_conversation_id", cursor.ConversationID),
-		slog.String("cursor_request_id", cursor.RequestID),
-		slog.Bool("created", acquired.Created),
-		slog.String("prompt_mode", promptMode),
+	out, err := adaptercodex.RunManagedSession(
+		codexManagedRuntime{server: s},
+		ctx,
+		s.codexSessions,
+		req,
+		s.codexCursorContext(req),
+		model,
+		effort,
+		buildCodexManagedPromptPlan,
+		reqID,
+		emit,
 	)
+	if err != nil {
+		return codexRunResult{}, "", out.Managed, err
+	}
+	res, _ := out.Result.(codexRunResult)
+	return res, out.AssistantText, out.Managed, nil
+}
 
-	session.RunMu.Lock()
-	defer session.RunMu.Unlock()
+type codexManagedRuntime struct {
+	server *Server
+}
+
+func (rt codexManagedRuntime) Log() *slog.Logger { return rt.server.log }
+
+func (rt codexManagedRuntime) NormalizeAssistantAnchor(text string) string {
+	return normalizeCodexAssistantAnchor(text)
+}
+
+func (rt codexManagedRuntime) ManagedSummary(req ChatRequest) string { return codexManagedSummary(req) }
+
+func (rt codexManagedRuntime) EffectiveAppEffort(req ChatRequest) any { return effectiveCodexAppEffort(req) }
+
+func (rt codexManagedRuntime) EffectiveAppSummary(req ChatRequest) any { return effectiveCodexAppSummary(req) }
+
+func (rt codexManagedRuntime) RunManagedTurn(
+	ctx context.Context,
+	session *adaptercodex.ManagedSession,
+	spec adaptercodex.SessionSpec,
+	reqID string,
+	prompt string,
+	effort any,
+	summary any,
+	emit func(tooltrans.OpenAIStreamChunk) error,
+) (any, string, error) {
 	transport, _ := session.Transport.(*codexAppTransport)
 	if transport == nil {
-		return codexRunResult{}, "", true, fmt.Errorf("codex session transport type mismatch")
+		return codexRunResult{}, "", adaptercodex.ManagedTransportTypeMismatch()
 	}
-	res, assistantText, err := transport.runTurn(ctx, reqID, spec.Model, effectiveCodexAppEffort(req), effectiveCodexAppSummary(req), prompt, emit)
-	if err != nil {
-		s.codexSessions.Drop(session, "transport_error")
-		return codexRunResult{}, "", true, err
-	}
-	session.LastAssistant = normalizeCodexAssistantAnchor(assistantText)
-	return res, assistantText, true, nil
+	return transport.runTurn(ctx, reqID, spec.Model, effort, summary, prompt, emit)
 }
