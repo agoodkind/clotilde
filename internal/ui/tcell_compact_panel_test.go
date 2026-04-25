@@ -18,16 +18,16 @@ func TestCompactPanelSliderAdjustsTarget(t *testing.T) {
 	if !handled {
 		t.Fatalf("expected slider key to be handled")
 	}
-	if panel.targetTokens <= 200000 {
-		t.Fatalf("expected right arrow to grow target, got %d", panel.targetTokens)
+	if panel.targetTokens >= 200000 {
+		t.Fatalf("expected right arrow to shrink target, got %d", panel.targetTokens)
 	}
 
 	handled = panel.HandleEvent(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone))
 	if !handled {
 		t.Fatalf("expected slider key to be handled")
 	}
-	if panel.targetTokens >= 210000 {
-		t.Fatalf("expected left arrow to shrink target, got %d", panel.targetTokens)
+	if panel.targetTokens <= 190000 {
+		t.Fatalf("expected left arrow to grow target, got %d", panel.targetTokens)
 	}
 }
 
@@ -241,5 +241,62 @@ func TestCompactPanelRenderActionsLooksLikeButtons(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "[> Apply <]") {
 		t.Fatalf("expected focused apply button rendering, got %q", rendered)
+	}
+}
+
+func TestCompactPanelVisibleIterationLinesShowsLatestSteps(t *testing.T) {
+	panel := NewCompactPanel("demo")
+	panel.iterationHistory = []CompactIteration{
+		{Iteration: 1, Step: "baseline", CtxTotal: 975789, Delta: 475789},
+		{Iteration: 2, Step: "drop thinking", CtxTotal: 975700, Delta: 475700},
+		{Iteration: 3, Step: "drop tools", CtxTotal: 506400, Delta: 6400},
+	}
+
+	lines := panel.visibleIterationLines(2)
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d", len(lines))
+	}
+	if !strings.Contains(lines[0], "iter 2") || !strings.Contains(lines[0], "drop thinking") {
+		t.Fatalf("unexpected first visible line: %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "iter 3") || !strings.Contains(lines[1], "506,400") || !strings.Contains(lines[1], "+6,400") {
+		t.Fatalf("unexpected second visible line: %q", lines[1])
+	}
+}
+
+func TestCompactPanelApplyCompactEventTracksIterationHistory(t *testing.T) {
+	panel := NewCompactPanel("demo")
+	panel.ApplyCompactEvent(CompactEvent{
+		Kind: "upfront",
+		Upfront: &CompactUpfront{
+			SessionName: "demo",
+			SessionID:   "sess-1",
+			Model:       "opus",
+		},
+	})
+	panel.ApplyCompactEvent(CompactEvent{
+		Kind: "iteration",
+		Iteration: &CompactIteration{
+			Iteration: 1,
+			Step:      "baseline",
+			CtxTotal:  900000,
+			Delta:     400000,
+		},
+	})
+	panel.ApplyCompactEvent(CompactEvent{
+		Kind: "iteration",
+		Iteration: &CompactIteration{
+			Iteration: 2,
+			Step:      "drop chat",
+			CtxTotal:  500100,
+			Delta:     100,
+		},
+	})
+
+	if panel.latestIteration == nil || panel.latestIteration.Iteration != 2 {
+		t.Fatalf("expected latest iteration 2, got %#v", panel.latestIteration)
+	}
+	if got := len(panel.iterationHistory); got != 2 {
+		t.Fatalf("expected 2 history rows, got %d", got)
 	}
 }

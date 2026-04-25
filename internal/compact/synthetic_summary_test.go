@@ -42,6 +42,15 @@ func sampleSyntheticSummaryBlocks() []string {
 	}
 }
 
+func sampleLegacySyntheticSummaryBlocks() []string {
+	return []string{
+		"## Continued from prior session (transcript below)\n\n",
+		"**User (2026-04-01 00:01Z):** older-user-turn\n\n",
+		"**Assistant (2026-04-01 00:02Z):** older-assistant-turn\n\n",
+		"## Continue from here.\n",
+	}
+}
+
 func TestParseSyntheticSummary_AllSections(t *testing.T) {
 	t0 := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	line := syntheticSummaryLine("s1", "b1", t0, sampleSyntheticSummaryBlocks())
@@ -64,6 +73,31 @@ func TestParseSyntheticSummary_AllSections(t *testing.T) {
 	}
 	if !summary.HasContinue {
 		t.Fatalf("HasContinue = false, want true")
+	}
+}
+
+func TestParseSyntheticSummary_LegacyHeader(t *testing.T) {
+	t0 := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	line := syntheticSummaryLine("s1", "b1", t0, sampleLegacySyntheticSummaryBlocks())
+	slice, err := LoadSlice(writeTranscript(t, []string{boundaryLine("b1", "", t0.Add(-time.Second)), line}))
+	if err != nil {
+		t.Fatalf("LoadSlice: %v", err)
+	}
+	summary, ok := parseSyntheticSummary(slice.PostBoundary[0])
+	if !ok {
+		t.Fatalf("parseSyntheticSummary = false")
+	}
+	if got, want := len(summary.TranscriptTurns), 2; got != want {
+		t.Fatalf("len(TranscriptTurns) = %d, want %d", got, want)
+	}
+	if got := len(summary.ToolItems); got != 0 {
+		t.Fatalf("len(ToolItems) = %d, want 0", got)
+	}
+	if !summary.HasContinue {
+		t.Fatalf("HasContinue = false, want true")
+	}
+	if !strings.Contains(summary.Continuity, "prior context was compacted earlier") {
+		t.Fatalf("Continuity = %q", summary.Continuity)
 	}
 }
 
@@ -255,6 +289,51 @@ func TestRunPlan_RecompactsPriorSyntheticSummaryByChunk(t *testing.T) {
 	}
 	if !strings.Contains(text, "older-user-turn") {
 		t.Fatalf("surviving transcript should still include old turns")
+	}
+}
+
+func TestRunPlan_RecompactsLegacySyntheticSummaryByChunk(t *testing.T) {
+	t0 := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	lines := []string{
+		boundaryLine("b1", "", t0),
+		syntheticSummaryLine("s1", "b1", t0.Add(time.Second), sampleLegacySyntheticSummaryBlocks()),
+		userText("u1", "s1", "recent-user-turn", t0.Add(2*time.Second)),
+		assistantBlocks("a1", "u1", t0.Add(3*time.Second), []map[string]any{
+			{"type": "text", "text": "recent-assistant-turn"},
+		}),
+	}
+	slice, err := LoadSlice(writeTranscript(t, lines))
+	if err != nil {
+		t.Fatalf("LoadSlice: %v", err)
+	}
+
+	res, err := RunPlan(context.Background(), PlanInput{
+		Slice:         slice,
+		Strippers:     Strippers{Chat: true},
+		Target:        275,
+		Counter:       syntheticSummaryCounter{},
+		ChatBatchSize: 1,
+	})
+	if err != nil {
+		t.Fatalf("RunPlan: %v", err)
+	}
+
+	if res.Options.DroppedChatEntries[0] {
+		t.Fatalf("legacy synthetic summary should not be dropped as a whole entry")
+	}
+	dropped := res.Options.DroppedSummaryChunks[0]
+	if !dropped[summaryChunkContinue] {
+		t.Fatalf("continue chunk should be dropped first")
+	}
+	if dropped["surviving_turn:0"] {
+		t.Fatalf("target should be hit before dropping legacy transcript turns")
+	}
+	text := joinOutputText(res.BoundaryTail)
+	if strings.Contains(text, "## Continued from prior session (transcript below)") {
+		t.Fatalf("legacy header should be canonicalized: %q", text)
+	}
+	if !strings.Contains(text, "## Context continuity notice") {
+		t.Fatalf("canonical continuity header missing: %q", text)
 	}
 }
 

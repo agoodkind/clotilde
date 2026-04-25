@@ -21,9 +21,10 @@ func TestDetailsView_ContextUsesLoadingAndDiagnosticsInsteadOfUnavailable(t *tes
 		},
 	}
 	detail := SessionDetail{
-		Model:              "opus",
-		LastMessageTokens:  44,
-		ContextUsageStatus: "failed; retrying",
+		Model:                 "opus",
+		LastMessageTokens:     44,
+		ContextUsageStatus:    "failed; retrying",
+		TranscriptStatsStatus: "loading...",
 	}
 
 	lines := flattenSegments(view.buildLeft(sess, detail))
@@ -38,8 +39,8 @@ func TestDetailsView_ContextUsesLoadingAndDiagnosticsInsteadOfUnavailable(t *tes
 	if !strings.Contains(joined, "Context probe") || !strings.Contains(joined, "failed; retrying") {
 		t.Fatalf("details pane missing retry diagnostic:\n%s", joined)
 	}
-	if !strings.Contains(joined, "Last msg") || !strings.Contains(joined, "~44 tok") {
-		t.Fatalf("details pane missing renamed last message row:\n%s", joined)
+	if !strings.Contains(joined, "Transcript") || !strings.Contains(joined, "Last msg est") || !strings.Contains(joined, "loading...") {
+		t.Fatalf("details pane missing transcript loading row:\n%s", joined)
 	}
 }
 
@@ -63,7 +64,8 @@ func TestDetailsView_ContextShowsExactUsageWhenLoaded(t *testing.T) {
 			Percentage:     42,
 			MessagesTokens: 41234,
 		},
-		ContextUsageLoaded: true,
+		ContextUsageLoaded:    true,
+		TranscriptStatsLoaded: true,
 	}
 
 	lines := flattenSegments(view.buildLeft(sess, detail))
@@ -72,11 +74,53 @@ func TestDetailsView_ContextShowsExactUsageWhenLoaded(t *testing.T) {
 	if !strings.Contains(joined, "84.3k/200k tok  42%") {
 		t.Fatalf("details pane missing exact context usage:\n%s", joined)
 	}
-	if !strings.Contains(joined, "Msg tokens") || !strings.Contains(joined, "~41.2k tok") {
-		t.Fatalf("details pane missing message token row:\n%s", joined)
+	if !strings.Contains(joined, "Messages") || !strings.Contains(joined, "~41.2k tok") {
+		t.Fatalf("details pane missing live context message token row:\n%s", joined)
+	}
+	if strings.Contains(joined, "Overview\n  Last msg") || strings.Contains(joined, "Overview\r\n  Last msg") {
+		t.Fatalf("details pane should not render transcript-derived rows in Overview:\n%s", joined)
 	}
 	if strings.Contains(joined, "Diagnostics") {
 		t.Fatalf("details pane should not show diagnostics for successful probe:\n%s", joined)
+	}
+}
+
+func TestDetailsView_TranscriptSectionSeparatesHeuristicsFromContext(t *testing.T) {
+	view := NewDetailsView()
+	sess := &session.Session{
+		Name: "demo",
+		Metadata: session.Metadata{
+			Name:          "demo",
+			SessionID:     "1234",
+			WorkspaceRoot: "/Users/test/Sites/demo",
+			Created:       time.Date(2026, 4, 24, 9, 0, 0, 0, time.UTC),
+			LastAccessed:  time.Date(2026, 4, 24, 9, 5, 0, 0, time.UTC),
+		},
+	}
+	detail := SessionDetail{
+		Model:                "opus",
+		LastMessageTokens:    178000,
+		TotalMessages:        981,
+		CompactionCount:      2,
+		LastPreCompactTokens: 543000,
+		ContextUsage: SessionContextUsage{
+			TotalTokens:    506400,
+			MaxTokens:      1000000,
+			Percentage:     51,
+			MessagesTokens: 474415,
+		},
+		ContextUsageLoaded:    true,
+		TranscriptStatsLoaded: true,
+	}
+
+	lines := flattenSegments(view.buildLeft(sess, detail))
+	joined := strings.Join(lines, "\n")
+
+	if !strings.Contains(joined, "Overview") || !strings.Contains(joined, "Context") || !strings.Contains(joined, "Messages") {
+		t.Fatalf("details pane missing context overview rows:\n%s", joined)
+	}
+	if !strings.Contains(joined, "Transcript") || !strings.Contains(joined, "Visible msgs") || !strings.Contains(joined, "Last msg est") || !strings.Contains(joined, "Compactions") {
+		t.Fatalf("details pane missing transcript section rows:\n%s", joined)
 	}
 }
 

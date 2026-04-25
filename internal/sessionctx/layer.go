@@ -39,11 +39,10 @@ type Usage struct {
 	Source     Source    `json:"source"`
 }
 
-// StaticOverhead sums everything that behaves as a per-session
-// constant: system prompt, tools (including deferred), memory, skills,
-// custom agents. Excludes Messages (the trim-able tail), Compact
-// buffer (matches the --reserved knob in the planner), and Free space
-// (visualization padding, not real tokens).
+// StaticOverhead returns the non-trimmable /context floor for the
+// session. It is derived from Claude's reported total by subtracting
+// the dynamic buckets Clyde can reason about: Messages, Compact
+// buffer, and Free space.
 func (u Usage) StaticOverhead() int {
 	return compact.StaticOverheadFromUsage(u.ContextUsage)
 }

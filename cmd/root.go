@@ -622,6 +622,7 @@ func sessionDetailFromProto(resp *clydev1.GetSessionDetailResponse) ui.SessionDe
 		CompactionCount:       int(resp.GetCompactionCount()),
 		LastPreCompactTokens:  int(resp.GetLastPreCompactTokens()),
 		TranscriptSizeBytes:   resp.GetTranscriptSizeBytes(),
+		TranscriptStatsLoaded: true,
 	}
 	for _, m := range resp.GetRecentMessages() {
 		out.Messages = append(out.Messages, ui.DetailMessage{

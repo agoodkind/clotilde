@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -118,17 +119,13 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][
 	section("Overview")
 	if detail.ContextUsageLoaded {
 		kv("Context", formatExactContextUsage(detail.ContextUsage))
-		kv("Msg tokens", formatDetailTokens(detail.ContextUsage.MessagesTokens))
+		kv("Messages", formatDetailTokens(detail.ContextUsage.MessagesTokens))
 	} else {
-		kv("Context", "loading...")
+		kv("Context", formatLoadingValue(detail.ContextUsageStatus))
+		kv("Messages", formatLoadingValue(detail.ContextUsageStatus))
 	}
-	kv("Last msg", formatDetailTokens(detail.LastMessageTokens))
-	kv("Visible msgs", formatDetailMessageCount(detail))
 	lastActivityAt, lastActivityAgo := formatDetailLastActivity(sess)
 	kvStacked("Last activity", lastActivityAt, lastActivityAgo)
-	if detail.CompactionCount > 0 {
-		kv("Compactions", formatDetailCompactions(detail))
-	}
 	out = append(out, []TextSegment{})
 
 	if detail.ContextUsageStatus != "" {
@@ -161,9 +158,22 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][
 	out = append(out, []TextSegment{})
 
 	section("Transcript")
-	if detail.TranscriptSizeBytes > 0 {
-		mb := float64(detail.TranscriptSizeBytes) / (1024 * 1024)
-		kv("Size", fmt.Sprintf("%.2f MB", mb))
+	if detail.TranscriptStatsLoaded {
+		kv("Visible msgs", formatDetailMessageCount(detail))
+		kv("Last msg est", formatDetailTokens(detail.LastMessageTokens))
+		if detail.CompactionCount > 0 {
+			kv("Compactions", formatDetailCompactions(detail))
+		}
+		if detail.TranscriptSizeBytes > 0 {
+			mb := float64(detail.TranscriptSizeBytes) / (1024 * 1024)
+			kv("Size", fmt.Sprintf("%.2f MB", mb))
+		}
+	} else {
+		v := formatLoadingValue(detail.TranscriptStatsStatus)
+		kv("Visible msgs", v)
+		kv("Last msg est", v)
+		kv("Compactions", v)
+		kv("Size", v)
 	}
 	out = append(out, []TextSegment{})
 
@@ -299,6 +309,18 @@ func formatDetailCompactions(detail SessionDetail) string {
 		value += "  last pre " + formatDetailTokens(detail.LastPreCompactTokens)
 	}
 	return value
+}
+
+func formatLoadingValue(status string) string {
+	switch strings.TrimSpace(status) {
+	case "", "loading...":
+		return spinnerGlyph(int(time.Now().UnixNano()/int64(100*time.Millisecond))) + " loading..."
+	default:
+		if strings.HasPrefix(status, "failed") {
+			return status
+		}
+		return spinnerGlyph(int(time.Now().UnixNano()/int64(100*time.Millisecond))) + " " + status
+	}
 }
 
 // buildRight renders the full conversation. Each message gets a role tag

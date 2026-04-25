@@ -136,10 +136,16 @@ type parsedSyntheticHeader struct {
 func parseSyntheticHeader(block string) (*parsedSyntheticHeader, error) {
 	const (
 		continuityHeader = "## Context continuity notice\n\n"
+		legacyHeader     = "## Continued from prior session (transcript below)\n\n"
 		whatHeader       = "### What was dropped\n\n"
 		summaryHeader    = "### Summary of dropped content\n\n"
 		transcriptHeader = "## Surviving transcript\n\n"
 	)
+	if block == legacyHeader {
+		return &parsedSyntheticHeader{
+			Continuity: "Your prior context was compacted earlier in this same session. The surviving transcript continues below.",
+		}, nil
+	}
 	if !strings.HasPrefix(block, continuityHeader) {
 		return nil, fmt.Errorf("missing continuity header")
 	}

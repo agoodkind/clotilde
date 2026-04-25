@@ -93,9 +93,10 @@ type CompactPanel struct {
 	busyAction string
 	status     string
 
-	latestIteration *CompactIteration
-	latestFinal     *CompactFinal
-	latestUndo      *CompactUndoResult
+	iterationHistory []CompactIteration
+	latestIteration  *CompactIteration
+	latestFinal      *CompactFinal
+	latestUndo       *CompactUndoResult
 
 	OnPreview func(CompactRunRequest)
 	OnApply   func(CompactRunRequest)
@@ -122,6 +123,10 @@ func (p *CompactPanel) ApplyCompactEvent(ev CompactEvent) {
 	switch ev.Kind {
 	case "upfront":
 		if ev.Upfront != nil {
+			p.iterationHistory = nil
+			p.latestIteration = nil
+			p.latestFinal = nil
+			p.latestUndo = nil
 			p.sessionName = ev.Upfront.SessionName
 			p.sessionID = ev.Upfront.SessionID
 			p.model = ev.Upfront.Model
@@ -134,7 +139,10 @@ func (p *CompactPanel) ApplyCompactEvent(ev CompactEvent) {
 			}
 		}
 	case "iteration":
-		p.latestIteration = ev.Iteration
+		if ev.Iteration != nil {
+			p.latestIteration = ev.Iteration
+			p.iterationHistory = append(p.iterationHistory, *ev.Iteration)
+		}
 	case "final":
 		p.latestFinal = ev.Final
 	case "status":
@@ -188,14 +196,13 @@ func (p *CompactPanel) Draw(scr tcell.Screen, r Rect) {
 	y++
 	drawString(scr, inner.X, y, StyleMuted, "status: "+p.status, inner.W)
 	y++
-	if p.latestIteration != nil {
-		drawString(scr, inner.X, y, StyleDefault, fmt.Sprintf("iter %d %s", p.latestIteration.Iteration, p.latestIteration.Step), inner.W)
-		y++
-		drawString(scr, inner.X, y, StyleDefault, fmt.Sprintf(
-			"current total %s  over/under %s",
-			formatWithCommas(p.latestIteration.CtxTotal),
-			formatSignedWithCommas(p.latestIteration.Delta),
-		), inner.W)
+
+	actionsY := inner.Y + inner.H - 2
+	if actionsY < y+1 {
+		actionsY = y + 1
+	}
+	for _, line := range p.visibleIterationLines(actionsY - y) {
+		drawString(scr, inner.X, y, StyleDefault, line, inner.W)
 		y++
 	}
 	if p.latestFinal != nil {
@@ -212,10 +219,10 @@ func (p *CompactPanel) Draw(scr tcell.Screen, r Rect) {
 		y++
 	}
 
-	y += 1
+	y = actionsY - 1
 	drawString(scr, inner.X, y, StyleHeader, "Actions", inner.W)
 	y++
-	drawString(scr, inner.X, y, StyleDefault, p.renderActions(), inner.W)
+	p.drawActionButtons(scr, inner.X, y, inner.W)
 }
 
 func (p *CompactPanel) StatusLegendActions() []LegendAction {
@@ -285,10 +292,10 @@ func (p *CompactPanel) handleSliderKeys(e *tcell.EventKey) bool {
 	p.clearApplyConfirmation()
 	switch e.Key() {
 	case tcell.KeyLeft:
-		p.adjustTargetByPercent(-1)
+		p.adjustTargetByPercent(1)
 		return true
 	case tcell.KeyRight:
-		p.adjustTargetByPercent(1)
+		p.adjustTargetByPercent(-1)
 		return true
 	case tcell.KeyPgUp:
 		p.adjustTargetByPercent(5)
@@ -489,6 +496,56 @@ func (p *CompactPanel) renderActions() string {
 		out += left + " " + label + " " + right
 	}
 	return out
+}
+
+func (p *CompactPanel) drawActionButtons(scr tcell.Screen, x, y, maxW int) {
+	labels := []string{"Preview", "Apply", "Undo", "Close"}
+	cursor := x
+	for i, label := range labels {
+		if i == 1 && p.confirmApply {
+			label = "Apply (confirm)"
+		}
+		text := "[ " + label + " ]"
+		width := cellCount(text)
+		if cursor > x {
+			if cursor-x+1 >= maxW {
+				break
+			}
+			drawString(scr, cursor, y, StyleDefault, " ", maxW-(cursor-x))
+			cursor++
+		}
+		if cursor-x+width > maxW {
+			break
+		}
+		style := StyleDefault
+		if p.focusGroup == 3 && p.actionIdx == i {
+			style = StyleSelected
+			fillRow(scr, cursor, y, width, style)
+		}
+		drawString(scr, cursor, y, style, text, maxW-(cursor-x))
+		cursor += width
+	}
+}
+
+func (p *CompactPanel) visibleIterationLines(limit int) []string {
+	if limit <= 0 || len(p.iterationHistory) == 0 {
+		return nil
+	}
+	if limit > len(p.iterationHistory) {
+		limit = len(p.iterationHistory)
+	}
+	start := len(p.iterationHistory) - limit
+	lines := make([]string, 0, limit)
+	for _, iter := range p.iterationHistory[start:] {
+		lines = append(lines, fmt.Sprintf(
+			"iter %d  %s  total %s  %s",
+			iter.Iteration,
+			iter.Step,
+			formatWithCommas(iter.CtxTotal),
+			formatSignedWithCommas(iter.Delta),
+		))
+	}
+	return lines
 }
 
 func (p *CompactPanel) renderSlider(width int) string {

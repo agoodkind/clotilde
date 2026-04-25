@@ -15,18 +15,18 @@ import (
 // so calibration and preview do not silently pick up a wrong bucket.
 // Deferred variants are the parent name plus " (deferred)".
 var stableCategoryNames = map[string]bool{
-	"System prompt":           true,
+	"System prompt":            true,
 	"System prompt (deferred)": true,
-	"System tools":            true,
-	"System tools (deferred)": true,
-	"MCP tools":               true,
-	"MCP tools (deferred)":    true,
-	"Memory files":            true,
-	"Skills":                  true,
-	"Custom agents":           true,
-	"Messages":                true,
-	"Compact buffer":          true,
-	"Free space":              true,
+	"System tools":             true,
+	"System tools (deferred)":  true,
+	"MCP tools":                true,
+	"MCP tools (deferred)":     true,
+	"Memory files":             true,
+	"Skills":                   true,
+	"Custom agents":            true,
+	"Messages":                 true,
+	"Compact buffer":           true,
+	"Free space":               true,
 }
 
 // TestUsageShape_FromRealProbe decodes a real ContextData captured
@@ -64,8 +64,8 @@ func TestUsageShape_FromRealProbe(t *testing.T) {
 	}
 
 	usage := sessionctx.Usage{ContextUsage: raw}
-	if usage.StaticOverhead() <= 0 {
-		t.Fatalf("StaticOverhead should be positive, got %d", usage.StaticOverhead())
+	if usage.StaticOverhead() < 0 {
+		t.Fatalf("StaticOverhead should never be negative, got %d", usage.StaticOverhead())
 	}
 	if usage.TailTokens() <= 0 {
 		t.Fatalf("TailTokens (Messages) should be positive, got %d", usage.TailTokens())
@@ -76,13 +76,11 @@ func TestUsageShape_FromRealProbe(t *testing.T) {
 }
 
 // TestStaticOverhead_ExcludesMessageAndReserved asserts that the
-// subtraction rules match the planner's contract: Messages, Compact
-// buffer, and Free space are never counted as static overhead, while
-// System prompt, System tools, MCP tools (and deferred), Memory
-// files, and Skills always are.
+// floor is derived from totalTokens, with Messages, Compact buffer,
+// and Free space removed as dynamic buckets.
 func TestStaticOverhead_ExcludesMessageAndReserved(t *testing.T) {
 	raw := compact.ContextUsage{
-		TotalTokens: 100,
+		TotalTokens: 890,
 		MaxTokens:   1000,
 		Categories: []compact.ContextCategory{
 			{Name: "System prompt", Tokens: 100},
@@ -95,7 +93,7 @@ func TestStaticOverhead_ExcludesMessageAndReserved(t *testing.T) {
 		},
 	}
 	usage := sessionctx.Usage{ContextUsage: raw}
-	want := 100 + 200 + 50 + 25
+	want := 890 - 500 - 10 - 5
 	if got := usage.StaticOverhead(); got != want {
 		t.Fatalf("StaticOverhead = %d, want %d", got, want)
 	}
@@ -104,5 +102,20 @@ func TestStaticOverhead_ExcludesMessageAndReserved(t *testing.T) {
 	}
 	if got := usage.CategoryTokens("Compact buffer"); got != 10 {
 		t.Fatalf("CategoryTokens(Compact buffer) = %d, want 10", got)
+	}
+}
+
+func TestStaticOverhead_FallsBackWhenTotalMissing(t *testing.T) {
+	raw := compact.ContextUsage{
+		Categories: []compact.ContextCategory{
+			{Name: "System prompt", Tokens: 100},
+			{Name: "System tools", Tokens: 200},
+			{Name: "Messages", Tokens: 500},
+			{Name: "Compact buffer", Tokens: 10},
+		},
+	}
+	usage := sessionctx.Usage{ContextUsage: raw}
+	if got, want := usage.StaticOverhead(), 300; got != want {
+		t.Fatalf("StaticOverhead fallback = %d, want %d", got, want)
 	}
 }

@@ -205,6 +205,8 @@ type SessionDetail struct {
 	ContextUsage          SessionContextUsage
 	ContextUsageLoaded    bool
 	ContextUsageStatus    string
+	TranscriptStatsLoaded bool
+	TranscriptStatsStatus string
 }
 
 type ProviderStats struct {
@@ -2217,6 +2219,15 @@ func (a *App) handleEvent(ev tcell.Event) {
 			a.applySessionSnapshot(d.snapshot)
 		case detailsLoaded:
 			a.detailMu.Lock()
+			if d.err != nil {
+				if cached, ok := a.detailCache[d.name]; ok {
+					d.detail = cached
+				}
+				if d.detail.TranscriptStatsStatus == "" {
+					d.detail.TranscriptStatsStatus = fmt.Sprintf("failed: %v", d.err)
+				}
+				d.detail.TranscriptStatsLoaded = false
+			}
 			a.detailCache[d.name] = d.detail
 			delete(a.detailLoading, d.name)
 			a.detailMu.Unlock()
@@ -3565,22 +3576,19 @@ func (a *App) populateDetails() {
 		cached.ContextUsageLoaded = contextState.Loaded
 		cached.ContextUsageStatus = contextState.Status
 		a.details.Set(a.selected, cached)
-		if !cached.ContextUsageLoaded {
-			a.details.Left.Title = " STATS   " + spinnerGlyph(a.spinnerFrame) + " loading context "
-		}
 		return
 	}
 
 	// Paint a fast placeholder so the UI is never blocked on disk I/O.
 	placeholder := SessionDetail{
-		Model:              a.modelCache[name],
-		ContextUsage:       contextState.Usage,
-		ContextUsageLoaded: contextState.Loaded,
-		ContextUsageStatus: contextState.Status,
+		Model:                 a.modelCache[name],
+		ContextUsage:          contextState.Usage,
+		ContextUsageLoaded:    contextState.Loaded,
+		ContextUsageStatus:    contextState.Status,
+		TranscriptStatsLoaded: false,
+		TranscriptStatsStatus: "loading...",
 	}
 	a.details.Set(a.selected, placeholder)
-	a.details.Left.Title = " STATS   " + spinnerGlyph(a.spinnerFrame) + " loading "
-	a.details.Right.Title = " MESSAGES   " + spinnerGlyph(a.spinnerFrame) + " loading "
 
 	a.loadDetailAsync(a.selected)
 }

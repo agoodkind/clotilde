@@ -52,20 +52,32 @@ var categoryNamesExcludedFromOverhead = map[string]bool{
 	"Free space":     true,
 }
 
-// StaticOverheadFromUsage sums the category tokens that behave as a
-// per-session constant: system prompt, tools (including deferred),
-// memory, skills, custom agents, and anything else that is not the
-// transcript tail or a reserved buffer. The caller passes the result
-// to SaveCalibration.
+// StaticOverheadFromUsage derives the non-trimmable floor from the
+// live /context total itself. Claude's category rows are not reliably
+// additive, especially once deferred buckets are present, so summing
+// every non-message category can materially overstate the floor. When
+// totalTokens is present we treat it as the authority and subtract the
+// dynamic buckets (Messages, Compact buffer, Free space). If total is
+// unavailable, fall back to the older "sum included categories"
+// behavior.
 func StaticOverheadFromUsage(u ContextUsage) int {
-	sum := 0
+	excluded := 0
+	included := 0
 	for _, cat := range u.Categories {
 		if categoryNamesExcludedFromOverhead[cat.Name] {
+			excluded += cat.Tokens
 			continue
 		}
-		sum += cat.Tokens
+		included += cat.Tokens
 	}
-	return sum
+	if u.TotalTokens > 0 {
+		floor := u.TotalTokens - excluded
+		if floor < 0 {
+			return 0
+		}
+		return floor
+	}
+	return included
 }
 
 // ProbeOptions configures a get_context_usage probe.
