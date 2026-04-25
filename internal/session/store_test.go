@@ -174,6 +174,36 @@ var _ = Describe("FileStore", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(sessions).To(BeEmpty())
 		})
+
+		It("dedupes stale aliases that point at the same session id", func() {
+			auto := &session.Session{
+				Name: "clyde-dev-1a4837fd",
+				Metadata: session.Metadata{
+					Name:         "clyde-dev-1a4837fd",
+					SessionID:    "uuid-shared",
+					LastAccessed: time.Date(2026, 4, 21, 22, 10, 0, 0, time.UTC),
+					Created:      time.Date(2026, 4, 20, 15, 25, 0, 0, time.UTC),
+				},
+			}
+			human := &session.Session{
+				Name: "unified-session-resolution",
+				Metadata: session.Metadata{
+					Name:         "unified-session-resolution",
+					SessionID:    "uuid-shared",
+					LastAccessed: time.Date(2026, 4, 21, 17, 17, 0, 0, time.UTC),
+					Created:      time.Date(2026, 4, 20, 22, 26, 0, 0, time.UTC),
+				},
+			}
+
+			Expect(store.Create(auto)).To(Succeed())
+			Expect(store.Create(human)).To(Succeed())
+
+			sessions, err := store.List()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(sessions).To(HaveLen(1))
+			Expect(sessions[0].Name).To(Equal("unified-session-resolution"))
+			Expect(sessions[0].Metadata.SessionID).To(Equal("uuid-shared"))
+		})
 	})
 
 	Describe("Settings operations", func() {

@@ -6,12 +6,40 @@ import (
 )
 
 // RenderPlainText formats messages as readable plain text.
-// Tool calls are shown as a compact summary line, not full output.
+// Tool-only assistant turns render as compact summaries by default.
 func RenderPlainText(messages []Message) string {
-	return renderMessages(messages, -1)
+	return RenderPlainTextWithOptions(messages, DefaultShapeOptions())
 }
 
-func renderMessages(messages []Message, startIndex int) string {
+func RenderPlainTextWithOptions(messages []Message, opts ShapeOptions) string {
+	return renderConversationMessages(ShapeConversation(messages, opts), -1)
+}
+
+func RenderMarkdown(messages []Message) string {
+	return RenderMarkdownWithOptions(messages, DefaultShapeOptions())
+}
+
+func RenderMarkdownWithOptions(messages []Message, opts ShapeOptions) string {
+	return RenderMarkdownConversation(ShapeConversation(messages, opts))
+}
+
+func RenderHTML(messages []Message) string {
+	return RenderHTMLWithOptions(messages, DefaultShapeOptions())
+}
+
+func RenderHTMLWithOptions(messages []Message, opts ShapeOptions) string {
+	return RenderHTMLConversation(ShapeConversation(messages, opts))
+}
+
+func RenderJSON(messages []Message) ([]byte, error) {
+	return RenderJSONWithOptions(messages, DefaultShapeOptions())
+}
+
+func RenderJSONWithOptions(messages []Message, opts ShapeOptions) ([]byte, error) {
+	return RenderJSONConversation(ShapeConversation(messages, opts))
+}
+
+func renderConversationMessages(messages []ConversationTurn, startIndex int) string {
 	var b strings.Builder
 	for i, m := range messages {
 		ts := m.Timestamp.Format("2006-01-02 15:04")
@@ -29,9 +57,10 @@ func renderMessages(messages []Message, startIndex int) string {
 			b.WriteString(m.Text)
 			b.WriteString("\n")
 		}
-		if m.HasTools {
-			names := m.ToolNames()
-			fmt.Fprintf(&b, "  [used: %s]\n", strings.Join(names, ", "))
+		if m.Thinking != "" {
+			b.WriteString("[thinking]\n")
+			b.WriteString(m.Thinking)
+			b.WriteString("\n")
 		}
 		b.WriteString("\n")
 	}

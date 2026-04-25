@@ -61,25 +61,13 @@ LAUNCH_AGENT_PLIST := $(HOME)/Library/LaunchAgents/$(LAUNCH_AGENT_LABEL).plist
 LAUNCH_AGENT_TEMPLATE := packaging/macos/io.goodkind.clyde.daemon.plist.in
 DAEMON_LOG := $(HOME)/Library/Logs/clyde-daemon.log
 CLYDE_BIN := $(HOME)/.local/bin/clyde
+CLYDE_RUNNER := $(CURDIR)/run.sh
 UID := $(shell id -u)
-
-install: build ## Install clyde to ~/.local/bin and restart daemon via launchd
-	@mkdir -p "$(HOME)/.local/bin"
-	@ln -sf "$(CURDIR)/dist/clyde" "$(CLYDE_BIN)"
-	@if [ -f "$(LAUNCH_AGENT_PLIST)" ]; then \
-		launchctl bootout gui/$(UID)/$(LAUNCH_AGENT_LABEL) 2>/dev/null || true; \
-		sleep 1; \
-		launchctl bootstrap gui/$(UID) "$(LAUNCH_AGENT_PLIST)" || { echo "launchctl bootstrap failed; daemon NOT running"; exit 1; }; \
-		echo "✓ Installed to $(CLYDE_BIN) (daemon restarted via launchd)"; \
-	else \
-		-pkill -f "clyde daemon" 2>/dev/null; true; \
-		echo "✓ Installed to $(CLYDE_BIN) (run 'make install-launch-agent' to register LaunchAgent)"; \
-	fi
 
 install-launch-agent: ## Render and install the daemon LaunchAgent (runs OAuth refresh + adapter + prune in-process)
 	@mkdir -p "$(HOME)/Library/LaunchAgents" "$(HOME)/Library/Logs"
 	@touch "$(DAEMON_LOG)"
-	@sed -e 's|@@CLYDE_BIN@@|$(CLYDE_BIN)|g' \
+	@sed -e 's|@@CLYDE_RUNNER@@|$(CLYDE_RUNNER)|g' \
 	     -e 's|@@HOME@@|$(HOME)|g' \
 	     -e 's|@@LOG_PATH@@|$(DAEMON_LOG)|g' \
 	     "$(LAUNCH_AGENT_TEMPLATE)" > "$(LAUNCH_AGENT_PLIST)"

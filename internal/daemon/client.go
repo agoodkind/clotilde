@@ -34,6 +34,16 @@ type Client struct {
 	rpc  clydev1.ClydeServiceClient
 }
 
+// LifecycleOutcome normalizes daemon lifecycle state for callers that need to
+// decide between online success, offline degradation, and hard failure.
+type LifecycleOutcome string
+
+const (
+	LifecycleOutcomeReady           LifecycleOutcome = "ready"
+	LifecycleOutcomeDegradedOffline LifecycleOutcome = "degraded_offline"
+	LifecycleOutcomeFailed          LifecycleOutcome = "failed"
+)
+
 // NudgeDiscoveryScan asks the daemon to run an immediate discovery
 // scan. The preferred path is the TriggerScan RPC because it carries
 // no privileges and works regardless of how the daemon was launched.
@@ -74,6 +84,16 @@ func NudgeDiscoveryScan() {
 // the rename happened via the daemon, false (and an error) when the
 // daemon is unreachable so callers can fall back to a direct write.
 func RenameSessionViaDaemon(ctx context.Context, oldName, newName string) (bool, error) {
+	outcome, err := RenameSessionViaDaemonOutcome(ctx, oldName, newName)
+	if outcome == LifecycleOutcomeReady {
+		return true, nil
+	}
+	return false, err
+}
+
+// RenameSessionViaDaemonOutcome performs the rename and returns the normalized
+// daemon lifecycle outcome.
+func RenameSessionViaDaemonOutcome(ctx context.Context, oldName, newName string) (LifecycleOutcome, error) {
 	log := daemonClientLog(ctx)
 	log.DebugContext(ctx, "daemon.client.rename_session.begin",
 		"old_name", oldName,
@@ -82,7 +102,7 @@ func RenameSessionViaDaemon(ctx context.Context, oldName, newName string) (bool,
 	c, err := ConnectOrStart(ctx)
 	if err != nil {
 		log.DebugContext(ctx, "daemon.client.rename_session.connect_failed", "err", err)
-		return false, err
+		return LifecycleOutcomeDegradedOffline, err
 	}
 	defer c.conn.Close()
 	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -93,22 +113,32 @@ func RenameSessionViaDaemon(ctx context.Context, oldName, newName string) (bool,
 	})
 	if err != nil {
 		log.DebugContext(rpcCtx, "daemon.client.rename_session.rpc_failed", "err", err)
-		return false, err
+		return lifecycleOutcomeForError(err), err
 	}
 	log.DebugContext(rpcCtx, "daemon.client.rename_session.ok")
-	return true, nil
+	return LifecycleOutcomeReady, nil
 }
 
 // DeleteSessionViaDaemon asks the daemon to drop a session from the
 // registry. Transcript and agent log cleanup remain the caller's job
 // because they touch per-project state outside the daemon's view.
 func DeleteSessionViaDaemon(ctx context.Context, name string) (bool, error) {
+	outcome, err := DeleteSessionViaDaemonOutcome(ctx, name)
+	if outcome == LifecycleOutcomeReady {
+		return true, nil
+	}
+	return false, err
+}
+
+// DeleteSessionViaDaemonOutcome drops the session and returns the normalized
+// daemon lifecycle outcome.
+func DeleteSessionViaDaemonOutcome(ctx context.Context, name string) (LifecycleOutcome, error) {
 	log := daemonClientLog(ctx)
 	log.DebugContext(ctx, "daemon.client.delete_session.begin", "name", name)
 	c, err := ConnectOrStart(ctx)
 	if err != nil {
 		log.DebugContext(ctx, "daemon.client.delete_session.connect_failed", "err", err)
-		return false, err
+		return LifecycleOutcomeDegradedOffline, err
 	}
 	defer c.conn.Close()
 	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -116,10 +146,10 @@ func DeleteSessionViaDaemon(ctx context.Context, name string) (bool, error) {
 	_, err = c.rpc.DeleteSession(rpcCtx, &clydev1.DeleteSessionRequest{Name: name})
 	if err != nil {
 		log.DebugContext(rpcCtx, "daemon.client.delete_session.rpc_failed", "err", err)
-		return false, err
+		return lifecycleOutcomeForError(err), err
 	}
 	log.DebugContext(rpcCtx, "daemon.client.delete_session.ok")
-	return true, nil
+	return LifecycleOutcomeReady, nil
 }
 
 // SubscribeRegistry opens a long-lived stream of SubscribeRegistryResponse values
@@ -160,6 +190,61 @@ func SubscribeRegistry(parent context.Context) (<-chan *clydev1.SubscribeRegistr
 			case out <- ev:
 			case <-ctx.Done():
 				loopLog.DebugContext(ctx, "daemon.client.subscribe_registry.consumer_cancelled")
+				return
+			}
+		}
+	}()
+	return out, cancel, nil
+}
+
+func GetProviderStats(parent context.Context) (*clydev1.GetProviderStatsResponse, error) {
+	log := daemonClientLog(parent)
+	log.DebugContext(parent, "daemon.client.get_provider_stats.begin")
+	c, err := ConnectOrStart(parent)
+	if err != nil {
+		log.DebugContext(parent, "daemon.client.get_provider_stats.connect_failed", "err", err)
+		return nil, err
+	}
+	defer c.conn.Close()
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+	defer cancel()
+	resp, err := c.rpc.GetProviderStats(ctx, &clydev1.GetProviderStatsRequest{})
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.get_provider_stats.rpc_failed", "err", err)
+		return nil, err
+	}
+	return resp, nil
+}
+
+func SubscribeProviderStats(parent context.Context) (<-chan *clydev1.ProviderStatsEvent, context.CancelFunc, error) {
+	log := daemonClientLog(parent)
+	log.DebugContext(parent, "daemon.client.subscribe_provider_stats.begin")
+	c, err := ConnectOrStart(parent)
+	if err != nil {
+		log.DebugContext(parent, "daemon.client.subscribe_provider_stats.connect_failed", "err", err)
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithCancel(parent)
+	stream, err := c.rpc.SubscribeProviderStats(ctx, &clydev1.SubscribeProviderStatsRequest{})
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.subscribe_provider_stats.stream_open_failed", "err", err)
+		cancel()
+		c.conn.Close()
+		return nil, nil, err
+	}
+	out := make(chan *clydev1.ProviderStatsEvent, 8)
+	go func() {
+		defer close(out)
+		defer c.conn.Close()
+		for {
+			ev, err := stream.Recv()
+			if err != nil {
+				log.DebugContext(ctx, "daemon.client.subscribe_provider_stats.recv_done", "err", err)
+				return
+			}
+			select {
+			case out <- ev:
+			case <-ctx.Done():
 				return
 			}
 		}
@@ -274,6 +359,24 @@ func connect(ctx context.Context) (*Client, error) {
 		log.DebugContext(dialCtx, "daemon.client.connect.probe_alive", "err", err)
 	}
 
+	// Verify the daemon speaks the current dashboard RPC surface. Older
+	// daemons can answer AcquireSession but lack newer methods like
+	// ListSessions, which leaves the TUI looking empty while data still
+	// exists on disk.
+	_, err = client.rpc.ListSessions(dialCtx, &clydev1.ListSessionsRequest{})
+	if err != nil {
+		if isIncompatibleDaemonError(err) {
+			log.DebugContext(dialCtx, "daemon.client.connect.probe_incompatible", "err", err)
+			conn.Close()
+			return nil, fmt.Errorf("daemon incompatible with this client: %w", err)
+		}
+		if isTransportError(err) {
+			log.DebugContext(dialCtx, "daemon.client.connect.probe_list_sessions_transport_error", "err", err)
+			conn.Close()
+			return nil, fmt.Errorf("daemon not responding: %w", err)
+		}
+	}
+
 	log.DebugContext(ctx, "daemon.client.connect.ok")
 	return client, nil
 }
@@ -285,6 +388,23 @@ func isTransportError(err error) bool {
 	// gRPC wraps transport failures with "Unavailable" or connection errors.
 	for _, substr := range []string{"Unavailable", "connection refused", "no such file"} {
 		if contains(s, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+func isIncompatibleDaemonError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	incompatibleHints := []string{
+		"Unimplemented",
+		"unknown method ListSessions",
+	}
+	for _, hint := range incompatibleHints {
+		if contains(s, hint) {
 			return true
 		}
 	}
@@ -439,6 +559,16 @@ func (c *Client) UpdateContext(sessionName, workspaceRoot string, messages []str
 // accepted the update so callers can fall back to a direct file write
 // only when the daemon is unreachable.
 func UpdateSessionRemoteControlViaDaemon(ctx context.Context, name string, enabled bool) (bool, error) {
+	outcome, err := UpdateSessionRemoteControlViaDaemonOutcome(ctx, name, enabled)
+	if outcome == LifecycleOutcomeReady {
+		return true, nil
+	}
+	return false, err
+}
+
+// UpdateSessionRemoteControlViaDaemonOutcome updates one session setting and
+// returns the normalized daemon lifecycle outcome.
+func UpdateSessionRemoteControlViaDaemonOutcome(ctx context.Context, name string, enabled bool) (LifecycleOutcome, error) {
 	log := daemonClientLog(ctx)
 	log.DebugContext(ctx, "daemon.client.update_session_remote_control.begin",
 		"name", name,
@@ -447,7 +577,7 @@ func UpdateSessionRemoteControlViaDaemon(ctx context.Context, name string, enabl
 	c, err := ConnectOrStart(ctx)
 	if err != nil {
 		log.DebugContext(ctx, "daemon.client.update_session_remote_control.connect_failed", "err", err)
-		return false, err
+		return LifecycleOutcomeDegradedOffline, err
 	}
 	defer c.conn.Close()
 	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -459,21 +589,59 @@ func UpdateSessionRemoteControlViaDaemon(ctx context.Context, name string, enabl
 	})
 	if err != nil {
 		log.DebugContext(rpcCtx, "daemon.client.update_session_remote_control.rpc_failed", "err", err)
-		return false, err
+		return lifecycleOutcomeForError(err), err
 	}
 	log.DebugContext(rpcCtx, "daemon.client.update_session_remote_control.ok")
-	return true, nil
+	return LifecycleOutcomeReady, nil
+}
+
+// UpdateSessionWorkspaceRootViaDaemonOutcome updates a session's metadata
+// workspace root through the daemon.
+func UpdateSessionWorkspaceRootViaDaemonOutcome(ctx context.Context, name, workspaceRoot string) (LifecycleOutcome, error) {
+	log := daemonClientLog(ctx)
+	log.DebugContext(ctx, "daemon.client.update_session_workspace_root.begin",
+		"name", name,
+		"workspace_root", workspaceRoot,
+	)
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.update_session_workspace_root.connect_failed", "err", err)
+		return LifecycleOutcomeDegradedOffline, err
+	}
+	defer c.conn.Close()
+	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, err = c.rpc.UpdateSessionMetadata(rpcCtx, &clydev1.UpdateSessionMetadataRequest{
+		Name:          name,
+		WorkspaceRoot: workspaceRoot,
+	})
+	if err != nil {
+		log.DebugContext(rpcCtx, "daemon.client.update_session_workspace_root.rpc_failed", "err", err)
+		return lifecycleOutcomeForError(err), err
+	}
+	log.DebugContext(rpcCtx, "daemon.client.update_session_workspace_root.ok")
+	return LifecycleOutcomeReady, nil
 }
 
 // UpdateGlobalRemoteControlViaDaemon flips the global default. The
 // daemon serialises writes to ~/.config/clyde/config.toml.
 func UpdateGlobalRemoteControlViaDaemon(ctx context.Context, enabled bool) (bool, error) {
+	outcome, err := UpdateGlobalRemoteControlViaDaemonOutcome(ctx, enabled)
+	if outcome == LifecycleOutcomeReady {
+		return true, nil
+	}
+	return false, err
+}
+
+// UpdateGlobalRemoteControlViaDaemonOutcome updates the global default and
+// returns the normalized daemon lifecycle outcome.
+func UpdateGlobalRemoteControlViaDaemonOutcome(ctx context.Context, enabled bool) (LifecycleOutcome, error) {
 	log := daemonClientLog(ctx)
 	log.DebugContext(ctx, "daemon.client.update_global_remote_control.begin", "enabled", enabled)
 	c, err := ConnectOrStart(ctx)
 	if err != nil {
 		log.DebugContext(ctx, "daemon.client.update_global_remote_control.connect_failed", "err", err)
-		return false, err
+		return LifecycleOutcomeDegradedOffline, err
 	}
 	defer c.conn.Close()
 	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -484,10 +652,43 @@ func UpdateGlobalRemoteControlViaDaemon(ctx context.Context, enabled bool) (bool
 	})
 	if err != nil {
 		log.DebugContext(rpcCtx, "daemon.client.update_global_remote_control.rpc_failed", "err", err)
-		return false, err
+		return lifecycleOutcomeForError(err), err
 	}
 	log.DebugContext(rpcCtx, "daemon.client.update_global_remote_control.ok")
-	return true, nil
+	return LifecycleOutcomeReady, nil
+}
+
+func lifecycleOutcomeForError(err error) LifecycleOutcome {
+	if err == nil {
+		return LifecycleOutcomeReady
+	}
+	if lifecycleErrorLooksOffline(err) {
+		return LifecycleOutcomeDegradedOffline
+	}
+	return LifecycleOutcomeFailed
+}
+
+func lifecycleErrorLooksOffline(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	offlineHints := []string{
+		"Unavailable",
+		"connection refused",
+		"no such file",
+		"transport is closing",
+		"daemon disabled by CLYDE_DISABLE_DAEMON",
+		"daemon not responding",
+		"daemon did not become ready",
+		"dial daemon",
+	}
+	for _, hint := range offlineHints {
+		if contains(msg, hint) {
+			return true
+		}
+	}
+	return false
 }
 
 // ListBridgesViaDaemon fetches the daemon's current bridge map.
@@ -591,17 +792,17 @@ func TailTranscriptViaDaemon(parent context.Context, sessionID string, startOffs
 }
 
 type CompactRunOptions struct {
-	SessionName   string
-	TargetTokens  int
+	SessionName    string
+	TargetTokens   int
 	ReservedTokens int
-	Model         string
-	ModelExplicit bool
-	Thinking      bool
-	Images        bool
-	Tools         bool
-	Chat          bool
-	Summarize     bool
-	Force         bool
+	Model          string
+	ModelExplicit  bool
+	Thinking       bool
+	Images         bool
+	Tools          bool
+	Chat           bool
+	Summarize      bool
+	Force          bool
 }
 
 func CompactPreviewViaDaemon(parent context.Context, in CompactRunOptions) (<-chan *clydev1.CompactEvent, context.CancelFunc, error) {
@@ -693,7 +894,107 @@ func CompactUndoViaDaemon(ctx context.Context, sessionName string) (*clydev1.Com
 	return resp, nil
 }
 
+func ListSessionsViaDaemon(ctx context.Context) (*clydev1.ListSessionsResponse, error) {
+	log := daemonClientLog(ctx)
+	log.DebugContext(ctx, "daemon.client.list_sessions.begin")
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.list_sessions.connect_failed", "err", err)
+		return nil, err
+	}
+	defer c.conn.Close()
+	rpcCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	resp, rpcErr := c.rpc.ListSessions(rpcCtx, &clydev1.ListSessionsRequest{})
+	if rpcErr != nil {
+		log.DebugContext(rpcCtx, "daemon.client.list_sessions.rpc_failed", "err", rpcErr)
+		return nil, rpcErr
+	}
+	log.DebugContext(rpcCtx, "daemon.client.list_sessions.ok", "sessions", len(resp.GetSessions()))
+	return resp, nil
+}
+
+func GetSessionDetailViaDaemon(ctx context.Context, sessionName string) (*clydev1.GetSessionDetailResponse, error) {
+	log := daemonClientLog(ctx)
+	log.DebugContext(ctx, "daemon.client.session_detail.begin", "session", sessionName)
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.session_detail.connect_failed", "err", err)
+		return nil, err
+	}
+	defer c.conn.Close()
+	rpcCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	resp, rpcErr := c.rpc.GetSessionDetail(rpcCtx, &clydev1.GetSessionDetailRequest{SessionName: sessionName})
+	if rpcErr != nil {
+		log.DebugContext(rpcCtx, "daemon.client.session_detail.rpc_failed", "session", sessionName, "err", rpcErr)
+		return nil, rpcErr
+	}
+	log.DebugContext(rpcCtx, "daemon.client.session_detail.ok",
+		"session", sessionName,
+		"messages", resp.GetTotalMessages())
+	return resp, nil
+}
+
+func ProbeContextUsageViaDaemon(ctx context.Context, sessionName string) (*clydev1.ProbeContextUsageResponse, error) {
+	log := daemonClientLog(ctx)
+	log.DebugContext(ctx, "daemon.client.context_usage.begin", "session", sessionName)
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.context_usage.connect_failed", "err", err)
+		return nil, err
+	}
+	defer c.conn.Close()
+	rpcCtx, cancel := context.WithTimeout(ctx, 75*time.Second)
+	defer cancel()
+	resp, rpcErr := c.rpc.ProbeContextUsage(rpcCtx, &clydev1.ProbeContextUsageRequest{SessionName: sessionName})
+	if rpcErr != nil {
+		log.DebugContext(rpcCtx, "daemon.client.context_usage.rpc_failed", "session", sessionName, "err", rpcErr)
+		return nil, rpcErr
+	}
+	log.DebugContext(rpcCtx, "daemon.client.context_usage.ok",
+		"session", sessionName,
+		"total_tokens", resp.GetTotalTokens(),
+		"max_tokens", resp.GetMaxTokens())
+	return resp, nil
+}
+
 const launchAgentLabel = "io.goodkind.clyde.daemon"
+
+// RestartManagedDaemon rewrites the local LaunchAgent target when needed and
+// restarts the daemon under launchd on macOS. Other platforms fall back to a
+// best-effort direct spawn.
+func RestartManagedDaemon(ctx context.Context) error {
+	log := daemonClientLog(ctx)
+	if runtime.GOOS != "darwin" {
+		log.DebugContext(ctx, "daemon.client.restart.non_darwin_spawn_direct")
+		return spawnDaemonDirect()
+	}
+	plistPath, err := ensureDarwinLaunchAgent()
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.restart.ensure_launch_agent_failed", "err", err)
+		return err
+	}
+	uid := strconv.Itoa(os.Getuid())
+	target := "gui/" + uid + "/" + launchAgentLabel
+	_ = exec.Command("launchctl", "bootout", target).Run()
+	if out, err := exec.Command("launchctl", "bootstrap", "gui/"+uid, plistPath).CombinedOutput(); err != nil {
+		log.DebugContext(ctx, "daemon.client.restart.bootstrap_failed",
+			"plist_path", plistPath,
+			"err", err,
+			"output", string(out))
+		return fmt.Errorf("bootstrap launch agent: %w", err)
+	}
+	if out, err := exec.Command("launchctl", "kickstart", "-k", target).CombinedOutput(); err != nil {
+		log.DebugContext(ctx, "daemon.client.restart.kickstart_failed",
+			"target", target,
+			"err", err,
+			"output", string(out))
+		return fmt.Errorf("kickstart launch agent: %w", err)
+	}
+	log.DebugContext(ctx, "daemon.client.restart.ok", "target", target, "plist_path", plistPath)
+	return nil
+}
 
 // startDaemon starts the daemon process. On macOS, tries launchctl kickstart
 // first (if the LaunchAgent is registered), falling back to direct spawn.
@@ -701,11 +1002,29 @@ func startDaemon() error {
 	bg := context.Background()
 	log := daemonClientLog(bg)
 	if runtime.GOOS == "darwin" {
+		plistPath, err := ensureDarwinLaunchAgent()
+		if err != nil {
+			log.DebugContext(bg, "daemon.client.start_daemon.ensure_launch_agent_failed", "err", err)
+		}
 		uid := strconv.Itoa(os.Getuid())
 		target := "gui/" + uid + "/" + launchAgentLabel
-		if err := exec.Command("launchctl", "kickstart", target).Run(); err == nil {
+		if err := exec.Command("launchctl", "kickstart", "-k", target).Run(); err == nil {
 			log.DebugContext(bg, "daemon.client.start_daemon.kickstart_ok", "target", target)
-			return nil // launchd started it
+			return nil
+		}
+		if plistPath != "" {
+			if out, err := exec.Command("launchctl", "bootstrap", "gui/"+uid, plistPath).CombinedOutput(); err == nil {
+				log.DebugContext(bg, "daemon.client.start_daemon.bootstrap_ok", "target", target, "plist_path", plistPath)
+				if err := exec.Command("launchctl", "kickstart", "-k", target).Run(); err == nil {
+					log.DebugContext(bg, "daemon.client.start_daemon.kickstart_after_bootstrap_ok", "target", target)
+					return nil
+				}
+			} else {
+				log.DebugContext(bg, "daemon.client.start_daemon.bootstrap_failed",
+					"plist_path", plistPath,
+					"err", err,
+					"output", string(out))
+			}
 		}
 		log.DebugContext(bg, "daemon.client.start_daemon.kickstart_failed_try_direct", "target", target)
 		// launchctl failed (agent not registered)  --  fall through to direct spawn
@@ -735,4 +1054,133 @@ func spawnDaemonDirect() error {
 	log.DebugContext(bg, "daemon.client.spawn_direct.started", "pid", daemonCmd.Process.Pid)
 	go func() { _ = daemonCmd.Wait() }()
 	return nil
+}
+
+func ensureDarwinLaunchAgent() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	plistPath := filepath.Join(home, "Library", "LaunchAgents", launchAgentLabel+".plist")
+	stateDir := filepath.Join(home, ".local", "state", "clyde")
+	args, err := darwinLaunchAgentProgramArguments()
+	if err != nil {
+		return "", err
+	}
+	content := renderDarwinLaunchAgentPlist(args)
+	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		return "", err
+	}
+	current, _ := os.ReadFile(plistPath)
+	if string(current) == content {
+		return plistPath, nil
+	}
+	if err := os.WriteFile(plistPath, []byte(content), 0o644); err != nil {
+		return "", err
+	}
+	return plistPath, nil
+}
+
+func darwinLaunchAgentProgramArguments() ([]string, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	runScriptCandidates := []string{
+		filepath.Join(filepath.Dir(self), "run.sh"),
+		filepath.Join(filepath.Dir(filepath.Dir(self)), "run.sh"),
+	}
+	for _, candidate := range runScriptCandidates {
+		info, err := os.Stat(candidate)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		return []string{candidate, "daemon"}, nil
+	}
+	return []string{self, "daemon"}, nil
+}
+
+func renderDarwinLaunchAgentPlist(args []string) string {
+	home, _ := os.UserHomeDir()
+	stateDir := filepath.Join(home, ".local", "state", "clyde")
+	logPath := filepath.Join(stateDir, "daemon.log")
+	pathEnv := os.Getenv("PATH")
+	if pathEnv == "" {
+		pathEnv = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+	}
+	argv := ""
+	for _, arg := range args {
+		argv += "    <string>" + xmlEscape(arg) + "</string>\n"
+	}
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>%s</string>
+  <key>ProgramArguments</key>
+  <array>
+%s  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>%s</string>
+    <key>PATH</key>
+    <string>%s</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>StandardOutPath</key>
+  <string>%s</string>
+  <key>StandardErrorPath</key>
+  <string>%s</string>
+</dict>
+</plist>
+`, xmlEscape(launchAgentLabel), argv, xmlEscape(home), xmlEscape(pathEnv), xmlEscape(logPath), xmlEscape(logPath))
+}
+
+func xmlEscape(s string) string {
+	replacer := []struct {
+		old string
+		new string
+	}{
+		{"&", "&amp;"},
+		{"<", "&lt;"},
+		{">", "&gt;"},
+		{`"`, "&quot;"},
+		{"'", "&apos;"},
+	}
+	for _, item := range replacer {
+		s = replaceAll(s, item.old, item.new)
+	}
+	return s
+}
+
+func replaceAll(s, old, new string) string {
+	if old == "" || s == "" {
+		return s
+	}
+	for {
+		idx := indexOf(s, old)
+		if idx < 0 {
+			return s
+		}
+		s = s[:idx] + new + s[idx+len(old):]
+	}
+}
+
+func indexOf(s, sub string) int {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
 }

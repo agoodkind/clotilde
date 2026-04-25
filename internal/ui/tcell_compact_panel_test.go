@@ -18,8 +18,16 @@ func TestCompactPanelSliderAdjustsTarget(t *testing.T) {
 	if !handled {
 		t.Fatalf("expected slider key to be handled")
 	}
-	if panel.targetTokens >= 200000 {
-		t.Fatalf("expected right arrow to shrink target, got %d", panel.targetTokens)
+	if panel.targetTokens <= 200000 {
+		t.Fatalf("expected right arrow to grow target, got %d", panel.targetTokens)
+	}
+
+	handled = panel.HandleEvent(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone))
+	if !handled {
+		t.Fatalf("expected slider key to be handled")
+	}
+	if panel.targetTokens >= 210000 {
+		t.Fatalf("expected left arrow to shrink target, got %d", panel.targetTokens)
 	}
 }
 
@@ -185,6 +193,18 @@ func TestPercentLabelUsesCommaGrouping(t *testing.T) {
 	label := panel.percentLabel()
 	if label != "20% (200,000/1,000,000)" {
 		t.Fatalf("unexpected percent label: %q", label)
+	}
+}
+
+func TestCompactPanelSliderFillRepresentsCompactedShare(t *testing.T) {
+	panel := NewCompactPanel("demo")
+	panel.maxTokens = 1000000
+	panel.targetTokens = 200000
+
+	got := panel.renderSlider(20)
+	want := "|================----|"
+	if got != want {
+		t.Fatalf("slider = %q want %q", got, want)
 	}
 }
 

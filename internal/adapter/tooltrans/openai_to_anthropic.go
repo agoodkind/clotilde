@@ -223,6 +223,14 @@ func stripNotice(text string, msgIdx, partIdx int) string {
 	return stripped
 }
 
+// StripNoticeSentinel removes the clyde notice envelope.
+func StripNoticeSentinel(text string) string {
+	if text == "" {
+		return ""
+	}
+	return noticeSentinelRE.ReplaceAllString(text, "")
+}
+
 // flattenToolResultContent normalizes a tool_result content payload to a
 // single string. Cursor sends either a raw string or an array of OpenAI
 // content parts (text-only); both shapes survive the trip.
@@ -468,4 +476,9 @@ func stripThinkingBlockquote(text string) string {
 		return text
 	}
 	return thinkingBlockquoteRE.ReplaceAllString(text, "")
+}
+
+// StripThinkingSentinel removes the clyde thinking envelope.
+func StripThinkingSentinel(text string) string {
+	return stripThinkingBlockquote(text)
 }

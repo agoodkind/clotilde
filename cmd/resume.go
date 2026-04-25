@@ -53,7 +53,7 @@ func NewResumeCmd() *cobra.Command {
 				"session", sess.Name,
 				"session_id", sess.Metadata.SessionID,
 			)
-			return resumeSession(sess, store)
+			return resumeSession(sess, store, false)
 		},
 	}
 }

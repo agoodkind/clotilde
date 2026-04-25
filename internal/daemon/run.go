@@ -6,7 +6,13 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
+	"reflect"
+	"sync"
+	"syscall"
+	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"google.golang.org/grpc"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
@@ -24,6 +30,28 @@ import (
 // package itself.
 type ExtraLoop func(log *slog.Logger) func()
 
+const adapterConfigReloadDebounce = 250 * time.Millisecond
+const adapterShutdownWait = 4 * time.Second
+
+type adapterLaunchConfig struct {
+	Enabled bool
+	Adapter config.AdapterConfig
+	Logging config.LoggingConfig
+}
+
+type adapterProcess struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+type adapterController struct {
+	log     *slog.Logger
+	deps    adapter.Deps
+	mu      sync.Mutex
+	current adapterLaunchConfig
+	proc    *adapterProcess
+}
+
 // Run starts the daemon gRPC server on the XDG runtime Unix socket
 // and, when the user enables it, the OpenAI compatible HTTP adapter
 // on a local port. A single launchd entry boots both layers so the
@@ -33,6 +61,23 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
 	if err := config.EnsureRuntimeDir(); err != nil {
 		return err
 	}
+
+	lockPath := filepath.Join(config.RuntimeDir(), "daemon.process.lock")
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("open daemon process lock: %w", err)
+	}
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = lockFile.Close()
+		log.Info("daemon.already_running",
+			"component", "daemon",
+			"lock_path", lockPath)
+		return nil
+	}
+	defer func() {
+		_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+		_ = lockFile.Close()
+	}()
 
 	socketPath := config.DaemonSocketPath()
 
@@ -55,7 +100,7 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
 	grpcServer := grpc.NewServer()
 	clydev1.RegisterClydeServiceServer(grpcServer, srv)
 
-	adapterCancel, err := startAdapter(log)
+	adapterCancel, err := startAdapter(log, srv)
 	if err != nil {
 		return fmt.Errorf("adapter startup: %w", err)
 	}
@@ -137,7 +182,7 @@ func startWebApp(log *slog.Logger, srv *Server) func() {
 // or required client_identity fields). The daemon then exits non-zero so
 // launchd reports the failure instead of silently running without
 // the OpenAI surface the user asked for.
-func startAdapter(log *slog.Logger) (func(), error) {
+func startAdapter(log *slog.Logger, srv *Server) (func(), error) {
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
 		log.Warn("adapter.config_load_failed",
@@ -149,20 +194,243 @@ func startAdapter(log *slog.Logger) (func(), error) {
 	if !cfg.Adapter.Enabled {
 		return nil, nil
 	}
-	deps := adapter.Deps{
-		ResolveClaude: findRealClaude,
-		ScratchDir:    adapterScratchDir,
+
+	ctrl := &adapterController{
+		log: log,
+		deps: adapter.Deps{
+			ResolveClaude: findRealClaude,
+			ScratchDir:    adapterScratchDir,
+			RequestEvents: srv.providerStats.Record,
+		},
 	}
-	srv, err := adapter.New(cfg.Adapter, cfg.Logging, deps, log)
+	if err := ctrl.apply(launchConfigFromGlobal(cfg), true); err != nil {
+		return nil, err
+	}
+
+	stopWatch, err := watchAdapterConfig(log, ctrl)
 	if err != nil {
-		log.Error("adapter.registry.invalid_config",
+		log.Warn("adapter.config_watch_failed",
 			"component", "adapter",
 			slog.Any("err", err),
 		)
-		return nil, fmt.Errorf("adapter registry: %w", err)
 	}
+	return func() {
+		if stopWatch != nil {
+			stopWatch()
+		}
+		ctrl.stop()
+	}, nil
+}
+
+func launchConfigFromGlobal(cfg *config.Config) adapterLaunchConfig {
+	if cfg == nil {
+		return adapterLaunchConfig{}
+	}
+	return adapterLaunchConfig{
+		Enabled: cfg.Adapter.Enabled,
+		Adapter: cfg.Adapter,
+		Logging: cfg.Logging,
+	}
+}
+
+func watchAdapterConfig(log *slog.Logger, ctrl *adapterController) (func(), error) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, err
+	}
+
+	configDir := filepath.Dir(config.GlobalConfigPath())
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		_ = watcher.Close()
+		return nil, fmt.Errorf("create config dir: %w", err)
+	}
+	if err := watcher.Add(configDir); err != nil {
+		_ = watcher.Close()
+		return nil, fmt.Errorf("watch config dir: %w", err)
+	}
+	tomlPath := filepath.Clean(filepath.Join(configDir, "config.toml"))
+	jsonPath := filepath.Clean(filepath.Join(configDir, "config.json"))
+	log.Info("adapter.config_watch.started",
+		"component", "adapter",
+		"dir", configDir,
+		"toml_path", tomlPath,
+		"json_path", jsonPath,
+	)
+
 	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
+		var timer *time.Timer
+		var timerCh <-chan time.Time
+		trigger := func() {
+			cfg, err := config.LoadGlobalOrDefault()
+			if err != nil {
+				log.Warn("adapter.config_reload_failed",
+					"component", "adapter",
+					slog.Any("err", err),
+				)
+				return
+			}
+			if err := ctrl.apply(launchConfigFromGlobal(cfg), false); err != nil {
+				log.Warn("adapter.config_reload_apply_failed",
+					"component", "adapter",
+					slog.Any("err", err),
+				)
+			}
+		}
+
+		for {
+			select {
+			case <-ctx.Done():
+				if timer != nil {
+					timer.Stop()
+				}
+				return
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				if !isAdapterConfigEvent(event, tomlPath, jsonPath) {
+					continue
+				}
+				log.Debug("adapter.config_watch.event",
+					"component", "adapter",
+					"name", event.Name,
+					"op", event.Op.String(),
+				)
+				if timer == nil {
+					timer = time.NewTimer(adapterConfigReloadDebounce)
+					timerCh = timer.C
+					continue
+				}
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(adapterConfigReloadDebounce)
+			case <-timerCh:
+				timerCh = nil
+				timer = nil
+				trigger()
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				log.Warn("adapter.config_watch.error",
+					"component", "adapter",
+					slog.Any("err", err),
+				)
+			}
+		}
+	}()
+
+	return func() {
+		cancel()
+		_ = watcher.Close()
+		<-done
+	}, nil
+}
+
+func isAdapterConfigEvent(event fsnotify.Event, tomlPath, jsonPath string) bool {
+	name := filepath.Clean(event.Name)
+	if name != tomlPath && name != jsonPath {
+		return false
+	}
+	return event.Has(fsnotify.Write) ||
+		event.Has(fsnotify.Create) ||
+		event.Has(fsnotify.Remove) ||
+		event.Has(fsnotify.Rename) ||
+		event.Has(fsnotify.Chmod)
+}
+
+func (c *adapterController) apply(next adapterLaunchConfig, startup bool) error {
+	c.mu.Lock()
+	prev := c.current
+	if !startup && reflect.DeepEqual(prev, next) {
+		c.mu.Unlock()
+		c.log.Debug("adapter.config_reload.noop",
+			"component", "adapter",
+		)
+		return nil
+	}
+	old := c.proc
+	c.mu.Unlock()
+
+	var srv *adapter.Server
+	var err error
+	if next.Enabled {
+		srv, err = adapter.New(next.Adapter, next.Logging, c.deps, c.log)
+		if err != nil {
+			c.log.Error("adapter.registry.invalid_config",
+				"component", "adapter",
+				slog.Any("err", err),
+			)
+			if startup {
+				return fmt.Errorf("adapter registry: %w", err)
+			}
+			return nil
+		}
+	}
+
+	if old != nil {
+		stopAdapterProcess(old, adapterShutdownWait)
+	}
+
+	if !next.Enabled {
+		c.mu.Lock()
+		c.proc = nil
+		c.current = next
+		c.mu.Unlock()
+		c.log.Info("adapter.config_reload.disabled",
+			"component", "adapter",
+		)
+		return nil
+	}
+
+	proc := startAdapterProcess(c.log, srv)
+	c.mu.Lock()
+	c.proc = proc
+	c.current = next
+	c.mu.Unlock()
+	c.log.Info("adapter.config_reload.applied",
+		"component", "adapter",
+		"enabled", next.Enabled,
+		"host", next.Adapter.Host,
+		"port", next.Adapter.Port,
+		"default_model", next.Adapter.DefaultModel,
+	)
+	return nil
+}
+
+func (c *adapterController) stop() {
+	c.mu.Lock()
+	proc := c.proc
+	c.proc = nil
+	c.mu.Unlock()
+	if proc != nil {
+		stopAdapterProcess(proc, adapterShutdownWait)
+	}
+}
+
+func stopAdapterProcess(proc *adapterProcess, timeout time.Duration) {
+	if proc == nil {
+		return
+	}
+	proc.cancel()
+	select {
+	case <-proc.done:
+	case <-time.After(timeout):
+	}
+}
+
+func startAdapterProcess(log *slog.Logger, srv *adapter.Server) *adapterProcess {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
 		if err := srv.Start(ctx); err != nil {
 			log.Error("adapter.exited",
 				"component", "adapter",
@@ -170,5 +438,8 @@ func startAdapter(log *slog.Logger) (func(), error) {
 			)
 		}
 	}()
-	return cancel, nil
+	return &adapterProcess{
+		cancel: cancel,
+		done:   done,
+	}
 }

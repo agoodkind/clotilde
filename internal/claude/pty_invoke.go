@@ -116,12 +116,20 @@ func invokeInteractivePTY(args []string, env map[string]string, workDir, session
 	// Daemon settings sync runs alongside the pty path too so global
 	// settings changes propagate to this session like any other.
 	monitorDone := make(chan struct{})
-	go monitorDaemon(ctx, wrapperID, sessionName, monitorDone)
+	monitorStopped := make(chan struct{})
+	monitor := &monitorState{}
+	go monitorDaemon(ctx, wrapperID, sessionName, monitorDone, monitor, monitorStopped)
 
 	runErr := cmd.Wait()
 	close(monitorDone)
+	<-monitorStopped
 	finish()
 	<-done
+	if shouldSelfReloadWrapper(env, runErr, monitor) {
+		if reloadErr := selfReloadCurrentProcess(); reloadErr != nil {
+			return fmt.Errorf("self reload: %w", reloadErr)
+		}
+	}
 	return runErr
 }
 

@@ -180,12 +180,47 @@ func (fs *FileStore) List() ([]*Session, error) {
 		sessions = append(sessions, session)
 	}
 
+	sessions = dedupeSessionsByIdentity(sessions)
+
 	// Sort by lastAccessed (most recent first)
-	sort.Slice(sessions, func(i, j int) bool {
+	sort.SliceStable(sessions, func(i, j int) bool {
+		if sessions[i].Metadata.LastAccessed.Equal(sessions[j].Metadata.LastAccessed) {
+			return sessions[i].Name < sessions[j].Name
+		}
 		return sessions[i].Metadata.LastAccessed.After(sessions[j].Metadata.LastAccessed)
 	})
 
 	return sessions, nil
+}
+
+func dedupeSessionsByIdentity(sessions []*Session) []*Session {
+	if len(sessions) <= 1 {
+		return sessions
+	}
+	bestByKey := make(map[string]*Session, len(sessions))
+	for _, sess := range sessions {
+		if sess == nil {
+			continue
+		}
+		key := IdentityKey(sess)
+		existing := bestByKey[key]
+		if existing == nil || PreferIdentityWinner(sess, existing) {
+			bestByKey[key] = sess
+		}
+	}
+	out := make([]*Session, 0, len(bestByKey))
+	for _, sess := range bestByKey {
+		out = append(out, sess)
+	}
+	if len(out) != len(sessions) {
+		slog.Info("session.list.deduped",
+			"component", "session",
+			"subcomponent", "store",
+			"sessions_before", len(sessions),
+			"sessions_after", len(out),
+		)
+	}
+	return out
 }
 
 // ListForWorkspace returns sessions whose WorkspaceRoot matches the given path,
@@ -406,13 +441,16 @@ func (fs *FileStore) adoptFromDiscovery(query string) (*Session, error) {
 			continue
 		}
 		if queryIsUUID && r.SessionID == query {
-			match = r
-			break
+			if match == nil || shouldPreferDiscoveryResult(*r, *match) {
+				match = r
+			}
+			continue
 		}
 		if !queryIsUUID {
 			if sanitized := Sanitize(r.CustomTitle); sanitized != "" && sanitized == query {
-				match = r
-				break
+				if match == nil || shouldPreferDiscoveryResult(*r, *match) {
+					match = r
+				}
 			}
 		}
 	}
@@ -607,6 +645,28 @@ func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult
 		return existing, nil
 	}
 	return renamed, nil
+}
+
+func shouldPreferDiscoveryResult(candidate DiscoveryResult, current DiscoveryResult) bool {
+	if candidate.CustomTitle != "" && current.CustomTitle == "" {
+		return true
+	}
+	if current.CustomTitle != "" && candidate.CustomTitle == "" {
+		return false
+	}
+	if !candidate.FirstEntryTime.Equal(current.FirstEntryTime) {
+		return candidate.FirstEntryTime.After(current.FirstEntryTime)
+	}
+	if candidate.WorkspaceRoot != "" && current.WorkspaceRoot == "" {
+		return true
+	}
+	if current.WorkspaceRoot != "" && candidate.WorkspaceRoot == "" {
+		return false
+	}
+	if candidate.TranscriptPath != current.TranscriptPath {
+		return candidate.TranscriptPath < current.TranscriptPath
+	}
+	return candidate.SessionID < current.SessionID
 }
 
 // Rename renames a session: moves the directory, updates metadata Name field,

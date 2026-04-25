@@ -27,18 +27,28 @@ import (
 const (
 	envOverride       = "CLYDE_SLOG_PATH"
 	defaultBaseSubdir = "clyde"
-	defaultFile       = "clyde.jsonl"
+	defaultTUIFile    = "clyde-tui.jsonl"
+	defaultDaemonFile = "clyde-daemon.jsonl"
+)
+
+// ProcessRole identifies which process family is initializing slog.
+type ProcessRole string
+
+const (
+	ProcessRoleTUI    ProcessRole = "tui"
+	ProcessRoleDaemon ProcessRole = "daemon"
 )
 
 // Setup initializes the global slog logger via gklog. It writes
-// JSONL to $XDG_STATE_HOME/clyde/clyde.jsonl (rotated) AND to
-// stdout is currently disabled so command output remains machine-friendly
+// JSONL to a process-specific path under $XDG_STATE_HOME/clyde
+// (or [logging.paths] when configured). Stdout logging is disabled
+// so command output remains machine-friendly
 // for CLI callers. Call once at process start before emitting any events;
 // otherwise slog.Default falls back to a stderr text handler.
 //
 // Returns an io.Closer that the caller must Close on shutdown so the
 // rotating file handles flush. closer.Close() is safe to call once.
-func Setup(cfg config.LoggingConfig) (io.Closer, error) {
+func Setup(cfg config.LoggingConfig, role ProcessRole) (io.Closer, error) {
 	level := strings.ToLower(strings.TrimSpace(cfg.Level))
 	switch level {
 	case "debug", "info", "warn", "error":
@@ -48,7 +58,7 @@ func Setup(cfg config.LoggingConfig) (io.Closer, error) {
 		return nopCloser{}, fmt.Errorf("slogger: logging.level required, must be one of debug|info|warn|error, got %q", level)
 	}
 
-	path := defaultPath()
+	path := defaultPath(cfg, role)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nopCloser{}, fmt.Errorf("slogger: mkdir %s: %w", filepath.Dir(path), err)
 	}
@@ -68,8 +78,8 @@ func Setup(cfg config.LoggingConfig) (io.Closer, error) {
 	// stdout is reserved for command output (so CLI subcommands like
 	// `clyde compact clone-for-test --print-name` produce machine-
 	// parseable single-line output). slog goes to the rotated JSONL
-	// file at $XDG_STATE_HOME/clyde/clyde.jsonl; tail that file
-	// for live diagnostics.
+	// file at the resolved process path; tail that file for
+	// live diagnostics.
 	compress := cfg.Rotation.Compress
 	if compress == nil {
 		compress = boolPtr(true)
@@ -109,22 +119,35 @@ func parseJSONMinLevel(level string) slog.Level {
 	}
 }
 
-// defaultPath resolves the unified JSONL path. Honors the env override
-// for tests; otherwise lands at $XDG_STATE_HOME/clyde/clyde.jsonl
-// to mirror the daemon's existing log location.
-func defaultPath() string {
+// defaultPath resolves the process-aware JSONL path. Honors the env
+// override for tests. Operators may set [logging.paths] to override
+// the per-role defaults.
+func defaultPath(cfg config.LoggingConfig, role ProcessRole) string {
 	if p := os.Getenv(envOverride); p != "" {
 		return p
+	}
+	if role == ProcessRoleDaemon && cfg.Paths.Daemon != "" {
+		return cfg.Paths.Daemon
+	}
+	if role == ProcessRoleTUI && cfg.Paths.TUI != "" {
+		return cfg.Paths.TUI
 	}
 	state := os.Getenv("XDG_STATE_HOME")
 	if state == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return filepath.Join(os.TempDir(), defaultBaseSubdir, defaultFile)
+			return filepath.Join(os.TempDir(), defaultBaseSubdir, fileForRole(role))
 		}
 		state = filepath.Join(home, ".local", "state")
 	}
-	return filepath.Join(state, defaultBaseSubdir, defaultFile)
+	return filepath.Join(state, defaultBaseSubdir, fileForRole(role))
+}
+
+func fileForRole(role ProcessRole) string {
+	if role == ProcessRoleDaemon {
+		return defaultDaemonFile
+	}
+	return defaultTUIFile
 }
 
 type nopCloser struct{}

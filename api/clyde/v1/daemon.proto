@@ -7,10 +7,15 @@ service ClydeService {
   rpc ReleaseSession(ReleaseSessionRequest) returns (ReleaseSessionResponse);
   rpc HookEvent(HookEventRequest) returns (HookEventResponse);
   rpc ListActiveSessions(ListActiveSessionsRequest) returns (ListActiveSessionsResponse);
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc GetSessionDetail(GetSessionDetailRequest) returns (GetSessionDetailResponse);
   rpc TriggerScan(TriggerScanRequest) returns (TriggerScanResponse);
   rpc SubscribeRegistry(SubscribeRegistryRequest) returns (stream SubscribeRegistryResponse);
+  rpc GetProviderStats(GetProviderStatsRequest) returns (GetProviderStatsResponse);
+  rpc SubscribeProviderStats(SubscribeProviderStatsRequest) returns (stream ProviderStatsEvent);
   rpc RenameSession(RenameSessionRequest) returns (RenameSessionResponse);
   rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);
+  rpc UpdateSessionMetadata(UpdateSessionMetadataRequest) returns (UpdateSessionMetadataResponse);
   rpc UpdateSessionSettings(UpdateSessionSettingsRequest) returns (UpdateSessionSettingsResponse);
   rpc UpdateGlobalSettings(UpdateGlobalSettingsRequest) returns (UpdateGlobalSettingsResponse);
   rpc ListBridges(ListBridgesRequest) returns (ListBridgesResponse);
@@ -19,6 +24,7 @@ service ClydeService {
   rpc CompactPreview(CompactRunRequest) returns (stream CompactEvent);
   rpc CompactApply(CompactRunRequest) returns (stream CompactEvent);
   rpc CompactUndo(CompactUndoRequest) returns (CompactUndoResponse);
+  rpc ProbeContextUsage(ProbeContextUsageRequest) returns (ProbeContextUsageResponse);
 }
 
 message AcquireSessionRequest {
@@ -60,6 +66,74 @@ message ActiveSession {
   string wrapper_id = 2;
 }
 
+message ListSessionsRequest {}
+
+message SessionSummary {
+  string name = 1;
+  string metadata_name = 2;
+  string session_id = 3;
+  string transcript_path = 4;
+  string work_dir = 5;
+  int64 created_nanos = 6;
+  int64 last_accessed_nanos = 7;
+  string parent_session = 8;
+  bool is_forked_session = 9;
+  bool is_incognito = 10;
+  repeated string previous_session_ids = 11;
+  string context = 12;
+  bool has_custom_output_style = 13;
+  string workspace_root = 14;
+  int32 context_message_count = 15;
+  string display_title = 16;
+  string model = 17;
+  bool remote_control = 18;
+  int32 message_count = 19;
+  int64 transcript_size_bytes = 20;
+  int64 last_activity_nanos = 21;
+  Bridge bridge = 22;
+  int32 context_total_tokens = 23;
+  int32 context_max_tokens = 24;
+  int32 context_percentage = 25;
+  int32 context_messages_tokens = 26;
+  bool context_usage_loaded = 27;
+  string context_usage_status = 28;
+}
+
+message ListSessionsResponse {
+  repeated SessionSummary sessions = 1;
+  bool global_remote_control = 2;
+}
+
+message DetailMessage {
+  string role = 1;
+  string text = 2;
+  int64 timestamp_nanos = 3;
+}
+
+message ToolUse {
+  string name = 1;
+  int32 count = 2;
+}
+
+message GetSessionDetailRequest {
+  string session_name = 1;
+}
+
+message GetSessionDetailResponse {
+  string session_name = 1;
+  string model = 2;
+  repeated DetailMessage recent_messages = 3;
+  repeated DetailMessage all_messages = 4;
+  repeated ToolUse tools = 5;
+  int32 total_messages = 6;
+  int32 visible_tokens_estimate = 7;
+  int32 last_message_tokens = 8;
+  int32 compaction_count = 9;
+  int32 last_pre_compact_tokens = 10;
+  int64 transcript_size_bytes = 11;
+  int64 last_activity_nanos = 12;
+}
+
 message TriggerScanRequest {}
 
 message TriggerScanResponse {
@@ -78,6 +152,7 @@ message SubscribeRegistryResponse {
     KIND_SESSION_RENAMED = 4;
     KIND_BRIDGE_OPENED = 5;
     KIND_BRIDGE_CLOSED = 6;
+    KIND_GLOBAL_SETTINGS_UPDATED = 7;
   }
   Kind kind = 1;
   string session_name = 2;
@@ -85,6 +160,37 @@ message SubscribeRegistryResponse {
   string old_name = 4;
   string bridge_session_id = 5;
   string bridge_url = 6;
+  SessionSummary session_summary = 7;
+  bool global_remote_control = 8;
+}
+
+message GetProviderStatsRequest {}
+
+message SubscribeProviderStatsRequest {}
+
+message ProviderStats {
+  string provider = 1;
+  int32 requests = 2;
+  int32 inflight = 3;
+  int32 streaming = 4;
+  int64 input_tokens = 5;
+  int64 output_tokens = 6;
+  int64 cache_read_tokens = 7;
+  int64 cache_creation_tokens = 8;
+  double hit_ratio = 9;
+  int64 estimated_cost_microcents = 10;
+  int64 last_seen_unix = 11;
+  string error = 12;
+}
+
+message GetProviderStatsResponse {
+  repeated ProviderStats providers = 1;
+  int64 loaded_at_unix = 2;
+}
+
+message ProviderStatsEvent {
+  ProviderStats stats = 1;
+  int64 emitted_at_unix = 2;
 }
 
 message RenameSessionRequest {
@@ -99,6 +205,13 @@ message DeleteSessionRequest {
 }
 
 message DeleteSessionResponse {}
+
+message UpdateSessionMetadataRequest {
+  string name = 1;
+  string workspace_root = 2;
+}
+
+message UpdateSessionMetadataResponse {}
 
 message Settings {
   string model = 1;
@@ -165,6 +278,27 @@ message SendToSessionRequest {
 message SendToSessionResponse {
   int32 bytes_written = 1;
   bool delivered = 2;
+}
+
+message ProbeContextUsageRequest {
+  string session_name = 1;
+}
+
+message ContextUsageCategory {
+  string name = 1;
+  int32 tokens = 2;
+  string color = 3;
+  bool is_deferred = 4;
+}
+
+message ProbeContextUsageResponse {
+  string session_name = 1;
+  string session_id = 2;
+  string model = 3;
+  int32 total_tokens = 4;
+  int32 max_tokens = 5;
+  int32 percentage = 6;
+  repeated ContextUsageCategory categories = 7;
 }
 
 message CompactStrippers {

@@ -1,6 +1,11 @@
 package ui
 
 import (
+	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,9 +18,9 @@ func TestUX_OpenReturnPromptDoesNotBlockOnDetailExtraction(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 2)
 	defer cleanup()
 	block := make(chan struct{})
-	a.cb.ExtractDetail = func(*session.Session) SessionDetail {
+	a.cb.GetSessionDetail = func(*session.Session) (SessionDetail, error) {
 		<-block
-		return SessionDetail{Model: "opus"}
+		return SessionDetail{Model: "opus"}, nil
 	}
 
 	start := time.Now()
@@ -30,8 +35,316 @@ func TestUX_OpenReturnPromptDoesNotBlockOnDetailExtraction(t *testing.T) {
 	if !ok || modal.Context != OptionsModalContextReturn {
 		t.Fatalf("overlay = %T, want return-context *OptionsModal", a.overlay)
 	}
+	if len(modal.TopEntries) != 0 {
+		t.Fatalf("return modal should use the same single options list as session options, got %d top entries", len(modal.TopEntries))
+	}
+	if findModalAction(modal, "Quit clyde") == nil {
+		t.Fatalf("return modal missing Quit clyde action")
+	}
+	if findModalAction(modal, "Return back to chat") == nil {
+		t.Fatalf("return modal missing Return back to chat action")
+	}
 
 	close(block)
+}
+
+func TestUX_WriteSuspendTerminalPrepSequence(t *testing.T) {
+	var out bytes.Buffer
+	writeSuspendTerminalPrep(&out)
+	if got := out.String(); got != suspendTerminalPrepSequence {
+		t.Fatalf("terminal prep sequence mismatch: got %q want %q", got, suspendTerminalPrepSequence)
+	}
+}
+
+func TestUX_NewSessionRemoteControlChoiceIsForwarded(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 2)
+	defer cleanup()
+	a.suspendImpl = func(fn func()) { fn() }
+
+	var calls []bool
+	a.cb.StartSessionWithBasedirRC = func(basedir string, enableRC bool) error {
+		if basedir != "/tmp/work" {
+			t.Fatalf("basedir = %q, want /tmp/work", basedir)
+		}
+		calls = append(calls, enableRC)
+		return nil
+	}
+
+	a.openNewSessionRemoteControlModal("/tmp/work")
+	modal, ok := a.overlay.(*OptionsModal)
+	if !ok {
+		t.Fatalf("overlay = %T, want *OptionsModal", a.overlay)
+	}
+	withRC := findModalAction(modal, "Launch with --remote-control")
+	if withRC == nil {
+		t.Fatalf("missing Launch with --remote-control action")
+	}
+	withRC()
+
+	a.openNewSessionRemoteControlModal("/tmp/work")
+	modal, ok = a.overlay.(*OptionsModal)
+	if !ok {
+		t.Fatalf("overlay = %T, want *OptionsModal", a.overlay)
+	}
+	withoutRC := findModalAction(modal, "Launch without remote control")
+	if withoutRC == nil {
+		t.Fatalf("missing Launch without remote control action")
+	}
+	withoutRC()
+
+	if len(calls) != 2 {
+		t.Fatalf("StartSessionWithBasedirRC calls = %d, want 2", len(calls))
+	}
+	if !calls[0] {
+		t.Fatalf("first call enableRC = false, want true")
+	}
+	if calls[1] {
+		t.Fatalf("second call enableRC = true, want false")
+	}
+}
+
+func TestUX_SessionOptionsIncludeExportWhenCallbackConfigured(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 2)
+	defer cleanup()
+	a.cb.ExportSession = func(*session.Session, SessionExportFormat) ([]byte, error) {
+		return []byte("demo"), nil
+	}
+
+	a.openSessionOptionsFor(a.sessions[a.visibleIdx[0]])
+	modal, ok := a.overlay.(*OptionsModal)
+	if !ok {
+		t.Fatalf("overlay = %T, want *OptionsModal", a.overlay)
+	}
+	if findModalAction(modal, "Export transcript") == nil {
+		t.Fatalf("session options missing Export transcript action")
+	}
+}
+
+func TestUX_OpenExportSavePromptSeedsDownloadsPath(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 1)
+	defer cleanup()
+	a.cb.ExportSession = func(*session.Session, SessionExportFormat) ([]byte, error) {
+		return []byte("demo"), nil
+	}
+	home := t.TempDir()
+	oldHome := os.Getenv("HOME")
+	if err := os.Setenv("HOME", home); err != nil {
+		t.Fatalf("set HOME: %v", err)
+	}
+	defer func() { _ = os.Setenv("HOME", oldHome) }()
+
+	sess := a.sessions[a.visibleIdx[0]]
+	a.openExportSavePrompt(sess, SessionExportMarkdown)
+	overlay, ok := a.overlay.(*InputOverlay)
+	if !ok {
+		t.Fatalf("overlay = %T, want *InputOverlay", a.overlay)
+	}
+	want := filepath.Join(home, "Downloads", sess.Name+".md")
+	if overlay.Input.Text != want {
+		t.Fatalf("path = %q want %q", overlay.Input.Text, want)
+	}
+}
+
+func TestUX_RegistrySessionUpdateAppliesWithoutSnapshotReload(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 2)
+	defer cleanup()
+
+	listCalls := 0
+	a.cb.ListSessions = func() (SessionSnapshot, error) {
+		listCalls++
+		return SessionSnapshot{}, nil
+	}
+
+	updated := &session.Session{
+		Name: "test-session-00",
+		Metadata: session.Metadata{
+			Name:          "test-session-00",
+			SessionID:     "00000000-0000-0000-0000-000000000000",
+			WorkspaceRoot: "/Users/test/Sites/updated",
+			Context:       "fresh summary",
+			Created:       time.Now().Add(-time.Hour),
+			LastAccessed:  time.Now(),
+		},
+	}
+	a.applySessionEvent(SessionEvent{
+		Kind:          "SESSION_UPDATED",
+		SessionName:   updated.Name,
+		SessionID:     updated.Metadata.SessionID,
+		Session:       updated,
+		Model:         "sonnet",
+		RemoteControl: true,
+		MessageCount:  42,
+	})
+
+	if listCalls != 0 {
+		t.Fatalf("ListSessions calls = %d, want 0", listCalls)
+	}
+	got := a.findSessionByName(updated.Name)
+	if got == nil || got.Metadata.WorkspaceRoot != updated.Metadata.WorkspaceRoot {
+		t.Fatalf("updated session not applied, got %#v", got)
+	}
+	if a.modelCache[updated.Name] != "sonnet" {
+		t.Fatalf("model cache = %q, want sonnet", a.modelCache[updated.Name])
+	}
+	if !a.remoteControlCache[updated.Name] {
+		t.Fatalf("remote control cache not updated")
+	}
+	if a.messageCountCache[updated.Name] != 42 {
+		t.Fatalf("message count cache = %d, want 42", a.messageCountCache[updated.Name])
+	}
+}
+
+func TestUX_RegistrySessionUpdateCollapsesDuplicateSessionIDs(t *testing.T) {
+	a := NewApp([]*session.Session{
+		{Name: "clyde-dev-1a4837fd", Metadata: session.Metadata{Name: "clyde-dev-1a4837fd", SessionID: "shared"}},
+		{Name: "unified-session-resolution", Metadata: session.Metadata{Name: "unified-session-resolution", SessionID: "shared"}},
+	}, AppCallbacks{})
+
+	a.applySessionEvent(SessionEvent{
+		Kind: "SESSION_UPDATED",
+		Session: &session.Session{
+			Name: "unified-session-resolution",
+			Metadata: session.Metadata{
+				Name:      "unified-session-resolution",
+				SessionID: "shared",
+			},
+		},
+	})
+
+	if len(a.sessions) != 1 {
+		t.Fatalf("sessions=%d want 1", len(a.sessions))
+	}
+	if a.sessions[0].Name != "unified-session-resolution" {
+		t.Fatalf("name=%q want unified-session-resolution", a.sessions[0].Name)
+	}
+}
+
+func TestUX_RegistryRenamePreservesSelection(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 2)
+	defer cleanup()
+
+	a.table.SelectedRow = 0
+	a.table.Active = true
+	a.openDetails(a.sessions[a.visibleIdx[0]])
+
+	renamed := &session.Session{
+		Name: "renamed-session",
+		Metadata: session.Metadata{
+			Name:          "renamed-session",
+			SessionID:     "00000000-0000-0000-0000-000000000000",
+			WorkspaceRoot: "/Users/test/Sites/ws-0",
+			Created:       time.Now().Add(-time.Hour),
+			LastAccessed:  time.Now(),
+		},
+	}
+	a.applySessionEvent(SessionEvent{
+		Kind:          "SESSION_RENAMED",
+		OldName:       "test-session-00",
+		SessionName:   renamed.Name,
+		SessionID:     renamed.Metadata.SessionID,
+		Session:       renamed,
+		Model:         "opus",
+		RemoteControl: false,
+		MessageCount:  7,
+	})
+
+	if a.selected == nil || a.selected.Name != renamed.Name {
+		t.Fatalf("selected session = %#v, want %q", a.selected, renamed.Name)
+	}
+	if row := a.findVisibleRowByName(renamed.Name); row < 0 {
+		t.Fatalf("renamed session not visible")
+	}
+	if _, ok := a.modelCache["test-session-00"]; ok {
+		t.Fatalf("old model cache entry still present")
+	}
+}
+
+func TestUX_StartupLoadingStateHidesEmptyTableAndOfflineBadge(t *testing.T) {
+	a, scr, cleanup := mkAppWithSessions(t, 0)
+	defer cleanup()
+
+	a.startupLoading = true
+	a.sessionsLoading = true
+	a.daemonOnline = false
+	a.spinnerFrame = 1
+
+	a.draw()
+	got := screenText(scr)
+
+	if !strings.Contains(got, "Loading sessions") {
+		t.Fatalf("screen missing startup loading copy:\n%s", got)
+	}
+	if strings.Contains(got, "NAME") {
+		t.Fatalf("screen showed empty table header during startup:\n%s", got)
+	}
+	if strings.Contains(got, "DAEMON OFFLINE") {
+		t.Fatalf("screen showed daemon offline during startup:\n%s", got)
+	}
+	if !strings.Contains(got, "connecting") {
+		t.Fatalf("screen missing connecting badge:\n%s", got)
+	}
+	if strings.Contains(got, "0 sessions") {
+		t.Fatalf("screen showed session count before initial load finished:\n%s", got)
+	}
+}
+
+func TestUX_EmptySessionsStateHidesTableHeaders(t *testing.T) {
+	a, scr, cleanup := mkAppWithSessions(t, 0)
+	defer cleanup()
+
+	a.startupLoading = false
+	a.sessionsLoading = false
+
+	a.draw()
+	got := screenText(scr)
+
+	if !strings.Contains(got, "No sessions yet") {
+		t.Fatalf("screen missing empty state copy:\n%s", got)
+	}
+	if strings.Contains(got, "NAME") {
+		t.Fatalf("screen showed table header for empty state:\n%s", got)
+	}
+	if !strings.Contains(got, "0 sessions") {
+		t.Fatalf("screen missing session count after load completed:\n%s", got)
+	}
+}
+
+func TestUX_TableShowsVisibleMessageCounts(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 2)
+	defer cleanup()
+
+	a.messageCountCache["test-session-00"] = 1027
+	a.messageCountCache["test-session-01"] = 44
+	a.populateTable()
+
+	row0 := a.table.Rows[0]
+	row1 := a.table.Rows[1]
+	if got := row0[4].Text; got != "1,027" {
+		t.Fatalf("row0 msgs = %q, want %q", got, "1,027")
+	}
+	if got := row1[4].Text; got != "44" {
+		t.Fatalf("row1 msgs = %q, want %q", got, "44")
+	}
+}
+
+func screenText(scr tcell.SimulationScreen) string {
+	scr.Show()
+	cells, cw, ch := scr.GetContents()
+	var b strings.Builder
+	for y := 0; y < ch; y++ {
+		row := make([]rune, 0, cw)
+		for x := 0; x < cw; x++ {
+			c := cells[y*cw+x]
+			if len(c.Runes) == 0 || c.Runes[0] == 0 {
+				row = append(row, ' ')
+				continue
+			}
+			row = append(row, c.Runes[0])
+		}
+		b.WriteString(strings.TrimRight(string(row), " "))
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 // TestUX_FirstDownArmsFirstRow verifies first-launch keyboard behavior:
@@ -87,19 +400,59 @@ func TestUX_FirstEnterOpensOptions(t *testing.T) {
 	}
 }
 
-// TestUX_PostSessionPromptPicksTheListOption mirrors the user's
+func TestUX_ExecutableChangedDetectsReplacement(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "clyde")
+	if err := os.WriteFile(path, []byte("old"), 0o755); err != nil {
+		t.Fatalf("write old executable: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat old executable: %v", err)
+	}
+	base := executableSnapshot{path: path, info: info}
+
+	changed, _, err := executableChanged(base)
+	if err != nil {
+		t.Fatalf("check unchanged executable: %v", err)
+	}
+	if changed {
+		t.Fatalf("unchanged executable reported changed")
+	}
+
+	replacement := filepath.Join(dir, "clyde.new")
+	if err := os.WriteFile(replacement, []byte("new-binary"), 0o755); err != nil {
+		t.Fatalf("write replacement executable: %v", err)
+	}
+	if err := os.Rename(replacement, path); err != nil {
+		t.Fatalf("replace executable: %v", err)
+	}
+
+	changed, reason, err := executableChanged(base)
+	if err != nil {
+		t.Fatalf("check replaced executable: %v", err)
+	}
+	if !changed {
+		t.Fatalf("replaced executable was not detected")
+	}
+	if reason == "" {
+		t.Fatalf("expected replacement reason")
+	}
+}
+
+// TestUX_PostSessionPromptCanCancelToList mirrors the user's
 // concrete flow: resume a session, claude exits, the post-session
-// prompt shows, user picks "Go back to session list", expects the
+// prompt shows, user cancels back to the session list, expects the
 // dashboard to be responsive and the prompt to be gone.
 //
 // The bug the user just hit this morning in post-session pane:
 // unclear, but the most likely regressions are:
 //   - Prompt doesn't appear after exit
-//   - Picking "list" leaves the overlay stuck
-//   - After list, keys don't route to the table
+//   - Cancel leaves the overlay stuck
+//   - After cancel, keys don't route to the table
 //
 // This test covers all three.
-func TestUX_PostSessionPromptPicksTheListOption(t *testing.T) {
+func TestUX_PostSessionPromptCanCancelToList(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 4)
 	defer cleanup()
 	a.suspendImpl = func(fn func()) { fn() }
@@ -122,14 +475,13 @@ func TestUX_PostSessionPromptPicksTheListOption(t *testing.T) {
 		t.Fatalf("overlay = %T, want return-context *OptionsModal (post-session pane missing)", a.overlay)
 	}
 
-	// User picks "Go back to session list".
-	listAction := findModalAction(modal, "Go to session list")
-	if listAction == nil {
-		t.Fatalf("return modal missing Go to session list action")
+	// User cancels back to the session list.
+	if modal.OnCancel == nil {
+		t.Fatalf("return modal missing cancel handler")
 	}
-	listAction()
+	modal.OnCancel()
 	if a.overlay != nil {
-		t.Errorf("after OnList, overlay = %T, want nil (prompt should dismiss)", a.overlay)
+		t.Errorf("after cancel, overlay = %T, want nil (prompt should dismiss)", a.overlay)
 	}
 
 	// Now the dashboard should be responsive again. Table should
@@ -162,18 +514,65 @@ func TestUX_ReturnPromptResumeAgainClosesLoop(t *testing.T) {
 		if !ok || modal.Context != OptionsModalContextReturn {
 			t.Fatalf("cycle %d: overlay = %T, want return-context *OptionsModal", i, a.overlay)
 		}
-		// Call List to reset the loop so the next resumeRow fires
+		// Cancel to reset the loop so the next resumeRow fires
 		// from a clean slate (OnResume would recurse through another
 		// resumeRow internally; testing that path is
 		// TestHappyPath_ResumeCycleMultipleTimes).
-		listAction := findModalAction(modal, "Go to session list")
-		if listAction == nil {
-			t.Fatalf("cycle %d: return modal missing list action", i)
+		if modal.OnCancel == nil {
+			t.Fatalf("cycle %d: return modal missing cancel handler", i)
 		}
-		listAction()
+		modal.OnCancel()
 		if a.overlay != nil {
-			t.Errorf("cycle %d: OnList did not clear overlay", i)
+			t.Errorf("cycle %d: cancel did not clear overlay", i)
 		}
+	}
+}
+
+func TestUX_DaemonRestartKeepsDashboardResponsive(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 4)
+	defer cleanup()
+
+	a.setDaemonOnline("test.startup")
+	if !a.isDaemonOnline() {
+		t.Fatalf("daemon should start online for test")
+	}
+	a.setDaemonOffline("stream_closed", fmt.Errorf("registry stream closed"))
+	if a.isDaemonOnline() {
+		t.Fatalf("daemon should report offline after stream close")
+	}
+	a.setDaemonOnline("subscribe_ok")
+	if !a.isDaemonOnline() {
+		t.Fatalf("daemon should report online after restart")
+	}
+
+	before := a.table.SelectedRow
+	a.table.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+	a.table.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+	if len(a.visibleIdx) > 1 && a.table.SelectedRow == before {
+		t.Fatalf("dashboard did not respond after daemon restart simulation")
+	}
+}
+
+func TestUX_FocusTransitionsKeepReturnPromptDuringResume(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 3)
+	defer cleanup()
+	a.cb.ResumeSession = func(*session.Session) error { return nil }
+	a.suspendImpl = func(fn func()) {
+		a.handleEvent(&tcell.EventFocus{Focused: false})
+		fn()
+		a.handleEvent(&tcell.EventFocus{Focused: true})
+	}
+
+	a.table.SelectedRow = 0
+	a.table.Active = true
+	a.resumeRow(0)
+
+	modal, ok := a.overlay.(*OptionsModal)
+	if !ok || modal.Context != OptionsModalContextReturn {
+		t.Fatalf("overlay = %T, want return-context *OptionsModal", a.overlay)
+	}
+	if !a.appFocused {
+		t.Fatalf("app should return to focused state after focus bounce")
 	}
 }
 

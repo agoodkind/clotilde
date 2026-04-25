@@ -50,6 +50,7 @@ type LoggingConfig struct {
 	Level    string          `json:"level,omitempty" toml:"level,omitempty"`
 	Rotation LoggingRotation `json:"rotation,omitempty" toml:"rotation,omitempty"`
 	Body     LoggingBody     `json:"body,omitempty" toml:"body,omitempty"`
+	Paths    LoggingPaths    `json:"paths,omitempty" toml:"paths,omitempty"`
 }
 
 // LoggingRotation controls file rotation behavior for the unified clyde logger.
@@ -65,6 +66,13 @@ type LoggingRotation struct {
 type LoggingBody struct {
 	Mode  string `json:"mode,omitempty" toml:"mode,omitempty"`
 	MaxKB int    `json:"max_kb,omitempty" toml:"max_kb,omitempty"`
+}
+
+// LoggingPaths controls per-process JSONL destinations. When a path is empty,
+// slogger picks a process-specific default under $XDG_STATE_HOME/clyde.
+type LoggingPaths struct {
+	TUI    string `json:"tui,omitempty" toml:"tui,omitempty"`
+	Daemon string `json:"daemon,omitempty" toml:"daemon,omitempty"`
 }
 
 // LabelerConfig drives the (currently stubbed) session topic labeler.
@@ -203,6 +211,33 @@ type AdapterConfig struct {
 	// NewRegistry validates every field and rejects partial
 	// configurations.
 	Fallback AdapterFallback `json:"fallback,omitempty" toml:"fallback,omitempty"`
+	// Codex configures routing for ChatGPT model names (gpt-*, o*)
+	// through the Codex backend-api surface. This keeps Cursor on the
+	// same adapter endpoint/port while letting model name choose
+	// backend.
+	Codex AdapterCodex `json:"codex,omitempty" toml:"codex,omitempty"`
+}
+
+// AdapterCodex configures the direct Codex backend path plus optional
+// app-server fallback used when direct HTTP fails.
+type AdapterCodex struct {
+	// Enabled toggles Codex model-name routing.
+	Enabled bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	// BaseURL is the direct backend endpoint.
+	// Defaults to https://chatgpt.com/backend-api/codex/responses.
+	BaseURL string `json:"baseUrl,omitempty" toml:"base_url,omitempty"`
+	// AuthFile points at Codex auth state. Defaults to ~/.codex/auth.json.
+	AuthFile string `json:"authFile,omitempty" toml:"auth_file,omitempty"`
+	// ModelPrefixes are alias prefixes routed to codex when no explicit
+	// model entry matches. Defaults to ["gpt-", "o"].
+	ModelPrefixes []string `json:"modelPrefixes,omitempty" toml:"model_prefixes,omitempty"`
+	// AppFallback enables app-server fallback when direct HTTP fails.
+	AppFallback bool `json:"appFallback,omitempty" toml:"app_fallback,omitempty"`
+	// AppServerPath is the codex binary path used for fallback.
+	// Empty defaults to "codex".
+	AppServerPath string `json:"appServerPath,omitempty" toml:"app_server_path,omitempty"`
+	// AppFallbackTimeout caps one fallback request wall time.
+	AppFallbackTimeout string `json:"appFallbackTimeout,omitempty" toml:"app_fallback_timeout,omitempty"`
 }
 
 // AdapterLogprobs picks the per-backend behavior. Each value is

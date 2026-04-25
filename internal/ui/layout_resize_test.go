@@ -1,9 +1,14 @@
 package ui
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
+
+	"goodkind.io/clyde/internal/session"
 )
 
 func TestLayoutKeepsRectsWithinScreen(t *testing.T) {
@@ -117,6 +122,110 @@ func TestOptionsModalHandlesTinyScreensWithOptionsOnly(t *testing.T) {
 	}
 	if activated != 1 {
 		t.Fatalf("expected one action activation on tiny modal, got %d", activated)
+	}
+}
+
+func TestLayoutResumeReturnPromptSurvivesResizeBurst(t *testing.T) {
+	a, scr, cleanup := mkAppWithSessions(t, 3)
+	defer cleanup()
+	a.suspendImpl = func(fn func()) { fn() }
+	a.cb.ResumeSession = func(*session.Session) error { return nil }
+
+	a.table.SelectedRow = 0
+	a.table.Active = true
+	a.resumeRow(0)
+
+	modal, ok := a.overlay.(*OptionsModal)
+	if !ok || modal.Context != OptionsModalContextReturn {
+		t.Fatalf("overlay = %T, want return-context *OptionsModal", a.overlay)
+	}
+
+	sizes := []struct {
+		width  int
+		height int
+	}{
+		{120, 30},
+		{92, 26},
+		{76, 22},
+		{104, 28},
+		{84, 24},
+	}
+	for _, size := range sizes {
+		scr.SetSize(size.width, size.height)
+		a.handleEvent(tcell.NewEventResize(size.width, size.height))
+	}
+
+	afterResize, ok := a.overlay.(*OptionsModal)
+	if !ok || afterResize.Context != OptionsModalContextReturn {
+		t.Fatalf("return prompt disappeared during resize burst: overlay=%T", a.overlay)
+	}
+	if afterResize.OnCancel == nil {
+		t.Fatalf("return prompt missing cancel handler")
+	}
+	afterResize.OnCancel()
+	if a.overlay != nil {
+		t.Fatalf("overlay should close after cancel")
+	}
+}
+
+func TestEventResizeSetsPendingDisplaySyncWithoutTableReshuffle(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 2)
+	defer cleanup()
+	before := len(a.table.Rows)
+	a.handleEvent(tcell.NewEventResize(120, 30))
+	if !a.pendingResizeDisplaySync {
+		t.Fatalf("expected pendingResizeDisplaySync after EventResize")
+	}
+	if len(a.table.Rows) != before {
+		t.Fatalf("EventResize must not repopulate the table, got row count %d want %d",
+			len(a.table.Rows), before)
+	}
+}
+
+func TestBridgesLoadedInterruptPopulatesBridgeMap(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 2)
+	defer cleanup()
+
+	a.handleEvent(tcell.NewEventInterrupt(bridgesLoaded{
+		list: []Bridge{{
+			SessionID:       a.sessions[0].Metadata.SessionID,
+			BridgeSessionID: "bridge-1",
+			URL:             "https://claude.ai/code/bridge-1",
+		}},
+	}))
+
+	got, ok := a.bridgeFor(a.sessions[0])
+	if !ok {
+		t.Fatalf("expected bridge to be loaded")
+	}
+	if got.BridgeSessionID != "bridge-1" {
+		t.Fatalf("bridge session id = %q, want bridge-1", got.BridgeSessionID)
+	}
+	if got.URL != "https://claude.ai/code/bridge-1" {
+		t.Fatalf("bridge url = %q", got.URL)
+	}
+}
+
+func TestLastUsedTickDoesNotDeadlockWhenUpdatingRows(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 2)
+	defer cleanup()
+
+	transcriptPath := filepath.Join(t.TempDir(), "session.jsonl")
+	if err := os.WriteFile(transcriptPath, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	a.sessions[0].Metadata.TranscriptPath = transcriptPath
+
+	done := make(chan struct{})
+	go func() {
+		a.handleEvent(tcell.NewEventInterrupt(lastUsedTick{}))
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("lastUsedTick handling deadlocked")
 	}
 }
 

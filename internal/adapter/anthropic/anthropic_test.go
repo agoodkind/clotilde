@@ -329,3 +329,128 @@ func TestStreamEvents_fixtureSSE(t *testing.T) {
 		}
 	}
 }
+
+func TestStreamEvents_fixtureSSEWithCacheUsage(t *testing.T) {
+	t.Parallel()
+	startPayload, err := json.Marshal(map[string]any{
+		"message": map[string]any{
+			"usage": map[string]any{
+				"input_tokens":                10,
+				"output_tokens":               0,
+				"cache_creation_input_tokens": 640,
+				"cache_read_input_tokens":     3200,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cbStart, err := json.Marshal(map[string]any{
+		"index": 0,
+		"content_block": map[string]any{
+			"type": "text",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cbDelta, err := json.Marshal(map[string]any{
+		"index": 0,
+		"delta": map[string]any{
+			"type": "text_delta",
+			"text": "ok",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cbStop, err := json.Marshal(map[string]any{"index": 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgDelta, err := json.Marshal(map[string]any{
+		"delta": map[string]any{"stop_reason": "end_turn"},
+		"usage": map[string]any{
+			"output_tokens":               8,
+			"cache_creation_input_tokens": 640,
+			"cache_read_input_tokens":     3200,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sse := strings.Join([]string{
+		"event: message_start",
+		"data: " + string(startPayload),
+		"",
+		"event: content_block_start",
+		"data: " + string(cbStart),
+		"",
+		"event: content_block_delta",
+		"data: " + string(cbDelta),
+		"",
+		"event: content_block_stop",
+		"data: " + string(cbStop),
+		"",
+		"event: message_delta",
+		"data: " + string(msgDelta),
+		"",
+		"event: message_stop",
+		"data: {}",
+		"",
+	}, "\n")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/messages" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(sse))
+	}))
+	t.Cleanup(srv.Close)
+
+	srvURL, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hc := &http.Client{Transport: &rewriteMessagesHost{serverURL: srvURL}}
+	cli := &Client{
+		http:  hc,
+		oauth: &staticToken{},
+		cfg: Config{
+			MessagesURL:             "https://REDACTED-UPSTREAM/v1/messages",
+			OAuthAnthropicVersion:   "2023-06-01",
+			BetaHeader:              "REDACTED-OAUTH-BETA",
+			UserAgent:               "anthropic-test/0",
+			SystemPromptPrefix:      "",
+			StainlessPackageVersion: "0",
+			StainlessRuntime:        "node",
+			StainlessRuntimeVersion: "v0",
+			CCVersion:               "1.0.0",
+			CCEntrypoint:            "test",
+		},
+	}
+
+	usage, stop, err := cli.StreamEvents(context.Background(), Request{
+		Model:     "claude-test",
+		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
+		MaxTokens: 10,
+	}, func(StreamEvent) error { return nil })
+	if err != nil {
+		t.Fatalf("StreamEvents: %v", err)
+	}
+	if stop != "end_turn" {
+		t.Fatalf("stop reason: got %q want end_turn", stop)
+	}
+	if usage.InputTokens != 10 || usage.OutputTokens != 8 {
+		t.Fatalf("usage: got %+v want input 10 output 8", usage)
+	}
+	if usage.CacheCreationInputTokens != 640 {
+		t.Fatalf("cache_creation_input_tokens = %d want 640", usage.CacheCreationInputTokens)
+	}
+	if usage.CacheReadInputTokens != 3200 {
+		t.Fatalf("cache_read_input_tokens = %d want 3200", usage.CacheReadInputTokens)
+	}
+}

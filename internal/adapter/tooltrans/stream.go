@@ -170,12 +170,9 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 			// remove the whole envelope on the return trip, keeping
 			// the Anthropic cached prefix byte-stable across turns.
 			text := ev.Delta.Thinking
-			var contentOut string
+			contentOut := FormatThinkingInlineDelta(!t.thinkingOpen, text)
 			if !t.thinkingOpen {
-				contentOut = "<!--clyde-thinking-->\n> **💭 Thinking**\n> \n> " + strings.ReplaceAll(text, "\n", "\n> ")
 				t.thinkingOpen = true
-			} else {
-				contentOut = strings.ReplaceAll(text, "\n", "\n> ")
 			}
 			delta := OpenAIStreamDelta{
 				Content: contentOut,
@@ -202,7 +199,7 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 			t.currentBlockType = ""
 			t.thinkingOpen = false
 			return []OpenAIStreamChunk{t.baseChunk(OpenAIStreamDelta{
-				Content: "\n<!--/clyde-thinking-->\n\n",
+				Content: ThinkingInlineClose(),
 			})}, false, "", nil, nil
 		}
 		t.currentBlockType = ""

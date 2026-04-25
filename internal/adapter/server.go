@@ -1,16 +1,22 @@
 package adapter
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,6 +38,7 @@ const DefaultHost = "127.0.0.1"
 // DefaultMaxConcurrent caps the number of in flight claude
 // subprocesses when the config omits a value.
 const DefaultMaxConcurrent = 4
+const defaultCodexBaseURL = "https://chatgpt.com/backend-api/codex/responses"
 
 type rawChatLogEvent struct {
 	RequestID     string
@@ -91,8 +98,10 @@ type Server struct {
 	// fb is the optional `claude -p` fallback driver. nil unless
 	// cfg.Fallback.Enabled. When set, fbSem caps its concurrency
 	// independently of sem.
-	fb    *fallback.Client
-	fbSem chan struct{}
+	fb         *fallback.Client
+	fbSem      chan struct{}
+	httpClient *http.Client
+	ctxUsage   *contextUsageTracker
 }
 
 // New constructs a Server from the given adapter config. The deps
@@ -132,6 +141,10 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 		registry: registry,
 		sem:      make(chan struct{}, max),
 		token:    token,
+		httpClient: &http.Client{
+			Timeout: 120 * time.Second,
+		},
+		ctxUsage: newContextUsageTracker(),
 	}
 	if cfg.DirectOAuth {
 		s.oauthMgr = oauth.NewManager(cfg.OAuth, "")
@@ -169,6 +182,96 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 	}
 	s.mux = s.routes()
 	return s, nil
+}
+
+func resolveCodexAuthFile(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		path = "~/.codex/auth.json"
+	}
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
+}
+
+func (s *Server) codexBaseURL() string {
+	u := strings.TrimSpace(s.cfg.Codex.BaseURL)
+	if u == "" {
+		return defaultCodexBaseURL
+	}
+	return u
+}
+
+func (s *Server) codexAppServerPath() string {
+	if v := strings.TrimSpace(s.cfg.Codex.AppServerPath); v != "" {
+		return v
+	}
+	return "codex"
+}
+
+func (s *Server) codexAppFallbackTimeout() time.Duration {
+	raw := strings.TrimSpace(s.cfg.Codex.AppFallbackTimeout)
+	if raw == "" {
+		return 45 * time.Second
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return 45 * time.Second
+	}
+	return d
+}
+
+type codexAuthFile struct {
+	AuthMode string `json:"auth_mode"`
+	Tokens   struct {
+		AccessToken string `json:"access_token"`
+	} `json:"tokens"`
+}
+
+func (s *Server) readCodexAccessToken() (string, error) {
+	p := resolveCodexAuthFile(s.cfg.Codex.AuthFile)
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return "", fmt.Errorf("read codex auth file: %w", err)
+	}
+	var doc codexAuthFile
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return "", fmt.Errorf("parse codex auth file: %w", err)
+	}
+	if strings.TrimSpace(doc.Tokens.AccessToken) == "" {
+		return "", errors.New("codex auth file missing tokens.access_token")
+	}
+	return doc.Tokens.AccessToken, nil
+}
+
+type codexRPCClient struct {
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout *bufio.Reader
+}
+
+func startCodexRPC(ctx context.Context, bin string) (*codexRPCClient, error) {
+	cmd := exec.CommandContext(ctx, bin, "app-server", "--listen", "stdio://")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	cmd.Stderr = io.Discard
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return &codexRPCClient{
+		cmd:    cmd,
+		stdin:  stdin,
+		stdout: bufio.NewReader(stdout),
+	}, nil
 }
 
 // buildFallbackConfig resolves runtime values from the user's

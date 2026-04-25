@@ -72,6 +72,26 @@ type toolResultBlock struct {
 }
 
 var systemTagRe = regexp.MustCompile(`<(?:system-reminder|local-command[^>]*|command-name|command-message|command-args|local-command-stdout|local-command-caveat)[^>]*>[\s\S]*?</(?:system-reminder|local-command[^>]*|command-name|command-message|command-args|local-command-stdout|local-command-caveat)>`)
+var transcriptNoiseTags = []string{
+	"command-name",
+	"command-message",
+	"command-args",
+	"local-command-stdout",
+	"local-command-stderr",
+	"local-command-caveat",
+	"system-reminder",
+	"user-prompt-submit-hook",
+	"task-notification",
+	"bash-stdout",
+	"bash-stderr",
+}
+var transcriptNoisePatterns = func() []*regexp.Regexp {
+	out := make([]*regexp.Regexp, 0, len(transcriptNoiseTags))
+	for _, t := range transcriptNoiseTags {
+		out = append(out, regexp.MustCompile(`(?is)<`+t+`\b[^>]*>.*?</`+t+`>`))
+	}
+	return out
+}()
 
 // Parse reads a transcript JSONL file and returns structured messages.
 // Tool outputs are NOT loaded by default (expensive). Call LoadToolOutputs
@@ -204,5 +224,27 @@ func parseAssistantBlocks(m *Message, raw json.RawMessage) {
 // stripSystemTags removes system-injected tags from user messages.
 func stripSystemTags(s string) string {
 	s = systemTagRe.ReplaceAllString(s, "")
+	for _, re := range transcriptNoisePatterns {
+		s = re.ReplaceAllString(s, "")
+	}
+	if idx := strings.Index(s, "<"); idx == 0 {
+		if end := strings.Index(s, ">"); end > 0 && end < 80 {
+			s = s[end+1:]
+		}
+	}
+	if strings.Contains(s, "hook feedback:") {
+		var keep []string
+		for _, line := range strings.Split(s, "\n") {
+			t := strings.TrimSpace(line)
+			if strings.HasPrefix(t, "Stop hook feedback:") ||
+				strings.HasPrefix(t, "PreToolUse hook feedback:") ||
+				strings.HasPrefix(t, "PostToolUse hook feedback:") ||
+				strings.HasPrefix(t, "UserPromptSubmit hook feedback:") {
+				continue
+			}
+			keep = append(keep, line)
+		}
+		s = strings.Join(keep, "\n")
+	}
 	return strings.TrimSpace(s)
 }

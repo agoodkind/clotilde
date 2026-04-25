@@ -10,7 +10,8 @@ import (
 // millions of requests in aggregation pipelines.
 //
 // Keep rates in sync with Anthropic's published pricing page:
-//   https://docs.claude.com/en/docs/about-claude/models/overview#model-pricing
+//
+//	https://docs.claude.com/en/docs/about-claude/models/overview#model-pricing
 //
 // Rates below assume the standard Messages API list price. They do
 // NOT represent what the user is billed when running against a Max
@@ -18,11 +19,11 @@ import (
 // costs ACROSS paths (e.g. OAuth vs fallback vs shunted) so the
 // user can pick the cheapest effective route for a given workload.
 type ModelRates struct {
-	InputPerToken           int64
-	OutputPerToken          int64
-	CacheWrite5mPerToken    int64 // 1.25x input
-	CacheWrite1hPerToken    int64 // 2x input
-	CacheReadPerToken       int64 // 0.1x input
+	InputPerToken        int64
+	OutputPerToken       int64
+	CacheWrite5mPerToken int64 // 1.25x input
+	CacheWrite1hPerToken int64 // 2x input
+	CacheReadPerToken    int64 // 0.1x input
 }
 
 // Public-list rates, expressed as microcents-per-token. One million
@@ -34,12 +35,19 @@ type ModelRates struct {
 // on the wire (snapshot IDs, context-suffixed variants). Lookup uses
 // prefix / substring matching in LookupRates.
 var modelRates = map[string]ModelRates{
+	"claude-opus-4-6": {
+		InputPerToken:        500,  // $5/M
+		OutputPerToken:       2500, // $25/M
+		CacheWrite5mPerToken: 625,  // $6.25/M (1.25x)
+		CacheWrite1hPerToken: 1000, // $10/M   (2x)
+		CacheReadPerToken:    50,   // $0.50/M (0.1x)
+	},
 	"claude-opus-4": {
-		InputPerToken:        1500,  // $15/M
-		OutputPerToken:       7500,  // $75/M
-		CacheWrite5mPerToken: 1875,  // $18.75/M (1.25x)
-		CacheWrite1hPerToken: 3000,  // $30/M   (2x)
-		CacheReadPerToken:    150,   // $1.50/M (0.1x)
+		InputPerToken:        1500, // $15/M
+		OutputPerToken:       7500, // $75/M
+		CacheWrite5mPerToken: 1875, // $18.75/M (1.25x)
+		CacheWrite1hPerToken: 3000, // $30/M   (2x)
+		CacheReadPerToken:    150,  // $1.50/M (0.1x)
 	},
 	"claude-sonnet-4": {
 		InputPerToken:        300,
@@ -85,20 +93,20 @@ func LookupRates(modelID string) (ModelRates, bool) {
 // TTL values accepted: "5m" (default), "1h". Any other string is
 // treated as 5m since the API defaults to 5m when omitted.
 type CostInputs struct {
-	ModelID              string
-	TTL                  string // "" / "5m" / "1h"
-	InputTokens          int
-	OutputTokens         int
-	CacheCreationTokens  int
-	CacheReadTokens      int
+	ModelID             string
+	TTL                 string // "" / "5m" / "1h"
+	InputTokens         int
+	OutputTokens        int
+	CacheCreationTokens int
+	CacheReadTokens     int
 }
 
 type CostBreakdown struct {
-	InputMicrocents         int64
-	OutputMicrocents        int64
-	CacheWriteMicrocents    int64
-	CacheReadMicrocents     int64
-	TotalMicrocents         int64
+	InputMicrocents      int64
+	OutputMicrocents     int64
+	CacheWriteMicrocents int64
+	CacheReadMicrocents  int64
+	TotalMicrocents      int64
 	// HypotheticalNoCacheMicrocents is the cost if every cache-read
 	// token had been billed as a fresh input token. Useful for
 	// quantifying cache savings.

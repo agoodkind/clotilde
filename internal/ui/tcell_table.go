@@ -1,9 +1,9 @@
 package ui
 
 import (
-	"fmt"
-
 	"github.com/gdamore/tcell/v2"
+	"github.com/mattn/go-runewidth"
+	"github.com/rivo/uniseg"
 )
 
 // TableCell is one cell's text and style.
@@ -55,18 +55,26 @@ func NewTableWidget(headers []string) *TableWidget {
 	}
 }
 
-// ColumnWidths returns the max width of each column across headers and rows.
+// ColumnWidths returns the max display width of each column across headers and rows.
 func (t *TableWidget) ColumnWidths() []int {
 	widths := make([]int, len(t.Headers))
 	for i, h := range t.Headers {
-		widths[i] = runeCount(h) + 2 // room for sort indicator
+		label := h
+		if i == t.SortCol {
+			if t.SortAsc {
+				label += " ^"
+			} else {
+				label += " v"
+			}
+		}
+		widths[i] = cellCount(label)
 	}
 	for _, row := range t.Rows {
 		for i, cell := range row {
 			if i >= len(widths) {
 				continue
 			}
-			if n := runeCount(cell.Text); n > widths[i] {
+			if n := cellCount(cell.Text); n > widths[i] {
 				widths[i] = n
 			}
 		}
@@ -127,20 +135,41 @@ func (t *TableWidget) Draw(scr tcell.Screen, r Rect) {
 		t.HOffset = 0
 	}
 
-	// drawShifted paints text at virtual column position vx so that
-	// vx == HOffset appears at the left edge. Partial visibility at
-	// either edge is handled by slicing.
+	// drawShifted paints text at virtual column position vx in display cells so
+	// the cell at vx == HOffset appears at the left edge. Wide runes use tcell
+	// SetContent so each grapheme lands on the right number of cells.
 	drawShifted := func(vx, y int, style tcell.Style, text string) {
-		runes := []rune(text)
-		for i, ch := range runes {
-			col := vx + i - t.HOffset
-			if col < 0 {
+		dpos := 0
+		gr := uniseg.NewGraphemes(text)
+		for gr.Next() {
+			cl := gr.Str()
+			w := runewidth.StringWidth(cl)
+			if w < 1 {
+				rns := []rune(cl)
+				if len(rns) == 0 {
+					continue
+				}
+				w = runewidth.RuneWidth(rns[0])
+			}
+			if w < 1 {
 				continue
 			}
-			if col >= contentW {
+			col0 := vx + dpos - t.HOffset
+			if col0 >= contentW {
 				break
 			}
-			scr.SetContent(r.X+col, y, ch, nil, style)
+			if col0+w <= 0 {
+				dpos += w
+				continue
+			}
+			rns := []rune(cl)
+			if len(rns) == 0 {
+				dpos += w
+				continue
+			}
+			cx := r.X + imax(0, col0)
+			scr.SetContent(cx, y, rns[0], rns[1:], style)
+			dpos += w
 		}
 	}
 
@@ -160,9 +189,9 @@ func (t *TableWidget) Draw(scr tcell.Screen, r Rect) {
 		}
 		var text string
 		if i == len(t.Headers)-1 {
-			text = fmt.Sprintf("%*s", widths[i], label)
+			text = runewidth.FillLeft(label, widths[i])
 		} else {
-			text = fmt.Sprintf("%-*s", widths[i], label)
+			text = runewidth.FillRight(label, widths[i])
 		}
 		drawShifted(vx, r.Y, StyleHeader, text)
 		vx += widths[i]
@@ -197,9 +226,9 @@ func (t *TableWidget) Draw(scr tcell.Screen, r Rect) {
 			}
 			var text string
 			if i == len(t.Headers)-1 {
-				text = fmt.Sprintf("%*s", widths[i], cell.Text)
+				text = runewidth.FillLeft(cell.Text, widths[i])
 			} else {
-				text = fmt.Sprintf("%-*s", widths[i], cell.Text)
+				text = runewidth.FillRight(cell.Text, widths[i])
 			}
 			drawShifted(vx, y, style, text)
 			vx += widths[i]

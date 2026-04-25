@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -243,53 +244,62 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 		return nil, err
 	}
 
+	ordered := append([]DiscoveryResult(nil), results...)
+	sort.SliceStable(ordered, func(i int, j int) bool {
+		left := ordered[i]
+		right := ordered[j]
+		if left.SessionID == right.SessionID {
+			if left.CustomTitle != "" && right.CustomTitle == "" {
+				return true
+			}
+			if right.CustomTitle != "" && left.CustomTitle == "" {
+				return false
+			}
+			if !left.FirstEntryTime.Equal(right.FirstEntryTime) {
+				return left.FirstEntryTime.After(right.FirstEntryTime)
+			}
+			if left.WorkspaceRoot != "" && right.WorkspaceRoot == "" {
+				return true
+			}
+			if right.WorkspaceRoot != "" && left.WorkspaceRoot == "" {
+				return false
+			}
+		}
+		if left.SessionID != right.SessionID {
+			return left.SessionID < right.SessionID
+		}
+		return left.TranscriptPath < right.TranscriptPath
+	})
+
 	slog.Debug("session.adopt.started",
 		"component", "session",
 		"subcomponent", "adopt",
-		"candidates", len(results),
+		"candidates", len(ordered),
 		"known_uuids", len(known),
 		"existing_names", len(existingNames),
 	)
 
 	var adopted []AdoptedSession
-	for _, r := range results {
+	skippedAutoOrSubagent := 0
+	skippedScratch := 0
+	skippedNoSessionID := 0
+	skippedKnown := 0
+	createFailed := 0
+	for _, r := range ordered {
 		if r.IsAutoName || r.IsSubagent {
-			slog.Debug("session.adopt.skipped",
-				"component", "session",
-				"subcomponent", "adopt",
-				"reason", "auto_name_or_subagent",
-				"transcript", r.TranscriptPath,
-				"is_auto_name", r.IsAutoName,
-				"is_subagent", r.IsSubagent,
-			)
+			skippedAutoOrSubagent++
 			continue
 		}
 		if isClydeScratch(r.WorkspaceRoot) {
-			slog.Debug("session.adopt.skipped",
-				"component", "session",
-				"subcomponent", "adopt",
-				"reason", "clyde_scratch",
-				"transcript", r.TranscriptPath,
-				"workspace", r.WorkspaceRoot,
-			)
+			skippedScratch++
 			continue
 		}
 		if r.SessionID == "" {
-			slog.Debug("session.adopt.skipped",
-				"component", "session",
-				"subcomponent", "adopt",
-				"reason", "no_session_id",
-				"transcript", r.TranscriptPath,
-			)
+			skippedNoSessionID++
 			continue
 		}
 		if known[r.SessionID] {
-			slog.Debug("session.adopt.skipped",
-				"component", "session",
-				"subcomponent", "adopt",
-				"reason", "already_known",
-				"session_id", r.SessionID,
-			)
+			skippedKnown++
 			continue
 		}
 		name, nameSource := pickAdoptedName(r, existingNames)
@@ -320,6 +330,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 
 		sess := &Session{Name: name, Metadata: md}
 		if err := store.Create(sess); err != nil {
+			createFailed++
 			slog.Warn("session.adopt.create_failed",
 				"component", "session",
 				"subcomponent", "adopt",
@@ -347,7 +358,12 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 		"component", "session",
 		"subcomponent", "adopt",
 		"adopted", len(adopted),
-		"considered", len(results),
+		"considered", len(ordered),
+		"skipped_auto_or_subagent", skippedAutoOrSubagent,
+		"skipped_clyde_scratch", skippedScratch,
+		"skipped_no_session_id", skippedNoSessionID,
+		"skipped_already_known", skippedKnown,
+		"create_failed", createFailed,
 	)
 	return adopted, nil
 }

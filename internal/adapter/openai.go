@@ -24,9 +24,11 @@ import (
 type ChatRequest struct {
 	Model            string          `json:"model"`
 	Messages         []ChatMessage   `json:"messages"`
+	Input            json.RawMessage `json:"input,omitempty"`
 	Stream           bool            `json:"stream,omitempty"`
 	StreamOptions    *StreamOptions  `json:"stream_options,omitempty"`
 	ReasoningEffort  string          `json:"reasoning_effort,omitempty"`
+	Reasoning        *Reasoning      `json:"reasoning,omitempty"`
 	Tools            []Tool          `json:"tools,omitempty"`
 	ToolChoice       json.RawMessage `json:"tool_choice,omitempty"`
 	Functions        []Function      `json:"functions,omitempty"`
@@ -50,6 +52,14 @@ type ChatRequest struct {
 	ParallelTools    *bool           `json:"parallel_tool_calls,omitempty"`
 	Store            *bool           `json:"store,omitempty"`
 	Metadata         json.RawMessage `json:"metadata,omitempty"`
+	Include          []string        `json:"include,omitempty"`
+}
+
+// Reasoning mirrors Responses-style reasoning controls. Cursor sends this
+// shape for ChatGPT models on BYOK.
+type Reasoning struct {
+	Effort  string `json:"effort,omitempty"`
+	Summary string `json:"summary,omitempty"`
 }
 
 // Tool is one entry in the OpenAI request.tools array.
@@ -124,17 +134,17 @@ type Function struct {
 // Message and streaming types are aliased from chatemit to keep all OpenAI
 // wire-shape definitions single-sourced.
 type (
-	ChatMessage       = chatemit.ChatMessage
-	MessageAnnotation = chatemit.MessageAnnotation
-	URLCitation       = chatemit.URLCitation
-	ToolCall          = chatemit.ToolCall
-	ToolCallFunction  = chatemit.ToolCallFunction
-	LogprobsResult    = chatemit.LogprobsResult
-	LogprobToken      = chatemit.LogprobToken
-	TopLogprob        = chatemit.TopLogprob
-	Usage             = chatemit.Usage
-	ChatResponse      = chatemit.ChatResponse
-	ChatChoice        = chatemit.ChatChoice
+	ChatMessage         = chatemit.ChatMessage
+	MessageAnnotation   = chatemit.MessageAnnotation
+	URLCitation         = chatemit.URLCitation
+	ToolCall            = chatemit.ToolCall
+	ToolCallFunction    = chatemit.ToolCallFunction
+	LogprobsResult      = chatemit.LogprobsResult
+	LogprobToken        = chatemit.LogprobToken
+	TopLogprob          = chatemit.TopLogprob
+	Usage               = chatemit.Usage
+	ChatResponse        = chatemit.ChatResponse
+	ChatChoice          = chatemit.ChatChoice
 	StreamChunk         = chatemit.StreamChunk
 	StreamChoice        = chatemit.StreamChoice
 	StreamDelta         = chatemit.StreamDelta

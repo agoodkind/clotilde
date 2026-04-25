@@ -158,6 +158,34 @@ func TestHandleChatLogsOffModeSkipsEvent(t *testing.T) {
 	}
 }
 
+func TestHandleChatAcceptsResponsesInputShape(t *testing.T) {
+	t.Parallel()
+	srv, _ := newLoggingServer(t, config.LoggingConfig{
+		Body: config.LoggingBody{
+			Mode: "off",
+		},
+	})
+
+	body := map[string]any{
+		"model": "missing-model",
+		"input": []map[string]any{
+			{"role": "system", "content": "sys"},
+			{"role": "user", "content": "hello"},
+		},
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	srv.mux.ServeHTTP(resp, req)
+	if strings.Contains(resp.Body.String(), "messages is required") {
+		t.Fatalf("expected input normalization; got body %s", resp.Body.String())
+	}
+}
+
 func newLoggingServer(t *testing.T, logging config.LoggingConfig) (*Server, *bytes.Buffer) {
 	t.Helper()
 	cfg := baseConfig()

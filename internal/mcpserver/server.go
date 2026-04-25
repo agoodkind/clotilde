@@ -231,7 +231,7 @@ func handleGetContext(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 
 	window := messages[start:end]
 	text := fmt.Sprintf("Messages %d-%d of %d (centered on %d):\n\n%s",
-		start, end-1, len(messages), center, transcript.RenderPlainText(window))
+		start, end-1, len(messages), center, transcript.RenderPlainTextWithOptions(window, transcript.DefaultShapeOptions()))
 	return mcp.NewToolResultText(text), nil
 }
 
@@ -286,7 +286,7 @@ func handleGetConversation(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 		messages = messages[len(messages)-lastN:]
 	}
 
-	text := transcript.RenderPlainText(messages)
+	text := transcript.RenderPlainTextWithOptions(messages, transcript.DefaultShapeOptions())
 	if len(text) == 0 {
 		return mcp.NewToolResultText("No conversation messages found."), nil
 	}

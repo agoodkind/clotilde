@@ -36,6 +36,23 @@ creation and incognito went away with the cull; users create sessions
 via plain `claude` (passthrough) and clyde adopts them in the
 background.
 
+### TUI-as-a-Dumb-Renderer
+
+Treat the TUI as a dumb renderer over daemon-owned and domain-owned state.
+
+- Put business logic, normalization, filtering, aggregation, and transcript shaping upstream in shared packages or daemon RPC construction.
+- Do not add TUI-only semantic cleanup, transcript parsing, cache aggregation, provider accounting, or state derivation when the same logic can live in `internal/transcript`, `internal/claude`, `internal/adapter`, or daemon/server code.
+- The TUI may own presentation concerns only:
+  - layout
+  - focus
+  - scrolling
+  - wrapping
+  - truncation
+  - visual grouping
+  - badges and status text
+- The TUI should consume already-shaped data models. If a screen needs “cleaner” or “smarter” data, fix the upstream producer and keep the renderer simple.
+- Prefer one canonical pipeline for conversation/plain-text views and reuse it everywhere: daemon details, MCP/session export, search snippets, and TUI transcript panes.
+
 ## Architecture
 
 ### Core Concept

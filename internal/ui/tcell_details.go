@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -105,6 +104,38 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][
 			{Text: v, Style: StyleDefault},
 		})
 	}
+	kvStacked := func(k, v string, note string) {
+		kv(k, v)
+		if strings.TrimSpace(note) == "" {
+			return
+		}
+		out = append(out, []TextSegment{
+			{Text: "                ", Style: StyleSubtext},
+			{Text: note, Style: StyleMuted},
+		})
+	}
+
+	section("Overview")
+	if detail.ContextUsageLoaded {
+		kv("Context", formatExactContextUsage(detail.ContextUsage))
+		kv("Msg tokens", formatDetailTokens(detail.ContextUsage.MessagesTokens))
+	} else {
+		kv("Context", "loading...")
+	}
+	kv("Last msg", formatDetailTokens(detail.LastMessageTokens))
+	kv("Visible msgs", formatDetailMessageCount(detail))
+	lastActivityAt, lastActivityAgo := formatDetailLastActivity(sess)
+	kvStacked("Last activity", lastActivityAt, lastActivityAgo)
+	if detail.CompactionCount > 0 {
+		kv("Compactions", formatDetailCompactions(detail))
+	}
+	out = append(out, []TextSegment{})
+
+	if detail.ContextUsageStatus != "" {
+		section("Diagnostics")
+		kv("Context probe", detail.ContextUsageStatus)
+		out = append(out, []TextSegment{})
+	}
 
 	section("Identity")
 	kv("Model", detail.Model)
@@ -123,17 +154,16 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][
 
 	section("Timing")
 	kv("Created", sess.Metadata.Created.Format("2006-01-02 15:04"))
-	kv("Last used", util.FormatRelativeTime(sess.Metadata.LastAccessed))
+	kv("Last used", sess.Metadata.LastAccessed.Local().Format("2006-01-02 15:04"))
+	kv("Used ago", util.FormatRelativeTime(sess.Metadata.LastAccessed))
 	age := util.FormatRelativeTime(sess.Metadata.Created)
 	kv("Age", age)
 	out = append(out, []TextSegment{})
 
 	section("Transcript")
-	if sess.Metadata.TranscriptPath != "" {
-		if info, err := os.Stat(sess.Metadata.TranscriptPath); err == nil {
-			mb := float64(info.Size()) / (1024 * 1024)
-			kv("Size", fmt.Sprintf("%.2f MB", mb))
-		}
+	if detail.TranscriptSizeBytes > 0 {
+		mb := float64(detail.TranscriptSizeBytes) / (1024 * 1024)
+		kv("Size", fmt.Sprintf("%.2f MB", mb))
 	}
 	out = append(out, []TextSegment{})
 
@@ -155,7 +185,7 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][
 				lastTS = m.Timestamp.Local().Format("2006-01-02 15:04")
 			}
 		}
-		kv("Messages", fmt.Sprintf("%d  (%d user, %d assistant)", users+assistants, users, assistants))
+		kv("Total msgs", fmt.Sprintf("%d  (%d user, %d assistant)", users+assistants, users, assistants))
 		if firstTS != "" {
 			kv("First message", firstTS)
 		}
@@ -188,6 +218,87 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][
 	out = append(out, []TextSegment{{Text: "  claude --resume " + sess.Metadata.SessionID, Style: StyleMuted}})
 
 	return out
+}
+
+func formatDetailTokens(tokens int) string {
+	if tokens <= 0 {
+		return "-"
+	}
+	return "~" + formatCompactTokens(tokens) + " tok"
+}
+
+func formatExactContextUsage(usage SessionContextUsage) string {
+	if usage.TotalTokens <= 0 {
+		return "-"
+	}
+	if usage.MaxTokens > 0 {
+		percent := usage.Percentage
+		if percent <= 0 {
+			percent = usage.TotalTokens * 100 / usage.MaxTokens
+		}
+		return fmt.Sprintf("%s/%s tok  %d%%",
+			formatCompactTokens(usage.TotalTokens),
+			formatCompactTokens(usage.MaxTokens),
+			percent)
+	}
+	return formatCompactTokens(usage.TotalTokens) + " tok"
+}
+
+func formatCompactTokens(tokens int) string {
+	if tokens < 0 {
+		return "0"
+	}
+	switch {
+	case tokens >= 1_000_000:
+		value := float64(tokens) / 1_000_000
+		if tokens%1_000_000 == 0 {
+			return fmt.Sprintf("%.0fM", value)
+		}
+		return fmt.Sprintf("%.1fM", value)
+	case tokens >= 100_000:
+		return fmt.Sprintf("%dk", tokens/1000)
+	case tokens >= 1_000:
+		value := float64(tokens) / 1_000
+		if tokens%1_000 == 0 {
+			return fmt.Sprintf("%.0fk", value)
+		}
+		return fmt.Sprintf("%.1fk", value)
+	default:
+		return formatWithCommas(tokens)
+	}
+}
+
+func formatDetailMessageCount(detail SessionDetail) string {
+	total := detail.TotalMessages
+	if total == 0 {
+		total = len(detail.AllMessages)
+	}
+	if total == 0 {
+		return "-"
+	}
+	if detail.CompactionCount > 0 {
+		return fmt.Sprintf("%s incl. compacted history", formatWithCommas(total))
+	}
+	return formatWithCommas(total)
+}
+
+func formatDetailLastActivity(sess *session.Session) (string, string) {
+	if sess == nil {
+		return "-", ""
+	}
+	t := lastUsedTime(sess)
+	if t.IsZero() {
+		return "-", ""
+	}
+	return t.Local().Format("2006-01-02 15:04"), util.FormatRelativeTime(t)
+}
+
+func formatDetailCompactions(detail SessionDetail) string {
+	value := formatWithCommas(detail.CompactionCount)
+	if detail.LastPreCompactTokens > 0 {
+		value += "  last pre " + formatDetailTokens(detail.LastPreCompactTokens)
+	}
+	return value
 }
 
 // buildRight renders the full conversation. Each message gets a role tag
@@ -246,6 +357,9 @@ func (d *DetailsView) buildRight(sess *session.Session, detail SessionDetail) []
 		// not accidentally glue them together. Blank line after each message.
 		body := strings.ReplaceAll(m.Text, "\r", "")
 		for _, line := range strings.Split(body, "\n") {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
 			out = append(out, []TextSegment{{Text: "  " + line, Style: bodyStyle}})
 		}
 		if i != len(msgs)-1 {

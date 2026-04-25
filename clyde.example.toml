@@ -24,6 +24,14 @@ max_backups = 5
 max_age_days = 14
 compress = true
 
+# Optional per-process log file overrides.
+# Defaults:
+#   TUI and CLI commands -> $XDG_STATE_HOME/clyde/clyde-tui.jsonl
+#   daemon command       -> $XDG_STATE_HOME/clyde/clyde-daemon.jsonl
+[logging.paths]
+tui = ""
+daemon = ""
+
 [logging.body]
 mode = "summary"
 max_kb = 32
@@ -71,6 +79,21 @@ cc_entrypoint = "sdk-cli"
 [adapter.logprobs]
 anthropic = "reject"
 fallback  = "reject"
+
+# opus-4-6: adaptive/default/enabled/disabled thinking, low/medium/high/max
+# effort, 200k context plus 1M beta. Claude Code upstream names this exact
+# family "claude-opus-4-6". Verified against bundled upstream docs 2026-04-24.
+[adapter.families.opus-4-6]
+model = "claude-opus-4-6"
+supports_tools = true
+supports_vision = true
+efforts = ["low", "medium", "high", "max"]
+thinking_modes = ["default", "adaptive", "enabled", "disabled"]
+max_output_tokens = 128000
+contexts = [
+  { tokens = 200000,  alias_suffix = "",   wire_suffix = "" },
+  { tokens = 1000000, alias_suffix = "1m", wire_suffix = "[1m]" },
+]
 
 # opus-4-7: low/medium/high/max effort, all four thinking modes,
 # 200k and 1M context. Empirically the highest-capability family on
@@ -138,7 +161,7 @@ trigger            = "on_oauth_failure"   # "explicit" | "on_oauth_failure" | "b
 binary             = ""                   # empty -> use the daemon's resolver
 timeout            = "120s"
 max_concurrent     = 2
-allowed_families   = ["opus-4-7", "sonnet-4-6", "haiku-4-5"]
+allowed_families   = ["opus-4-6", "opus-4-7", "sonnet-4-6", "haiku-4-5"]
 scratch_subdir     = "fallback"
 stream_passthrough = true
 drop_unsupported   = true                 # silently ignore reasoning_effort / thinking
@@ -149,6 +172,7 @@ failure_escalation = "fallback_error"     # which error to return when the fallb
 # Anthropic wire ids the OAuth path sends. Map every family
 # slug listed in allowed_families above.
 [adapter.fallback.cli_aliases]
+opus-4-6   = "opus"
 opus-4-7   = "opus"
 sonnet-4-6 = "sonnet"
 haiku-4-5  = "haiku"

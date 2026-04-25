@@ -12,20 +12,26 @@
 package ui
 
 import (
+	"context"
 	"fmt"
+	"hash/fnv"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
 
 	"goodkind.io/clyde/internal/session"
 	"goodkind.io/clyde/internal/util"
+	gklogversion "goodkind.io/gklog/version"
 )
 
 // ---------------- Public API ----------------
@@ -52,6 +58,10 @@ type AppCallbacks struct {
 	// StartSessionWithBasedir creates a new session pinned to the given
 	// workspace root. Empty string falls back to the caller's cwd.
 	StartSessionWithBasedir func(basedir string) error
+	// StartSessionWithBasedirRC creates a new tracked session pinned to
+	// basedir and requests the launch-time remote-control flag state.
+	// When nil, the UI falls back to StartSessionWithBasedir.
+	StartSessionWithBasedirRC func(basedir string, enableRC bool) error
 	// StartIncognitoWithBasedir launches an incognito session pinned
 	// to basedir. The session auto deletes on exit unless persisted
 	// later. enableRC requests the --remote-control flag at launch.
@@ -67,14 +77,16 @@ type AppCallbacks struct {
 	// the Settings tab to flip the default for sessions that have no
 	// explicit per session value.
 	SetGlobalRemoteControl func(enabled bool) error
-	// IsRemoteControlEnabled reports the current per session value so
-	// the options popup can render the correct toggle label.
-	IsRemoteControlEnabled func(sess *session.Session) bool
-	// IsGlobalRemoteControlEnabled reports the global default for the
-	// Settings tab indicator.
-	IsGlobalRemoteControlEnabled func() bool
+	// ListSessions returns the daemon-owned dashboard snapshot.
+	ListSessions func() (SessionSnapshot, error)
+	// LoadStats returns asynchronously rendered dashboard-wide cache stats.
+	LoadStats func() (DashboardStats, error)
+	// SubscribeProviderStats streams provider-level stats updates from the daemon.
+	SubscribeProviderStats func() (events <-chan ProviderStats, cancel func(), err error)
 	// ListBridges returns the daemon's view of active bridges.
 	ListBridges func() ([]Bridge, error)
+	// RestartDaemon asks the local daemon supervisor to self-heal and restart.
+	RestartDaemon func() error
 	// SendToSession injects text into the running claude session via
 	// the daemon. The TUI sidecar uses this for user input.
 	SendToSession func(sessionID, text string) error
@@ -87,11 +99,10 @@ type AppCallbacks struct {
 	// request is queued. The returned sessions callback (may be nil)
 	// fires once the updated metadata is persisted; the TUI uses it to
 	// redraw the affected row.
-	RefreshSummary func(sess *session.Session, onDone func(*session.Session)) error
-	ExtractDetail  func(sess *session.Session) SessionDetail
-	ExtractModel   func(sess *session.Session) string
-	ViewContent    func(sess *session.Session) string
-	Store          session.Store
+	RefreshSummary   func(sess *session.Session, onDone func(*session.Session)) error
+	GetSessionDetail func(sess *session.Session) (SessionDetail, error)
+	ViewContent      func(sess *session.Session) string
+	ExportSession    func(sess *session.Session, format SessionExportFormat) ([]byte, error)
 	// SubscribeRegistry, when set, opens a long-lived subscription to
 	// the daemon's registry-event stream. Each event nudges the TUI to
 	// reload sessions from disk so adoptions land immediately instead
@@ -107,15 +118,48 @@ type AppCallbacks struct {
 	CompactUndo func(sessionName string) (*CompactUndoResult, error)
 }
 
+type SessionExportFormat string
+
+const (
+	SessionExportPlainText SessionExportFormat = "plain_text"
+	SessionExportMarkdown  SessionExportFormat = "markdown"
+	SessionExportHTML      SessionExportFormat = "html"
+	SessionExportJSON      SessionExportFormat = "json"
+)
+
+type SessionSnapshot struct {
+	Sessions            []*session.Session
+	Models              map[string]string
+	RemoteControl       map[string]bool
+	MessageCounts       map[string]int
+	ContextStates       map[string]SessionContextState
+	Bridges             []Bridge
+	GlobalRemoteControl bool
+}
+
 // SessionEvent is the UI-facing copy of the daemon SubscribeRegistryResponse. The
 // ui package keeps its own type so the daemon's protobuf does not leak
 // into widget code.
 type SessionEvent struct {
-	Kind            string
-	SessionName     string
-	SessionID       string
-	BridgeSessionID string
-	BridgeURL       string
+	Kind                string
+	SessionName         string
+	SessionID           string
+	OldName             string
+	BridgeSessionID     string
+	BridgeURL           string
+	Session             *session.Session
+	Model               string
+	RemoteControl       bool
+	MessageCount        int
+	ContextState        *SessionContextState
+	Bridge              *Bridge
+	GlobalRemoteControl *bool
+}
+
+type SessionContextState struct {
+	Usage  SessionContextUsage
+	Loaded bool
+	Status string
 }
 
 // Bridge mirrors the daemon's notion of an active claude
@@ -144,10 +188,50 @@ type TranscriptEntry struct {
 // AllMessages carries the full transcript for the scrollable right pane.
 // Tools ranks the top assistant tool uses for the stats pane.
 type SessionDetail struct {
-	Model       string
-	Messages    []DetailMessage // last N for quick peek (kept for backwards compat)
-	AllMessages []DetailMessage // full transcript, ordered oldest -> newest
-	Tools       []ToolUse       // descending by Count
+	Model                 string
+	Messages              []DetailMessage // last N for quick peek (kept for backwards compat)
+	AllMessages           []DetailMessage // full transcript, ordered oldest -> newest
+	Tools                 []ToolUse       // descending by Count
+	TotalMessages         int             // full visible user/assistant message count
+	VisibleTokensEstimate int             // rough estimate of visible message tokens
+	LastMessageTokens     int             // rough estimate of latest visible message tokens
+	CompactionCount       int             // compact_boundary entries in this transcript
+	LastPreCompactTokens  int             // pre-compact token count from the latest clyde compact boundary
+	TranscriptSizeBytes   int64
+	ContextUsage          SessionContextUsage
+	ContextUsageLoaded    bool
+	ContextUsageStatus    string
+}
+
+type ProviderStats struct {
+	Provider                string
+	Requests                int
+	Inflight                int
+	Streaming               int
+	InputTokens             int64
+	OutputTokens            int64
+	CacheReadTokens         int64
+	CacheCreationTokens     int64
+	HitRatio                float64
+	EstimatedCostMicrocents int64
+	LastSeen                time.Time
+	Error                   string
+}
+
+type DashboardStats struct {
+	Providers []ProviderStats
+	LoadedAt  time.Time
+	StreamErr string
+}
+
+// SessionContextUsage is the exact no-persist /context payload used by the
+// details pane once the async probe completes.
+type SessionContextUsage struct {
+	Model          string
+	TotalTokens    int
+	MaxTokens      int
+	Percentage     int
+	MessagesTokens int
 }
 
 // DetailMessage is a simplified message for display.
@@ -173,6 +257,13 @@ const (
 	grabDetailsRight
 )
 
+const (
+	tabSessions = iota
+	tabStats
+	tabSettings
+	tabSidecar
+)
+
 // SortColumn identifies which column the table is sorted by.
 type SortColumn int
 
@@ -190,8 +281,9 @@ const (
 
 // App is the main tcell TUI.
 type App struct {
-	screen tcell.Screen
-	cb     AppCallbacks
+	screenMu sync.RWMutex
+	screen   tcell.Screen
+	cb       AppCallbacks
 
 	// Widgets
 	tabs    *TabBarWidget
@@ -200,7 +292,8 @@ type App struct {
 	status  *StatusBarWidget
 
 	// activeTab indexes into tabs.Tabs. 0 is the sessions dashboard. 1
-	// is the settings editor stub. 2 is the sidecar live view. The
+	// is the stats snapshot. 2 is the settings editor stub. 3 is the
+	// sidecar live view. The
 	// dashboard renders the table view when activeTab is 0; other
 	// indices replace the body with a tab specific panel.
 	activeTab int
@@ -212,6 +305,7 @@ type App struct {
 	sidecarSessionID string
 	sidecarCancel    func() // cancels the daemon TailTranscript stream
 	compactCancel    func() // cancels in-flight compact preview/apply stream
+	reloadExecPath   string // set when the on-disk executable changed and Run should exec after teardown
 
 	// Overlays (one at a time)
 	overlay Widget
@@ -240,12 +334,25 @@ type App struct {
 	hiddenCount   int  // number of sessions hidden by the ephemeral filter
 
 	// Caches
-	modelCache map[string]string
+	modelCache          map[string]string
+	remoteControlCache  map[string]bool
+	messageCountCache   map[string]int
+	contextStateCache   map[string]SessionContextState
+	globalRemoteControl bool
 	// bridges holds the daemon's view of active claude --remote-control
 	// bridges. Keyed by Claude session UUID. Updated on startup via
 	// ListBridges and on each BRIDGE_OPENED / BRIDGE_CLOSED event.
 	bridgeMu sync.RWMutex
 	bridges  map[string]Bridge
+
+	// daemonOnline tracks whether the daemon-backed registry stream is
+	// currently healthy. The dashboard keeps running when false and the
+	// status bar surfaces "daemon offline" so users know live bridge and
+	// registry updates are degraded.
+	daemonMu       sync.RWMutex
+	daemonOnline   bool
+	daemonLastErr  string
+	daemonLastSeen time.Time
 
 	// detailCache stores the fully-extracted SessionDetail keyed by session
 	// name. Populated off the UI goroutine by loadDetailAsync so repeat
@@ -258,6 +365,21 @@ type App struct {
 	// spinnerFrame increments on each redraw that is waiting for async
 	// data so the user sees motion in the details header.
 	spinnerFrame int
+
+	// drawCount/lastDrawAt track presentation progress as seen by draw().
+	// health ticker interrupts use these to detect "event loop alive but
+	// not producing fresh frames" situations.
+	drawCount            uint64
+	lastDrawAt           time.Time
+	lastDrawSpinner      int
+	lastEventType        string
+	lastEventAt          time.Time
+	lastNonInterruptType string
+	lastNonInterruptAt   time.Time
+	healthLastDraw       uint64
+	healthLastSpin       int
+	heartbeatStartedAt   time.Time
+	lastHeartbeatAt      time.Time
 
 	// summaryRefreshing tracks session names whose summary refresh is
 	// in flight, so repeated highlights do not spawn duplicate requests.
@@ -280,11 +402,20 @@ type App struct {
 	lastInteraction time.Time
 	interactionMu   sync.Mutex
 
-	// storeSnapshot is a fingerprint of the session store from the most
-	// recent watcher tick. When a newer snapshot differs, the watcher
-	// posts a refresh interrupt. Keeping the fingerprint avoids calling
-	// Store.List() twice when nothing changed.
-	storeSnapshot string
+	// sessionsLoading gates in-flight daemon snapshot requests so rapid
+	// refresh triggers coalesce without spawning redundant RPC calls.
+	storeSnapshot     string
+	sessionsLoadingMu sync.Mutex
+	sessionsLoading   bool
+	startupLoading    bool
+
+	// statsLoading gates the async Stats-tab snapshot so the render path never
+	// blocks on log or transcript scans.
+	statsMu      sync.Mutex
+	stats        DashboardStats
+	statsLoaded  bool
+	statsLoading bool
+	statsErr     string
 
 	// Double click tracking
 	lastClickTime time.Time
@@ -296,6 +427,9 @@ type App struct {
 
 	// Event loop control
 	running bool
+	// appFocused tracks the terminal focus state from EventFocus so we can
+	// avoid high-frequency spinner redraws while unfocused.
+	appFocused bool
 
 	// Scroll position readout for status bar
 	positionText string
@@ -316,6 +450,22 @@ type App struct {
 	// observable in slog JSON traces.
 	returnPathState   returnPathState
 	returnPathSession *session.Session
+
+	// Last layout dimensions logged for resize diagnostics.
+	lastLayoutW int
+	lastLayoutH int
+
+	// buildHash identifies the binary build. runHash identifies this process
+	// instance so operators can tell which wrapper is currently painting.
+	buildHash string
+	runHash   string
+
+	// pendingResizeDisplaySync is set on every EventResize so the next draw
+	// in the run loop is followed by Screen.Sync. A debounced only approach
+	// let many Show-only frames through during an active drag and the host
+	// could desync from the tcell buffer.
+	pendingResizeDisplaySync bool
+	inResizeEvent            bool
 }
 
 // returnPathState captures the resumability lifecycle during pause/return.
@@ -340,6 +490,9 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 		sessions:           sessions,
 		mode:               StatusBrowse,
 		modelCache:         make(map[string]string),
+		remoteControlCache: make(map[string]bool),
+		messageCountCache:  make(map[string]int),
+		contextStateCache:  make(map[string]SessionContextState),
 		bridges:            make(map[string]Bridge),
 		detailCache:        make(map[string]SessionDetail),
 		detailLoading:      make(map[string]bool),
@@ -349,6 +502,14 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 		sortCol:            SortColUsed,
 		sortAsc:            false,
 		returnPathState:    returnPathStateDashboardActive,
+		daemonOnline:       false,
+		startupLoading:     len(sessions) == 0,
+		appFocused:         true,
+		lastNonInterruptAt: time.Now(),
+		heartbeatStartedAt: time.Now(),
+		lastHeartbeatAt:    time.Now(),
+		buildHash:          shortStableHash(gklogversion.String()),
+		runHash:            shortStableHash(fmt.Sprintf("%d:%d", os.Getpid(), time.Now().UnixNano())),
 	}
 	// Default suspendImpl: real teardown / exec / reinit. Tests
 	// replace this before driving events so the resume cycle can be
@@ -361,9 +522,9 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	a.sortSessions()
 
 	// Build widgets
-	a.tabs = NewTabBar([]string{"Sessions", "Settings", "Sidecar"})
+	a.tabs = NewTabBar([]string{"Sessions", "Stats", "Settings", "Sidecar"})
 	a.tabs.OnActivate = func(idx int) { a.activeTab = idx }
-	a.table = NewTableWidget([]string{"NAME", "BASEDIR", "MODEL", "RC", "MSGS", "SUMMARY", "LAST USED", "CREATED"})
+	a.table = NewTableWidget([]string{"NAME", "BASEDIR", "LAST ACTIVE", "MODEL", "MSGS", "SUMMARY", "CREATED"})
 	a.table.SortCol = int(a.sortCol)
 	a.table.SortAsc = a.sortAsc
 	a.table.OnActivate = func(row int) { a.openSessionOptions(row) }
@@ -401,6 +562,25 @@ func (a *App) isCurrentReturnPathSession(sess *session.Session) bool {
 	return a.returnPathSession.Metadata.SessionID == sess.Metadata.SessionID
 }
 
+// resolveSession deterministically maps a session reference onto the current
+// in-memory view. UUID takes precedence, then name, then the original pointer.
+func (a *App) resolveSession(sess *session.Session) *session.Session {
+	if sess == nil {
+		return nil
+	}
+	if sess.Metadata.SessionID != "" {
+		for _, candidate := range a.sessions {
+			if candidate.Metadata.SessionID == sess.Metadata.SessionID {
+				return candidate
+			}
+		}
+	}
+	if resolved := a.findSessionByName(sess.Name); resolved != nil {
+		return resolved
+	}
+	return sess
+}
+
 func (a *App) trackReturnPathState(state returnPathState, source string, sess *session.Session) {
 	prev := a.returnPathState
 	if prev == "" {
@@ -433,9 +613,8 @@ func (a *App) closeReturnPrompt(sess *session.Session, source string) {
 	}
 }
 
-// openReturnPrompt shows the post-session modal with session stats and
-// three choices: Return to session, Go back to session list, Quit clyde.
-// Quit is highlighted by default so a single Enter press exits.
+// openReturnPrompt shows the post-session modal with the same session
+// actions as the normal options popup, plus return-path actions.
 func (a *App) openReturnPrompt(sess *session.Session) {
 	if sess == nil {
 		slog.Warn("returnprompt.open skipped", "reason", "nil_session")
@@ -447,8 +626,7 @@ func (a *App) openReturnPrompt(sess *session.Session) {
 	if a.isCurrentReturnPathSession(sess) {
 		a.trackReturnPathState(returnPathStateReturnPromptPending, "returnprompt.enter", sess)
 	}
-	sessionEntries := a.sessionOptionsEntries(sess, close)
-	returnEntries := []OptionsModalEntry{
+	entries := []OptionsModalEntry{
 		{
 			Label: "Quit clyde",
 			Hint:  "q",
@@ -458,42 +636,18 @@ func (a *App) openReturnPrompt(sess *session.Session) {
 			},
 		},
 		{
-			Label: "Go to session list",
-			Hint:  "esc/list",
-			Action: func() {
-				a.closeReturnPrompt(sess, "dismiss")
-			},
-		},
-		{
 			Label: "Return back to chat",
 			Hint:  "enter",
 			Action: func() {
 				a.closeReturnPrompt(sess, "return_to_chat")
-				row := a.findVisibleRowByName(sess.Name)
-				if row < 0 {
-					slog.Warn("returnprompt.onresume row not visible, resuming directly",
-						"session", sess.Name)
-					a.resumeSession(sess)
-					return
-				}
-				a.table.SelectedRow = row
-				a.resumeRow(row)
-			},
-		},
-		{
-			Label: "Compact this session...",
-			Hint:  "c",
-			Action: func() {
-				a.closeReturnPrompt(sess, "compact")
-				a.openRichCompactForm(sess)
+				a.resumeSession(sess)
 			},
 		},
 	}
+	entries = append(entries, a.sessionOptionsEntries(sess, close)...)
 	statsSegments, statsLoading := a.buildSessionStatsSegments(sess)
-	modal := NewOptionsModal("Session exited: "+sess.Name, sessionEntries)
+	modal := NewOptionsModal("Session exited: "+sess.Name, entries)
 	modal.Context = OptionsModalContextReturn
-	modal.TopEntries = returnEntries
-	modal.resetCursor()
 	modal.OnCancel = close
 	modal.OnQuit = func() {
 		a.closeReturnPrompt(sess, "quit")
@@ -520,8 +674,25 @@ func (a *App) ensureReturnPrompt(sess *session.Session, source string) {
 		if modal.Context == OptionsModalContextReturn {
 			if a.isCurrentReturnPathSession(sess) {
 				a.trackReturnPathState(returnPathStateReturnPromptVisible, "ensureReturnPrompt.while_visible", sess)
+				return
 			}
-			return
+			slog.Warn("returnprompt.ensure_reopen_mismatched_session",
+				"source", source,
+				"requested_session", sess.Name,
+				"requested_session_id", sess.Metadata.SessionID,
+				"return_path_session", func() string {
+					if a.returnPathSession == nil {
+						return ""
+					}
+					return a.returnPathSession.Name
+				}(),
+				"return_path_session_id", func() string {
+					if a.returnPathSession == nil {
+						return ""
+					}
+					return a.returnPathSession.Metadata.SessionID
+				}(),
+				"overlay", fmt.Sprintf("%T", a.overlay))
 		}
 	}
 	slog.Warn("returnprompt.ensure_reopen", "source", source, "session", sess.Name, "overlay", fmt.Sprintf("%T", a.overlay))
@@ -529,29 +700,41 @@ func (a *App) ensureReturnPrompt(sess *session.Session, source string) {
 	a.openReturnPrompt(sess)
 }
 
-// resumeSession is the row-agnostic resume path used when the prompt's
-// row lookup fails (filter excludes the session, table not yet rebuilt,
-// etc.). It mirrors resumeRow without the row index dependency so the
-// post-session loop is never broken by transient table state.
-func (a *App) resumeSession(sess *session.Session) {
+func (a *App) runResumeLifecycle(sess *session.Session, source string) {
 	if sess == nil || a.cb.ResumeSession == nil {
 		return
 	}
-	slog.Info("resume.start", "session", sess.Name, "uuid", sess.Metadata.SessionID, "path", "resumeSession")
-	a.returnPathSession = sess
-	a.trackReturnPathState(returnPathStateSuspendedForResume, "resumeSession.before_suspend", sess)
+	resolved := a.resolveSession(sess)
+	if resolved == nil {
+		return
+	}
+	slog.Info("resume.start", "session", resolved.Name, "uuid", resolved.Metadata.SessionID, "path", source)
+	a.returnPathSession = resolved
+	a.trackReturnPathState(returnPathStateSuspendedForResume, source+".before_suspend", resolved)
 	a.suspendImpl(func() {
-		a.trackReturnPathState(returnPathStateResumingTerminal, "resumeSession.callback", sess)
-		_ = a.cb.ResumeSession(sess)
+		a.trackReturnPathState(returnPathStateResumingTerminal, source+".callback", resolved)
+		_ = a.cb.ResumeSession(resolved)
 	})
-	slog.Info("resume.exit", "session", sess.Name, "path", "resumeSession")
-	a.trackReturnPathState(returnPathStateReturnPromptPending, "resumeSession.after_suspend", sess)
-	// Open the return prompt immediately after resume exits. A synchronous
-	// refresh can block on large stores and make the app appear frozen before
-	// the prompt is shown.
-	sessionForPrompt := sess
-	a.openReturnPrompt(sessionForPrompt)
-	a.ensureReturnPrompt(sessionForPrompt, "resumeSession")
+	slog.Info("resume.exit", "session", resolved.Name, "path", source)
+	a.trackReturnPathState(returnPathStateReturnPromptPending, source+".after_suspend", resolved)
+	sessionForPrompt := a.resolveSession(resolved)
+	if sessionForPrompt == nil {
+		sessionForPrompt = resolved
+	}
+	a.returnPathSession = sessionForPrompt
+	a.ensureReturnPrompt(sessionForPrompt, source)
+	a.requestSessionsAsync(source + ".after_resume")
+	if row := a.findVisibleRowByName(sessionForPrompt.Name); row >= 0 {
+		a.table.Active = true
+		a.table.SelectedRow = row
+	}
+}
+
+// resumeSession is the row-agnostic resume path used when the prompt's
+// row lookup fails (filter excludes the session, table not yet rebuilt,
+// etc.).
+func (a *App) resumeSession(sess *session.Session) {
+	a.runResumeLifecycle(sess, "resumeSession")
 }
 
 func (a *App) cachedDetailForSession(sess *session.Session) (SessionDetail, bool) {
@@ -595,6 +778,8 @@ func (a *App) Run() error {
 		return err
 	}
 	slog.Info("tui.run.started", "screen", fmt.Sprintf("%p", a.screen))
+	stopSIGQUITDump := installSIGQUITDumpHandler()
+	defer stopSIGQUITDump()
 	// Defer a sequenced teardown that always disables the alt-screen
 	// modes we turned on. macOS Terminal and iTerm both leave the
 	// cursor and mouse-tracking state half-set when only Fini runs.
@@ -610,10 +795,20 @@ func (a *App) Run() error {
 			panic(r)
 		}
 		a.teardownScreen()
+		if a.reloadExecPath != "" {
+			if err := execCurrentProcess(a.reloadExecPath); err != nil {
+				slog.Error("tui.self_reload.exec_failed",
+					"component", "tui",
+					"path", a.reloadExecPath,
+					"err", err)
+				_, _ = fmt.Fprintf(os.Stderr, "clyde self-reload failed: %v\n", err)
+			}
+		}
 	}()
 
 	a.running = true
 	a.draw()
+	a.requestSessionsAsync("startup")
 
 	// Ticker that posts a spinner tick every 100ms. The handler only
 	// triggers a redraw when something is actually loading, so an idle
@@ -622,34 +817,31 @@ func (a *App) Run() error {
 	go a.runSpinnerTicker(stopTicker)
 	defer close(stopTicker)
 
-	// Watcher that polls the session store for changes every few seconds
-	// and signals the main loop when something changed. Skipped while
-	// the user is actively interacting.
-	stopWatcher := make(chan struct{})
-	go a.runStoreWatcher(stopWatcher)
-	defer close(stopWatcher)
+	// Health ticker posts a low-rate interrupt used to emit liveness
+	// summaries and detect frame stalls even when only spinner interrupts
+	// are flowing.
+	stopHealthTicker := make(chan struct{})
+	go a.runHealthTicker(stopHealthTicker)
+	defer close(stopHealthTicker)
 
-	// Subscribe to daemon registry events so adoptions land
-	// immediately. Failure is tolerated: the polling watcher above
-	// still keeps the dashboard reasonably fresh.
-	if a.cb.SubscribeRegistry != nil {
-		if events, cancel, err := a.cb.SubscribeRegistry(); err == nil {
-			defer cancel()
-			go a.runRegistrySubscriber(events)
-		}
-	}
+	stopReloadWatcher := make(chan struct{})
+	go a.runSelfReloadWatcher(stopReloadWatcher)
+	defer close(stopReloadWatcher)
 
-	// Seed the bridge map from the daemon. Subsequent
-	// BRIDGE_OPENED / BRIDGE_CLOSED events keep it fresh.
-	if a.cb.ListBridges != nil {
-		if list, err := a.cb.ListBridges(); err == nil {
-			a.bridgeMu.Lock()
-			for _, b := range list {
-				a.bridges[b.SessionID] = b
-			}
-			a.bridgeMu.Unlock()
-		}
-	}
+	stopSessionRefresh := make(chan struct{})
+	go a.runSessionRefreshTicker(stopSessionRefresh)
+	defer close(stopSessionRefresh)
+
+	// Registry stream supervisor keeps daemon subscriptions healthy even
+	// when the daemon restarts. The dashboard remains usable in offline
+	// mode and the polling watcher above still refreshes snapshots.
+	stopRegistry := make(chan struct{})
+	go a.runRegistrySupervisor(stopRegistry)
+	defer close(stopRegistry)
+
+	stopProviderStats := make(chan struct{})
+	go a.runProviderStatsSupervisor(stopProviderStats)
+	defer close(stopProviderStats)
 
 	// Idle sweeper that regenerates stale session summaries one at a
 	// time while the user is inactive. Rate limited so it never floods
@@ -658,10 +850,6 @@ func (a *App) Run() error {
 	go a.runIdleSummarySweeper(stopSweep)
 	defer close(stopSweep)
 
-	stopLastUsed := make(chan struct{})
-	go a.runLastUsedTicker(stopLastUsed)
-	defer close(stopLastUsed)
-
 	nilEventStreak := 0
 	reinitAttemptedAfterNil := false
 	for a.running {
@@ -669,7 +857,9 @@ func (a *App) Run() error {
 			slog.Error("tui.loop screen is nil, exiting")
 			return nil
 		}
-		ev := a.screen.PollEvent()
+		pollStartedAt := time.Now()
+		ev := a.pollEvent()
+		pollDuration := time.Since(pollStartedAt)
 		if ev == nil {
 			// PollEvent returns nil when the screen has been Fini'd.
 			// Previously we exited the loop here, which made the
@@ -715,14 +905,69 @@ func (a *App) Run() error {
 		}
 		nilEventStreak = 0
 		reinitAttemptedAfterNil = false
-		slog.Debug("tui.loop dispatching event", "event", fmt.Sprintf("%T", ev))
+		eventType := fmt.Sprintf("%T", ev)
+		isSpinnerInterrupt := false
+		isHealthInterrupt := false
+		if interrupt, ok := ev.(*tcell.EventInterrupt); ok {
+			switch interrupt.Data().(type) {
+			case spinnerTick:
+				isSpinnerInterrupt = true
+			case healthTick:
+				isHealthInterrupt = true
+			}
+		}
+		a.lastEventType = eventType
+		a.lastEventAt = time.Now()
+		if eventType != "*tcell.EventInterrupt" {
+			a.lastNonInterruptType = eventType
+			a.lastNonInterruptAt = a.lastEventAt
+		}
+		if !isSpinnerInterrupt && !isHealthInterrupt {
+			slog.Debug("tui.loop dispatching event", "event", eventType)
+		}
 		if a.screen == nil {
 			slog.Debug("tui.loop screen became nil before dispatch")
 			continue
 		}
+		handleStartedAt := time.Now()
 		a.handleEvent(ev)
-		if a.running {
+		handleDuration := time.Since(handleStartedAt)
+		drawDuration := time.Duration(0)
+		shouldDraw := a.running
+		if shouldDraw && isSpinnerInterrupt && !a.appFocused {
+			shouldDraw = false
+			slog.Debug("tui.loop.skip_draw.spinner_unfocused",
+				"component", "tui",
+				"active_tab", a.activeTab,
+				"has_overlay", a.overlay != nil,
+				"overlay_type", fmt.Sprintf("%T", a.overlay))
+		}
+		if shouldDraw {
+			drawStartedAt := time.Now()
 			a.draw()
+			drawDuration = time.Since(drawStartedAt)
+			if a.pendingResizeDisplaySync && a.screen != nil {
+				a.runTerminalCall("sync", func() {
+					a.screen.Sync()
+				})
+				a.pendingResizeDisplaySync = false
+				slog.Debug("tui.display.synced_after_resize", "component", "tui")
+			}
+		}
+		if eventType != "*tcell.EventInterrupt" || handleDuration > 20*time.Millisecond || drawDuration > 35*time.Millisecond {
+			logLevel := slog.LevelDebug
+			if handleDuration > 40*time.Millisecond || drawDuration > 80*time.Millisecond || pollDuration > 1500*time.Millisecond {
+				logLevel = slog.LevelWarn
+			}
+			slog.Log(context.Background(), logLevel, "tui.loop.event_timing",
+				"event", eventType,
+				"poll_ms", pollDuration.Milliseconds(),
+				"handle_ms", handleDuration.Milliseconds(),
+				"draw_ms", drawDuration.Milliseconds(),
+				"active_tab", a.activeTab,
+				"has_overlay", a.overlay != nil,
+				"overlay_type", fmt.Sprintf("%T", a.overlay),
+				"mode", int(a.mode))
 		}
 	}
 	return nil
@@ -731,6 +976,9 @@ func (a *App) Run() error {
 // spinnerTick is posted periodically while something is loading so the
 // UI can advance the spinner glyph.
 type spinnerTick struct{}
+
+// healthTick is posted periodically to emit watchdog liveness snapshots.
+type healthTick struct{}
 
 // runSpinnerTicker posts a spinnerTick every 100ms until stop is closed.
 // The tick is cheap; handleEvent only repaints when data is actually
@@ -743,21 +991,110 @@ func (a *App) runSpinnerTicker(stop <-chan struct{}) {
 		case <-stop:
 			return
 		case <-t.C:
-			if a.screen == nil {
-				continue
-			}
-			_ = a.screen.PostEvent(tcell.NewEventInterrupt(spinnerTick{}))
+			a.postInterrupt(spinnerTick{})
 		}
 	}
 }
 
-// storeChanged is posted by the session watcher when the on-disk store
-// contents differ from the last snapshot. The main loop calls
-// softRefreshSessions in response, which preserves selection.
-type storeChanged struct{}
+// runHealthTicker posts a healthTick every 25 seconds. The handler logs frame
+// progress and warns when draw() has not advanced recently.
+func (a *App) runHealthTicker(stop <-chan struct{}) {
+	t := time.NewTicker(25 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			a.postInterrupt(healthTick{})
+		}
+	}
+}
+
+func (a *App) runSelfReloadWatcher(stop <-chan struct{}) {
+	base, err := currentExecutableSnapshot()
+	if err != nil {
+		slog.Warn("tui.self_reload.snapshot_failed",
+			"component", "tui",
+			"err", err)
+		return
+	}
+	slog.Debug("tui.self_reload.watcher_started",
+		"component", "tui",
+		"path", base.path,
+		"mtime", base.info.ModTime().Format(time.RFC3339Nano),
+		"size", base.info.Size())
+
+	t := time.NewTicker(2 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			changed, reason, err := executableChanged(base)
+			if err != nil {
+				slog.Debug("tui.self_reload.check_failed",
+					"component", "tui",
+					"path", base.path,
+					"err", err)
+				continue
+			}
+			if !changed {
+				continue
+			}
+			a.postInterrupt(selfReloadAvailable{path: base.path, reason: reason})
+			return
+		}
+	}
+}
+
+func currentExecutableSnapshot() (executableSnapshot, error) {
+	path, err := os.Executable()
+	if err != nil {
+		return executableSnapshot{}, fmt.Errorf("resolve executable: %w", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return executableSnapshot{}, fmt.Errorf("stat executable: %w", err)
+	}
+	return executableSnapshot{path: path, info: info}, nil
+}
+
+func executableChanged(base executableSnapshot) (bool, string, error) {
+	info, err := os.Stat(base.path)
+	if err != nil {
+		return false, "", err
+	}
+	if !os.SameFile(base.info, info) {
+		return true, "file_replaced", nil
+	}
+	if !info.ModTime().Equal(base.info.ModTime()) {
+		return true, "mtime_changed", nil
+	}
+	if info.Size() != base.info.Size() {
+		return true, "size_changed", nil
+	}
+	return false, "", nil
+}
+
+func execCurrentProcess(path string) error {
+	slog.Info("tui.self_reload.exec",
+		"component", "tui",
+		"path", path,
+		"arg_count", len(os.Args))
+	return syscall.Exec(path, os.Args, os.Environ())
+}
 
 type compactStreamEvent struct {
 	event CompactEvent
+}
+
+type compactStreamOpened struct {
+	action string
+	events <-chan CompactEvent
+	cancel func()
+	err    error
 }
 
 type compactStreamDone struct {
@@ -770,65 +1107,361 @@ type compactUndoDone struct {
 	err    error
 }
 
-// runStoreWatcher polls the session store every five seconds for changes.
-// A fingerprint of (name, metadata mtime) pairs acts as a change signal
-// so renames, deletes, and context updates all trigger a refresh. When a
-// change is seen and the user has been idle for at least two seconds, a
-// storeChanged interrupt is posted. Otherwise the refresh waits for the
-// next tick. This keeps the dashboard fresh without thrashing the UI
-// mid-scroll.
-func (a *App) runStoreWatcher(stop <-chan struct{}) {
-	if a.cb.Store == nil {
+type sidecarTailOpened struct {
+	events <-chan TranscriptEntry
+	cancel func()
+	err    error
+}
+
+type sidecarSendDone struct {
+	err error
+}
+
+type viewContentLoaded struct {
+	sessionName string
+	content     string
+}
+
+type exportFinished struct {
+	title string
+	body  string
+}
+
+type bridgesLoaded struct {
+	list     []Bridge
+	err      error
+	duration time.Duration
+}
+
+type modelsPrewarmed struct {
+	models map[string]string
+}
+
+type sessionsLoaded struct {
+	snapshot SessionSnapshot
+	err      error
+	reason   string
+}
+
+type detailsLoaded struct {
+	name   string
+	detail SessionDetail
+	err    error
+}
+
+type summaryRefreshDone struct {
+	name    string
+	updated *session.Session
+}
+
+type registryEvent struct {
+	event SessionEvent
+}
+
+type providerStatsEvent struct {
+	stats ProviderStats
+}
+
+type lastUsedTick struct{}
+
+type idleSummarySweepTick struct{}
+
+type selfReloadAvailable struct {
+	path   string
+	reason string
+}
+
+type executableSnapshot struct {
+	path string
+	info os.FileInfo
+}
+
+const suspendTerminalPrepSequence = "\x1b[0m\x1b[2J\x1b[H"
+
+func writeSuspendTerminalPrep(w io.Writer) {
+	if w == nil {
 		return
 	}
-	const pollEvery = 5 * time.Second
-	const idleGrace = 2 * time.Second
-	a.storeSnapshot = a.storeFingerprint()
-	t := time.NewTicker(pollEvery)
-	defer t.Stop()
-	for {
-		select {
-		case <-stop:
-			return
-		case <-t.C:
-			if a.screen == nil {
-				continue
+	_, _ = fmt.Fprint(w, suspendTerminalPrepSequence)
+}
+
+func (a *App) runSessionRefreshTicker(stop <-chan struct{}) {
+	<-stop
+}
+
+func (a *App) requestSessionsAsync(reason string) {
+	if a.cb.ListSessions == nil {
+		return
+	}
+	a.sessionsLoadingMu.Lock()
+	if a.sessionsLoading {
+		a.sessionsLoadingMu.Unlock()
+		return
+	}
+	a.sessionsLoading = true
+	a.sessionsLoadingMu.Unlock()
+	go func() {
+		started := time.Now()
+		snapshot, err := a.cb.ListSessions()
+		slog.Debug("tui.sessions.load.finished",
+			"component", "tui",
+			"reason", reason,
+			"duration_ms", time.Since(started).Milliseconds(),
+			"err", err)
+		a.postInterrupt(sessionsLoaded{snapshot: snapshot, err: err, reason: reason})
+	}()
+}
+
+func (a *App) applySessionSnapshot(snapshot SessionSnapshot) {
+	selectedName := ""
+	if a.selected != nil {
+		selectedName = a.selected.Name
+	} else if a.table.Active && a.table.SelectedRow >= 0 && a.table.SelectedRow < len(a.visibleIdx) {
+		selectedName = a.sessions[a.visibleIdx[a.table.SelectedRow]].Name
+	}
+	prevOffset := a.table.Offset
+
+	a.sessions = dedupeSessionList(snapshot.Sessions)
+	a.modelCache = copyStringMap(snapshot.Models)
+	a.remoteControlCache = copyBoolMap(snapshot.RemoteControl)
+	a.messageCountCache = copyIntMap(snapshot.MessageCounts)
+	a.contextStateCache = copyContextStateMap(snapshot.ContextStates)
+	a.globalRemoteControl = snapshot.GlobalRemoteControl
+	a.bridgeMu.Lock()
+	clear(a.bridges)
+	for _, b := range snapshot.Bridges {
+		a.bridges[b.SessionID] = b
+	}
+	a.bridgeMu.Unlock()
+	a.sortSessions()
+	a.populateTable()
+
+	if selectedName != "" {
+		if updated := a.findSessionByName(selectedName); updated != nil {
+			a.selected = updated
+			if row := a.findVisibleRowByName(selectedName); row >= 0 {
+				a.table.Active = true
+				a.table.SelectedRow = row
+				a.table.Offset = clamp(prevOffset, 0, imax(0, len(a.table.Rows)-1))
 			}
-			fp := a.storeFingerprint()
-			if fp == a.storeSnapshot {
-				continue
-			}
-			// Check user activity. If a key or mouse event landed
-			// recently, defer to the next tick so the refresh does
-			// not reset a half-finished scroll or sort.
-			a.interactionMu.Lock()
-			lastAct := a.lastInteraction
-			a.interactionMu.Unlock()
-			if !lastAct.IsZero() && time.Since(lastAct) < idleGrace {
-				continue
-			}
-			a.storeSnapshot = fp
-			_ = a.screen.PostEvent(tcell.NewEventInterrupt(storeChanged{}))
+		} else {
+			a.deselect()
 		}
+	}
+	if a.selected != nil {
+		a.populateDetails()
 	}
 }
 
-// storeFingerprint returns a short string that summarizes the current
-// session store state. It is cheap to compute and changes whenever any
-// session is added, removed, or has its metadata file modified.
-func (a *App) storeFingerprint() string {
-	if a.cb.Store == nil {
-		return ""
+func (a *App) applySessionEvent(ev SessionEvent) {
+	selectedName := ""
+	if a.selected != nil {
+		selectedName = a.selected.Name
+	} else if a.table.Active && a.table.SelectedRow >= 0 && a.table.SelectedRow < len(a.visibleIdx) {
+		selectedName = a.sessions[a.visibleIdx[a.table.SelectedRow]].Name
 	}
-	sessions, err := a.cb.Store.List()
-	if err != nil {
-		return ""
+	if ev.Kind == "SESSION_RENAMED" && selectedName == ev.OldName && ev.SessionName != "" {
+		selectedName = ev.SessionName
 	}
-	var b strings.Builder
-	for _, s := range sessions {
-		fmt.Fprintf(&b, "%s|%d|", s.Name, s.Metadata.LastAccessed.UnixNano())
+	prevOffset := a.table.Offset
+
+	if ev.GlobalRemoteControl != nil {
+		a.globalRemoteControl = *ev.GlobalRemoteControl
 	}
-	return b.String()
+
+	if ev.Bridge != nil {
+		a.bridgeMu.Lock()
+		a.bridges[ev.Bridge.SessionID] = *ev.Bridge
+		a.bridgeMu.Unlock()
+	}
+
+	switch ev.Kind {
+	case "SESSION_ADOPTED", "SESSION_UPDATED":
+		a.upsertSessionEvent(ev)
+	case "SESSION_RENAMED":
+		a.renameSessionEvent(ev)
+	case "SESSION_DELETED":
+		a.deleteSessionEvent(ev)
+	case "BRIDGE_OPENED":
+		a.bridgeMu.Lock()
+		a.bridges[ev.SessionID] = Bridge{
+			SessionID:       ev.SessionID,
+			BridgeSessionID: ev.BridgeSessionID,
+			URL:             ev.BridgeURL,
+		}
+		a.bridgeMu.Unlock()
+		if a.sidecar != nil && a.sidecarSessionID == ev.SessionID {
+			a.sidecar.BridgeURL = ev.BridgeURL
+		}
+	case "BRIDGE_CLOSED":
+		a.bridgeMu.Lock()
+		delete(a.bridges, ev.SessionID)
+		a.bridgeMu.Unlock()
+		if a.sidecar != nil && a.sidecarSessionID == ev.SessionID {
+			a.sidecar.BridgeURL = ""
+		}
+	case "GLOBAL_SETTINGS_UPDATED":
+		// Global defaults already applied above.
+	}
+
+	a.sortSessions()
+	a.populateTable()
+
+	if selectedName != "" {
+		if updated := a.findSessionByName(selectedName); updated != nil {
+			a.selected = updated
+			if row := a.findVisibleRowByName(selectedName); row >= 0 {
+				a.table.Active = true
+				a.table.SelectedRow = row
+				a.table.Offset = clamp(prevOffset, 0, imax(0, len(a.table.Rows)-1))
+			}
+		} else {
+			a.deselect()
+		}
+	}
+	if a.selected != nil {
+		a.populateDetails()
+	}
+}
+
+func (a *App) upsertSessionEvent(ev SessionEvent) {
+	if ev.Session == nil {
+		return
+	}
+	filtered := a.sessions[:0]
+	replaced := false
+	for _, sess := range a.sessions {
+		if sess.Name == ev.Session.Name || (ev.Session.Metadata.SessionID != "" && sess.Metadata.SessionID == ev.Session.Metadata.SessionID) {
+			if !replaced {
+				filtered = append(filtered, ev.Session)
+				replaced = true
+			}
+			continue
+		}
+		filtered = append(filtered, sess)
+	}
+	if !replaced {
+		filtered = append(filtered, ev.Session)
+	}
+	a.sessions = dedupeSessionList(filtered)
+	a.modelCache[ev.Session.Name] = ev.Model
+	a.remoteControlCache[ev.Session.Name] = ev.RemoteControl
+	a.messageCountCache[ev.Session.Name] = ev.MessageCount
+	if ev.ContextState != nil {
+		a.contextStateCache[ev.Session.Name] = *ev.ContextState
+	}
+}
+
+func (a *App) renameSessionEvent(ev SessionEvent) {
+	if ev.Session != nil {
+		filtered := a.sessions[:0]
+		renamed := false
+		for _, sess := range a.sessions {
+			if sess.Name == ev.OldName || (ev.Session.Metadata.SessionID != "" && sess.Metadata.SessionID == ev.Session.Metadata.SessionID) {
+				if !renamed {
+					filtered = append(filtered, ev.Session)
+					renamed = true
+				}
+				continue
+			}
+			filtered = append(filtered, sess)
+		}
+		if !renamed {
+			filtered = append(filtered, ev.Session)
+		}
+		a.sessions = dedupeSessionList(filtered)
+		a.modelCache[ev.Session.Name] = ev.Model
+		a.remoteControlCache[ev.Session.Name] = ev.RemoteControl
+		a.messageCountCache[ev.Session.Name] = ev.MessageCount
+		if ev.ContextState != nil {
+			a.contextStateCache[ev.Session.Name] = *ev.ContextState
+		}
+	}
+	if ev.OldName != "" && ev.OldName != ev.SessionName {
+		delete(a.modelCache, ev.OldName)
+		delete(a.remoteControlCache, ev.OldName)
+		delete(a.messageCountCache, ev.OldName)
+		delete(a.contextStateCache, ev.OldName)
+	}
+}
+
+func (a *App) deleteSessionEvent(ev SessionEvent) {
+	filtered := a.sessions[:0]
+	for _, sess := range a.sessions {
+		if ev.SessionName != "" && sess.Name == ev.SessionName {
+			continue
+		}
+		if ev.SessionID != "" && sess.Metadata.SessionID == ev.SessionID {
+			continue
+		}
+		filtered = append(filtered, sess)
+	}
+	a.sessions = filtered
+	if ev.SessionName != "" {
+		delete(a.modelCache, ev.SessionName)
+		delete(a.remoteControlCache, ev.SessionName)
+		delete(a.messageCountCache, ev.SessionName)
+		delete(a.contextStateCache, ev.SessionName)
+	}
+}
+
+func dedupeSessionList(in []*session.Session) []*session.Session {
+	if len(in) <= 1 {
+		return in
+	}
+	bestByKey := make(map[string]*session.Session, len(in))
+	order := make([]string, 0, len(in))
+	for _, sess := range in {
+		if sess == nil {
+			continue
+		}
+		key := session.IdentityKey(sess)
+		if _, ok := bestByKey[key]; !ok {
+			order = append(order, key)
+		}
+		if current := bestByKey[key]; current == nil || session.PreferIdentityWinner(sess, current) {
+			bestByKey[key] = sess
+		}
+	}
+	out := make([]*session.Session, 0, len(bestByKey))
+	for _, key := range order {
+		if sess := bestByKey[key]; sess != nil {
+			out = append(out, sess)
+		}
+	}
+	return out
+}
+
+func copyStringMap(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func copyBoolMap(in map[string]bool) map[string]bool {
+	out := make(map[string]bool, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func copyIntMap(in map[string]int) map[string]int {
+	out := make(map[string]int, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func copyContextStateMap(in map[string]SessionContextState) map[string]SessionContextState {
+	out := make(map[string]SessionContextState, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // noteInteraction records the current time as the last user interaction.
@@ -845,35 +1478,361 @@ func (a *App) noteInteraction() {
 // closed bridges within milliseconds. The reload runs on the same
 // code path as the polling watcher so concurrency stays simple.
 func (a *App) runRegistrySubscriber(events <-chan SessionEvent) {
+	slog.Info("tui.registry_subscriber.started", "component", "tui")
 	for ev := range events {
-		switch ev.Kind {
-		case "BRIDGE_OPENED":
-			if ev.SessionID != "" {
-				a.bridgeMu.Lock()
-				a.bridges[ev.SessionID] = Bridge{
-					SessionID:       ev.SessionID,
-					BridgeSessionID: ev.BridgeSessionID,
-					URL:             ev.BridgeURL,
-				}
-				a.bridgeMu.Unlock()
-				if a.sidecar != nil && a.sidecarSessionID == ev.SessionID {
-					a.sidecar.BridgeURL = ev.BridgeURL
-				}
-			}
-		case "BRIDGE_CLOSED":
-			if ev.SessionID != "" {
-				a.bridgeMu.Lock()
-				delete(a.bridges, ev.SessionID)
-				a.bridgeMu.Unlock()
-				if a.sidecar != nil && a.sidecarSessionID == ev.SessionID {
-					a.sidecar.BridgeURL = ""
-				}
-			}
+		a.postInterrupt(registryEvent{event: ev})
+	}
+	slog.Warn("tui.registry_subscriber.exited", "component", "tui")
+}
+
+func (a *App) runProviderStatsSubscriber(events <-chan ProviderStats) {
+	slog.Info("tui.provider_stats_subscriber.started", "component", "tui")
+	for ev := range events {
+		a.postInterrupt(providerStatsEvent{stats: ev})
+	}
+	slog.Warn("tui.provider_stats_subscriber.exited", "component", "tui")
+}
+
+func (a *App) runRegistrySupervisor(stop <-chan struct{}) {
+	if a.cb.SubscribeRegistry == nil {
+		a.setDaemonOffline("registry_unavailable", fmt.Errorf("subscribe callback not configured"))
+		return
+	}
+
+	retryDelay := 250 * time.Millisecond
+	const maxRetryDelay = 5 * time.Second
+
+	for {
+		select {
+		case <-stop:
+			slog.Info("tui.registry_supervisor.stopped", "component", "tui")
+			return
+		default:
 		}
-		if a.screen != nil {
-			_ = a.screen.PostEvent(tcell.NewEventInterrupt(a))
+
+		subscribeStartedAt := time.Now()
+		slog.Debug("tui.registry_supervisor.subscribe_begin",
+			"component", "tui",
+			"started_at", subscribeStartedAt.Format(time.RFC3339Nano))
+		events, cancel, err := a.cb.SubscribeRegistry()
+		subscribeDuration := time.Since(subscribeStartedAt)
+		if err != nil {
+			a.setDaemonOffline("subscribe_failed", err)
+			slog.Warn("tui.registry_supervisor.subscribe_failed",
+				"component", "tui",
+				"subscribe_ms", subscribeDuration.Milliseconds(),
+				"retry_ms", retryDelay.Milliseconds(),
+				"err", err)
+			if !waitForRegistryRetry(stop, retryDelay) {
+				return
+			}
+			retryDelay = nextRegistryRetryDelay(retryDelay, maxRetryDelay)
+			continue
+		}
+
+		a.setDaemonOnline("subscribe_ok")
+		slog.Info("tui.registry_supervisor.subscribe_ok",
+			"component", "tui",
+			"subscribe_ms", subscribeDuration.Milliseconds())
+		a.requestSessionsAsync("registry.resubscribe")
+		retryDelay = 250 * time.Millisecond
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			a.runRegistrySubscriber(events)
+		}()
+
+		select {
+		case <-stop:
+			cancel()
+			<-done
+			slog.Info("tui.registry_supervisor.cancelled", "component", "tui")
+			return
+		case <-done:
+			cancel()
+			a.setDaemonOffline("stream_closed", fmt.Errorf("registry stream closed"))
+			slog.Warn("tui.registry_supervisor.stream_closed",
+				"component", "tui",
+				"retry_ms", retryDelay.Milliseconds())
+			if !waitForRegistryRetry(stop, retryDelay) {
+				return
+			}
+			retryDelay = nextRegistryRetryDelay(retryDelay, maxRetryDelay)
 		}
 	}
+}
+
+func (a *App) runProviderStatsSupervisor(stop <-chan struct{}) {
+	if a.cb.SubscribeProviderStats == nil {
+		a.statsMu.Lock()
+		a.stats.StreamErr = "stats stream unavailable"
+		a.statsMu.Unlock()
+		return
+	}
+
+	retryDelay := 250 * time.Millisecond
+	const maxRetryDelay = 5 * time.Second
+
+	for {
+		select {
+		case <-stop:
+			slog.Info("tui.provider_stats_supervisor.stopped", "component", "tui")
+			return
+		default:
+		}
+
+		events, cancel, err := a.cb.SubscribeProviderStats()
+		if err != nil {
+			a.statsMu.Lock()
+			a.stats.StreamErr = err.Error()
+			a.statsMu.Unlock()
+			a.postInterrupt(a)
+			if !waitForRegistryRetry(stop, retryDelay) {
+				return
+			}
+			retryDelay = nextRegistryRetryDelay(retryDelay, maxRetryDelay)
+			continue
+		}
+
+		a.statsMu.Lock()
+		a.stats.StreamErr = ""
+		a.statsMu.Unlock()
+		a.postInterrupt(a)
+		retryDelay = 250 * time.Millisecond
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			a.runProviderStatsSubscriber(events)
+		}()
+
+		select {
+		case <-stop:
+			cancel()
+			<-done
+			return
+		case <-done:
+			cancel()
+			a.statsMu.Lock()
+			if a.stats.StreamErr == "" {
+				a.stats.StreamErr = "stats stream closed"
+			}
+			a.statsMu.Unlock()
+			a.postInterrupt(a)
+			if !waitForRegistryRetry(stop, retryDelay) {
+				return
+			}
+			retryDelay = nextRegistryRetryDelay(retryDelay, maxRetryDelay)
+		}
+	}
+}
+
+func (a *App) applyProviderStats(update ProviderStats) {
+	a.statsMu.Lock()
+	defer a.statsMu.Unlock()
+	found := false
+	for i := range a.stats.Providers {
+		if a.stats.Providers[i].Provider == update.Provider {
+			a.stats.Providers[i] = update
+			found = true
+			break
+		}
+	}
+	if !found {
+		a.stats.Providers = append(a.stats.Providers, update)
+	}
+	sort.Slice(a.stats.Providers, func(i, j int) bool {
+		if a.stats.Providers[i].Inflight != a.stats.Providers[j].Inflight {
+			return a.stats.Providers[i].Inflight > a.stats.Providers[j].Inflight
+		}
+		if !a.stats.Providers[i].LastSeen.Equal(a.stats.Providers[j].LastSeen) {
+			return a.stats.Providers[i].LastSeen.After(a.stats.Providers[j].LastSeen)
+		}
+		return a.stats.Providers[i].Provider < a.stats.Providers[j].Provider
+	})
+	a.stats.LoadedAt = time.Now()
+	a.statsLoaded = true
+}
+
+func waitForRegistryRetry(stop <-chan struct{}, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-stop:
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func nextRegistryRetryDelay(current time.Duration, max time.Duration) time.Duration {
+	next := current * 2
+	if next > max {
+		return max
+	}
+	return next
+}
+
+func (a *App) setDaemonOnline(source string) {
+	a.daemonMu.Lock()
+	wasOnline := a.daemonOnline
+	previousErr := a.daemonLastErr
+	a.daemonOnline = true
+	a.daemonLastErr = ""
+	a.daemonLastSeen = time.Now()
+	a.daemonMu.Unlock()
+
+	if !wasOnline {
+		slog.Info("tui.daemon.online",
+			"component", "tui",
+			"source", source,
+			"previous_error", previousErr)
+	}
+	a.postInterrupt(a)
+}
+
+func (a *App) setDaemonOffline(source string, err error) {
+	errorMessage := ""
+	if err != nil {
+		errorMessage = err.Error()
+	}
+
+	a.daemonMu.Lock()
+	wasOnline := a.daemonOnline
+	errorChanged := a.daemonLastErr != errorMessage
+	a.daemonOnline = false
+	a.daemonLastErr = errorMessage
+	a.daemonMu.Unlock()
+
+	if wasOnline || errorChanged {
+		slog.Warn("tui.daemon.offline",
+			"component", "tui",
+			"source", source,
+			"err", errorMessage)
+	}
+	a.postInterrupt(a)
+}
+
+func shortDaemonStatus(msg string) string {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return ""
+	}
+	msg = strings.ReplaceAll(msg, "\n", " ")
+	replacements := []struct{ old, new string }{
+		{"rpc error: code = ", ""},
+		{"desc = ", ""},
+		{"dial daemon at ", "dial "},
+		{"daemon not responding:", "not responding:"},
+		{"unknown method ListSessions for service clyde.v1.ClydeService", "daemon binary too old"},
+	}
+	for _, rep := range replacements {
+		msg = strings.ReplaceAll(msg, rep.old, rep.new)
+	}
+	runes := []rune(msg)
+	if len(runes) > 56 {
+		msg = string(runes[:55]) + "..."
+	}
+	return msg
+}
+
+func (a *App) isDaemonOnline() bool {
+	a.daemonMu.RLock()
+	defer a.daemonMu.RUnlock()
+	return a.daemonOnline
+}
+
+func (a *App) isSessionsLoading() bool {
+	a.sessionsLoadingMu.Lock()
+	defer a.sessionsLoadingMu.Unlock()
+	return a.sessionsLoading
+}
+
+func (a *App) showStartupLoadingState() bool {
+	return a.startupLoading && a.isSessionsLoading() && len(a.sessions) == 0
+}
+
+func (a *App) showSessionsEmptyState() bool {
+	return !a.showStartupLoadingState() && len(a.visibleIdx) == 0
+}
+
+func (a *App) logHealthTick() {
+	now := time.Now()
+	drawDelta := a.drawCount - a.healthLastDraw
+	spinDelta := a.spinnerFrame - a.healthLastSpin
+	sinceLastDraw := time.Duration(0)
+	if !a.lastDrawAt.IsZero() {
+		sinceLastDraw = now.Sub(a.lastDrawAt)
+	}
+	sinceLastEvent := time.Duration(0)
+	if !a.lastEventAt.IsZero() {
+		sinceLastEvent = now.Sub(a.lastEventAt)
+	}
+	sinceLastNonInterrupt := time.Duration(0)
+	if !a.lastNonInterruptAt.IsZero() {
+		sinceLastNonInterrupt = now.Sub(a.lastNonInterruptAt)
+	}
+
+	slog.Debug("tui.health.tick",
+		"component", "tui",
+		"draw_count", a.drawCount,
+		"draw_delta", drawDelta,
+		"spinner_frame", a.spinnerFrame,
+		"spinner_delta", spinDelta,
+		"last_draw_ms", sinceLastDraw.Milliseconds(),
+		"last_event_ms", sinceLastEvent.Milliseconds(),
+		"last_event_type", a.lastEventType,
+		"last_non_interrupt_ms", sinceLastNonInterrupt.Milliseconds(),
+		"last_non_interrupt_type", a.lastNonInterruptType,
+		"app_focused", a.appFocused,
+		"active_tab", a.activeTab,
+		"selected", a.selectedSessionName(),
+		"has_overlay", a.overlay != nil,
+		"overlay_type", fmt.Sprintf("%T", a.overlay),
+		"daemon_online", a.isDaemonOnline())
+
+	if sinceLastDraw > 1500*time.Millisecond || drawDelta == 0 {
+		slog.Warn("tui.health.draw_stall_suspected",
+			"component", "tui",
+			"draw_count", a.drawCount,
+			"draw_delta", drawDelta,
+			"spinner_frame", a.spinnerFrame,
+			"spinner_delta", spinDelta,
+			"last_draw_ms", sinceLastDraw.Milliseconds(),
+			"last_event_ms", sinceLastEvent.Milliseconds(),
+			"last_event_type", a.lastEventType,
+			"last_non_interrupt_ms", sinceLastNonInterrupt.Milliseconds(),
+			"last_non_interrupt_type", a.lastNonInterruptType,
+			"app_focused", a.appFocused,
+			"active_tab", a.activeTab,
+			"has_overlay", a.overlay != nil,
+			"overlay_type", fmt.Sprintf("%T", a.overlay))
+	}
+	if a.appFocused && sinceLastNonInterrupt > 4*time.Second {
+		slog.Warn("tui.health.input_starvation_suspected",
+			"component", "tui",
+			"draw_count", a.drawCount,
+			"draw_delta", drawDelta,
+			"spinner_frame", a.spinnerFrame,
+			"spinner_delta", spinDelta,
+			"last_non_interrupt_ms", sinceLastNonInterrupt.Milliseconds(),
+			"last_non_interrupt_type", a.lastNonInterruptType,
+			"last_event_type", a.lastEventType,
+			"active_tab", a.activeTab,
+			"has_overlay", a.overlay != nil,
+			"overlay_type", fmt.Sprintf("%T", a.overlay))
+	}
+
+	a.healthLastDraw = a.drawCount
+	a.healthLastSpin = a.spinnerFrame
+}
+
+func (a *App) selectedSessionName() string {
+	if a.selected == nil {
+		return ""
+	}
+	return a.selected.Name
 }
 
 // runLastUsedTicker watches every tracked transcript for mtime
@@ -883,24 +1842,7 @@ func (a *App) runRegistrySubscriber(events <-chan SessionEvent) {
 // few seconds so the eye catches the update. The ticker idles
 // quickly and avoids work when the user is actively interacting.
 func (a *App) runLastUsedTicker(stop <-chan struct{}) {
-	const interval = 5 * time.Second
-	const idleGrace = 750 * time.Millisecond
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	for {
-		select {
-		case <-stop:
-			return
-		case <-t.C:
-		}
-		a.interactionMu.Lock()
-		lastAct := a.lastInteraction
-		a.interactionMu.Unlock()
-		if !lastAct.IsZero() && time.Since(lastAct) < idleGrace {
-			continue
-		}
-		a.refreshLastUsedColumns()
-	}
+	<-stop
 }
 
 // refreshLastUsedColumns walks every session, restats its
@@ -909,50 +1851,7 @@ func (a *App) runLastUsedTicker(stop <-chan struct{}) {
 // no reshuffle happens. The set of sessions whose row was touched
 // is recorded so a brief highlight tint stays on for a few seconds.
 func (a *App) refreshLastUsedColumns() {
-	a.lastUsedMu.Lock()
-	defer a.lastUsedMu.Unlock()
-
-	changed := false
-	for _, sess := range a.sessions {
-		if sess == nil {
-			continue
-		}
-		path := sess.Metadata.TranscriptPath
-		if path == "" {
-			continue
-		}
-		fi, err := os.Stat(path)
-		if err != nil {
-			continue
-		}
-		mt := fi.ModTime()
-		prev := a.lastUsedTickerSeen[sess.Name]
-		if !prev.IsZero() && !mt.After(prev) {
-			continue
-		}
-		a.lastUsedTickerSeen[sess.Name] = mt
-		// First sighting after startup is not a "change" worth
-		// highlighting; just record it. A subsequent advance is
-		// what triggers the tint.
-		if !prev.IsZero() {
-			a.recentlyUpdatedAt[sess.Name] = time.Now()
-		}
-		// Update only this row in place. populateTable does a full
-		// rebuild but does not re-sort, so the order remains stable.
-		for vi, idx := range a.visibleIdx {
-			if idx >= 0 && idx < len(a.sessions) && a.sessions[idx].Name == sess.Name {
-				if vi < len(a.table.Rows) {
-					a.table.Rows[vi] = a.rowFor(sess)
-					changed = true
-				}
-				break
-			}
-		}
-	}
-
-	if changed && a.screen != nil {
-		_ = a.screen.PostEvent(tcell.NewEventInterrupt(a))
-	}
+	a.requestSessionsAsync("last_used")
 }
 
 // runIdleSummarySweeper regenerates stale or missing session summaries
@@ -973,7 +1872,7 @@ func (a *App) runIdleSummarySweeper(stop <-chan struct{}) {
 		case <-stop:
 			return
 		case <-t.C:
-			if a.screen == nil {
+			if !a.hasScreen() {
 				continue
 			}
 			a.interactionMu.Lock()
@@ -982,11 +1881,7 @@ func (a *App) runIdleSummarySweeper(stop <-chan struct{}) {
 			if !lastAct.IsZero() && time.Since(lastAct) < idleFor {
 				continue
 			}
-			sess := a.pickStaleForSweep()
-			if sess == nil {
-				continue
-			}
-			a.maybeRefreshSummary(sess)
+			a.postInterrupt(idleSummarySweepTick{})
 		}
 	}
 }
@@ -1060,16 +1955,21 @@ func (a *App) syncTableSelectionWithOffset() {
 // in "^[[200~...^[[201~". The full sequence below matches what tput
 // reset emits minus the screen clear.
 func (a *App) teardownScreen() {
-	if a.screen == nil {
-		return
+	a.screenMu.Lock()
+	scr := a.screen
+	if scr != nil {
+		slog.Debug("tui.teardownScreen.start", "screen", fmt.Sprintf("%p", scr))
+		a.pendingResizeDisplaySync = false
+		scr.DisableMouse()
+		scr.DisableFocus()
+		scr.ShowCursor(0, 0)
+		scr.Fini()
+		slog.Debug("tui.teardownScreen.fini", "screen", fmt.Sprintf("%p", scr))
+		a.screen = nil
+	} else {
+		slog.Debug("tui.teardownScreen.no_screen")
 	}
-	slog.Debug("tui.teardownScreen.start", "screen", fmt.Sprintf("%p", a.screen))
-	a.screen.DisableMouse()
-	a.screen.DisableFocus()
-	a.screen.ShowCursor(0, 0)
-	a.screen.Fini()
-	slog.Debug("tui.teardownScreen.fini", "screen", fmt.Sprintf("%p", a.screen))
-	a.screen = nil
+	a.screenMu.Unlock()
 
 	// Reset escape sequences, emitted in a single write so a
 	// ctrl-c mid-sequence cannot leave the terminal half-reset.
@@ -1103,33 +2003,117 @@ func (a *App) initScreen() error {
 	scr.EnableMouse(tcell.MouseButtonEvents | tcell.MouseDragEvents)
 	scr.EnableFocus()
 	scr.Clear()
+	a.screenMu.Lock()
 	a.screen = scr
+	a.screenMu.Unlock()
 	slog.Info("tui.initScreen.success", "screen", fmt.Sprintf("%p", a.screen))
 	return nil
+}
+
+func (a *App) postInterrupt(data interface{}) {
+	a.screenMu.RLock()
+	scr := a.screen
+	a.screenMu.RUnlock()
+	if scr == nil {
+		return
+	}
+	_ = scr.PostEvent(tcell.NewEventInterrupt(data))
+}
+
+func (a *App) hasScreen() bool {
+	a.screenMu.RLock()
+	defer a.screenMu.RUnlock()
+	return a.screen != nil
+}
+
+func (a *App) screenSizeSnapshot() (int, int) {
+	a.screenMu.RLock()
+	defer a.screenMu.RUnlock()
+	if a.screen == nil {
+		return 0, 0
+	}
+	return a.screen.Size()
+}
+
+func (a *App) runTerminalCall(call string, fn func()) {
+	startedAt := time.Now()
+	width, height := a.screenSizeSnapshot()
+	overlayType := fmt.Sprintf("%T", a.overlay)
+	slog.Debug("tui.terminal_call.begin",
+		"component", "tui",
+		"call", call,
+		"started_at", startedAt.Format(time.RFC3339Nano),
+		"width", width,
+		"height", height,
+		"active_tab", a.activeTab,
+		"selected", a.selectedSessionName(),
+		"overlay_type", overlayType,
+		"during_resize", a.inResizeEvent)
+	fn()
+	duration := time.Since(startedAt)
+	logLevel := slog.LevelDebug
+	if duration > terminalCallWarnThreshold(call) {
+		logLevel = slog.LevelWarn
+	}
+	slog.Log(context.Background(), logLevel, "tui.terminal_call.done",
+		"component", "tui",
+		"call", call,
+		"started_at", startedAt.Format(time.RFC3339Nano),
+		"duration_ms", duration.Milliseconds(),
+		"width", width,
+		"height", height,
+		"active_tab", a.activeTab,
+		"selected", a.selectedSessionName(),
+		"overlay_type", overlayType,
+		"during_resize", a.inResizeEvent)
+}
+
+func (a *App) pollEvent() tcell.Event {
+	var ev tcell.Event
+	a.runTerminalCall("poll_event", func() {
+		ev = a.screen.PollEvent()
+	})
+	return ev
+}
+
+func terminalCallWarnThreshold(call string) time.Duration {
+	switch call {
+	case "poll_event":
+		return 1500 * time.Millisecond
+	case "show", "sync":
+		return 250 * time.Millisecond
+	default:
+		return 500 * time.Millisecond
+	}
+}
+
+func (a *App) seedBridgesAsync() {
+	if a.cb.ListBridges == nil {
+		return
+	}
+	go func() {
+		startedAt := time.Now()
+		slog.Debug("tui.startup.list_bridges.begin",
+			"component", "tui",
+			"started_at", startedAt.Format(time.RFC3339Nano))
+		list, err := a.cb.ListBridges()
+		a.postInterrupt(bridgesLoaded{
+			list:     list,
+			err:      err,
+			duration: time.Since(startedAt),
+		})
+	}()
 }
 
 // PreWarmStats kicks off background model computation. Results land in
 // modelCache and a redraw is triggered via PostEvent.
 func (a *App) PreWarmStats() {
-	go func() {
-		for _, sess := range a.sessions {
-			if a.cb.ExtractModel != nil {
-				name := sess.Name
-				model := a.cb.ExtractModel(sess)
-				a.modelCache[name] = model
-			}
-		}
-		a.asyncRefresh()
-	}()
+	a.requestSessionsAsync("prewarm")
 }
 
 // asyncRefresh posts an event that triggers a redraw without blocking.
 func (a *App) asyncRefresh() {
-	if a.screen == nil {
-		return
-	}
-	// tcell PostEvent is safe across goroutines.
-	_ = a.screen.PostEvent(tcell.NewEventInterrupt(a))
+	a.postInterrupt(a)
 }
 
 // ---------------- Event dispatch ----------------
@@ -1137,17 +2121,83 @@ func (a *App) asyncRefresh() {
 func (a *App) handleEvent(ev tcell.Event) {
 	switch e := ev.(type) {
 	case *tcell.EventResize:
-		a.screen.Sync()
+		a.inResizeEvent = true
+		defer func() { a.inResizeEvent = false }()
+		w, h := e.Size()
+		sw, sh := a.screen.Size()
+		if w != sw || h != sh {
+			slog.Debug("tui.event.resize.size_mismatch",
+				"component", "tui",
+				"event_w", w, "event_h", h, "screen_w", sw, "screen_h", sh,
+				"overlay_type", fmt.Sprintf("%T", a.overlay))
+		}
+		slog.Debug("tui.event.resize",
+			"component", "tui",
+			"width", w,
+			"height", h,
+			"overlay_type", fmt.Sprintf("%T", a.overlay),
+			"return_path_state", string(a.returnPathState))
+		// One full Sync after the draw for this event (see main loop), not
+		// on a debounce, so the terminal does not smear during drag resize.
+		a.pendingResizeDisplaySync = true
+		if a.returnPathSession != nil {
+			switch a.returnPathState {
+			case returnPathStateReturnPromptPending, returnPathStateReturnPromptVisible:
+				a.ensureReturnPrompt(a.returnPathSession, "event.resize")
+			}
+		}
 	case *tcell.EventFocus:
+		slog.Debug("tui.event.focus",
+			"component", "tui",
+			"focused", e.Focused,
+			"overlay_type", fmt.Sprintf("%T", a.overlay),
+			"return_path_state", string(a.returnPathState))
+		a.appFocused = e.Focused
 		if e.Focused {
-			a.screen.Sync()
+			a.runTerminalCall("sync", func() {
+				a.screen.Sync()
+			})
+			if a.returnPathSession != nil {
+				switch a.returnPathState {
+				case returnPathStateReturnPromptPending, returnPathStateReturnPromptVisible:
+					a.ensureReturnPrompt(a.returnPathSession, "event.focus")
+				}
+			}
 		}
 	case *tcell.EventInterrupt:
+		interruptType := fmt.Sprintf("%T", e.Data())
+		switch e.Data().(type) {
+		case spinnerTick, healthTick:
+			// Skip per-tick logging for high-frequency heartbeat events.
+		default:
+			slog.Debug("tui.event.interrupt",
+				"component", "tui",
+				"payload_type", interruptType,
+				"selected", a.selectedSessionName(),
+				"active_tab", a.activeTab,
+				"overlay_type", fmt.Sprintf("%T", a.overlay))
+		}
 		// Interrupts are posted from background goroutines. The Data
 		// payload tells us which cache to refresh.
 		switch d := e.Data().(type) {
-		case detailsReady:
-			// Only re-render the details pane if the user hasn't moved on.
+		case sessionsLoaded:
+			a.sessionsLoadingMu.Lock()
+			a.sessionsLoading = false
+			a.sessionsLoadingMu.Unlock()
+			if d.err != nil {
+				if d.reason == "startup" {
+					a.startupLoading = false
+				}
+				slog.Warn("tui.sessions.load.failed", "component", "tui", "reason", d.reason, "err", d.err)
+				break
+			}
+			a.startupLoading = false
+			a.applySessionSnapshot(d.snapshot)
+		case detailsLoaded:
+			a.detailMu.Lock()
+			a.detailCache[d.name] = d.detail
+			delete(a.detailLoading, d.name)
+			a.detailMu.Unlock()
 			if a.selected != nil && a.selected.Name == d.name {
 				a.populateDetails()
 			}
@@ -1156,15 +2206,80 @@ func (a *App) handleEvent(ev tcell.Event) {
 			if a.selected != nil && a.detailsLoadingNow(a.selected.Name) {
 				a.populateDetails()
 			}
+		case healthTick:
+			a.lastHeartbeatAt = time.Now()
+			a.logHealthTick()
+		case modelsPrewarmed:
+			for name, model := range d.models {
+				a.modelCache[name] = model
+			}
+			a.populateTable()
+		case bridgesLoaded:
+			if d.err != nil {
+				slog.Warn("tui.startup.list_bridges.failed",
+					"component", "tui",
+					"duration_ms", d.duration.Milliseconds(),
+					"err", d.err)
+				break
+			}
+			a.bridgeMu.Lock()
+			clear(a.bridges)
+			for _, b := range d.list {
+				a.bridges[b.SessionID] = b
+			}
+			a.bridgeMu.Unlock()
+			slog.Info("tui.startup.list_bridges.loaded",
+				"component", "tui",
+				"count", len(d.list),
+				"duration_ms", d.duration.Milliseconds())
+			a.populateTable()
 		case summaryRefreshed:
 			// Table was already repopulated by maybeRefreshSummary. The
 			// interrupt exists to trigger a draw cycle from the event loop.
 			_ = d
-		case storeChanged:
-			a.softRefreshSessions()
+		case idleSummarySweepTick:
+			sess := a.pickStaleForSweep()
+			if sess != nil {
+				a.maybeRefreshSummary(sess)
+			}
+		case summaryRefreshDone:
+			a.summaryRefreshing[d.name] = false
+			if d.updated != nil {
+				for i := range a.sessions {
+					if a.sessions[i].Name == d.name {
+						a.sessions[i] = d.updated
+						break
+					}
+				}
+				a.populateTable()
+			}
+		case registryEvent:
+			a.applySessionEvent(d.event)
+		case providerStatsEvent:
+			a.applyProviderStats(d.stats)
+		case selfReloadAvailable:
+			slog.Info("tui.self_reload.requested",
+				"component", "tui",
+				"path", d.path,
+				"reason", d.reason)
+			a.reloadExecPath = d.path
+			a.running = false
 		case compactStreamEvent:
 			if panel, ok := a.overlay.(*CompactPanel); ok {
 				panel.ApplyCompactEvent(d.event)
+			}
+		case compactStreamOpened:
+			if panel, ok := a.overlay.(*CompactPanel); ok {
+				if d.err != nil {
+					panel.SetBusy(d.action, false)
+					panel.ApplyCompactEvent(CompactEvent{
+						Kind:    "status",
+						Message: fmt.Sprintf("%s start failed: %v", d.action, d.err),
+					})
+					break
+				}
+				a.compactCancel = d.cancel
+				go a.runCompactStream(d.events, d.action)
 			}
 		case compactStreamDone:
 			a.compactCancel = nil
@@ -1187,6 +2302,38 @@ func (a *App) handleEvent(ev tcell.Event) {
 				panel.SetBusy("undo", false)
 				panel.SetUndoResult(d.result, d.err)
 			}
+		case sidecarTailOpened:
+			if a.sidecar != nil {
+				if d.err != nil {
+					a.sidecar.status = "tail failed: " + d.err.Error()
+					break
+				}
+				a.sidecarCancel = d.cancel
+				go a.runSidecarTail(d.events, a.sidecar)
+			}
+		case sidecarSendDone:
+			if a.sidecar != nil {
+				if d.err != nil {
+					a.sidecar.status = "error: " + d.err.Error()
+				} else {
+					a.sidecar.status = "sent"
+				}
+			}
+		case viewContentLoaded:
+			if d.content == "" {
+				break
+			}
+			tb := &TextBox{
+				Title:      "Conversation: " + d.sessionName,
+				TitleStyle: StyleHeader,
+				Wrap:       true,
+				Focused:    true,
+			}
+			tb.SetLines(strings.Split(d.content, "\n"))
+			a.overlay = &ViewerOverlay{Box: tb, OnClose: a.closeOverlay}
+			a.mode = StatusView
+		case exportFinished:
+			a.openNoticeModal(d.title, d.body)
 		default:
 			// Several call sites post the *App itself as the payload to
 			// request a generic table repaint (see PostEvent calls in
@@ -1205,6 +2352,16 @@ func (a *App) handleEvent(ev tcell.Event) {
 // Global shortcuts (Ctrl+C) always apply. Overlays take priority over widgets.
 func (a *App) handleKey(e *tcell.EventKey) {
 	a.noteInteraction()
+	slog.Debug("tui.input.key",
+		"component", "tui",
+		"key", int(e.Key()),
+		"rune", string(e.Rune()),
+		"modifiers", int(e.Modifiers()),
+		"selected", a.selectedSessionName(),
+		"active_tab", a.activeTab,
+		"has_overlay", a.overlay != nil,
+		"overlay_type", fmt.Sprintf("%T", a.overlay),
+		"mode", int(a.mode))
 	// Global: Ctrl+C always quits, regardless of focus.
 	if e.Key() == tcell.KeyCtrlC {
 		a.running = false
@@ -1220,10 +2377,10 @@ func (a *App) handleKey(e *tcell.EventKey) {
 	// so the user can type into the inject input without the global
 	// shortcuts (e.g. "d" for delete) firing while typing a message.
 	// Esc returns to the Sessions tab.
-	if a.activeTab == 2 && a.sidecar != nil {
+	if a.activeTab == tabSidecar && a.sidecar != nil {
 		if e.Key() == tcell.KeyEscape {
-			a.activeTab = 0
-			a.tabs.SetActive(0)
+			a.activeTab = tabSessions
+			a.tabs.SetActive(tabSessions)
 			return
 		}
 		if a.sidecar.HandleEvent(e) {
@@ -1299,16 +2456,21 @@ func (a *App) handleKey(e *tcell.EventKey) {
 			a.openFilter()
 			return
 		case '1':
-			a.activeTab = 0
-			a.tabs.SetActive(0)
+			a.activeTab = tabSessions
+			a.tabs.SetActive(tabSessions)
 			return
 		case '2':
-			a.activeTab = 1
-			a.tabs.SetActive(1)
+			a.activeTab = tabStats
+			a.tabs.SetActive(tabStats)
+			a.requestStatsAsync("tab.switch")
 			return
 		case '3':
-			a.activeTab = 2
-			a.tabs.SetActive(2)
+			a.activeTab = tabSettings
+			a.tabs.SetActive(tabSettings)
+			return
+		case '4':
+			a.activeTab = tabSidecar
+			a.tabs.SetActive(tabSidecar)
 			return
 		case 'S':
 			// Pin the highlighted row in the sidecar tab and switch
@@ -1316,8 +2478,8 @@ func (a *App) handleKey(e *tcell.EventKey) {
 			// view of a remote control session one keystroke away.
 			if sess := a.rowSession(); sess != nil {
 				a.pinSidecar(sess)
-				a.activeTab = 2
-				a.tabs.SetActive(2)
+				a.activeTab = tabSidecar
+				a.tabs.SetActive(tabSidecar)
 			}
 			return
 		case '!':
@@ -1342,6 +2504,14 @@ func (a *App) handleKey(e *tcell.EventKey) {
 			a.newSession()
 			return
 		case 'R':
+			if !a.isDaemonOnline() && a.cb.RestartDaemon != nil {
+				a.restartDaemonAsync()
+				return
+			}
+			if a.activeTab == tabStats {
+				a.refreshStats()
+				return
+			}
 			a.refreshSessions()
 			return
 		case 'B':
@@ -1360,22 +2530,21 @@ func (a *App) handleKey(e *tcell.EventKey) {
 			}
 			return
 		case 'e':
-			if a.activeTab == 1 {
+			if a.activeTab == tabSettings {
 				a.editConfigFile(false)
 				return
 			}
 		case 'E':
-			if a.activeTab == 1 {
+			if a.activeTab == tabSettings {
 				a.editConfigFile(true)
 				return
 			}
 		case 'G':
-			if a.activeTab == 1 && a.cb.SetGlobalRemoteControl != nil {
-				cur := false
-				if a.cb.IsGlobalRemoteControlEnabled != nil {
-					cur = a.cb.IsGlobalRemoteControlEnabled()
-				}
+			if a.activeTab == tabSettings && a.cb.SetGlobalRemoteControl != nil {
+				cur := a.globalRemoteControl
 				_ = a.cb.SetGlobalRemoteControl(!cur)
+				a.globalRemoteControl = !cur
+				a.refreshSessions()
 				return
 			}
 		case 'v':
@@ -1426,14 +2595,34 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 	}
 	x, y := e.Position()
 	btns := e.Buttons()
+	slog.Debug("tui.input.mouse",
+		"component", "tui",
+		"x", x,
+		"y", y,
+		"buttons", int(btns),
+		"selected", a.selectedSessionName(),
+		"active_tab", a.activeTab,
+		"has_overlay", a.overlay != nil,
+		"overlay_type", fmt.Sprintf("%T", a.overlay),
+		"mode", int(a.mode))
 
 	if a.overlay != nil {
+		slog.Debug("tui.input.mouse.route", "component", "tui", "route", "overlay")
 		a.overlay.HandleEvent(e)
 		return
 	}
 
+	if btns&tcell.Button1 != 0 && a.statusRect.Contains(x, y) {
+		if action, ok := legendActionAt(a.status, a.statusRect, x); ok {
+			slog.Debug("tui.input.mouse.route", "component", "tui", "route", "status_legend", "action", int(action))
+			a.invokeLegendAction(action)
+			return
+		}
+	}
+
 	// Tab strip click takes priority over the rest of the body.
 	if a.tabs != nil && a.tabs.HandleEvent(e) {
+		slog.Debug("tui.input.mouse.route", "component", "tui", "route", "tabs")
 		return
 	}
 
@@ -1445,6 +2634,7 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 	// If the user is currently dragging a scrollbar, keep routing the
 	// mouse position to that widget until the button is released.
 	if a.grab != grabNone && btns&tcell.Button1 != 0 {
+		slog.Debug("tui.input.mouse.route", "component", "tui", "route", "grab", "grab", int(a.grab))
 		switch a.grab {
 		case grabTable:
 			a.table.JumpToScrollbarY(y)
@@ -1463,6 +2653,7 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 
 	// Click on the table scrollbar starts a grab and jumps.
 	if btns&tcell.Button1 != 0 && a.table.ScrollbarRect.Contains(x, y) {
+		slog.Debug("tui.input.mouse.route", "component", "tui", "route", "table_scrollbar")
 		a.grab = grabTable
 		a.table.JumpToScrollbarY(y)
 		a.syncTableSelectionWithOffset()
@@ -1474,12 +2665,14 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 	if a.selected != nil && a.details != nil {
 		// Scrollbar click or drag start on either sub-pane.
 		if btns&tcell.Button1 != 0 && a.details.Left.ScrollbarRect.Contains(x, y) {
+			slog.Debug("tui.input.mouse.route", "component", "tui", "route", "details_left_scrollbar")
 			a.grab = grabDetailsLeft
 			a.details.SetFocus(DetailsFocusLeft)
 			a.details.Left.JumpToScrollbarY(y)
 			return
 		}
 		if btns&tcell.Button1 != 0 && a.details.Right.ScrollbarRect.Contains(x, y) {
+			slog.Debug("tui.input.mouse.route", "component", "tui", "route", "details_right_scrollbar")
 			a.grab = grabDetailsRight
 			a.details.SetFocus(DetailsFocusRight)
 			a.details.Right.JumpToScrollbarY(y)
@@ -1495,6 +2688,7 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 				return
 			}
 			if btns&tcell.Button1 != 0 {
+				slog.Debug("tui.input.mouse.route", "component", "tui", "route", "details_left_focus")
 				a.details.SetFocus(DetailsFocusLeft)
 				return
 			}
@@ -1509,6 +2703,7 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 				return
 			}
 			if btns&tcell.Button1 != 0 {
+				slog.Debug("tui.input.mouse.route", "component", "tui", "route", "details_right_focus")
 				a.details.SetFocus(DetailsFocusRight)
 				return
 			}
@@ -1516,6 +2711,7 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 	}
 
 	if a.tableRect.Contains(x, y) {
+		slog.Debug("tui.input.mouse.route", "component", "tui", "route", "table")
 		// Wheel scroll
 		if btns&tcell.WheelUp != 0 {
 			a.table.ScrollUp(3)
@@ -1536,27 +2732,23 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 		// Left click / double click
 		if btns&tcell.Button1 != 0 {
 			// Header click sorts. The column index matches the display
-			// order (NAME, BASEDIR, MODEL, MSGS, SUMMARY, LAST USED,
-			// CREATED). MSGS and SUMMARY do not have their own sort
-			// mode yet so clicks on those columns fall through.
+			// order (NAME, BASEDIR, LAST ACTIVE, MODEL, MSGS, SUMMARY,
+			// CREATED).
 			if y == a.tableRect.Y {
-				// Table column order: NAME, BASEDIR, MODEL, RC, MSGS,
-				// SUMMARY, LAST USED, CREATED. The RC badge has no
-				// sort mode of its own; clicks on it fall through.
 				switch a.table.ColAtX(x) {
 				case 0:
 					a.toggleSort(SortColName)
 				case 1:
 					a.toggleSort(SortColWorkspace)
 				case 2:
+					a.toggleSort(SortColUsed)
+				case 3:
 					a.toggleSort(SortColModel)
 				case 4:
 					a.toggleSort(SortColMessages)
 				case 5:
 					a.toggleSort(SortColSummary)
 				case 6:
-					a.toggleSort(SortColUsed)
-				case 7:
 					a.toggleSort(SortColCreated)
 				}
 				return
@@ -1573,6 +2765,7 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 			a.lastClickRow = row
 
 			if isDouble {
+				slog.Debug("tui.input.mouse.double_click_resume", "component", "tui", "row", row)
 				a.resumeRow(row)
 				return
 			}
@@ -1583,10 +2776,77 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 	}
 }
 
+func (a *App) invokeLegendAction(action LegendAction) {
+	switch action {
+	case LegendNew:
+		a.newSession()
+	case LegendRefresh:
+		if a.activeTab == tabStats {
+			a.refreshStats()
+			return
+		}
+		a.refreshSessions()
+	case LegendRestartDaemon:
+		if a.cb.RestartDaemon != nil {
+			a.restartDaemonAsync()
+		}
+	case LegendHelp:
+		a.openHelpModal()
+	case LegendQuit:
+		if a.selected != nil {
+			a.deselect()
+			return
+		}
+		a.running = false
+	case LegendSearch:
+		if a.selected != nil {
+			a.openSearchForm()
+		}
+	case LegendView:
+		if a.selected != nil {
+			a.viewSelected()
+		}
+	case LegendCompact:
+		if a.selected != nil {
+			a.openCompactForm()
+		}
+	case LegendFork:
+		if a.selected != nil {
+			a.doFork()
+		}
+	case LegendDelete:
+		if a.selected != nil {
+			a.openDeleteConfirm()
+		}
+	case LegendEditBasedir:
+		if sess := a.rowSession(); sess != nil {
+			a.openBasedirEditor(sess)
+		}
+	case LegendClose:
+		if a.overlay != nil {
+			a.closeOverlay()
+			return
+		}
+		if a.selected != nil {
+			a.deselect()
+		}
+	case LegendSelectOption:
+		if sess := a.rowSession(); sess != nil {
+			a.openSessionOptionsFor(sess)
+		}
+	case LegendSelectDetail:
+		if sess := a.currentSession(); sess != nil {
+			a.openDetails(sess)
+		}
+	}
+}
+
 // ---------------- Drawing ----------------
 
 func (a *App) draw() {
+	drawStartedAt := time.Now()
 	a.layout()
+	layoutDuration := time.Since(drawStartedAt)
 
 	// Clear the whole screen to the default style before redrawing. Each
 	// widget also clears its own rect, but the margins between rects (the
@@ -1596,50 +2856,82 @@ func (a *App) draw() {
 	// previous frame linger in those gutters and the UI visibly corrupts
 	// the longer the user interacts with it.
 	w, h := a.screen.Size()
+	clearStartedAt := time.Now()
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
 			a.screen.SetContent(x, y, ' ', nil, tcell.StyleDefault)
 		}
 	}
+	clearDuration := time.Since(clearStartedAt)
 
 	// Tab strip (purple). Always visible across tabs so the user can
-	// click between Sessions and Settings. The dashboard summary
-	// renders right-aligned on the same row to save vertical space.
+	// click between Sessions and Settings. Runtime diagnostics and
+	// dashboard summary render right-aligned on the same row.
 	a.tabs.Active = a.activeTab
 	a.tabs.Draw(a.screen, Rect{X: 0, Y: 0, W: w, H: 1})
 
-	right := fmt.Sprintf("clyde  %d sessions", len(a.visibleIdx))
-	if a.hiddenCount > 0 {
-		right += fmt.Sprintf("  (%d hidden, H to show)", a.hiddenCount)
-	} else if a.showEphemeral {
-		right += "  (showing test/tmp)"
+	right := "clyde"
+	if !a.startupLoading {
+		right += fmt.Sprintf("  %d sessions", len(a.visibleIdx))
+		if a.hiddenCount > 0 {
+			right += fmt.Sprintf("  (%d hidden, H to show)", a.hiddenCount)
+		} else if a.showEphemeral {
+			right += "  (showing test/tmp)"
+		}
+		if a.filter != "" {
+			right += fmt.Sprintf("  (filter: %q)", a.filter)
+		}
 	}
-	if a.filter != "" {
-		right += fmt.Sprintf("  (filter: %q)", a.filter)
+	// Header runtime stamp keeps build/process identity and health age.
+	lastHeartbeatText := "--"
+	if !a.lastHeartbeatAt.IsZero() {
+		lastHeartbeatText = formatHeartbeatAge(time.Since(a.lastHeartbeatAt))
 	}
-	rx := w - runeCount(right) - 2
-	if rx > 0 {
-		drawString(a.screen, rx, 0, StyleTabBar.Bold(true), right, w-rx)
+	runtimeStamp := fmt.Sprintf("b:%s r:%s lh:%s",
+		a.buildHash,
+		a.runHash,
+		lastHeartbeatText,
+	)
+	rightX := w
+	rightText := " " + right + " "
+	rx := rightX - runeCount(rightText)
+	if rx >= 0 {
+		drawString(a.screen, rx, 0, StyleTabBar.Bold(true), rightText, rightX-rx)
+		rightX = rx
+	}
+	stampText := " " + runtimeStamp + " "
+	sx := rightX - runeCount(stampText)
+	if sx > 0 {
+		drawString(a.screen, sx, 0, StyleTabBar, stampText, rightX-sx)
 	}
 
 	switch a.activeTab {
-	case 0:
-		// Table
-		a.table.Draw(a.screen, a.tableRect)
-
-		// Details
-		if a.selected != nil {
-			a.details.Draw(a.screen, a.detailRect)
+	case tabSessions:
+		switch {
+		case a.showStartupLoadingState():
+			a.drawSessionsLoadingState(a.tableRect)
+		case a.showSessionsEmptyState():
+			a.drawSessionsEmptyState(a.tableRect)
+		default:
+			a.table.Draw(a.screen, a.tableRect)
+			if a.selected != nil {
+				a.details.Draw(a.screen, a.detailRect)
+			}
 		}
-	case 2:
+	case tabStats:
+		a.requestStatsAsync("draw")
+		a.drawStatsTab(a.tableRect)
+	case tabSidecar:
 		a.drawSidecarTab(a.tableRect)
 	default:
 		a.drawSettingsTab(a.tableRect)
 	}
+	bodyDuration := time.Since(clearStartedAt) - clearDuration
 
 	// Status bar
 	a.status.Mode = a.mode
 	a.status.Position = a.positionTextFor()
+	a.status.Clock = time.Now().Format("15:04:05")
 	a.status.LegendOverride = nil
 	if provider, ok := a.overlay.(LegendProvider); ok {
 		a.status.LegendOverride = provider.StatusLegendActions()
@@ -1647,7 +2939,14 @@ func (a *App) draw() {
 	a.bridgeMu.RLock()
 	a.status.BridgeCount = len(a.bridges)
 	a.bridgeMu.RUnlock()
+	a.status.DaemonOnline = a.isDaemonOnline()
+	a.status.DaemonConnecting = a.showStartupLoadingState() && !a.isDaemonOnline()
+	a.status.DaemonSpinner = spinnerGlyph(a.spinnerFrame)
+	a.daemonMu.RLock()
+	a.status.DaemonStatus = shortDaemonStatus(a.daemonLastErr)
+	a.daemonMu.RUnlock()
 	a.status.Draw(a.screen, a.statusRect)
+	statusDuration := time.Since(clearStartedAt) - clearDuration - bodyDuration
 
 	// Overlay on top. Dim the existing frame first so the pane reads
 	// as a lifted panel; the overlay then clears its own box back to
@@ -1659,11 +2958,62 @@ func (a *App) draw() {
 		a.overlay.Draw(a.screen, Rect{X: 0, Y: 0, W: ww, H: hh})
 	}
 
-	a.screen.Show()
+	showStartedAt := time.Now()
+	a.runTerminalCall("show", func() {
+		a.screen.Show()
+	})
+	showDuration := time.Since(showStartedAt)
+	totalDuration := time.Since(drawStartedAt)
+	a.drawCount++
+	a.lastDrawAt = time.Now()
+	a.lastDrawSpinner = a.spinnerFrame
+	overlayDuration := time.Duration(0)
+	if a.overlay != nil {
+		overlayDuration = totalDuration - layoutDuration - clearDuration - bodyDuration - statusDuration - showDuration
+		if overlayDuration < 0 {
+			overlayDuration = 0
+		}
+	}
+	if totalDuration > 20*time.Millisecond {
+		logLevel := slog.LevelDebug
+		if totalDuration > 75*time.Millisecond || clearDuration > 50*time.Millisecond || showDuration > 30*time.Millisecond {
+			logLevel = slog.LevelWarn
+		}
+		slog.Log(context.Background(), logLevel, "tui.draw.timing",
+			"component", "tui",
+			"total_ms", totalDuration.Milliseconds(),
+			"layout_ms", layoutDuration.Milliseconds(),
+			"clear_ms", clearDuration.Milliseconds(),
+			"body_ms", bodyDuration.Milliseconds(),
+			"status_ms", statusDuration.Milliseconds(),
+			"overlay_ms", overlayDuration.Milliseconds(),
+			"show_ms", showDuration.Milliseconds(),
+			"width", w,
+			"height", h,
+			"active_tab", a.activeTab,
+			"selected", a.selectedSessionName(),
+			"has_overlay", a.overlay != nil,
+			"overlay_type", fmt.Sprintf("%T", a.overlay),
+			"mode", int(a.mode))
+	}
 }
 
 func (a *App) layout() {
 	w, h := a.screen.Size()
+	if w != a.lastLayoutW || h != a.lastLayoutH {
+		slog.Debug("tui.layout.size_change",
+			"component", "tui",
+			"old_w", a.lastLayoutW,
+			"old_h", a.lastLayoutH,
+			"new_w", w,
+			"new_h", h,
+			"selected", a.selectedSessionName(),
+			"active_tab", a.activeTab,
+			"has_overlay", a.overlay != nil,
+			"overlay_type", fmt.Sprintf("%T", a.overlay))
+		a.lastLayoutW = w
+		a.lastLayoutH = h
+	}
 	if w <= 0 || h <= 0 {
 		a.headerRect = Rect{}
 		a.tableRect = Rect{}
@@ -1714,7 +3064,9 @@ func (a *App) layout() {
 		tableH = 0
 	}
 
-	tableX := 2
+	// Keep a slim side gutter so the table scrollbar does not look detached
+	// from the terminal edge on narrow windows.
+	tableX := 1
 	if w < 8 {
 		tableX = 0
 	}
@@ -1749,6 +3101,7 @@ func (a *App) positionTextFor() string {
 
 // populateTable rebuilds the table rows from the current visible sessions.
 func (a *App) populateTable() {
+	startedAt := time.Now()
 	rows := make([][]TableCell, 0, len(a.visibleIdx))
 	for _, idx := range a.visibleIdx {
 		sess := a.sessions[idx]
@@ -1761,9 +3114,32 @@ func (a *App) populateTable() {
 	if a.table.SelectedRow >= len(rows) {
 		a.table.SelectedRow = imax(0, len(rows)-1)
 	}
+	duration := time.Since(startedAt)
+	if duration > 15*time.Millisecond {
+		logLevel := slog.LevelDebug
+		if duration > 40*time.Millisecond {
+			logLevel = slog.LevelWarn
+		}
+		slog.Log(context.Background(), logLevel, "tui.table.populate_timing",
+			"component", "tui",
+			"duration_ms", duration.Milliseconds(),
+			"sessions_total", len(a.sessions),
+			"visible_total", len(a.visibleIdx),
+			"rows_total", len(rows),
+			"selected_row", a.table.SelectedRow,
+			"sort_col", int(a.sortCol),
+			"sort_asc", a.sortAsc,
+			"filter", a.filter)
+	}
 }
 
 func (a *App) rowFor(sess *session.Session) []TableCell {
+	a.lastUsedMu.Lock()
+	defer a.lastUsedMu.Unlock()
+	return a.rowForLockedLastUsed(sess)
+}
+
+func (a *App) rowForLockedLastUsed(sess *session.Session) []TableCell {
 	nameStyle := StyleDefault.Foreground(ColorText)
 	if sess.Metadata.IsForkedSession {
 		nameStyle = StyleDefault.Foreground(ColorFork)
@@ -1801,22 +3177,18 @@ func (a *App) rowFor(sess *session.Session) []TableCell {
 	if isEphemeralSession(sess) {
 		summaryStyle = StyleDefault.Foreground(ColorMuted).Dim(true)
 	}
+	msgCount := sessionMessageCount(a, sess)
 	msgs := "-"
 	msgStyle := StyleDefault.Foreground(ColorMuted).Dim(true)
-	rcCell := TableCell{Text: " - ", Style: StyleDefault.Foreground(ColorMuted).Dim(true)}
-	if _, active := a.bridgeFor(sess); active {
-		rcCell = TableCell{Text: " RC ", Style: StyleDefault.Foreground(ColorSuccess).Bold(true)}
-	} else if a.cb.IsRemoteControlEnabled != nil && a.cb.IsRemoteControlEnabled(sess) {
-		// Flag is on but no live bridge yet; the session is configured
-		// to launch with --remote-control next time it is resumed.
-		rcCell = TableCell{Text: " rc ", Style: StyleDefault.Foreground(ColorAccent)}
+	if msgCount > 0 {
+		msgs = formatWithCommas(msgCount)
+		msgStyle = subStyle
 	}
-	// If this session was just touched, paint the LAST USED cell in
+	// If this session was just touched, paint the LAST ACTIVE cell in
 	// the accent color so the eye catches the live update. The tint
 	// fades after a few seconds so a steady stream of updates does
 	// not turn the whole column accent.
 	lastUsedStyle := subStyle
-	a.lastUsedMu.Lock()
 	if t, ok := a.recentlyUpdatedAt[sess.Name]; ok {
 		if time.Since(t) < 4*time.Second {
 			lastUsedStyle = StyleDefault.Foreground(ColorAccent).Bold(true)
@@ -1824,15 +3196,13 @@ func (a *App) rowFor(sess *session.Session) []TableCell {
 			delete(a.recentlyUpdatedAt, sess.Name)
 		}
 	}
-	a.lastUsedMu.Unlock()
 	return []TableCell{
 		{Text: sess.Name, Style: nameStyle},
 		{Text: shortPath(sess.Metadata.WorkspaceRoot), Style: subStyle},
+		{Text: util.FormatRelativeTime(lastUsedTime(sess)), Style: lastUsedStyle},
 		{Text: model, Style: modelStyle},
-		rcCell,
 		{Text: msgs, Style: msgStyle},
 		{Text: summary, Style: summaryStyle},
-		{Text: util.FormatRelativeTime(lastUsedTime(sess)), Style: lastUsedStyle},
 		{Text: sess.Metadata.Created.Format("Jan 02"), Style: subStyle},
 	}
 }
@@ -1888,29 +3258,54 @@ func (a *App) rebuildVisible() {
 func (a *App) sortSessions() {
 	sort.SliceStable(a.sessions, func(i, j int) bool {
 		x, y := a.sessions[i], a.sessions[j]
-		var less bool
+		cmp := 0
 		switch a.sortCol {
 		case SortColName:
-			less = strings.ToLower(x.Name) < strings.ToLower(y.Name)
+			cmp = strings.Compare(strings.ToLower(x.Name), strings.ToLower(y.Name))
 		case SortColWorkspace:
-			less = x.Metadata.WorkspaceRoot < y.Metadata.WorkspaceRoot
+			cmp = strings.Compare(x.Metadata.WorkspaceRoot, y.Metadata.WorkspaceRoot)
 		case SortColModel:
-			less = a.modelCache[x.Name] < a.modelCache[y.Name]
+			cmp = strings.Compare(a.modelCache[x.Name], a.modelCache[y.Name])
 		case SortColMessages:
-			less = sessionMessageCount(a, x) < sessionMessageCount(a, y)
+			cmp = compareInts(sessionMessageCount(a, x), sessionMessageCount(a, y))
 		case SortColSummary:
-			less = strings.ToLower(x.Metadata.Context) < strings.ToLower(y.Metadata.Context)
+			cmp = strings.Compare(strings.ToLower(x.Metadata.Context), strings.ToLower(y.Metadata.Context))
 		case SortColCreated:
-			less = x.Metadata.Created.Before(y.Metadata.Created)
+			cmp = compareTimes(x.Metadata.Created, y.Metadata.Created)
 		case SortColUsed:
-			less = lastUsedTime(x).Before(lastUsedTime(y))
+			cmp = compareTimes(lastUsedTime(x), lastUsedTime(y))
+		}
+		if cmp == 0 {
+			return strings.ToLower(x.Name) < strings.ToLower(y.Name)
 		}
 		if !a.sortAsc {
-			less = !less
+			cmp = -cmp
 		}
-		return less
+		return cmp < 0
 	})
 	a.rebuildVisible()
+}
+
+func compareInts(a, b int) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func compareTimes(a, b time.Time) int {
+	switch {
+	case a.Before(b):
+		return -1
+	case a.After(b):
+		return 1
+	default:
+		return 0
+	}
 }
 
 func (a *App) toggleSort(col SortColumn) {
@@ -1929,24 +3324,23 @@ func (a *App) toggleSort(col SortColumn) {
 }
 
 // sortColTableIndex maps a SortColumn to the table column index used
-// by the table widget for header indicators. The RC badge column
-// occupies index 3 between MODEL and MSGS.
+// by the table widget for header indicators.
 func sortColTableIndex(c SortColumn) int {
 	switch c {
 	case SortColName:
 		return 0
 	case SortColWorkspace:
 		return 1
-	case SortColModel:
+	case SortColUsed:
 		return 2
+	case SortColModel:
+		return 3
 	case SortColMessages:
 		return 4
 	case SortColSummary:
 		return 5
-	case SortColUsed:
-		return 6
 	case SortColCreated:
-		return 7
+		return 6
 	}
 	return -1
 }
@@ -1995,12 +3389,9 @@ func (a *App) maybeRefreshSummary(sess *session.Session) {
 		return
 	}
 
-	// We do not maintain a per-session message count cache, so there is
-	// no cheap way to compare current transcript length against the
-	// stamped ContextMessageCount. Treat the transcript as size-zero
-	// for staleness purposes; the refresh path below still triggers
-	// when Context is empty or visibly too long.
-	msgNow := 0
+	// Use daemon-reported message counts to judge growth without any
+	// local transcript scanning on the UI path.
+	msgNow := sessionMessageCount(a, sess)
 
 	// Criteria for refresh:
 	//   1. No Context yet.
@@ -2029,23 +3420,13 @@ func (a *App) maybeRefreshSummary(sess *session.Session) {
 
 	a.summaryRefreshing[sess.Name] = true
 	name := sess.Name
-	_ = a.cb.RefreshSummary(sess, func(updated *session.Session) {
+	if err := a.cb.RefreshSummary(sess, func(updated *session.Session) {
+		a.postInterrupt(summaryRefreshDone{name: name, updated: updated})
+		a.postInterrupt(summaryRefreshed{})
+	}); err != nil {
 		a.summaryRefreshing[name] = false
-		if updated == nil {
-			return
-		}
-		// Splice the updated session in and re-render the table row.
-		for i := range a.sessions {
-			if a.sessions[i].Name == name {
-				a.sessions[i] = updated
-				break
-			}
-		}
-		a.populateTable()
-		if a.screen != nil {
-			_ = a.screen.PostEvent(tcell.NewEventInterrupt(summaryRefreshed{}))
-		}
-	})
+		slog.Warn("tui.summary.refresh.request_failed", "component", "tui", "session", name, "error", err)
+	}
 }
 
 // summaryRefreshed signals that a background summary update completed.
@@ -2116,18 +3497,30 @@ func (a *App) populateDetails() {
 		return
 	}
 	name := a.selected.Name
+	contextState := a.contextStateCache[name]
 
 	a.detailMu.Lock()
 	cached, ok := a.detailCache[name]
 	a.detailMu.Unlock()
 
 	if ok {
+		cached.ContextUsage = contextState.Usage
+		cached.ContextUsageLoaded = contextState.Loaded
+		cached.ContextUsageStatus = contextState.Status
 		a.details.Set(a.selected, cached)
+		if !cached.ContextUsageLoaded {
+			a.details.Left.Title = " STATS   " + spinnerGlyph(a.spinnerFrame) + " loading context "
+		}
 		return
 	}
 
 	// Paint a fast placeholder so the UI is never blocked on disk I/O.
-	placeholder := SessionDetail{Model: a.modelCache[name]}
+	placeholder := SessionDetail{
+		Model:              a.modelCache[name],
+		ContextUsage:       contextState.Usage,
+		ContextUsageLoaded: contextState.Loaded,
+		ContextUsageStatus: contextState.Status,
+	}
 	a.details.Set(a.selected, placeholder)
 	a.details.Left.Title = " STATS   " + spinnerGlyph(a.spinnerFrame) + " loading "
 	a.details.Right.Title = " MESSAGES   " + spinnerGlyph(a.spinnerFrame) + " loading "
@@ -2135,11 +3528,11 @@ func (a *App) populateDetails() {
 	a.loadDetailAsync(a.selected)
 }
 
-// loadDetailAsync spawns a goroutine to call cb.ExtractDetail and stash the
-// result in detailCache. Duplicate calls for the same session are coalesced
-// via detailLoading. Completion posts an interrupt event to wake the loop.
+// loadDetailAsync spawns a goroutine to call cb.GetSessionDetail.
+// Duplicate calls for the same session are coalesced via detailLoading.
+// The goroutine posts detailsLoaded; the event loop applies cache mutations.
 func (a *App) loadDetailAsync(sess *session.Session) {
-	if a.cb.ExtractDetail == nil {
+	if a.cb.GetSessionDetail == nil {
 		return
 	}
 	name := sess.Name
@@ -2153,26 +3546,69 @@ func (a *App) loadDetailAsync(sess *session.Session) {
 	a.detailMu.Unlock()
 
 	go func() {
-		detail := a.cb.ExtractDetail(sess)
-		a.detailMu.Lock()
-		a.detailCache[name] = detail
-		delete(a.detailLoading, name)
-		a.detailMu.Unlock()
-		if a.screen != nil {
-			_ = a.screen.PostEvent(tcell.NewEventInterrupt(detailsReady{name: name}))
-		}
+		detail, err := a.cb.GetSessionDetail(sess)
+		a.postInterrupt(detailsLoaded{name: name, detail: detail, err: err})
 	}()
 }
 
-// detailsReady signals that a background ExtractDetail call completed.
-// The main loop checks the selected session name against this payload so
-// that stale completions (user moved on) do not cause a flash repaint.
-type detailsReady struct{ name string }
-
 // spinnerGlyph returns a single rotating spinner character for frame n.
 func spinnerGlyph(n int) string {
-	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	// ASCII frames render reliably across terminal fonts and themes.
+	frames := []string{"|", "/", "-", "\\"}
 	return frames[n%len(frames)]
+}
+
+func (a *App) drawSessionsLoadingState(r Rect) {
+	clearRect(a.screen, r)
+	lines := []struct {
+		style tcell.Style
+		text  string
+	}{
+		{style: StyleDefault.Bold(true), text: spinnerGlyph(a.spinnerFrame) + " Loading sessions"},
+		{style: StyleMuted, text: "Connecting to daemon and building the initial snapshot"},
+	}
+	a.drawCenteredLines(r, lines)
+}
+
+func (a *App) drawSessionsEmptyState(r Rect) {
+	clearRect(a.screen, r)
+	lines := []struct {
+		style tcell.Style
+		text  string
+	}{
+		{style: StyleDefault.Bold(true), text: "No sessions yet"},
+		{style: StyleMuted, text: "Start a chat with claude and it will appear here"},
+	}
+	a.drawCenteredLines(r, lines)
+}
+
+func (a *App) drawCenteredLines(r Rect, lines []struct {
+	style tcell.Style
+	text  string
+}) {
+	if r.W <= 0 || r.H <= 0 || len(lines) == 0 {
+		return
+	}
+	startY := r.Y + (r.H-len(lines))/2
+	for i, line := range lines {
+		y := startY + i
+		if y < r.Y || y >= r.Y+r.H {
+			continue
+		}
+		x := r.X
+		if width := runeCount(line.text); width < r.W {
+			x = r.X + (r.W-width)/2
+		}
+		drawString(a.screen, x, y, line.style, line.text, r.X+r.W-x)
+	}
+}
+
+func formatHeartbeatAge(age time.Duration) string {
+	if age < 0 {
+		age = 0
+	}
+	seconds := int(age.Round(time.Second).Seconds())
+	return fmt.Sprintf("%ds", seconds)
 }
 
 // ---------------- Actions ----------------
@@ -2182,28 +3618,8 @@ func (a *App) resumeRow(row int) {
 		return
 	}
 	sess := a.sessions[a.visibleIdx[row]]
-	slog.Info("resume.start", "session", sess.Name, "row", row, "uuid", sess.Metadata.SessionID, "path", "resumeRow")
-	a.returnPathSession = sess
-	a.trackReturnPathState(returnPathStateSuspendedForResume, "resumeRow.before_suspend", sess)
-	a.suspendImpl(func() {
-		a.trackReturnPathState(returnPathStateResumingTerminal, "resumeRow.callback", sess)
-		_ = a.cb.ResumeSession(sess)
-	})
-	slog.Info("resume.exit", "session", sess.Name, "path", "resumeRow")
-	a.trackReturnPathState(returnPathStateReturnPromptPending, "resumeRow.after_suspend", sess)
-	// Open the post-session ReturnPrompt first. Deferring store refresh avoids
-	// blocking the prompt on a potentially slow session scan.
-	sessionForPrompt := sess
-	a.openReturnPrompt(sessionForPrompt)
-	a.ensureReturnPrompt(sessionForPrompt, "resumeRow")
-	// Re-select the row (refreshSessions resets selection on deselect).
-	for vi, idx := range a.visibleIdx {
-		if a.sessions[idx].Name == sess.Name {
-			a.table.Active = true
-			a.table.SelectedRow = vi
-			break
-		}
-	}
+	slog.Debug("resume.row_selected", "session", sess.Name, "row", row)
+	a.runResumeLifecycle(sess, "resumeRow")
 }
 
 func (a *App) newSession() {
@@ -2386,27 +3802,13 @@ func (a *App) openNewSessionRemoteControlModal(basedir string) {
 	launch := func(enableRC bool) {
 		a.closeOverlay()
 		runner := func() {
-			if a.cb.StartSessionWithBasedir != nil {
+			if a.cb.StartSessionWithBasedirRC != nil {
+				_ = a.cb.StartSessionWithBasedirRC(basedir, enableRC)
+			} else if a.cb.StartSessionWithBasedir != nil {
 				_ = a.cb.StartSessionWithBasedir(basedir)
 			} else if a.cb.StartSession != nil {
 				_ = a.cb.StartSession()
 			}
-			if !enableRC {
-				return
-			}
-			// After the session was created, the latest session is
-			// the most recently touched one. Flip its RC flag. The
-			// session may have already exited by the time this runs
-			// but SetRemoteControl persists into settings.json so the
-			// preference is ready for the next resume.
-			if a.cb.SetRemoteControl == nil || a.cb.Store == nil {
-				return
-			}
-			sessions, err := a.cb.Store.List()
-			if err != nil || len(sessions) == 0 {
-				return
-			}
-			_ = a.cb.SetRemoteControl(sessions[0], true)
 		}
 		a.suspendImpl(runner)
 		a.refreshSessions()
@@ -2433,21 +3835,11 @@ func (a *App) viewSelected() {
 	if a.selected == nil || a.cb.ViewContent == nil {
 		return
 	}
-	content := a.cb.ViewContent(a.selected)
-	if content == "" {
-		return
-	}
-	tb := &TextBox{
-		Title:      "Conversation: " + a.selected.Name,
-		TitleStyle: StyleHeader,
-		Wrap:       true,
-		Focused:    true,
-	}
-	tb.SetLines(strings.Split(content, "\n"))
-
-	ov := &ViewerOverlay{Box: tb, OnClose: a.closeOverlay}
-	a.overlay = ov
-	a.mode = StatusView
+	sess := a.selected
+	go func() {
+		content := a.cb.ViewContent(sess)
+		a.postInterrupt(viewContentLoaded{sessionName: sess.Name, content: content})
+	}()
 }
 
 func (a *App) openDeleteConfirm() {
@@ -2470,9 +3862,11 @@ func (a *App) openDeleteConfirm() {
 	m.OnChoice = func(idx int) {
 		a.closeOverlay()
 		if idx == 1 {
-			_ = a.cb.DeleteSession(sess)
 			a.deselect()
-			a.refreshSessions()
+			go func() {
+				_ = a.cb.DeleteSession(sess)
+				a.requestSessionsAsync("delete")
+			}()
 		}
 	}
 	a.overlay = m
@@ -2551,28 +3945,22 @@ func (a *App) startCompactRun(req CompactRunRequest, apply bool, panel *CompactP
 		a.compactCancel = nil
 	}
 	panel.SetBusy(action, true)
-	events, cancel, err := runner(req)
-	if err != nil {
-		panel.SetBusy(action, false)
-		panel.ApplyCompactEvent(CompactEvent{
-			Kind:    "status",
-			Message: fmt.Sprintf("%s start failed: %v", action, err),
+	go func() {
+		events, cancel, err := runner(req)
+		a.postInterrupt(compactStreamOpened{
+			action: action,
+			events: events,
+			cancel: cancel,
+			err:    err,
 		})
-		return
-	}
-	a.compactCancel = cancel
-	go a.runCompactStream(events, action)
+	}()
 }
 
 func (a *App) runCompactStream(events <-chan CompactEvent, action string) {
 	for ev := range events {
-		if a.screen != nil {
-			_ = a.screen.PostEvent(tcell.NewEventInterrupt(compactStreamEvent{event: ev}))
-		}
+		a.postInterrupt(compactStreamEvent{event: ev})
 	}
-	if a.screen != nil {
-		_ = a.screen.PostEvent(tcell.NewEventInterrupt(compactStreamDone{action: action}))
-	}
+	a.postInterrupt(compactStreamDone{action: action})
 }
 
 func (a *App) startCompactUndo(sessionName string, panel *CompactPanel) {
@@ -2586,12 +3974,10 @@ func (a *App) startCompactUndo(sessionName string, panel *CompactPanel) {
 	panel.SetBusy("undo", true)
 	go func() {
 		result, err := a.cb.CompactUndo(sessionName)
-		if a.screen != nil {
-			_ = a.screen.PostEvent(tcell.NewEventInterrupt(compactUndoDone{
-				result: result,
-				err:    err,
-			}))
-		}
+		a.postInterrupt(compactUndoDone{
+			result: result,
+			err:    err,
+		})
 	}()
 }
 
@@ -2697,7 +4083,12 @@ func (a *App) pinSidecar(sess *session.Session) {
 		if a.cb.SendToSession == nil {
 			return fmt.Errorf("daemon offline")
 		}
-		return a.cb.SendToSession(sess.Metadata.SessionID, text)
+		panel.status = "sending..."
+		go func() {
+			err := a.cb.SendToSession(sess.Metadata.SessionID, text)
+			a.postInterrupt(sidecarSendDone{err: err})
+		}()
+		return nil
 	}
 	a.sidecar = panel
 	a.sidecarSessionID = sess.Metadata.SessionID
@@ -2705,13 +4096,11 @@ func (a *App) pinSidecar(sess *session.Session) {
 	if a.cb.TailTranscript == nil {
 		return
 	}
-	events, cancel, err := a.cb.TailTranscript(sess.Metadata.SessionID, -1)
-	if err != nil {
-		panel.status = "tail failed: " + err.Error()
-		return
-	}
-	a.sidecarCancel = cancel
-	go a.runSidecarTail(events, panel)
+	panel.status = "opening tail..."
+	go func() {
+		events, cancel, err := a.cb.TailTranscript(sess.Metadata.SessionID, -1)
+		a.postInterrupt(sidecarTailOpened{events: events, cancel: cancel, err: err})
+	}()
 }
 
 // runSidecarTail drains the daemon stream and appends each line to
@@ -2727,9 +4116,7 @@ func (a *App) runSidecarTail(events <-chan TranscriptEntry, panel *SidecarPanel)
 			Text: line.Text,
 			When: when,
 		})
-		if a.screen != nil {
-			_ = a.screen.PostEvent(tcell.NewEventInterrupt(a))
-		}
+		a.postInterrupt(a)
 	}
 }
 
@@ -2738,6 +4125,110 @@ func (a *App) runSidecarTail(events <-chan TranscriptEntry, panel *SidecarPanel)
 // take. The body is read-mostly: editing happens in an external editor
 // invoked via the e shortcut so the dashboard does not have to ship a
 // full form widget for every config field.
+func (a *App) drawStatsTab(r Rect) {
+	if r.W <= 0 || r.H <= 0 {
+		return
+	}
+
+	a.statsMu.Lock()
+	stats := a.stats
+	loaded := a.statsLoaded
+	loading := a.statsLoading
+	errMsg := a.statsErr
+	a.statsMu.Unlock()
+
+	type row struct {
+		label string
+		value string
+		style tcell.Style
+	}
+	rows := []row{
+		{label: "Stats", style: StyleDefault.Foreground(ColorAccent).Bold(true)},
+		{label: "Provider aggregates from the daemon, including live inflight counts.", style: StyleSubtext},
+		{},
+	}
+	if errMsg != "" {
+		rows = append(rows, row{label: "Error", value: errMsg, style: StyleSubtext})
+	}
+	if stats.StreamErr != "" {
+		rows = append(rows, row{label: "Stream", value: stats.StreamErr, style: StyleSubtext})
+	}
+	if !loaded {
+		label := "Loading"
+		value := "collecting provider stats..."
+		if loading {
+			value = "collecting provider stats..."
+		}
+		rows = append(rows, row{label: label, value: value, style: StyleSubtext})
+	} else {
+		if len(stats.Providers) == 0 {
+			rows = append(rows, row{label: "Providers", value: "no provider traffic observed yet", style: StyleSubtext})
+		}
+		for idx, provider := range stats.Providers {
+			if idx > 0 {
+				rows = append(rows, row{})
+			}
+			rows = append(rows,
+				row{label: provider.Provider, style: StyleDefault.Foreground(ColorAccent).Bold(true)},
+				row{label: "Requests", value: strconv.Itoa(provider.Requests), style: StyleSubtext},
+				row{label: "Inflight", value: strconv.Itoa(provider.Inflight), style: StyleSubtext},
+				row{label: "Streaming", value: strconv.Itoa(provider.Streaming), style: StyleSubtext},
+				row{label: "Hit rate", value: formatHitRate(provider.HitRatio, provider.Requests), style: StyleSubtext},
+				row{label: "Input", value: formatTokenCount64(provider.InputTokens), style: StyleSubtext},
+				row{label: "Output", value: formatTokenCount64(provider.OutputTokens), style: StyleSubtext},
+				row{label: "Cache read", value: formatTokenCount64(provider.CacheReadTokens), style: StyleSubtext},
+				row{label: "Cache create", value: formatTokenCount64(provider.CacheCreationTokens), style: StyleSubtext},
+				row{label: "Est. cost", value: formatCostMicrocents(provider.EstimatedCostMicrocents), style: StyleSubtext},
+			)
+			if !provider.LastSeen.IsZero() {
+				rows = append(rows, row{label: "Last seen", value: provider.LastSeen.Format("15:04:05"), style: StyleSubtext})
+			}
+			if provider.Error != "" {
+				rows = append(rows, row{label: "Last err", value: provider.Error, style: StyleSubtext})
+			}
+		}
+		if !stats.LoadedAt.IsZero() {
+			rows = append(rows, row{}, row{label: "Updated", value: stats.LoadedAt.Format("15:04:05"), style: StyleSubtext})
+		}
+	}
+
+	for i, ln := range rows {
+		text := ln.label
+		if ln.value != "" {
+			text = fmt.Sprintf("%-16s %s", ln.label, ln.value)
+		}
+		style := ln.style
+		if style == (tcell.Style{}) {
+			style = StyleSubtext
+		}
+		if i >= r.H-1 {
+			break
+		}
+		drawString(a.screen, r.X+2, r.Y+1+i, style, text, r.W-4)
+	}
+}
+
+func formatHitRate(hitRatio float64, requests int) string {
+	if requests == 0 {
+		return "0.0% (no cache telemetry yet)"
+	}
+	return fmt.Sprintf("%.1f%%", hitRatio*100)
+}
+
+func formatTokenCount64(n int64) string {
+	if n <= 0 {
+		return "0"
+	}
+	return fmt.Sprintf("%d tok", n)
+}
+
+func formatCostMicrocents(n int64) string {
+	if n <= 0 {
+		return "unknown"
+	}
+	return fmt.Sprintf("$%.4f", float64(n)/100000000.0)
+}
+
 func (a *App) drawSettingsTab(r Rect) {
 	if r.W <= 0 || r.H <= 0 {
 		return
@@ -2768,8 +4259,8 @@ func (a *App) drawSettingsTab(r Rect) {
 		{label: "  e  edit global config in $EDITOR", style: StyleSubtext},
 		{label: "  E  edit project config in $EDITOR", style: StyleSubtext},
 		{label: "  G  toggle remote control default for new sessions", style: StyleSubtext},
-		{label: "  R  reload config (handled by daemon watcher)", style: StyleSubtext},
-		{label: "  1  back to Sessions  3  Sidecar", style: StyleSubtext},
+		{label: "  R  reload config (or restart daemon when offline)", style: StyleSubtext},
+		{label: "  1  Sessions  2  Stats  4  Sidecar", style: StyleSubtext},
 		{},
 		{label: "Tip", style: StyleDefault.Foreground(ColorAccent).Bold(true)},
 		{label: "  The daemon watches ~/.claude/settings.json and syncs across", style: StyleSubtext},
@@ -2796,10 +4287,7 @@ func (a *App) drawSettingsTab(r Rect) {
 // globalRCStateLabel returns a short string describing the current
 // global remote control default. Used in the Settings tab summary.
 func (a *App) globalRCStateLabel() string {
-	if a.cb.IsGlobalRemoteControlEnabled == nil {
-		return "(daemon offline)"
-	}
-	if a.cb.IsGlobalRemoteControlEnabled() {
+	if a.globalRemoteControl {
 		return "on  (G to disable)"
 	}
 	return "off (G to enable)"
@@ -2846,7 +4334,7 @@ func (a *App) openHelpModal() {
 		{Label: "  f            fork session", Disabled: true},
 		{Label: "Globals (Shift)", Disabled: true},
 		{Label: "  N            new session", Disabled: true},
-		{Label: "  R            refresh from disk", Disabled: true},
+		{Label: "  R            refresh (or restart daemon when offline)", Disabled: true},
 		{Label: "  B            edit basedir", Disabled: true},
 		{Label: "  H            show/hide test sessions", Disabled: true},
 		{Label: "  S            pin row in Sidecar tab", Disabled: true},
@@ -2854,8 +4342,9 @@ func (a *App) openHelpModal() {
 		{Label: "  ?            this help", Disabled: true},
 		{Label: "Tabs", Disabled: true},
 		{Label: "  1            Sessions tab", Disabled: true},
-		{Label: "  2            Settings tab", Disabled: true},
-		{Label: "  3            Sidecar tab (live remote control view)", Disabled: true},
+		{Label: "  2            Stats tab", Disabled: true},
+		{Label: "  3            Settings tab", Disabled: true},
+		{Label: "  4            Sidecar tab (live remote control view)", Disabled: true},
 		{Label: "  !@#$%        sort columns 1..5", Disabled: true},
 		{Label: "Remote control (in row Options popup)", Disabled: true},
 		{Label: "  Enable / Disable for selected session", Disabled: true},
@@ -2907,10 +4396,7 @@ func (a *App) findSessionByName(name string) *session.Session {
 // The label flips between Enable and Disable based on the current
 // per session value as known to the wired callback.
 func (a *App) remoteControlEntry(sess *session.Session, close func()) OptionsModalEntry {
-	enabled := false
-	if a.cb.IsRemoteControlEnabled != nil {
-		enabled = a.cb.IsRemoteControlEnabled(sess)
-	}
+	enabled := a.remoteControlCache[sess.Name]
 	label := "Enable remote control"
 	if enabled {
 		label = "Disable remote control"
@@ -2921,8 +4407,11 @@ func (a *App) remoteControlEntry(sess *session.Session, close func()) OptionsMod
 		Action: func() {
 			close()
 			if a.cb.SetRemoteControl != nil {
-				_ = a.cb.SetRemoteControl(sess, !enabled)
-				a.refreshSessions()
+				a.remoteControlCache[sess.Name] = !enabled
+				go func() {
+					_ = a.cb.SetRemoteControl(sess, !enabled)
+					a.requestSessionsAsync("remote_control")
+				}()
 			}
 		},
 		Disabled: a.cb.SetRemoteControl == nil,
@@ -2996,8 +4485,19 @@ func (a *App) rowSession() *session.Session {
 // double-click). A no-op when the row is out of range.
 func (a *App) openSessionOptions(row int) {
 	if row < 0 || row >= len(a.visibleIdx) {
+		slog.Debug("tui.overlay.options.skipped",
+			"component", "tui",
+			"reason", "row_out_of_range",
+			"row", row,
+			"visible_total", len(a.visibleIdx))
 		return
 	}
+	slog.Debug("tui.overlay.options.open_by_row",
+		"component", "tui",
+		"row", row,
+		"session", a.sessions[a.visibleIdx[row]].Name,
+		"selected", a.selectedSessionName(),
+		"active_tab", a.activeTab)
 	a.openSessionOptionsFor(a.sessions[a.visibleIdx[row]])
 }
 
@@ -3006,6 +4506,9 @@ func (a *App) openSessionOptions(row int) {
 // position so a user who just wants the old behavior types Enter twice.
 func (a *App) openSessionOptionsFor(sess *session.Session) {
 	if sess == nil {
+		slog.Debug("tui.overlay.options.skipped",
+			"component", "tui",
+			"reason", "session_nil")
 		return
 	}
 	close := func() { a.closeOverlay() }
@@ -3013,6 +4516,13 @@ func (a *App) openSessionOptionsFor(sess *session.Session) {
 	modal.OnCancel = close
 	modal.StatsSegments, modal.StatsLoading = a.buildSessionStatsSegments(sess)
 	a.overlay = modal
+	slog.Debug("tui.overlay.options.opened",
+		"component", "tui",
+		"session", sess.Name,
+		"entries_total", len(modal.Entries),
+		"stats_loading", modal.StatsLoading,
+		"selected", a.selectedSessionName(),
+		"active_tab", a.activeTab)
 }
 
 func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []OptionsModalEntry {
@@ -3028,10 +4538,6 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []Optio
 				// inlined a slightly different resume sequence and silently
 				// drifted from the others when bugs were fixed in resumeRow.
 				a.resumeSession(sess)
-				if row := a.findVisibleRowByName(sess.Name); row >= 0 {
-					a.table.Active = true
-					a.table.SelectedRow = row
-				}
 			},
 		},
 		{
@@ -3042,6 +4548,15 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []Optio
 				a.viewSelected()
 			},
 			Disabled: a.cb.ViewContent == nil,
+		},
+		{
+			Label: "Export transcript",
+			Hint:  "x",
+			Action: func() {
+				close()
+				a.openExportOptions(sess)
+			},
+			Disabled: a.cb.ExportSession == nil,
 		},
 		{
 			Label: "Edit basedir",
@@ -3062,9 +4577,9 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []Optio
 					return
 				}
 				a.pinSidecar(sess)
-				a.activeTab = 2
+				a.activeTab = tabSidecar
 				if a.tabs != nil {
-					a.tabs.SetActive(2)
+					a.tabs.SetActive(tabSidecar)
 				}
 			},
 			Disabled: func() bool {
@@ -3136,14 +4651,13 @@ func (a *App) openRenamePrompt(sess *session.Session) {
 		oldName := sess.Name
 		sess.Name = newName
 		if a.cb.RenameSession != nil {
-			if _, err := a.cb.RenameSession(sess); err != nil {
-				// Best-effort restore so a failed rename does not
-				// leave the in-memory session pointing at a name
-				// that does not exist on disk.
-				sess.Name = oldName
-			}
+			go func() {
+				if _, err := a.cb.RenameSession(sess); err != nil {
+					sess.Name = oldName
+				}
+				a.requestSessionsAsync("rename")
+			}()
 		}
-		a.refreshSessions()
 	}
 	input.OnCancel = a.closeOverlay
 	a.overlay = &InputOverlay{Input: input, Title: "Rename session"}
@@ -3168,14 +4682,178 @@ func (a *App) openBasedirEditor(sess *session.Session) {
 			return
 		}
 		if a.cb.SetBasedir != nil {
-			if err := a.cb.SetBasedir(sess, newPath); err == nil {
-				a.refreshSessions()
-			}
+			go func() {
+				_ = a.cb.SetBasedir(sess, newPath)
+				a.requestSessionsAsync("basedir")
+			}()
 		}
 	}
 	input.OnCancel = a.closeOverlay
 	a.overlay = &InputOverlay{Input: input, Title: "Edit basedir for " + sess.Name + " (empty clears)"}
 	a.mode = StatusFilter
+}
+
+func (a *App) openExportOptions(sess *session.Session) {
+	if sess == nil || a.cb.ExportSession == nil {
+		return
+	}
+	close := func() { a.closeOverlay() }
+	modal := NewOptionsModal("Export "+sess.Name, []OptionsModalEntry{
+		{
+			Label: "Copy plain text",
+			Hint:  "clipboard",
+			Action: func() {
+				close()
+				a.exportSessionToClipboard(sess, SessionExportPlainText)
+			},
+		},
+		{
+			Label: "Copy markdown",
+			Hint:  "clipboard",
+			Action: func() {
+				close()
+				a.exportSessionToClipboard(sess, SessionExportMarkdown)
+			},
+		},
+		{
+			Label: "Save plain text...",
+			Hint:  ".txt",
+			Action: func() {
+				close()
+				a.openExportSavePrompt(sess, SessionExportPlainText)
+			},
+		},
+		{
+			Label: "Save markdown...",
+			Hint:  ".md",
+			Action: func() {
+				close()
+				a.openExportSavePrompt(sess, SessionExportMarkdown)
+			},
+		},
+		{
+			Label: "Save HTML...",
+			Hint:  ".html",
+			Action: func() {
+				close()
+				a.openExportSavePrompt(sess, SessionExportHTML)
+			},
+		},
+		{
+			Label: "Save JSON...",
+			Hint:  ".json",
+			Action: func() {
+				close()
+				a.openExportSavePrompt(sess, SessionExportJSON)
+			},
+		},
+	})
+	modal.OnCancel = close
+	a.overlay = modal
+}
+
+func (a *App) exportSessionToClipboard(sess *session.Session, format SessionExportFormat) {
+	if sess == nil || a.cb.ExportSession == nil {
+		return
+	}
+	go func() {
+		body, err := a.cb.ExportSession(sess, format)
+		if err != nil {
+			a.postInterrupt(exportFinished{
+				title: "Export failed",
+				body:  err.Error(),
+			})
+			return
+		}
+		if err := CopyToClipboard(string(body)); err != nil {
+			a.postInterrupt(exportFinished{
+				title: "Copy failed",
+				body:  err.Error(),
+			})
+			return
+		}
+		a.postInterrupt(exportFinished{
+			title: "Copied export",
+			body:  fmt.Sprintf("%s copied to the system clipboard.", exportFormatLabel(format)),
+		})
+	}()
+}
+
+func (a *App) openExportSavePrompt(sess *session.Session, format SessionExportFormat) {
+	if sess == nil || a.cb.ExportSession == nil {
+		return
+	}
+	initial := defaultExportPath(sess, format)
+	input := NewTextInput("Path: ")
+	input.Text = initial
+	input.CursorX = runeCount(initial)
+	input.OnSubmit = func(s string) {
+		a.closeOverlay()
+		path := strings.TrimSpace(s)
+		if path == "" {
+			return
+		}
+		go func() {
+			body, err := a.cb.ExportSession(sess, format)
+			if err != nil {
+				a.postInterrupt(exportFinished{title: "Export failed", body: err.Error()})
+				return
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				a.postInterrupt(exportFinished{title: "Save failed", body: err.Error()})
+				return
+			}
+			if err := os.WriteFile(path, body, 0o644); err != nil {
+				a.postInterrupt(exportFinished{title: "Save failed", body: err.Error()})
+				return
+			}
+			a.postInterrupt(exportFinished{
+				title: "Export saved",
+				body:  fmt.Sprintf("%s written to %s", exportFormatLabel(format), path),
+			})
+		}()
+	}
+	input.OnCancel = a.closeOverlay
+	a.overlay = &InputOverlay{Input: input, Title: "Save " + exportFormatLabel(format)}
+	a.mode = StatusFilter
+}
+
+func defaultExportPath(sess *session.Session, format SessionExportFormat) string {
+	filename := "session"
+	if sess != nil && sess.Name != "" {
+		filename = sess.Name
+	}
+	path := filename + "." + exportFormatExt(format)
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, "Downloads", path)
+	}
+	return path
+}
+
+func exportFormatExt(format SessionExportFormat) string {
+	switch format {
+	case SessionExportMarkdown:
+		return "md"
+	case SessionExportHTML:
+		return "html"
+	case SessionExportJSON:
+		return "json"
+	default:
+		return "txt"
+	}
+}
+
+func exportFormatLabel(format SessionExportFormat) string {
+	switch format {
+	case SessionExportMarkdown:
+		return "Markdown export"
+	case SessionExportHTML:
+		return "HTML export"
+	case SessionExportJSON:
+		return "JSON export"
+	default:
+		return "Plain text export"
+	}
 }
 
 func (a *App) doFork() {
@@ -3189,6 +4867,7 @@ func (a *App) doFork() {
 }
 
 func (a *App) closeOverlay() {
+	oldOverlay := fmt.Sprintf("%T", a.overlay)
 	if a.compactCancel != nil {
 		a.compactCancel()
 		a.compactCancel = nil
@@ -3199,106 +4878,104 @@ func (a *App) closeOverlay() {
 	} else {
 		a.mode = StatusBrowse
 	}
+	slog.Debug("tui.overlay.closed",
+		"component", "tui",
+		"old_overlay_type", oldOverlay,
+		"selected", a.selectedSessionName(),
+		"active_tab", a.activeTab,
+		"mode", int(a.mode))
 }
 
-// refreshSessions reloads from store and repopulates the table.
+func (a *App) openNoticeModal(title, body string) {
+	modal := &Modal{
+		Title:       title,
+		Body:        body,
+		Buttons:     []string{"OK"},
+		ActiveIndex: 0,
+	}
+	modal.OnChoice = func(int) {
+		a.closeOverlay()
+	}
+	a.overlay = modal
+}
+
+// refreshSessions requests a daemon-owned dashboard snapshot without blocking
+// the UI loop. The eventual sessionsLoaded interrupt applies it.
 func (a *App) refreshSessions() {
-	if a.cb.Store == nil {
-		return
-	}
-	sessions, err := a.cb.Store.List()
-	if err != nil {
-		return
-	}
-	// Remember the current selection so an active details pane or
-	// overlay survives the rebuild. Without this guard, any refresh
-	// fired while the user has a pane open silently closed it. Common
-	// triggers were the post-resume refresh and any background tick
-	// that landed during a scroll gesture.
-	var selectedName string
-	if a.selected != nil {
-		selectedName = a.selected.Name
-	}
-	keepOverlay := a.overlay
-	keepActiveTab := a.activeTab
-
-	a.sessions = sessions
-	a.sortSessions()
-	a.populateTable()
-	a.detailMu.Lock()
-	a.detailCache = make(map[string]SessionDetail)
-	a.detailMu.Unlock()
-
-	// Restore selection by name. If the session no longer exists,
-	// fall back to deselect so the table view is clean.
-	if selectedName != "" {
-		if updated := a.findSessionByName(selectedName); updated != nil {
-			a.selected = updated
-			if row := a.findVisibleRowByName(selectedName); row >= 0 {
-				a.table.Active = true
-				a.table.SelectedRow = row
-			}
-		} else {
-			a.deselect()
-		}
-	} else {
-		a.deselect()
-	}
-	// Restore the overlay and active tab. The previous version of
-	// this function dropped both, which made any in flight modal or
-	// non default tab vanish on every refresh tick.
-	a.overlay = keepOverlay
-	a.activeTab = keepActiveTab
-	if a.tabs != nil {
-		a.tabs.SetActive(keepActiveTab)
-	}
+	a.requestSessionsAsync("refresh.full")
 }
 
-// softRefreshSessions reloads from the store without discarding the current
-// selection, scroll position, filter, or details cache. Called by the
-// background watcher when it notices on-disk changes. The previously
-// selected session is re-located by name so renames carry through.
-func (a *App) softRefreshSessions() {
-	if a.cb.Store == nil {
+func (a *App) refreshStats() {
+	a.statsMu.Lock()
+	a.statsLoaded = false
+	a.statsErr = ""
+	a.stats.StreamErr = ""
+	a.statsMu.Unlock()
+	a.requestStatsAsync("refresh")
+}
+
+func (a *App) requestStatsAsync(source string) {
+	if a.cb.LoadStats == nil {
 		return
 	}
-	sessions, err := a.cb.Store.List()
-	if err != nil {
+	a.statsMu.Lock()
+	if a.statsLoading {
+		a.statsMu.Unlock()
 		return
 	}
-	// Remember what the user was looking at.
-	var selectedName string
-	if a.selected != nil {
-		selectedName = a.selected.Name
-	} else if a.table.Active && a.table.SelectedRow < len(a.visibleIdx) {
-		selectedName = a.sessions[a.visibleIdx[a.table.SelectedRow]].Name
+	if a.statsErr != "" && source == "draw" {
+		a.statsMu.Unlock()
+		return
 	}
-	prevOffset := a.table.Offset
+	if a.statsLoaded && source == "draw" {
+		a.statsMu.Unlock()
+		return
+	}
+	a.statsLoading = true
+	a.statsMu.Unlock()
 
-	a.sessions = sessions
-	a.sortSessions()
-	a.populateTable()
-
-	// Restore selection if the same name still exists.
-	if selectedName != "" {
-		for vi, idx := range a.visibleIdx {
-			if a.sessions[idx].Name == selectedName {
-				a.table.SelectedRow = vi
-				if a.selected != nil {
-					a.selected = a.sessions[idx]
-				}
-				break
-			}
+	go func() {
+		stats, err := a.cb.LoadStats()
+		a.statsMu.Lock()
+		defer a.statsMu.Unlock()
+		a.statsLoading = false
+		if err != nil {
+			a.statsErr = err.Error()
+			a.postInterrupt(a)
+			return
 		}
+		a.stats = stats
+		a.statsLoaded = true
+		a.statsErr = ""
+		a.postInterrupt(a)
+	}()
+}
+
+func (a *App) restartDaemonAsync() {
+	if a.cb.RestartDaemon == nil {
+		return
 	}
-	a.table.Offset = prevOffset
-	if a.selected != nil {
-		// Refresh the details pane in case Context changed.
-		a.detailMu.Lock()
-		delete(a.detailCache, selectedName)
-		a.detailMu.Unlock()
-		a.populateDetails()
-	}
+	a.daemonMu.Lock()
+	a.daemonOnline = false
+	a.daemonLastErr = "restarting daemon..."
+	a.daemonMu.Unlock()
+	a.postInterrupt(a)
+
+	go func() {
+		if err := a.cb.RestartDaemon(); err != nil {
+			a.setDaemonOffline("restart", err)
+			return
+		}
+		a.setDaemonOnline("restart")
+		a.refreshSessions()
+		a.refreshStats()
+	}()
+}
+
+// softRefreshSessions preserves the old call site contract while delegating
+// refresh work to the daemon-backed async snapshot path.
+func (a *App) softRefreshSessions() {
+	a.requestSessionsAsync("refresh.soft")
 }
 
 // suspendAndRun shuts down the screen, runs fn (which may launch claude),
@@ -3319,6 +4996,9 @@ func (a *App) softRefreshSessions() {
 // next operator a single grep to find the root cause when a freeze
 // recurs (look for "tui.suspend" in the JSONL log).
 func (a *App) suspendAndRun(fn func()) {
+	totalStartedAt := time.Now()
+	const callbackWarnInitial = 10 * time.Second
+	const callbackWarnEvery = 30 * time.Second
 	if a.screen == nil {
 		slog.Warn("tui.suspend no_screen running fn directly")
 		defer func() {
@@ -3331,9 +5011,37 @@ func (a *App) suspendAndRun(fn func()) {
 	}
 	slog.Info("tui.suspend.start", "screen", fmt.Sprintf("%p", a.screen))
 	slog.Info("tui.suspend teardown")
+	teardownStartedAt := time.Now()
 	a.teardownScreen()
+	teardownDuration := time.Since(teardownStartedAt)
 	slog.Info("tui.suspend teardown complete", "screen", fmt.Sprintf("%p", a.screen))
+	writeSuspendTerminalPrep(os.Stdout)
+	slog.Debug("tui.suspend.terminal_prepared", "component", "tui")
+	callbackStartedAt := time.Now()
+	callbackDone := make(chan struct{})
+	go func() {
+		nextWarning := callbackWarnInitial
+		timer := time.NewTimer(nextWarning)
+		defer timer.Stop()
+		for {
+			select {
+			case <-callbackDone:
+				return
+			case <-timer.C:
+				elapsed := time.Since(callbackStartedAt)
+				slog.Warn("tui.suspend.callback.still_running",
+					"component", "tui",
+					"elapsed_ms", elapsed.Milliseconds(),
+					"selected", a.selectedSessionName(),
+					"active_tab", a.activeTab,
+					"overlay_type", fmt.Sprintf("%T", a.overlay))
+				nextWarning = callbackWarnEvery
+				timer.Reset(nextWarning)
+			}
+		}
+	}()
 	func() {
+		defer close(callbackDone)
 		defer func() {
 			if r := recover(); r != nil {
 				slog.Error("tui.suspend fn panic", "recover", fmt.Sprint(r))
@@ -3341,8 +5049,10 @@ func (a *App) suspendAndRun(fn func()) {
 		}()
 		fn()
 	}()
+	callbackDuration := time.Since(callbackStartedAt)
 	slog.Info("tui.suspend callback complete")
 	slog.Info("tui.suspend reinit")
+	reinitStartedAt := time.Now()
 	if err := a.initScreen(); err != nil {
 		slog.Error("tui.suspend reinit failed", "error", err)
 		// Mark the loop dead and bail. Without a screen the main loop
@@ -3351,14 +5061,37 @@ func (a *App) suspendAndRun(fn func()) {
 		a.running = false
 		return
 	}
+	reinitDuration := time.Since(reinitStartedAt)
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("tui.suspend draw panic", "recover", fmt.Sprint(r))
 			a.running = false
 		}
 	}()
+	drawStartedAt := time.Now()
 	a.draw()
+	drawDuration := time.Since(drawStartedAt)
 	slog.Info("tui.suspend resumed")
+	totalDuration := time.Since(totalStartedAt)
+	slog.Info("tui.suspend.timing",
+		"component", "tui",
+		"teardown_ms", teardownDuration.Milliseconds(),
+		"callback_ms", callbackDuration.Milliseconds(),
+		"reinit_ms", reinitDuration.Milliseconds(),
+		"draw_ms", drawDuration.Milliseconds(),
+		"total_ms", totalDuration.Milliseconds(),
+		"selected", a.selectedSessionName(),
+		"active_tab", a.activeTab,
+		"overlay_type", fmt.Sprintf("%T", a.overlay))
+	if totalDuration > 200*time.Millisecond || reinitDuration > 120*time.Millisecond || drawDuration > 80*time.Millisecond {
+		slog.Warn("tui.suspend.slow",
+			"component", "tui",
+			"teardown_ms", teardownDuration.Milliseconds(),
+			"callback_ms", callbackDuration.Milliseconds(),
+			"reinit_ms", reinitDuration.Milliseconds(),
+			"draw_ms", drawDuration.Milliseconds(),
+			"total_ms", totalDuration.Milliseconds())
+	}
 }
 
 // ---------------- Helpers used by overlays ----------------
@@ -3476,12 +5209,13 @@ func isEphemeralSession(sess *session.Session) bool {
 	return false
 }
 
-// sessionMessageCount returns the message count used by the Messages
-// column sort. The TUI does not maintain a transcript-entry cache, so
-// every session reports zero and the column is effectively a no-op
-// sort key today. Kept as a hook for a future cheap counter.
-func sessionMessageCount(_ *App, _ *session.Session) int {
-	return 0
+// sessionMessageCount returns the daemon-provided visible message count
+// used by the MSGS column and its sort key.
+func sessionMessageCount(a *App, sess *session.Session) int {
+	if a == nil || sess == nil {
+		return 0
+	}
+	return a.messageCountCache[sess.Name]
 }
 
 // lastUsedTime returns the best available "last activity" timestamp for a
@@ -3492,14 +5226,6 @@ func sessionMessageCount(_ *App, _ *session.Session) int {
 func lastUsedTime(sess *session.Session) time.Time {
 	if sess == nil {
 		return time.Time{}
-	}
-	if p := sess.Metadata.TranscriptPath; p != "" {
-		if fi, err := os.Stat(p); err == nil {
-			t := fi.ModTime()
-			if t.After(sess.Metadata.LastAccessed) {
-				return t
-			}
-		}
 	}
 	return sess.Metadata.LastAccessed
 }
@@ -3520,4 +5246,17 @@ func shortPath(root string) string {
 		return "~/" + root[len(home)+1:]
 	}
 	return root
+}
+
+func shortStableHash(value string) string {
+	if value == "" {
+		return "000000"
+	}
+	hasher := fnv.New32a()
+	_, _ = hasher.Write([]byte(value))
+	hex := strconv.FormatUint(uint64(hasher.Sum32()), 16)
+	if len(hex) < 6 {
+		return strings.Repeat("0", 6-len(hex)) + hex
+	}
+	return hex[:6]
 }

@@ -118,6 +118,8 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 	}
 	logLevel := strings.ToLower(strings.TrimSpace(cfg.Logging.Level))
 	cfg.Logging.Level = logLevel
+	cfg.Logging.Paths.TUI = strings.TrimSpace(cfg.Logging.Paths.TUI)
+	cfg.Logging.Paths.Daemon = strings.TrimSpace(cfg.Logging.Paths.Daemon)
 
 	if cfg.Logging.Rotation.MaxSizeMB <= 0 {
 		cfg.Logging.Rotation.MaxSizeMB = 5

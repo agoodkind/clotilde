@@ -52,6 +52,7 @@ type OAuthSource interface {
 //     that GrowthBook allowlists. Requires the
 //     prompt-caching-scope-2026-01-05 beta.
 //   - "org": organization-wide. Same beta.
+//
 // Only set scope when matching the live CLI wire shape; it changes
 // the cache key and can mask bugs in breakpoint placement.
 type CacheControl struct {
@@ -222,6 +223,7 @@ type OutputConfig struct {
 type Thinking struct {
 	Type         string `json:"type"`
 	BudgetTokens int    `json:"budget_tokens,omitempty"`
+	Display      string `json:"display,omitempty"`
 }
 
 // Usage mirrors the prompt/completion token counts from the response.

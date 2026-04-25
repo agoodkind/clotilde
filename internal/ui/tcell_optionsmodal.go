@@ -63,6 +63,14 @@ type OptionsModal struct {
 	OnQuit func()
 }
 
+func (m *OptionsModal) StatusLegendActions() []LegendAction {
+	actions := []LegendAction{LegendMove, LegendClose}
+	if m.Context == OptionsModalContextReturn {
+		actions = append(actions, LegendQuit)
+	}
+	return actions
+}
+
 type optionsModalGrab int
 
 const (

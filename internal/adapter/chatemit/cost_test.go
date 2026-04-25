@@ -15,6 +15,19 @@ func TestLookupRatesMatchesLongestPrefix(t *testing.T) {
 	}
 }
 
+func TestLookupRatesPrefersExactOpus46Prefix(t *testing.T) {
+	r, ok := LookupRates("claude-opus-4-6")
+	if !ok {
+		t.Fatalf("expected rates for claude-opus-4-6")
+	}
+	if r.InputPerToken != 500 {
+		t.Fatalf("unexpected opus 4.6 input rate: %d", r.InputPerToken)
+	}
+	if r.OutputPerToken != 2500 {
+		t.Fatalf("unexpected opus 4.6 output rate: %d", r.OutputPerToken)
+	}
+}
+
 func TestEstimateCostAppliesCacheWriteTTL(t *testing.T) {
 	in := CostInputs{
 		ModelID:             "claude-sonnet-4",

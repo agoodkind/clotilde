@@ -61,40 +61,12 @@ func RunDashboard(cmd *cobra.Command, args []string) {
 // runDashboardTUI opens the session dashboard. Caller must ensure stdin and
 // stdout are TTYs (see RunDashboard).
 func runDashboardTUI() {
-	store, err := session.NewGlobalFileStore()
-	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Failed to initialize session storage: %v\n", err)
-		slog.Error("dashboard.store_init_failed",
-			"component", "tui",
-			slog.Any("err", err),
-		)
-		os.Exit(1)
-	}
-
-	// Adopt orphan transcripts in the background. The daemon also runs
-	// this; doing it here makes the dashboard self-healing when the
-	// daemon is not yet running.
-	go runDiscoveryAdoption(store)
-
-	sessions, err := store.List()
-	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Failed to load sessions: %v\n", err)
-		slog.Error("dashboard.list_failed",
-			"component", "tui",
-			slog.Any("err", err),
-		)
-		os.Exit(1)
-	}
-
-	slog.Info("dashboard.opened",
-		"component", "tui",
-		"sessions", len(sessions),
-	)
+	daemon.NudgeDiscoveryScan()
+	slog.Info("dashboard.opened", "component", "tui")
 
 	dashboardCwd, _ := os.Getwd()
-	cb := buildAppCallbacks(store, sessions, dashboardCwd)
-	app := ui.NewApp(sessions, cb, ui.AppOptions{DashboardLaunchCWD: dashboardCwd})
-	app.PreWarmStats()
+	cb := buildAppCallbacks(dashboardCwd)
+	app := ui.NewApp(nil, cb, ui.AppOptions{DashboardLaunchCWD: dashboardCwd})
 
 	if err := app.Run(); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
@@ -139,17 +111,72 @@ func runDiscoveryAdoption(store *session.FileStore) {
 // buildAppCallbacks wires store + helpers into a ui.AppCallbacks.
 // dashboardLaunchCWD is the process cwd when RunDashboard started; it
 // is the default basedir for "new session" without picking a folder.
-func buildAppCallbacks(store session.Store, _ []*session.Session, dashboardLaunchCWD string) ui.AppCallbacks {
+func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
+	openStore := func() (session.Store, error) {
+		return session.NewGlobalFileStore()
+	}
 	return ui.AppCallbacks{
-		Store: store,
+		ListSessions: func() (ui.SessionSnapshot, error) {
+			resp, err := daemon.ListSessionsViaDaemon(context.Background())
+			if err != nil {
+				return ui.SessionSnapshot{}, err
+			}
+			return sessionSnapshotFromProto(resp), nil
+		},
+		LoadStats: func() (ui.DashboardStats, error) {
+			return loadDashboardStats(context.Background())
+		},
+		SubscribeProviderStats: func() (<-chan ui.ProviderStats, func(), error) {
+			raw, cancel, err := daemon.SubscribeProviderStats(context.Background())
+			if err != nil {
+				return nil, nil, err
+			}
+			out := make(chan ui.ProviderStats, 8)
+			go func() {
+				defer close(out)
+				for ev := range raw {
+					if ev == nil || ev.GetStats() == nil {
+						continue
+					}
+					stats := providerStatsFromProto([]*clydev1.ProviderStats{ev.GetStats()})
+					if len(stats) == 0 {
+						continue
+					}
+					out <- stats[0]
+				}
+			}()
+			return out, cancel, nil
+		},
+		RestartDaemon: func() error {
+			return daemon.RestartManagedDaemon(context.Background())
+		},
 		StartSessionWithBasedir: func(basedir string) error {
-			return startNewSessionInDir(basedir, store, dashboardLaunchCWD)
+			store, err := openStore()
+			if err != nil {
+				return err
+			}
+			return startNewSessionInDir(basedir, store, dashboardLaunchCWD, false)
+		},
+		StartSessionWithBasedirRC: func(basedir string, enableRC bool) error {
+			store, err := openStore()
+			if err != nil {
+				return err
+			}
+			return startNewSessionInDir(basedir, store, dashboardLaunchCWD, enableRC)
 		},
 		ResumeSession: func(sess *session.Session) error {
-			return resumeSession(sess, store)
+			store, err := openStore()
+			if err != nil {
+				return err
+			}
+			return resumeSession(sess, store, true)
 		},
 		DeleteSession: func(sess *session.Session) error {
-			return deleteSession(sess, store)
+			outcome, err := daemon.DeleteSessionViaDaemonOutcome(context.Background(), sess.Name)
+			if outcome != daemon.LifecycleOutcomeReady {
+				return daemonLifecycleError("delete", outcome, err)
+			}
+			return nil
 		},
 		RenameSession: func(sess *session.Session) (string, error) {
 			newName := sess.Name
@@ -157,37 +184,92 @@ func buildAppCallbacks(store session.Store, _ []*session.Session, dashboardLaunc
 			if oldName == "" || oldName == newName {
 				return newName, nil
 			}
-			ok, derr := daemon.RenameSessionViaDaemon(context.Background(), oldName, newName)
-			if !ok {
-				return newName, fmt.Errorf("daemon rename failed: %w", derr)
+			outcome, err := daemon.RenameSessionViaDaemonOutcome(context.Background(), oldName, newName)
+			if outcome != daemon.LifecycleOutcomeReady {
+				return newName, daemonLifecycleError("rename", outcome, err)
 			}
 			return newName, nil
 		},
+		SetBasedir: func(sess *session.Session, newPath string) error {
+			if sess == nil || sess.Name == "" {
+				return fmt.Errorf("nil session")
+			}
+			outcome, err := daemon.UpdateSessionWorkspaceRootViaDaemonOutcome(context.Background(), sess.Name, newPath)
+			if outcome != daemon.LifecycleOutcomeReady {
+				return daemonLifecycleError("update_session_workspace_root", outcome, err)
+			}
+			return nil
+		},
 		RefreshSummary: func(sess *session.Session, onDone func(*session.Session)) error {
-			return refreshSessionSummary(store, sess, onDone)
+			if sess == nil || sess.Name == "" {
+				return fmt.Errorf("nil session")
+			}
+			go func(name, workspaceRoot string) {
+				defer func() {
+					if onDone != nil {
+						onDone(nil)
+					}
+				}()
+				resp, err := daemon.GetSessionDetailViaDaemon(context.Background(), name)
+				if err != nil {
+					return
+				}
+				all := resp.GetAllMessages()
+				if len(all) == 0 {
+					return
+				}
+				start := 0
+				if len(all) > 100 {
+					start = len(all) - 100
+				}
+				messages := make([]string, 0, len(all)-start)
+				for _, m := range all[start:] {
+					role := strings.TrimSpace(m.GetRole())
+					text := strings.TrimSpace(m.GetText())
+					if role == "" || text == "" {
+						continue
+					}
+					roleLabel := "User"
+					if strings.EqualFold(role, "assistant") {
+						roleLabel = "Assistant"
+					}
+					runes := []rune(text)
+					if len(runes) > 300 {
+						text = string(runes[:300])
+					}
+					messages = append(messages, fmt.Sprintf("[%s] %s", roleLabel, text))
+				}
+				if len(messages) == 0 {
+					return
+				}
+				client, err := daemon.ConnectOrStart(context.Background())
+				if err != nil {
+					return
+				}
+				defer client.Close()
+				_ = client.UpdateContext(name, workspaceRoot, messages)
+			}(sess.Name, sess.Metadata.WorkspaceRoot)
+			return nil
 		},
 		ViewContent: func(sess *session.Session) string {
-			messages, err := loadSessionMessages(sess)
-			if err != nil || len(messages) == 0 {
+			resp, err := daemon.GetSessionDetailViaDaemon(context.Background(), sess.Name)
+			if err != nil || len(resp.GetAllMessages()) == 0 {
 				return ""
 			}
-			return transcript.RenderPlainText(messages)
+			var b strings.Builder
+			for _, m := range resp.GetAllMessages() {
+				if m.GetRole() == "" || m.GetText() == "" {
+					continue
+				}
+				b.WriteString(strings.ToUpper(m.GetRole()))
+				b.WriteString(":\n")
+				b.WriteString(m.GetText())
+				b.WriteString("\n\n")
+			}
+			return strings.TrimSpace(b.String())
 		},
-		ExtractModel: func(sess *session.Session) string {
-			if sess.Metadata.TranscriptPath != "" {
-				m, _ := claude.ExtractModelAndLastTime(sess.Metadata.TranscriptPath)
-				if m != "" {
-					return m
-				}
-			}
-			fs, ok := store.(*session.FileStore)
-			if ok {
-				settings, _ := fs.LoadSettings(sess.Name)
-				if settings != nil && settings.Model != "" {
-					return settings.Model
-				}
-			}
-			return "-"
+		ExportSession: func(sess *session.Session, format ui.SessionExportFormat) ([]byte, error) {
+			return exportSessionContent(sess, format)
 		},
 		SubscribeRegistry: func() (<-chan ui.SessionEvent, func(), error) {
 			raw, cancel, err := daemon.SubscribeRegistry(context.Background())
@@ -198,13 +280,7 @@ func buildAppCallbacks(store session.Store, _ []*session.Session, dashboardLaunc
 			go func() {
 				defer close(out)
 				for ev := range raw {
-					out <- ui.SessionEvent{
-						Kind:            strings.TrimPrefix(ev.GetKind().String(), "KIND_"),
-						SessionName:     ev.GetSessionName(),
-						SessionID:       ev.GetSessionId(),
-						BridgeSessionID: ev.GetBridgeSessionId(),
-						BridgeURL:       ev.GetBridgeUrl(),
-					}
+					out <- sessionEventFromProto(ev)
 				}
 			}()
 			return out, cancel, nil
@@ -213,33 +289,18 @@ func buildAppCallbacks(store session.Store, _ []*session.Session, dashboardLaunc
 			if sess == nil || sess.Name == "" {
 				return fmt.Errorf("nil session")
 			}
-			ok, err := daemon.UpdateSessionRemoteControlViaDaemon(context.Background(), sess.Name, enabled)
-			if !ok {
-				return fmt.Errorf("daemon update failed: %w", err)
+			outcome, err := daemon.UpdateSessionRemoteControlViaDaemonOutcome(context.Background(), sess.Name, enabled)
+			if outcome != daemon.LifecycleOutcomeReady {
+				return daemonLifecycleError("update_session_remote_control", outcome, err)
 			}
 			return nil
 		},
 		SetGlobalRemoteControl: func(enabled bool) error {
-			ok, err := daemon.UpdateGlobalRemoteControlViaDaemon(context.Background(), enabled)
-			if !ok {
-				return fmt.Errorf("daemon update failed: %w", err)
+			outcome, err := daemon.UpdateGlobalRemoteControlViaDaemonOutcome(context.Background(), enabled)
+			if outcome != daemon.LifecycleOutcomeReady {
+				return daemonLifecycleError("update_global_remote_control", outcome, err)
 			}
 			return nil
-		},
-		IsRemoteControlEnabled: func(sess *session.Session) bool {
-			if sess == nil {
-				return false
-			}
-			fs, ok := store.(*session.FileStore)
-			if !ok {
-				return false
-			}
-			settings, _ := fs.LoadSettings(sess.Name)
-			return settings != nil && settings.RemoteControl
-		},
-		IsGlobalRemoteControlEnabled: func() bool {
-			cfg, err := config.LoadGlobalOrDefault()
-			return err == nil && cfg.Defaults.RemoteControl
 		},
 		ListBridges: func() ([]ui.Bridge, error) {
 			raw, err := daemon.ListBridgesViaDaemon(context.Background())
@@ -354,45 +415,47 @@ func buildAppCallbacks(store session.Store, _ []*session.Session, dashboardLaunc
 				SyntheticUUID: resp.GetSyntheticUuid(),
 			}, nil
 		},
-		ExtractDetail: func(sess *session.Session) ui.SessionDetail {
-			model := "-"
-			if sess.Metadata.TranscriptPath != "" {
-				m, _ := claude.ExtractModelAndLastTime(sess.Metadata.TranscriptPath)
-				if m != "" {
-					model = m
-				}
+		GetSessionDetail: func(sess *session.Session) (ui.SessionDetail, error) {
+			resp, err := daemon.GetSessionDetailViaDaemon(context.Background(), sess.Name)
+			if err != nil {
+				return ui.SessionDetail{}, err
 			}
-			if model == "-" {
-				if fs, ok := store.(*session.FileStore); ok {
-					settings, _ := fs.LoadSettings(sess.Name)
-					if settings != nil && settings.Model != "" {
-						model = settings.Model
-					}
-				}
-			}
-
-			var recentMsgs []ui.DetailMessage
-			var allMsgs []ui.DetailMessage
-			var tools []ui.ToolUse
-			if sess.Metadata.TranscriptPath != "" {
-				recent := claude.ExtractRecentMessages(sess.Metadata.TranscriptPath, 5, 150)
-				for _, m := range recent {
-					text := strings.TrimSpace(m.Text)
-					if text == "" || strings.HasPrefix(text, "<") || len(text) < 5 {
-						continue
-					}
-					recentMsgs = append(recentMsgs, ui.DetailMessage{Role: m.Role, Text: text, Timestamp: m.Timestamp})
-				}
-				all := claude.LoadAllMessages(sess.Metadata.TranscriptPath, 1000)
-				for _, m := range all {
-					allMsgs = append(allMsgs, ui.DetailMessage{Role: m.Role, Text: m.Text, Timestamp: m.Timestamp})
-				}
-				for _, t := range claude.ToolUseStats(sess.Metadata.TranscriptPath, 8) {
-					tools = append(tools, ui.ToolUse{Name: t.Name, Count: t.Count})
-				}
-			}
-			return ui.SessionDetail{Model: model, Messages: recentMsgs, AllMessages: allMsgs, Tools: tools}
+			return sessionDetailFromProto(resp), nil
 		},
+	}
+}
+
+func exportSessionContent(sess *session.Session, format ui.SessionExportFormat) ([]byte, error) {
+	if sess == nil {
+		return nil, fmt.Errorf("nil session")
+	}
+	if strings.TrimSpace(sess.Metadata.TranscriptPath) == "" {
+		return nil, fmt.Errorf("session has no transcript path")
+	}
+	f, err := os.Open(sess.Metadata.TranscriptPath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	messages, err := transcript.Parse(f)
+	if err != nil {
+		return nil, err
+	}
+	opts := transcript.ShapeOptions{
+		ConversationOnly: true,
+		ToolOnly:         transcript.ToolOnlyOmit,
+	}
+	switch format {
+	case ui.SessionExportMarkdown:
+		return []byte(transcript.RenderMarkdownWithOptions(messages, opts)), nil
+	case ui.SessionExportHTML:
+		return []byte(transcript.RenderHTMLWithOptions(messages, opts)), nil
+	case ui.SessionExportJSON:
+		return transcript.RenderJSONWithOptions(messages, opts)
+	case ui.SessionExportPlainText:
+		fallthrough
+	default:
+		return []byte(transcript.RenderPlainTextWithOptions(messages, opts)), nil
 	}
 }
 
@@ -446,6 +509,138 @@ func compactEventFromProto(ev *clydev1.CompactEvent) ui.CompactEvent {
 		out.Message = "received compact stream update"
 	}
 	return out
+}
+
+func sessionSnapshotFromProto(resp *clydev1.ListSessionsResponse) ui.SessionSnapshot {
+	out := ui.SessionSnapshot{
+		Sessions:            make([]*session.Session, 0, len(resp.GetSessions())),
+		Models:              make(map[string]string, len(resp.GetSessions())),
+		RemoteControl:       make(map[string]bool, len(resp.GetSessions())),
+		MessageCounts:       make(map[string]int, len(resp.GetSessions())),
+		ContextStates:       make(map[string]ui.SessionContextState, len(resp.GetSessions())),
+		GlobalRemoteControl: resp.GetGlobalRemoteControl(),
+	}
+	for _, raw := range resp.GetSessions() {
+		sess, model, remoteControl, messageCount, contextState, bridge := sessionSummaryFromProto(raw)
+		out.Sessions = append(out.Sessions, sess)
+		out.Models[sess.Name] = model
+		out.RemoteControl[sess.Name] = remoteControl
+		out.MessageCounts[sess.Name] = messageCount
+		out.ContextStates[sess.Name] = contextState
+		if bridge != nil {
+			out.Bridges = append(out.Bridges, *bridge)
+		}
+	}
+	return out
+}
+
+func sessionSummaryFromProto(raw *clydev1.SessionSummary) (*session.Session, string, bool, int, ui.SessionContextState, *ui.Bridge) {
+	sess := &session.Session{
+		Name: raw.GetName(),
+		Metadata: session.Metadata{
+			Name:                 raw.GetMetadataName(),
+			SessionID:            raw.GetSessionId(),
+			TranscriptPath:       raw.GetTranscriptPath(),
+			WorkDir:              raw.GetWorkDir(),
+			Created:              timeFromNanos(raw.GetCreatedNanos()),
+			LastAccessed:         timeFromNanos(raw.GetLastActivityNanos()),
+			ParentSession:        raw.GetParentSession(),
+			IsForkedSession:      raw.GetIsForkedSession(),
+			IsIncognito:          raw.GetIsIncognito(),
+			PreviousSessionIDs:   append([]string(nil), raw.GetPreviousSessionIds()...),
+			Context:              raw.GetContext(),
+			HasCustomOutputStyle: raw.GetHasCustomOutputStyle(),
+			WorkspaceRoot:        raw.GetWorkspaceRoot(),
+			ContextMessageCount:  int(raw.GetContextMessageCount()),
+			DisplayTitle:         raw.GetDisplayTitle(),
+		},
+	}
+	if sess.Metadata.Name == "" {
+		sess.Metadata.Name = sess.Name
+	}
+	contextState := ui.SessionContextState{
+		Usage: ui.SessionContextUsage{
+			TotalTokens:    int(raw.GetContextTotalTokens()),
+			MaxTokens:      int(raw.GetContextMaxTokens()),
+			Percentage:     int(raw.GetContextPercentage()),
+			MessagesTokens: int(raw.GetContextMessagesTokens()),
+		},
+		Loaded: raw.GetContextUsageLoaded(),
+		Status: raw.GetContextUsageStatus(),
+	}
+
+	var bridge *ui.Bridge
+	if b := raw.GetBridge(); b != nil {
+		bridge = &ui.Bridge{
+			SessionID:       b.GetSessionId(),
+			PID:             b.GetPid(),
+			BridgeSessionID: b.GetBridgeSessionId(),
+			URL:             b.GetUrl(),
+		}
+	}
+	return sess, raw.GetModel(), raw.GetRemoteControl(), int(raw.GetMessageCount()), contextState, bridge
+}
+
+func sessionEventFromProto(ev *clydev1.SubscribeRegistryResponse) ui.SessionEvent {
+	out := ui.SessionEvent{
+		Kind:            strings.TrimPrefix(ev.GetKind().String(), "KIND_"),
+		SessionName:     ev.GetSessionName(),
+		SessionID:       ev.GetSessionId(),
+		OldName:         ev.GetOldName(),
+		BridgeSessionID: ev.GetBridgeSessionId(),
+		BridgeURL:       ev.GetBridgeUrl(),
+	}
+	if raw := ev.GetSessionSummary(); raw != nil {
+		sess, model, remoteControl, messageCount, contextState, bridge := sessionSummaryFromProto(raw)
+		out.Session = sess
+		out.Model = model
+		out.RemoteControl = remoteControl
+		out.MessageCount = messageCount
+		out.ContextState = &contextState
+		out.Bridge = bridge
+	}
+	if ev.GetKind() == clydev1.SubscribeRegistryResponse_KIND_GLOBAL_SETTINGS_UPDATED {
+		globalRC := ev.GetGlobalRemoteControl()
+		out.GlobalRemoteControl = &globalRC
+	}
+	return out
+}
+
+func sessionDetailFromProto(resp *clydev1.GetSessionDetailResponse) ui.SessionDetail {
+	out := ui.SessionDetail{
+		Model:                 resp.GetModel(),
+		TotalMessages:         int(resp.GetTotalMessages()),
+		VisibleTokensEstimate: int(resp.GetVisibleTokensEstimate()),
+		LastMessageTokens:     int(resp.GetLastMessageTokens()),
+		CompactionCount:       int(resp.GetCompactionCount()),
+		LastPreCompactTokens:  int(resp.GetLastPreCompactTokens()),
+		TranscriptSizeBytes:   resp.GetTranscriptSizeBytes(),
+	}
+	for _, m := range resp.GetRecentMessages() {
+		out.Messages = append(out.Messages, ui.DetailMessage{
+			Role:      m.GetRole(),
+			Text:      m.GetText(),
+			Timestamp: timeFromNanos(m.GetTimestampNanos()),
+		})
+	}
+	for _, m := range resp.GetAllMessages() {
+		out.AllMessages = append(out.AllMessages, ui.DetailMessage{
+			Role:      m.GetRole(),
+			Text:      m.GetText(),
+			Timestamp: timeFromNanos(m.GetTimestampNanos()),
+		})
+	}
+	for _, t := range resp.GetTools() {
+		out.Tools = append(out.Tools, ui.ToolUse{Name: t.GetName(), Count: int(t.GetCount())})
+	}
+	return out
+}
+
+func timeFromNanos(n int64) time.Time {
+	if n <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n)
 }
 
 // ForwardToClaude runs the real claude binary (bypassing the shell
@@ -541,10 +736,7 @@ func passthroughSkipsPostSessionTUI(args []string) bool {
 // SessionStart hook adopts the session, then opens the TUI when claude exits.
 // Pipe and print-style invocations behave like ForwardToClaude only.
 func ForwardToClaudeThenDashboard(args []string) int {
-	if passthroughSkipsPostSessionTUI(args) {
-		return ForwardToClaude(args)
-	}
-	if !isatty.IsTerminal(os.Stdin.Fd()) || !isatty.IsTerminal(os.Stdout.Fd()) {
+	if !shouldOpenDashboardAfterPassthrough(args) {
 		return ForwardToClaude(args)
 	}
 	env := os.Environ()
@@ -564,6 +756,13 @@ func ForwardToClaudeThenDashboard(args []string) int {
 	_ = runClaudeWithEnv(args, env)
 	runDashboardTUI()
 	return 0
+}
+
+func shouldOpenDashboardAfterPassthrough(args []string) bool {
+	if passthroughSkipsPostSessionTUI(args) {
+		return false
+	}
+	return isatty.IsTerminal(os.Stdin.Fd()) && isatty.IsTerminal(os.Stdout.Fd())
 }
 
 // nextChatSessionName returns a new registry-safe chat-* name that does not
@@ -587,7 +786,7 @@ func nextChatSessionName(store session.Store) (string, error) {
 
 // startNewSessionInDir launches claude for a new named session in workDir.
 // basedir may be empty; dashboardFallbackCWD is used when the trimmed path is empty.
-func startNewSessionInDir(basedir string, store session.Store, dashboardFallbackCWD string) error {
+func startNewSessionInDir(basedir string, store session.Store, dashboardFallbackCWD string, enableRemoteControl bool) error {
 	workDir := strings.TrimSpace(basedir)
 	if workDir == "" {
 		workDir = strings.TrimSpace(dashboardFallbackCWD)
@@ -611,14 +810,43 @@ func startNewSessionInDir(basedir string, store session.Store, dashboardFallback
 		"component", "cli",
 		"session", name,
 		"workdir", workDir,
+		"remote_control", enableRemoteControl,
 	)
 
-	err = claude.StartNewInteractive(env, "", workDir)
+	err = claude.StartNewInteractive(env, "", workDir, enableRemoteControl)
 	if err != nil {
 		return err
 	}
 	sess, gerr := store.Get(name)
 	if gerr == nil && sess != nil {
+		if enableRemoteControl {
+			settings, lerr := store.LoadSettings(name)
+			if lerr != nil {
+				slog.Warn("session.new.load_settings_failed",
+					"component", "cli",
+					"session", name,
+					slog.Any("err", lerr),
+				)
+			} else {
+				if settings == nil {
+					settings = &session.Settings{}
+				}
+				settings.RemoteControl = true
+				if serr := store.SaveSettings(name, settings); serr != nil {
+					slog.Warn("session.new.save_settings_failed",
+						"component", "cli",
+						"session", name,
+						slog.Any("err", serr),
+					)
+				} else {
+					slog.Info("session.new.remote_control_persisted",
+						"component", "cli",
+						"session", name,
+						"remote_control", true,
+					)
+				}
+			}
+		}
 		if fs, ok := store.(*session.FileStore); ok {
 			autoUpdateContext(fs, sess)
 		}
@@ -631,7 +859,7 @@ func startNewSessionInDir(basedir string, store session.Store, dashboardFallback
 // session, reattaching its workspace add-dir if the user invoked from
 // a different cwd. Shared by the resume cobra verb and the TUI
 // dashboard's resume callback.
-func resumeSession(sess *session.Session, store session.Store) error {
+func resumeSession(sess *session.Session, store session.Store, allowSelfReload bool) error {
 	globalRoot := config.GlobalDataDir()
 	sessionDir := config.GetSessionDir(globalRoot, sess.Name)
 
@@ -649,13 +877,19 @@ func resumeSession(sess *session.Session, store session.Store) error {
 	}
 
 	_, _ = fmt.Fprintf(os.Stdout, "Resuming session '%s' (%s)\n\n", sess.Name, sess.Metadata.SessionID)
+	_, _ = fmt.Fprintln(os.Stdout, "Dashboard is suspended while Claude runs. Exit Claude to return.")
+	_, _ = fmt.Fprintln(os.Stdout)
 	slog.Info("session.resume.started",
 		"component", "cli",
 		"session", sess.Name,
 		"session_id", sess.Metadata.SessionID,
 	)
 
-	err := claude.Resume(globalRoot, sess, settingsFile, additionalArgs)
+	extraEnvironment := map[string]string{}
+	if allowSelfReload {
+		extraEnvironment["CLYDE_ENABLE_SELF_RELOAD"] = "1"
+	}
+	err := claude.Resume(globalRoot, sess, settingsFile, additionalArgs, extraEnvironment)
 	if fs, ok := store.(*session.FileStore); ok {
 		autoUpdateContext(fs, sess)
 	}
@@ -706,10 +940,17 @@ func deleteSession(sess *session.Session, store session.Store) error {
 		}
 	}
 
-	if ok, derr := daemon.DeleteSessionViaDaemon(context.Background(), sess.Name); ok {
-		_ = derr
-	} else if err := store.Delete(sess.Name); err != nil {
-		return fmt.Errorf("failed to delete session: %w", err)
+	outcome, err := daemon.DeleteSessionViaDaemonOutcome(context.Background(), sess.Name)
+	switch outcome {
+	case daemon.LifecycleOutcomeReady:
+	case daemon.LifecycleOutcomeDegradedOffline:
+		if err := store.Delete(sess.Name); err != nil {
+			return fmt.Errorf("failed to delete session: %w", err)
+		}
+	case daemon.LifecycleOutcomeFailed:
+		return daemonLifecycleError("delete", outcome, err)
+	default:
+		return daemonLifecycleError("delete", outcome, err)
 	}
 
 	if sess.Metadata.HasCustomOutputStyle {
@@ -735,6 +976,13 @@ func deleteSession(sess *session.Session, store session.Store) error {
 	)
 
 	return nil
+}
+
+func daemonLifecycleError(action string, outcome daemon.LifecycleOutcome, err error) error {
+	if err == nil {
+		return fmt.Errorf("daemon %s %s", action, outcome)
+	}
+	return fmt.Errorf("daemon %s %s: %w", action, outcome, err)
 }
 
 // loadSessionMessages loads parsed messages from all transcripts for

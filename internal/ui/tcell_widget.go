@@ -1,6 +1,10 @@
 package ui
 
-import "github.com/gdamore/tcell/v2"
+import (
+	"github.com/gdamore/tcell/v2"
+	"github.com/mattn/go-runewidth"
+	"github.com/rivo/uniseg"
+)
 
 // Rect is a screen rectangle.
 type Rect struct{ X, Y, W, H int }
@@ -34,19 +38,38 @@ func drawBoxBorder(scr tcell.Screen, box Rect, color tcell.Color) {
 	}
 }
 
-// drawString writes s at (x, y) with the given style. Returns the width used.
-// Clips at maxW (cells). Grapheme/wide-char naive: one rune = one cell.
+// drawString writes s at (x, y) with the given style. Returns the display
+// width used (in terminal cells), clipping at maxW. Uses grapheme clusters
+// and go-runewidth so East Asian and emoji line up with layout in cellCount.
 func drawString(scr tcell.Screen, x, y int, style tcell.Style, s string, maxW int) int {
 	if maxW <= 0 {
 		return 0
 	}
+	gr := uniseg.NewGraphemes(s)
 	used := 0
-	for _, r := range s {
-		if used >= maxW {
+	for gr.Next() {
+		cl := gr.Str()
+		w := runewidth.StringWidth(cl)
+		if w < 1 {
+			rns := []rune(cl)
+			if len(rns) == 0 {
+				continue
+			}
+			w = runewidth.RuneWidth(rns[0])
+		}
+		if w < 1 {
+			continue
+		}
+		if used+w > maxW {
 			break
 		}
-		scr.SetContent(x+used, y, r, nil, style)
-		used++
+		rns := []rune(cl)
+		if len(rns) == 0 {
+			used += w
+			continue
+		}
+		scr.SetContent(x+used, y, rns[0], rns[1:], style)
+		used += w
 	}
 	return used
 }
@@ -93,10 +116,7 @@ func dimBackground(scr tcell.Screen) {
 // fall back to the muted palette entry; the default foreground and
 // every defined color get nudged into the subtext band.
 func dimForeground(fg tcell.Color) tcell.Color {
-	if fg == tcell.ColorDefault {
-		return ColorMuted
-	}
-	return ColorSubtext
+	return ColorMuted
 }
 
 // stripMarkup removes inline tview-style tags like [color:bg:flags] from s.
@@ -125,13 +145,15 @@ func stripMarkup(s string) string {
 	return string(out)
 }
 
-// runeCount returns the rune length of s (cell width approximation).
+// cellCount returns the display width of s in terminal cells.
+func cellCount(s string) int {
+	return runewidth.StringWidth(s)
+}
+
+// runeCount is an alias for cellCount. Kept for call sites that mean
+// "layout width" in screen cells, not Go rune count.
 func runeCount(s string) int {
-	n := 0
-	for range s {
-		n++
-	}
-	return n
+	return cellCount(s)
 }
 
 // min helper (Go 1.21+ has built-in; keep local copy for portability).

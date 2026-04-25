@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"goodkind.io/clyde/internal/config"
@@ -23,6 +25,15 @@ var VerboseFunc func() bool = func() bool { return false }
 // SessionUsedFunc checks if a Claude Code session was actually used (has a transcript).
 // Can be overridden in tests where the fake claude binary doesn't create transcripts.
 var SessionUsedFunc = DefaultSessionUsed
+
+const (
+	envEnableSelfReload = "CLYDE_ENABLE_SELF_RELOAD"
+)
+
+type monitorState struct {
+	sawConnectionError bool
+	reloadRequested    atomic.Bool
+}
 
 // appendCommonArgs adds settings flags and global defaults to the arg list.
 func appendCommonArgs(args []string, settingsFile string) []string {
@@ -52,13 +63,22 @@ func remoteControlEnabled(settingsFile string) bool {
 }
 
 // Resume invokes claude CLI to resume an existing session.
-func Resume(clydeRoot string, sess *session.Session, settingsFile string, additionalArgs []string) error {
+func Resume(
+	clydeRoot string,
+	sess *session.Session,
+	settingsFile string,
+	additionalArgs []string,
+	extraEnvironment map[string]string,
+) error {
 	args := []string{"--resume", sess.Metadata.SessionID, "-n", sess.Name}
 	args = appendCommonArgs(args, settingsFile)
 	args = append(args, additionalArgs...)
 
 	env := map[string]string{
 		"CLYDE_SESSION_NAME": sess.Name,
+	}
+	for key, value := range extraEnvironment {
+		env[key] = value
 	}
 
 	if sess.Metadata.IsIncognito {
@@ -74,10 +94,10 @@ func Resume(clydeRoot string, sess *session.Session, settingsFile string, additi
 // StartNewInteractive runs claude without --resume for a new named session.
 // env must set CLYDE_SESSION_NAME so the SessionStart hook can adopt the row.
 // settingsFile may be empty; remote-control and settings injection match Resume.
-func StartNewInteractive(env map[string]string, settingsFile string, workDir string) error {
+func StartNewInteractive(env map[string]string, settingsFile string, workDir string, forceRemoteControl bool) error {
 	args := []string{}
 	args = appendCommonArgs(args, settingsFile)
-	if remoteControlEnabled(settingsFile) {
+	if forceRemoteControl || remoteControlEnabled(settingsFile) {
 		return invokeInteractivePTY(args, env, workDir, "")
 	}
 	return invokeInteractive(args, env, workDir)
@@ -156,12 +176,23 @@ func invokeInteractive(args []string, env map[string]string, workDir string) err
 	// If the daemon restarts (e.g. after `make install`), this re-registers
 	// the session with the new daemon so global settings sync continues.
 	done := make(chan struct{})
-	go monitorDaemon(ctx, wrapperID, sessionName, done)
+	monitorStopped := make(chan struct{})
+	monitor := &monitorState{}
+	go monitorDaemon(ctx, wrapperID, sessionName, done, monitor, monitorStopped)
 
 	runErr := cmd.Run()
 
 	// Signal the monitor to stop and release the session.
 	close(done)
+	<-monitorStopped
+	if shouldSelfReloadWrapper(env, runErr, monitor) {
+		if reloadErr := selfReloadCurrentProcess(); reloadErr != nil {
+			slog.Warn("wrapper.self_reload.failed",
+				"component", "wrapper",
+				"session", sessionName,
+				"error", reloadErr)
+		}
+	}
 
 	return runErr
 }
@@ -170,10 +201,17 @@ func invokeInteractive(args []string, env map[string]string, workDir string) err
 // connection. If the daemon restarted (kill + relaunch during deploy),
 // this re-acquires the session so global settings sync keeps working.
 // On done signal, releases the session from whichever daemon is current.
-func monitorDaemon(ctx context.Context, wrapperID, sessionName string, done <-chan struct{}) {
+func monitorDaemon(
+	ctx context.Context,
+	wrapperID, sessionName string,
+	done <-chan struct{},
+	state *monitorState,
+	stopped chan<- struct{},
+) {
 	const interval = 30 * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	defer close(stopped)
 
 	for {
 		select {
@@ -192,18 +230,53 @@ func monitorDaemon(ctx context.Context, wrapperID, sessionName string, done <-ch
 			// AcquireSession is idempotent (daemon overwrites existing entry).
 			c, err := daemon.ConnectOrStart(ctx)
 			if err != nil {
+				state.sawConnectionError = true
 				if VerboseFunc() {
 					fmt.Fprintf(os.Stderr, "[DEBUG] daemon monitor: connect failed: %v\n", err)
 				}
 				continue
 			}
 			_, acqErr := c.AcquireSession(wrapperID, sessionName)
+			c.Close()
+			if acqErr != nil {
+				state.sawConnectionError = true
+			}
 			if acqErr != nil && VerboseFunc() {
 				fmt.Fprintf(os.Stderr, "[DEBUG] daemon monitor: re-acquire failed: %v\n", acqErr)
 			}
-			c.Close()
+			if acqErr == nil && state.sawConnectionError {
+				state.reloadRequested.Store(true)
+				state.sawConnectionError = false
+				slog.Info("wrapper.self_reload.requested",
+					"component", "wrapper",
+					"session", sessionName,
+					"wrapper_id", wrapperID,
+					"reason", "daemon_reconnected")
+			}
 		}
 	}
+}
+
+func shouldSelfReloadWrapper(env map[string]string, runErr error, state *monitorState) bool {
+	if runErr != nil {
+		return false
+	}
+	if env[envEnableSelfReload] != "1" {
+		return false
+	}
+	return state.reloadRequested.Load()
+}
+
+func selfReloadCurrentProcess() error {
+	executablePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve executable path: %w", err)
+	}
+	slog.Info("wrapper.self_reload.exec",
+		"component", "wrapper",
+		"path", executablePath,
+		"arg_count", len(os.Args))
+	return syscall.Exec(executablePath, os.Args, os.Environ())
 }
 
 // ResumeByName invokes claude with --resume <name>, letting Claude resolve
@@ -304,4 +377,3 @@ func DefaultSessionUsed(globalRoot string, sess *session.Session) bool {
 	transcriptPath := TranscriptPath(homeDir, clydeRoot, sessionID)
 	return util.FileExists(transcriptPath)
 }
-

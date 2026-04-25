@@ -169,16 +169,15 @@ func TestHappyPath_ResumeCycleMultipleTimes(t *testing.T) {
 				i)
 		}
 
-		// User dismisses the prompt (List action -> overlay = nil).
-		// Use OnList rather than OnResume so we don't recurse
-		// infinitely via the cycle-test-self path.
-		listAction := findModalAction(modal, "Go to session list")
-		if listAction == nil {
-			t.Fatalf("cycle %d: return overlay missing Go to session list action", i)
+		// User dismisses the prompt back to the dashboard. Use cancel
+		// rather than Return back to chat so we don't recurse infinitely
+		// through the cycle-test-self path.
+		if modal.OnCancel == nil {
+			t.Fatalf("cycle %d: return overlay missing cancel handler", i)
 		}
-		listAction()
+		modal.OnCancel()
 		if a.overlay != nil {
-			t.Fatalf("cycle %d: OnList should clear overlay", i)
+			t.Fatalf("cycle %d: cancel should clear overlay", i)
 		}
 
 		// Confirm the table is still responsive  --  Down should still
@@ -252,7 +251,7 @@ func TestHappyPath_ResumeFromOptionsPopup(t *testing.T) {
 // mkAppWithSessions constructs a test App with n synthetic sessions
 // and a SimulationScreen attached. Returns the app, the screen, and
 // a cleanup func. The App's expensive callbacks (RefreshSummary,
-// ExtractDetail, SubscribeRegistry, ListBridges) are stubbed.
+// GetSessionDetail, SubscribeRegistry, ListBridges) are stubbed.
 func mkAppWithSessions(t *testing.T, n int) (*App, tcell.SimulationScreen, func()) {
 	t.Helper()
 	sessions := make([]*session.Session, n)
@@ -275,14 +274,18 @@ func mkAppWithSessions(t *testing.T, n int) (*App, tcell.SimulationScreen, func(
 		// Default ResumeSession: no-op success. Tests override per
 		// case to count invocations.
 		ResumeSession: func(*session.Session) error { return nil },
-		// ExtractDetail returns an empty detail so populateDetails
-		// doesn't crash on lookup.
-		ExtractDetail: func(*session.Session) SessionDetail {
-			return SessionDetail{}
+		ListSessions: func() (SessionSnapshot, error) {
+			models := make(map[string]string, len(sessions))
+			for _, sess := range sessions {
+				models[sess.Name] = "opus"
+			}
+			return SessionSnapshot{Sessions: sessions, Models: models}, nil
 		},
-		ExtractModel: func(*session.Session) string { return "opus" },
-		// Store nil is fine for these tests; refreshSessions
-		// silently bails when Store is nil.
+		// GetSessionDetail returns an empty detail so populateDetails
+		// doesn't crash on lookup.
+		GetSessionDetail: func(*session.Session) (SessionDetail, error) {
+			return SessionDetail{}, nil
+		},
 	}
 	a := NewApp(sessions, cb)
 	scr := tcell.NewSimulationScreen("UTF-8")

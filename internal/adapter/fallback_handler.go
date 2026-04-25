@@ -235,15 +235,28 @@ func (s *Server) handleFallback(w http.ResponseWriter, r *http.Request, req Chat
 }
 
 func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req fallback.Request, model ResolvedModel, reqID string, started time.Time, jsonSpec JSONResponseSpec, escalate bool) error {
+	s.emitRequestStarted(ctx, model, "fallback", reqID, req.Model, false)
 	result, err := s.fb.Collect(ctx, req)
 	if err != nil {
 		chatemit.LogFailed(s.log, ctx, chatemit.FailedAttrs{
 			Backend:    "fallback",
+			Provider:   providerName(model, "fallback"),
 			RequestID:  reqID,
 			Alias:      model.Alias,
 			ModelID:    req.Model,
 			Err:        err,
 			DurationMs: time.Since(started).Milliseconds(),
+		})
+		chatemit.LogTerminal(s.log, ctx, s.deps.RequestEvents, chatemit.RequestEvent{
+			Stage:      chatemit.RequestStageFailed,
+			Provider:   providerName(model, "fallback"),
+			Backend:    model.Backend,
+			RequestID:  reqID,
+			Alias:      model.Alias,
+			ModelID:    req.Model,
+			Stream:     false,
+			DurationMs: time.Since(started).Milliseconds(),
+			Err:        err.Error(),
 		})
 		if err := chatemit.EscalateOrWrite(
 			err,
@@ -323,6 +336,7 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 		result.Usage.PromptTokens, result.Usage.CacheCreationInputTokens, result.Usage.CacheReadInputTokens)
 	chatemit.LogCompleted(s.log, ctx, chatemit.CompletedAttrs{
 		Backend:             "fallback",
+		Provider:            providerName(model, "fallback"),
 		Path:                fallbackPathLabel(req),
 		SessionID:           req.SessionID,
 		RequestID:           reqID,
@@ -336,6 +350,30 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 		CacheTTL:            s.cfg.ClientIdentity.PromptCacheTTL,
 		DurationMs:          time.Since(started).Milliseconds(),
 		Stream:              false,
+	})
+	breakdown := chatemit.EstimateCost(chatemit.CostInputs{
+		ModelID:             req.Model,
+		TTL:                 s.cfg.ClientIdentity.PromptCacheTTL,
+		InputTokens:         usage.PromptTokens,
+		OutputTokens:        usage.CompletionTokens,
+		CacheCreationTokens: result.Usage.CacheCreationInputTokens,
+		CacheReadTokens:     result.Usage.CacheReadInputTokens,
+	})
+	chatemit.LogTerminal(s.log, ctx, s.deps.RequestEvents, chatemit.RequestEvent{
+		Stage:               chatemit.RequestStageCompleted,
+		Provider:            providerName(model, "fallback"),
+		Backend:             model.Backend,
+		RequestID:           reqID,
+		Alias:               model.Alias,
+		ModelID:             req.Model,
+		Stream:              false,
+		FinishReason:        fr,
+		TokensIn:            usage.PromptTokens,
+		TokensOut:           usage.CompletionTokens,
+		CacheReadTokens:     result.Usage.CacheReadInputTokens,
+		CacheCreationTokens: result.Usage.CacheCreationInputTokens,
+		CostMicrocents:      breakdown.TotalMicrocents,
+		DurationMs:          time.Since(started).Milliseconds(),
 	})
 	return nil
 }
@@ -358,6 +396,7 @@ func fallbackPathLabel(req fallback.Request) string {
 // deltas (role, tool_calls, finish_reason) that match OpenAI
 // clients. Plain tool_choice "none" keeps live text deltas.
 func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fallback.Request, model ResolvedModel, reqID string, started time.Time, escalate bool, includeUsage bool) error {
+	s.emitRequestStarted(r.Context(), model, "fallback", reqID, req.Model, true)
 	sw, err := newSSEWriter(w)
 	if err != nil {
 		if err := chatemit.EscalateOrWrite(
@@ -377,6 +416,7 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 	}
 
 	sw.writeSSEHeaders()
+	s.emitRequestStreamOpened(r.Context(), model, "fallback", reqID, req.Model, true)
 
 	created := time.Now().Unix()
 	firstDelta := true
@@ -429,6 +469,17 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 		if escalate && !sw.hasCommittedHeaders() {
 			return streamErr
 		}
+		chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{
+			Stage:      chatemit.RequestStageFailed,
+			Provider:   providerName(model, "fallback"),
+			Backend:    model.Backend,
+			RequestID:  reqID,
+			Alias:      model.Alias,
+			ModelID:    req.Model,
+			Stream:     true,
+			DurationMs: time.Since(started).Milliseconds(),
+			Err:        streamErr.Error(),
+		})
 	}
 
 	finalFinish := finishreason.FromAnthropicNonStream(sr.Stop)
@@ -527,6 +578,7 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 		sr.Usage.PromptTokens, sr.Usage.CacheCreationInputTokens, sr.Usage.CacheReadInputTokens)
 	chatemit.LogCompleted(s.log, r.Context(), chatemit.CompletedAttrs{
 		Backend:             "fallback",
+		Provider:            providerName(model, "fallback"),
 		Path:                fallbackPathLabel(req),
 		SessionID:           req.SessionID,
 		RequestID:           reqID,
@@ -541,6 +593,32 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 		DurationMs:          time.Since(started).Milliseconds(),
 		Stream:              true,
 	})
+	if streamErr == nil {
+		breakdown := chatemit.EstimateCost(chatemit.CostInputs{
+			ModelID:             req.Model,
+			TTL:                 s.cfg.ClientIdentity.PromptCacheTTL,
+			InputTokens:         finalUsage.PromptTokens,
+			OutputTokens:        finalUsage.CompletionTokens,
+			CacheCreationTokens: sr.Usage.CacheCreationInputTokens,
+			CacheReadTokens:     sr.Usage.CacheReadInputTokens,
+		})
+		chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{
+			Stage:               chatemit.RequestStageCompleted,
+			Provider:            providerName(model, "fallback"),
+			Backend:             model.Backend,
+			RequestID:           reqID,
+			Alias:               model.Alias,
+			ModelID:             req.Model,
+			Stream:              true,
+			FinishReason:        finalFinish,
+			TokensIn:            finalUsage.PromptTokens,
+			TokensOut:           finalUsage.CompletionTokens,
+			CacheReadTokens:     sr.Usage.CacheReadInputTokens,
+			CacheCreationTokens: sr.Usage.CacheCreationInputTokens,
+			CostMicrocents:      breakdown.TotalMicrocents,
+			DurationMs:          time.Since(started).Milliseconds(),
+		})
+	}
 	return nil
 }
 

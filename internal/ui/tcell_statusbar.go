@@ -24,6 +24,7 @@ const (
 type StatusBarWidget struct {
 	Mode     StatusMode
 	Position string // e.g. "Top", "Bot", "45%". Empty means nothing to show.
+	Clock    string // e.g. "15:04:05"
 	// LegendOverride lets overlays/panels supply a context-specific
 	// legend while reusing the same fixed status bar location.
 	LegendOverride []LegendAction
@@ -31,6 +32,19 @@ type StatusBarWidget struct {
 	// sessions. Rendered as a small RC×N badge on the right edge so
 	// the user always sees how many of their sessions are exposed.
 	BridgeCount int
+	// DaemonOnline indicates whether the daemon subscription stream is
+	// currently healthy. When false the status bar shows an offline
+	// badge, but the rest of the TUI remains interactive.
+	DaemonOnline bool
+	// DaemonStatus carries a short human-readable error summary when the
+	// daemon is offline so the user can see why live features degraded.
+	DaemonStatus string
+	// DaemonConnecting suppresses the offline badge during startup while
+	// the dashboard is still waiting for the first daemon-backed snapshot.
+	DaemonConnecting bool
+	// DaemonSpinner is the single-glyph frame to render inside the
+	// connecting badge.
+	DaemonSpinner string
 }
 
 // LegendProvider is implemented by overlays that want to customize
@@ -57,6 +71,7 @@ const (
 	LegendFilter
 	LegendNew
 	LegendRefresh
+	LegendRestartDaemon
 	LegendHelp
 	LegendQuit
 	LegendSearch
@@ -102,34 +117,71 @@ func badgeFor(m StatusMode) (string, tcell.Color) {
 	return " ? ", tcell.ColorWhite
 }
 
-// legendFor returns styled segments for the keybinding hints.
-func legendFor(m StatusMode) []TextSegment {
-	var actions []LegendAction
-	switch m {
+// legendForStatus returns styled segments for the keybinding hints.
+func legendForStatus(s *StatusBarWidget) []TextSegment {
+	actions := legendActionsForStatus(s)
+	return legendSegmentsFromActions(actions)
+}
+
+func legendActionsForStatus(s *StatusBarWidget) []LegendAction {
+	switch s.Mode {
 	case StatusBrowse:
-		actions = []LegendAction{
-			LegendMove, LegendTopBottom, LegendSelectOption,
-			LegendSelectDetail, LegendFilter, LegendNew,
+		actions := []LegendAction{
+			LegendMove, LegendFilter, LegendNew,
 			LegendRefresh, LegendHelp, LegendQuit,
 		}
+		if !s.DaemonOnline {
+			actions[3] = LegendRestartDaemon
+		}
+		return actions
 	case StatusDetail:
-		actions = []LegendAction{
-			LegendSelectOption, LegendSearch, LegendView,
+		return []LegendAction{
+			LegendSearch, LegendView,
 			LegendCompact, LegendFork, LegendDelete,
 			LegendEditBasedir, LegendClose,
 		}
 	case StatusFilter:
-		actions = []LegendAction{LegendTypeFilter, LegendConfirm, LegendClear}
+		return []LegendAction{LegendTypeFilter, LegendClear}
 	case StatusSearch:
-		actions = []LegendAction{LegendNext, LegendSearch, LegendClose}
+		return []LegendAction{LegendNext, LegendSearch, LegendClose}
 	case StatusCompact:
-		actions = []LegendAction{LegendFocus, LegendAdjust, LegendSelect, LegendClose}
+		return []LegendAction{LegendFocus, LegendAdjust, LegendSelect, LegendClose}
 	case StatusView:
-		actions = []LegendAction{LegendScroll, LegendClose}
+		return []LegendAction{LegendScroll, LegendClose}
 	case StatusConfirm:
-		actions = []LegendAction{LegendYesConfirm, LegendNoCancel}
+		return []LegendAction{LegendYesConfirm, LegendNoCancel}
 	}
-	return legendSegmentsFromActions(actions)
+	return nil
+}
+
+func legendActionAt(s *StatusBarWidget, r Rect, x int) (LegendAction, bool) {
+	actions := s.LegendOverride
+	if len(actions) == 0 {
+		actions = legendActionsForStatus(s)
+	}
+	curX := r.X + 1 + runeCount(badgeLabelForStatus(s)) + 2
+	for i, action := range actions {
+		hint, ok := legendHintForAction(action)
+		if !ok {
+			continue
+		}
+		if i > 0 {
+			curX += 2
+		}
+		start := curX
+		width := runeCount(hint.key) + runeCount(" "+hint.label)
+		end := start + width
+		if x >= start && x < end {
+			return action, true
+		}
+		curX = end
+	}
+	return 0, false
+}
+
+func badgeLabelForStatus(s *StatusBarWidget) string {
+	label, _ := badgeFor(s.Mode)
+	return label
 }
 
 func legendSegmentsFromActions(actions []LegendAction) []TextSegment {
@@ -168,6 +220,8 @@ func legendHintForAction(action LegendAction) (legendHint, bool) {
 		return legendHint{key: "N", label: "new"}, true
 	case LegendRefresh:
 		return legendHint{key: "R", label: "refresh"}, true
+	case LegendRestartDaemon:
+		return legendHint{key: "R", label: "restart daemon"}, true
 	case LegendHelp:
 		return legendHint{key: "?", label: "help"}, true
 	case LegendQuit:
@@ -233,7 +287,7 @@ func (s *StatusBarWidget) Draw(scr tcell.Screen, r Rect) {
 	// Legend
 	var segs []TextSegment
 	if len(s.LegendOverride) == 0 {
-		segs = legendFor(s.Mode)
+		segs = legendForStatus(s)
 	} else {
 		segs = legendSegmentsFromActions(s.LegendOverride)
 	}
@@ -245,25 +299,64 @@ func (s *StatusBarWidget) Draw(scr tcell.Screen, r Rect) {
 		x += u
 	}
 
-	// Right aligned bridge indicator. Sits to the left of the
-	// position field when both are present.
+	// Right aligned clock.
 	rightX := r.X + r.W
-	if s.BridgeCount > 0 {
-		txt := " RC×" + itoa(s.BridgeCount) + " "
-		bx := rightX - runeCount(txt)
-		if bx > x {
-			drawString(scr, bx, r.Y, tcell.StyleDefault.Background(ColorSuccess).Foreground(tcell.ColorBlack).Bold(true), txt, rightX-bx)
-			rightX = bx
+	if s.Clock != "" {
+		clockStyle := StyleStatusBar.Foreground(ColorMuted)
+		txt := " " + s.Clock + " "
+		rx := rightX - runeCount(txt)
+		if rx > x {
+			drawString(scr, rx, r.Y, clockStyle, txt, rightX-rx)
+			rightX = rx
 		}
 	}
 
-	// Right aligned position
+	// Right aligned position.
 	if s.Position != "" {
 		posStyle := StyleStatusBar.Foreground(ColorText).Bold(true)
 		txt := " " + s.Position + " "
 		rx := rightX - runeCount(txt)
 		if rx > x {
 			drawString(scr, rx, r.Y, posStyle, txt, rightX-rx)
+			rightX = rx
+		}
+	}
+
+	// Right aligned daemon health badge. Sits to the left of position.
+	if s.DaemonConnecting {
+		txt := " " + s.DaemonSpinner + " connecting "
+		bx := rightX - runeCount(txt)
+		if bx > x {
+			connectingStyle := tcell.StyleDefault.Background(ColorAccent).Foreground(tcell.ColorBlack).Bold(true)
+			drawString(scr, bx, r.Y, connectingStyle, txt, rightX-bx)
+			rightX = bx
+		}
+	} else if !s.DaemonOnline {
+		txt := " DAEMON OFFLINE "
+		bx := rightX - runeCount(txt)
+		if bx > x {
+			offlineStyle := tcell.StyleDefault.Background(ColorWarning).Foreground(tcell.ColorBlack).Bold(true)
+			drawString(scr, bx, r.Y, offlineStyle, txt, rightX-bx)
+			rightX = bx
+		}
+		if s.DaemonStatus != "" {
+			msg := " " + s.DaemonStatus + " "
+			msgX := rightX - runeCount(msg)
+			if msgX > x {
+				msgStyle := tcell.StyleDefault.Background(ColorStatusBg).Foreground(ColorWarning)
+				drawString(scr, msgX, r.Y, msgStyle, msg, rightX-msgX)
+				rightX = msgX
+			}
+		}
+	}
+
+	// Right aligned bridge indicator. Sits to the left of daemon/position.
+	if s.BridgeCount > 0 {
+		txt := " RC×" + itoa(s.BridgeCount) + " "
+		bx := rightX - runeCount(txt)
+		if bx > x {
+			drawString(scr, bx, r.Y, tcell.StyleDefault.Background(ColorSuccess).Foreground(tcell.ColorBlack).Bold(true), txt, rightX-bx)
+			rightX = bx
 		}
 	}
 }

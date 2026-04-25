@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	itranscript "goodkind.io/clyde/internal/transcript"
 )
 
 // transcriptEntry represents a single line in the Claude Code transcript JSONL.
@@ -115,49 +117,21 @@ type ToolUseCount struct {
 	Count int
 }
 
+// TranscriptStats contains cheap transcript-level counters for the TUI details
+// pane. Token counts are Claude-style rough estimates, not count_tokens API
+// values, so they are safe to compute on every selected transcript.
+type TranscriptStats struct {
+	VisibleMessages       int
+	VisibleTokensEstimate int
+	LastMessageTokens     int
+	CompactionCount       int
+	LastPreCompactTokens  int
+}
+
 // ExtractRecentMessages reads the tail of a transcript and returns the last n
 // user/assistant messages with their text content truncated to maxLen chars.
 func ExtractRecentMessages(transcriptPath string, n, maxLen int) []RecentMessage {
-	type msgEntry struct {
-		Type      string `json:"type"`
-		Timestamp string `json:"timestamp"`
-		Message   struct {
-			Content json.RawMessage `json:"content"`
-		} `json:"message"`
-	}
-
-	var all []RecentMessage
-	_ = forEachTailLine(transcriptPath, 256*1024, func(line []byte) {
-		var e msgEntry
-		if err := json.Unmarshal(line, &e); err != nil {
-			return
-		}
-		if e.Type != "user" && e.Type != "assistant" {
-			return
-		}
-
-		text := extractTextContent(e.Message.Content)
-		if text == "" {
-			return
-		}
-		if e.Type == "user" {
-			text = cleanUserText(text)
-		}
-		if text == "" {
-			return
-		}
-		if len(text) > maxLen {
-			text = text[:maxLen] + "..."
-		}
-		var ts time.Time
-		if e.Timestamp != "" {
-			if parsed, err := time.Parse(time.RFC3339, e.Timestamp); err == nil {
-				ts = parsed
-			}
-		}
-		all = append(all, RecentMessage{Role: e.Type, Text: text, Timestamp: ts})
-	})
-
+	all := LoadAllMessages(transcriptPath, maxLen)
 	if len(all) > n {
 		all = all[len(all)-n:]
 	}
@@ -175,51 +149,83 @@ func LoadAllMessages(transcriptPath string, maxLen int) []RecentMessage {
 		return nil
 	}
 	defer f.Close()
+
+	parsed, err := itranscript.Parse(f)
+	if err != nil {
+		return nil
+	}
+	turns := itranscript.ShapeConversation(parsed, itranscript.ShapeOptions{
+		ToolOnly:     itranscript.ToolOnlyCompactSummary,
+		MaxTextRunes: maxLen,
+	})
+	out := make([]RecentMessage, 0, len(turns))
+	for _, turn := range turns {
+		out = append(out, RecentMessage{
+			Role:      turn.Role,
+			Text:      turn.Text,
+			Timestamp: turn.Timestamp,
+		})
+	}
+	return out
+}
+
+// TranscriptStatsFor scans the transcript once and returns message and compact
+// counters for the details pane. It intentionally uses the same visible-message
+// filters as LoadAllMessages so counts match what the model-visible pane shows.
+func TranscriptStatsFor(transcriptPath string) TranscriptStats {
+	f, err := os.Open(transcriptPath)
+	if err != nil {
+		return TranscriptStats{}
+	}
+	defer f.Close()
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 4*1024*1024)
 
-	type msgEntry struct {
-		Type      string `json:"type"`
-		Timestamp string `json:"timestamp"`
-		Message   struct {
+	type entry struct {
+		Type    string `json:"type"`
+		Subtype string `json:"subtype"`
+		Message struct {
 			Content json.RawMessage `json:"content"`
 		} `json:"message"`
+		CompactMetadata struct {
+			PreCompactTokenCount int `json:"preCompactTokenCount"`
+		} `json:"compactMetadata"`
 	}
 
-	var out []RecentMessage
+	var out TranscriptStats
 	for scanner.Scan() {
-		line := scanner.Bytes()
-		var e msgEntry
-		if err := json.Unmarshal(line, &e); err != nil {
+		var e entry
+		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil {
 			continue
 		}
-		if e.Type != "user" && e.Type != "assistant" {
-			continue
-		}
-		text := extractTextContent(e.Message.Content)
-		if text == "" {
-			continue
-		}
-		if e.Type == "user" {
-			text = cleanUserText(text)
-		}
-		if text == "" {
-			continue
-		}
-		if maxLen > 0 {
-			if runes := []rune(text); len(runes) > maxLen {
-				text = string(runes[:maxLen]) + "..."
+		if e.Type == "system" && e.Subtype == "compact_boundary" {
+			out.CompactionCount++
+			if e.CompactMetadata.PreCompactTokenCount > 0 {
+				out.LastPreCompactTokens = e.CompactMetadata.PreCompactTokenCount
 			}
+			continue
 		}
-		var ts time.Time
-		if e.Timestamp != "" {
-			if parsed, err := time.Parse(time.RFC3339, e.Timestamp); err == nil {
-				ts = parsed
-			}
-		}
-		out = append(out, RecentMessage{Role: e.Type, Text: text, Timestamp: ts})
+	}
+	messages := LoadAllMessages(transcriptPath, 0)
+	for _, msg := range messages {
+		tokens := roughVisibleTokenEstimate(msg.Text)
+		out.VisibleMessages++
+		out.VisibleTokensEstimate += tokens
+		out.LastMessageTokens = tokens
 	}
 	return out
+}
+
+func roughVisibleTokenEstimate(text string) int {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return 0
+	}
+	n := len([]rune(text)) / 4
+	if n < 1 {
+		return 1
+	}
+	return n
 }
 
 // ToolUseStats scans the full transcript and returns a descending count of

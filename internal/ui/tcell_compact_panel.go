@@ -285,10 +285,10 @@ func (p *CompactPanel) handleSliderKeys(e *tcell.EventKey) bool {
 	p.clearApplyConfirmation()
 	switch e.Key() {
 	case tcell.KeyLeft:
-		p.adjustTargetByPercent(1)
+		p.adjustTargetByPercent(-1)
 		return true
 	case tcell.KeyRight:
-		p.adjustTargetByPercent(-1)
+		p.adjustTargetByPercent(1)
 		return true
 	case tcell.KeyPgUp:
 		p.adjustTargetByPercent(5)
@@ -495,7 +495,7 @@ func (p *CompactPanel) renderSlider(width int) string {
 	if width < 4 {
 		width = 4
 	}
-	fill := p.percent() * width / 100
+	fill := p.compactedPercent() * width / 100
 	if fill < 0 {
 		fill = 0
 	}
@@ -518,6 +518,10 @@ func (p *CompactPanel) percent() int {
 		return 0
 	}
 	return (p.targetTokens * 100) / p.maxTokens
+}
+
+func (p *CompactPanel) compactedPercent() int {
+	return 100 - p.percent()
 }
 
 func (p *CompactPanel) percentLabel() string {

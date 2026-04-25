@@ -28,6 +28,8 @@ const (
 	// the dispatcher selects it either explicitly (alias bound to
 	// backend = "fallback") or as an on-oauth-failure escalation.
 	BackendFallback = "fallback"
+	// BackendCodex routes to ChatGPT/Codex-backed model execution.
+	BackendCodex = "codex"
 )
 
 // FallbackTrigger values control when the fallback dispatcher fires.
@@ -128,6 +130,8 @@ type Registry struct {
 	shunts       map[string]config.AdapterShunt
 	def          string
 	fallbackShnt string
+	codexEnabled bool
+	codexPrefix  []string
 }
 
 // NewRegistry builds the registry from a loaded AdapterConfig. It
@@ -231,6 +235,11 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 		shunts:       map[string]config.AdapterShunt{},
 		def:          cfg.DefaultModel,
 		fallbackShnt: strings.ToLower(cfg.FallbackShunt),
+		codexEnabled: cfg.Codex.Enabled,
+		codexPrefix:  append([]string(nil), cfg.Codex.ModelPrefixes...),
+	}
+	if len(r.codexPrefix) == 0 {
+		r.codexPrefix = []string{"gpt-", "o"}
 	}
 
 	for name, m := range cfg.Models {
@@ -315,10 +324,8 @@ func validateAdapterLogprobs(lp config.AdapterLogprobs) error {
 // the alias name so users get the shortest readable name when those
 // dimensions don't apply.
 func generateFamilyAliases(out map[string]ResolvedModel, slug string, f config.AdapterFamily, cliAlias string) {
-	efforts := f.Efforts
-	if len(efforts) == 0 {
-		efforts = []string{""} // sentinel: do not emit effort segment, do not bind
-	}
+	efforts := []string{""} // always emit a plain alias so callers can choose per-request effort
+	efforts = append(efforts, f.Efforts...)
 	thinking := f.ThinkingModes
 	if len(thinking) == 0 {
 		thinking = []string{""}
@@ -496,6 +503,80 @@ func resolveFromConfig(alias string, m config.AdapterModel) ResolvedModel {
 	return out
 }
 
+func (r *Registry) looksLikeCodexModel(alias string) bool {
+	if !r.codexEnabled {
+		return false
+	}
+	key := strings.ToLower(strings.TrimSpace(alias))
+	if key == "" {
+		return false
+	}
+	if strings.HasPrefix(key, "clyde-gpt-") ||
+		strings.HasPrefix(key, "clyde-o1") ||
+		strings.HasPrefix(key, "clyde-o3") ||
+		strings.HasPrefix(key, "clyde-o4") ||
+		strings.HasPrefix(key, "clyde-codex-") {
+		return true
+	}
+	for _, p := range r.codexPrefix {
+		p = strings.ToLower(strings.TrimSpace(p))
+		if p == "" {
+			continue
+		}
+		if strings.HasPrefix(key, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeCodexModelAlias(alias string) string {
+	key := strings.TrimSpace(alias)
+	lower := strings.ToLower(key)
+	for _, prefix := range []string{"clyde-codex-", "clyde-"} {
+		if strings.HasPrefix(lower, prefix) {
+			key = key[len(prefix):]
+			lower = strings.ToLower(key)
+			break
+		}
+	}
+	for _, suffix := range []string{"-low", "-medium", "-high", "-xhigh"} {
+		if strings.HasSuffix(lower, suffix) {
+			key = key[:len(key)-len(suffix)]
+			lower = strings.ToLower(key)
+			break
+		}
+	}
+	if strings.HasSuffix(lower, "-1m") {
+		key = key[:len(key)-len("-1m")]
+	}
+	switch {
+	default:
+		return key
+	}
+}
+
+func codexAliasEffort(alias string) string {
+	lower := strings.ToLower(strings.TrimSpace(alias))
+	for _, suffix := range []string{"xhigh", "high", "medium", "low"} {
+		if strings.HasSuffix(lower, "-"+suffix) {
+			return suffix
+		}
+	}
+	return ""
+}
+
+func codexAliasContext(alias string) int {
+	key := normalizeCodexModelAlias(alias)
+	original := strings.ToLower(strings.TrimSpace(alias))
+	if strings.HasSuffix(original, "-1m") || strings.Contains(original, "-1m-") {
+		if strings.EqualFold(key, "gpt-5.4") {
+			return 1000000
+		}
+	}
+	return 0
+}
+
 // Resolve looks up the alias and returns the resolved model plus the
 // chosen effort tier. reqEffort may be empty; the registry uses the
 // alias-bound effort first, then the family default. Unknown aliases
@@ -509,6 +590,18 @@ func resolveFromConfig(alias string, m config.AdapterModel) ResolvedModel {
 func (r *Registry) Resolve(alias, reqEffort string) (ResolvedModel, string, error) {
 	if alias == "" {
 		alias = r.def
+	}
+	if r.looksLikeCodexModel(alias) {
+		effort := strings.ToLower(strings.TrimSpace(reqEffort))
+		if effort == "" {
+			effort = codexAliasEffort(alias)
+		}
+		return ResolvedModel{
+			Alias:       alias,
+			Backend:     BackendCodex,
+			ClaudeModel: normalizeCodexModelAlias(alias),
+			Context:     codexAliasContext(alias),
+		}, effort, nil
 	}
 	key := strings.ToLower(alias)
 	m, ok := r.models[key]

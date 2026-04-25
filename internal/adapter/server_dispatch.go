@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"goodkind.io/clyde/internal/adapter/chatemit"
 	"goodkind.io/gklog"
 )
 
@@ -126,9 +127,26 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			slog.Int("count", n),
 		)
 	}
+	if len(req.Messages) == 0 && len(req.Input) > 0 {
+		count, nerr := normalizeMessagesFromInput(&req)
+		if nerr != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", nerr.Error())
+			return
+		}
+		if count > 0 {
+			s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.messages.normalized",
+				slog.String("request_id", reqID),
+				slog.String("from_shape", "responses_input"),
+				slog.Int("count", count),
+			)
+		}
+	}
 	if len(req.Messages) == 0 {
 		writeError(w, http.StatusBadRequest, "invalid_request", "messages is required")
 		return
+	}
+	if req.ReasoningEffort == "" && req.Reasoning != nil {
+		req.ReasoningEffort = strings.TrimSpace(req.Reasoning.Effort)
 	}
 
 	model, effort, err := s.registry.Resolve(req.Model, req.ReasoningEffort)
@@ -140,11 +158,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if override := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Clyde-Backend"))); override != "" {
 		original := string(model.Backend)
 		switch override {
-		case BackendAnthropic, BackendFallback, BackendShunt:
+		case BackendAnthropic, BackendFallback, BackendShunt, BackendCodex:
 			model.Backend = override
 		default:
 			writeError(w, http.StatusBadRequest, "invalid_backend_override",
-				"X-Clyde-Backend must be one of: anthropic, fallback, shunt")
+				"X-Clyde-Backend must be one of: anthropic, fallback, shunt, codex")
 			return
 		}
 		s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.backend.overridden",
@@ -193,6 +211,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		s.dispatchAnthropicWithFallback(w, r, req, model, effort, reqID, body)
 		return
 	}
+	if model.Backend == BackendCodex {
+		s.dispatchCodex(w, r, req, model, effort, reqID)
+		return
+	}
 
 	if err := s.acquire(r.Context()); err != nil {
 		writeError(w, http.StatusTooManyRequests, "rate_limited", err.Error())
@@ -211,9 +233,21 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	runner := NewRunner(s.deps, model, effort, system, prompt, reqID)
 	started := time.Now()
+	s.emitRequestStarted(r.Context(), model, "", reqID, model.ClaudeModel, req.Stream)
 	spawnCtx := gklog.WithLogger(r.Context(), s.log.With("request_id", reqID))
 	stdout, cancel, err := runner.Spawn(spawnCtx)
 	if err != nil {
+		chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{
+			Stage:      chatemit.RequestStageFailed,
+			Provider:   providerName(model, ""),
+			Backend:    model.Backend,
+			RequestID:  reqID,
+			Alias:      model.Alias,
+			ModelID:    model.ClaudeModel,
+			Stream:     req.Stream,
+			DurationMs: time.Since(started).Milliseconds(),
+			Err:        err.Error(),
+		})
 		writeError(w, http.StatusInternalServerError, "spawn_failed", err.Error())
 		return
 	}
@@ -323,9 +357,124 @@ func buildWhitelistBody(req ChatRequest, maxBytes int) (string, bool) {
 	return logBody, bodyTruncated
 }
 
+func normalizeMessagesFromInput(req *ChatRequest) (int, error) {
+	var inputItems []struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(req.Input, &inputItems); err != nil {
+		return 0, fmt.Errorf("invalid input payload: %w", err)
+	}
+	if len(inputItems) == 0 {
+		return 0, nil
+	}
+
+	messages := make([]ChatMessage, 0, len(inputItems))
+	for _, item := range inputItems {
+		role := strings.TrimSpace(item.Role)
+		if role == "" {
+			continue
+		}
+		content, err := normalizeInputContent(item.Content)
+		if err != nil {
+			return 0, err
+		}
+		messages = append(messages, ChatMessage{
+			Role:    role,
+			Content: content,
+		})
+	}
+	if len(messages) == 0 {
+		return 0, nil
+	}
+	req.Messages = messages
+	return len(messages), nil
+}
+
+func normalizeInputContent(raw json.RawMessage) (json.RawMessage, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return json.RawMessage(`""`), nil
+	}
+
+	switch trimmed[0] {
+	case '"':
+		// Plain OpenAI string content.
+		return json.RawMessage(trimmed), nil
+	case '{':
+		var part map[string]any
+		if err := json.Unmarshal(raw, &part); err != nil {
+			return nil, fmt.Errorf("invalid input content: %w", err)
+		}
+		return normalizeInputParts([]map[string]any{part})
+	case '[':
+		var parts []map[string]any
+		if err := json.Unmarshal(raw, &parts); err != nil {
+			return nil, fmt.Errorf("invalid input content: %w", err)
+		}
+		return normalizeInputParts(parts)
+	default:
+		return nil, fmt.Errorf("invalid input content type")
+	}
+}
+
+func normalizeInputParts(parts []map[string]any) (json.RawMessage, error) {
+	out := make([]map[string]any, 0, len(parts))
+	for _, p := range parts {
+		typ, _ := p["type"].(string)
+		switch typ {
+		case "text", "input_text", "output_text":
+			text, _ := p["text"].(string)
+			out = append(out, map[string]any{
+				"type": "text",
+				"text": text,
+			})
+		case "image_url":
+			out = append(out, map[string]any{
+				"type":      "image_url",
+				"image_url": p["image_url"],
+			})
+		case "input_image":
+			image := map[string]any{}
+			switch v := p["image_url"].(type) {
+			case map[string]any:
+				image = v
+			case string:
+				image["url"] = v
+			}
+			if len(image) == 0 {
+				continue
+			}
+			out = append(out, map[string]any{
+				"type":      "image_url",
+				"image_url": image,
+			})
+		}
+	}
+	if len(out) == 0 {
+		return json.RawMessage(`""`), nil
+	}
+	buf, err := json.Marshal(out)
+	if err != nil {
+		return nil, fmt.Errorf("failed to normalize input content: %w", err)
+	}
+	return buf, nil
+}
+
 func (s *Server) collectChat(w http.ResponseWriter, ctx context.Context, req ChatRequest, model ResolvedModel, stdout io.ReadCloser, reqID string, started time.Time, jsonSpec JSONResponseSpec) {
 	text, usage, err := CollectStream(stdout)
 	if err != nil {
+		chatemit.LogTerminal(s.log, ctx, s.deps.RequestEvents, chatemit.RequestEvent{
+			Stage:      chatemit.RequestStageFailed,
+			Provider:   providerName(model, ""),
+			Backend:    model.Backend,
+			RequestID:  reqID,
+			Alias:      model.Alias,
+			ModelID:    model.ClaudeModel,
+			Stream:     false,
+			DurationMs: time.Since(started).Milliseconds(),
+			Err:        err.Error(),
+		})
 		writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
 		return
 	}
@@ -358,6 +507,21 @@ func (s *Server) collectChat(w http.ResponseWriter, ctx context.Context, req Cha
 		slog.String("json_mode", jsonSpec.Mode),
 		slog.Bool("json_retried", jsonRetried),
 	)
+	chatemit.LogTerminal(s.log, ctx, s.deps.RequestEvents, chatemit.RequestEvent{
+		Stage:             chatemit.RequestStageCompleted,
+		Provider:          providerName(model, ""),
+		Backend:           model.Backend,
+		RequestID:         reqID,
+		Alias:             model.Alias,
+		ModelID:           model.ClaudeModel,
+		Stream:            false,
+		FinishReason:      "stop",
+		TokensIn:          usage.PromptTokens,
+		TokensOut:         usage.CompletionTokens,
+		CacheReadTokens:   usage.CachedTokens(),
+		CacheCreationTokens: 0,
+		DurationMs:        time.Since(started).Milliseconds(),
+	})
 }
 
 func (s *Server) handleLegacy(w http.ResponseWriter, r *http.Request) {

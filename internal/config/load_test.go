@@ -139,6 +139,28 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 		Expect(*cfg.Logging.Rotation.Enabled).To(BeFalse())
 	})
 
+	It("loads logging.paths for daemon and tui", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		data, _ := json.Marshal(map[string]any{
+			"logging": map[string]any{
+				"paths": map[string]any{
+					"daemon": "/tmp/clyde-daemon.jsonl",
+					"tui":    "/tmp/clyde-tui.jsonl",
+				},
+			},
+		})
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.json"), data, 0o644)).To(Succeed())
+
+		cfg, err := config.LoadGlobalOrDefault()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.Logging.Paths.Daemon).To(Equal("/tmp/clyde-daemon.jsonl"))
+		Expect(cfg.Logging.Paths.TUI).To(Equal("/tmp/clyde-tui.jsonl"))
+	})
+
 	It("rejects negative logging.rotation.max_backups", func() {
 		tmpDir := GinkgoT().TempDir()
 		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)

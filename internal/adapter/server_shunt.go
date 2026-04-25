@@ -9,9 +9,15 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
+
+	"goodkind.io/clyde/internal/adapter/chatemit"
 )
 
 func (s *Server) forwardShunt(w http.ResponseWriter, r *http.Request, model ResolvedModel, body []byte) {
+	started := time.Now()
+	reqID := newRequestID()
+	streamRequested := false
 	shunt, ok := s.registry.Shunt(model.Shunt)
 	if !ok || shunt.BaseURL == "" {
 		writeError(w, http.StatusNotImplemented, "shunt_unconfigured",
@@ -33,6 +39,9 @@ func (s *Server) forwardShunt(w http.ResponseWriter, r *http.Request, model Reso
 	var rawReq map[string]any
 	jsonSpec := JSONResponseSpec{}
 	if err := json.Unmarshal(body, &rawReq); err == nil {
+		if v, ok := rawReq["stream"].(bool); ok {
+			streamRequested = v
+		}
 		if shunt.Model != "" {
 			rawReq["model"] = shunt.Model
 		}
@@ -46,11 +55,27 @@ func (s *Server) forwardShunt(w http.ResponseWriter, r *http.Request, model Reso
 		}
 		body, _ = json.Marshal(rawReq)
 	}
+	s.emitRequestStarted(r.Context(), model, "", reqID, model.Alias, streamRequested)
 
 	respBody, status, hdr, err := shuntCall(r.Context(), shunt.BaseURL, apiKey, body)
 	if err != nil {
+		chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{
+			Stage:      chatemit.RequestStageFailed,
+			Provider:   providerName(model, ""),
+			Backend:    model.Backend,
+			RequestID:  reqID,
+			Alias:      model.Alias,
+			ModelID:    model.Alias,
+			Stream:     streamRequested,
+			DurationMs: time.Since(started).Milliseconds(),
+			Err:        err.Error(),
+		})
 		writeError(w, http.StatusBadGateway, "shunt_dial_failed", err.Error())
 		return
+	}
+	contentType := strings.ToLower(strings.TrimSpace(hdr.Get("Content-Type")))
+	if streamRequested || strings.Contains(contentType, "text/event-stream") {
+		s.emitRequestStreamOpened(r.Context(), model, "", reqID, model.Alias, true)
 	}
 
 	if jsonSpec.Mode != "" && status == http.StatusOK {
@@ -88,6 +113,29 @@ func (s *Server) forwardShunt(w http.ResponseWriter, r *http.Request, model Reso
 	w.Header().Set("Content-Length", strconv.Itoa(len(respBody)))
 	w.WriteHeader(status)
 	_, _ = w.Write(respBody)
+
+	usage := shuntUsageFromBody(respBody)
+	stage := chatemit.RequestStageCompleted
+	terminalErr := ""
+	if status >= 400 {
+		stage = chatemit.RequestStageFailed
+		terminalErr = "upstream returned status " + strconv.Itoa(status)
+	}
+	chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{
+		Stage:               stage,
+		Provider:            providerName(model, ""),
+		Backend:             model.Backend,
+		RequestID:           reqID,
+		Alias:               model.Alias,
+		ModelID:             model.Alias,
+		Stream:              streamRequested || strings.Contains(contentType, "text/event-stream"),
+		TokensIn:            usage.PromptTokens,
+		TokensOut:           usage.CompletionTokens,
+		CacheReadTokens:     usage.CachedTokens(),
+		CacheCreationTokens: 0,
+		DurationMs:          time.Since(started).Milliseconds(),
+		Err:                 terminalErr,
+	})
 }
 
 // injectJSONSystemMessage prepends (or appends to existing system
@@ -209,4 +257,29 @@ func redactedHeader(name string) bool {
 		return true
 	}
 	return strings.HasSuffix(name, "-api-key")
+}
+
+func shuntUsageFromBody(body []byte) Usage {
+	var payload struct {
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+			PromptDetails    struct {
+				CachedTokens int `json:"cached_tokens"`
+			} `json:"prompt_tokens_details"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return Usage{}
+	}
+	usage := Usage{
+		PromptTokens:     payload.Usage.PromptTokens,
+		CompletionTokens: payload.Usage.CompletionTokens,
+		TotalTokens:      payload.Usage.TotalTokens,
+	}
+	if payload.Usage.PromptDetails.CachedTokens > 0 {
+		usage.PromptTokensDetails = &PromptTokensDetails{CachedTokens: payload.Usage.PromptDetails.CachedTokens}
+	}
+	return usage
 }

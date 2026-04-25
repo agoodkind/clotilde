@@ -38,13 +38,13 @@ func TestQA_AllWidgets(t *testing.T) {
 
 	cases := []widgetCase{
 		{"00-tabbar-sessions-active", 100, 1, func(scr tcell.Screen, r Rect) {
-			tb := NewTabBar([]string{"Sessions", "Settings", "Sidecar"})
+			tb := NewTabBar([]string{"Sessions", "Stats", "Settings", "Sidecar"})
 			tb.Active = 0
 			tb.Draw(scr, r)
 		}},
 		{"01-tabbar-settings-active", 100, 1, func(scr tcell.Screen, r Rect) {
-			tb := NewTabBar([]string{"Sessions", "Settings", "Sidecar"})
-			tb.Active = 1
+			tb := NewTabBar([]string{"Sessions", "Stats", "Settings", "Sidecar"})
+			tb.Active = 2
 			tb.Draw(scr, r)
 		}},
 
@@ -62,7 +62,7 @@ func TestQA_AllWidgets(t *testing.T) {
 		}},
 
 		{"05-table-empty", 100, 10, func(scr tcell.Screen, r Rect) {
-			tw := NewTableWidget([]string{"NAME", "DIR", "MODEL", "MSGS", "LAST USED"})
+			tw := NewTableWidget([]string{"NAME", "DIR", "MODEL", "MSGS", "LAST ACTIVE"})
 			tw.Draw(scr, r)
 		}},
 		{"06-table-populated-no-selection", 100, 12, func(scr tcell.Screen, r Rect) {
@@ -100,17 +100,21 @@ func TestQA_AllWidgets(t *testing.T) {
 
 		{"10-returnprompt", 100, 25, func(scr tcell.Screen, r Rect) {
 			m := NewOptionsModal("Session exited: clotilde-tcell-remastered", []OptionsModalEntry{
-				{Label: "Resume", Hint: "r"},
+				{Label: "Quit clyde", Hint: "q"},
+				{Label: "Return back to chat", Hint: "enter"},
+				{Label: "Resume", Hint: "load this session"},
 				{Label: "View transcript", Hint: "v"},
+				{Label: "Edit basedir", Hint: "b"},
+				{Label: "Enable remote control", Hint: "claude --remote-control"},
+				{Label: "Drive in sidecar", Hint: "needs --remote-control", Disabled: true},
+				{Label: "Open bridge in browser", Hint: "uses /usr/bin/open", Disabled: true},
+				{Label: "Copy bridge URL", Hint: "system clipboard", Disabled: true},
+				{Label: "Rename", Hint: "edits the registry name"},
 				{Label: "Compact", Hint: "c"},
+				{Label: "Fork", Hint: "f"},
+				{Label: "Delete", Hint: "d"},
 			})
 			m.Context = OptionsModalContextReturn
-			m.TopEntries = []OptionsModalEntry{
-				{Label: "Quit clyde", Hint: "q"},
-				{Label: "Go to session list", Hint: "esc/list"},
-				{Label: "Return back to chat", Hint: "enter"},
-				{Label: "Compact this session...", Hint: "c"},
-			}
 			m.StatsSegments = [][]TextSegment{
 				{{Text: "Identity", Style: StyleDefault.Bold(true)}},
 				{{Text: "  Model", Style: StyleSubtext}, {Text: "opus 1M", Style: StyleDefault}},
@@ -198,14 +202,14 @@ func TestQA_AllWidgets(t *testing.T) {
 // Sessions table. activeOnly=true marks the table as user-interacted
 // so the SelectedRow highlight renders.
 func mkTable(activeOnly bool) *TableWidget {
-	tw := NewTableWidget([]string{"NAME", "DIR", "MODEL", "RC", "MSGS", "SUMMARY", "LAST USED", "CREATED"})
+	tw := NewTableWidget([]string{"NAME", "DIR", "LAST ACTIVE", "MODEL", "MSGS", "SUMMARY", "CREATED"})
 	tw.Active = activeOnly
 	rows := [][]string{
-		{"clotilde-tcell-remastered", "~/Sites/clotilde", "opus", "RC", "1.7k", "context tokenizer parity", "now", "1 day ago"},
-		{"agoodkind-f559acdd", "~", "opus", "", "1.7k", "Emdash hook refinement", "2h ago", "3 days ago"},
-		{"clotilde-b2a47cef", "~/Sites/clotilde", "opus", "", "402", "compaction pipeline", "6h ago", "1 day ago"},
-		{"swift-integration-tests-fix", "~/Sites/macos-smc-fan", "opus", "", "812", "fan curve calibration", "14h ago", "4 days ago"},
-		{"motd-shell-rules-cleanup", "~/.dotfiles", "sonnet", "", "1.2k", "shell ergonomics", "3h ago", "2026-04-09"},
+		{"clotilde-tcell-remastered", "~/Sites/clotilde", "now", "opus", "1.7k", "context tokenizer parity", "1 day ago"},
+		{"agoodkind-f559acdd", "~", "2h ago", "opus", "1.7k", "Emdash hook refinement", "3 days ago"},
+		{"clotilde-b2a47cef", "~/Sites/clotilde", "6h ago", "opus", "402", "compaction pipeline", "1 day ago"},
+		{"swift-integration-tests-fix", "~/Sites/macos-smc-fan", "14h ago", "opus", "812", "fan curve calibration", "4 days ago"},
+		{"motd-shell-rules-cleanup", "~/.dotfiles", "3h ago", "sonnet", "1.2k", "shell ergonomics", "2026-04-09"},
 	}
 	for _, r := range rows {
 		cells := make([]TableCell, len(r))

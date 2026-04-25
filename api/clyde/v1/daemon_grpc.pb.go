@@ -19,22 +19,28 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ClydeService_AcquireSession_FullMethodName        = "/clyde.v1.ClydeService/AcquireSession"
-	ClydeService_ReleaseSession_FullMethodName        = "/clyde.v1.ClydeService/ReleaseSession"
-	ClydeService_HookEvent_FullMethodName             = "/clyde.v1.ClydeService/HookEvent"
-	ClydeService_ListActiveSessions_FullMethodName    = "/clyde.v1.ClydeService/ListActiveSessions"
-	ClydeService_TriggerScan_FullMethodName           = "/clyde.v1.ClydeService/TriggerScan"
-	ClydeService_SubscribeRegistry_FullMethodName     = "/clyde.v1.ClydeService/SubscribeRegistry"
-	ClydeService_RenameSession_FullMethodName         = "/clyde.v1.ClydeService/RenameSession"
-	ClydeService_DeleteSession_FullMethodName         = "/clyde.v1.ClydeService/DeleteSession"
-	ClydeService_UpdateSessionSettings_FullMethodName = "/clyde.v1.ClydeService/UpdateSessionSettings"
-	ClydeService_UpdateGlobalSettings_FullMethodName  = "/clyde.v1.ClydeService/UpdateGlobalSettings"
-	ClydeService_ListBridges_FullMethodName           = "/clyde.v1.ClydeService/ListBridges"
-	ClydeService_TailTranscript_FullMethodName        = "/clyde.v1.ClydeService/TailTranscript"
-	ClydeService_SendToSession_FullMethodName         = "/clyde.v1.ClydeService/SendToSession"
-	ClydeService_CompactPreview_FullMethodName        = "/clyde.v1.ClydeService/CompactPreview"
-	ClydeService_CompactApply_FullMethodName          = "/clyde.v1.ClydeService/CompactApply"
-	ClydeService_CompactUndo_FullMethodName           = "/clyde.v1.ClydeService/CompactUndo"
+	ClydeService_AcquireSession_FullMethodName         = "/clyde.v1.ClydeService/AcquireSession"
+	ClydeService_ReleaseSession_FullMethodName         = "/clyde.v1.ClydeService/ReleaseSession"
+	ClydeService_HookEvent_FullMethodName              = "/clyde.v1.ClydeService/HookEvent"
+	ClydeService_ListActiveSessions_FullMethodName     = "/clyde.v1.ClydeService/ListActiveSessions"
+	ClydeService_ListSessions_FullMethodName           = "/clyde.v1.ClydeService/ListSessions"
+	ClydeService_GetSessionDetail_FullMethodName       = "/clyde.v1.ClydeService/GetSessionDetail"
+	ClydeService_TriggerScan_FullMethodName            = "/clyde.v1.ClydeService/TriggerScan"
+	ClydeService_SubscribeRegistry_FullMethodName      = "/clyde.v1.ClydeService/SubscribeRegistry"
+	ClydeService_GetProviderStats_FullMethodName       = "/clyde.v1.ClydeService/GetProviderStats"
+	ClydeService_SubscribeProviderStats_FullMethodName = "/clyde.v1.ClydeService/SubscribeProviderStats"
+	ClydeService_RenameSession_FullMethodName          = "/clyde.v1.ClydeService/RenameSession"
+	ClydeService_DeleteSession_FullMethodName          = "/clyde.v1.ClydeService/DeleteSession"
+	ClydeService_UpdateSessionMetadata_FullMethodName  = "/clyde.v1.ClydeService/UpdateSessionMetadata"
+	ClydeService_UpdateSessionSettings_FullMethodName  = "/clyde.v1.ClydeService/UpdateSessionSettings"
+	ClydeService_UpdateGlobalSettings_FullMethodName   = "/clyde.v1.ClydeService/UpdateGlobalSettings"
+	ClydeService_ListBridges_FullMethodName            = "/clyde.v1.ClydeService/ListBridges"
+	ClydeService_TailTranscript_FullMethodName         = "/clyde.v1.ClydeService/TailTranscript"
+	ClydeService_SendToSession_FullMethodName          = "/clyde.v1.ClydeService/SendToSession"
+	ClydeService_CompactPreview_FullMethodName         = "/clyde.v1.ClydeService/CompactPreview"
+	ClydeService_CompactApply_FullMethodName           = "/clyde.v1.ClydeService/CompactApply"
+	ClydeService_CompactUndo_FullMethodName            = "/clyde.v1.ClydeService/CompactUndo"
+	ClydeService_ProbeContextUsage_FullMethodName      = "/clyde.v1.ClydeService/ProbeContextUsage"
 )
 
 // ClydeServiceClient is the client API for ClydeService service.
@@ -45,10 +51,15 @@ type ClydeServiceClient interface {
 	ReleaseSession(ctx context.Context, in *ReleaseSessionRequest, opts ...grpc.CallOption) (*ReleaseSessionResponse, error)
 	HookEvent(ctx context.Context, in *HookEventRequest, opts ...grpc.CallOption) (*HookEventResponse, error)
 	ListActiveSessions(ctx context.Context, in *ListActiveSessionsRequest, opts ...grpc.CallOption) (*ListActiveSessionsResponse, error)
+	ListSessions(ctx context.Context, in *ListSessionsRequest, opts ...grpc.CallOption) (*ListSessionsResponse, error)
+	GetSessionDetail(ctx context.Context, in *GetSessionDetailRequest, opts ...grpc.CallOption) (*GetSessionDetailResponse, error)
 	TriggerScan(ctx context.Context, in *TriggerScanRequest, opts ...grpc.CallOption) (*TriggerScanResponse, error)
 	SubscribeRegistry(ctx context.Context, in *SubscribeRegistryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[SubscribeRegistryResponse], error)
+	GetProviderStats(ctx context.Context, in *GetProviderStatsRequest, opts ...grpc.CallOption) (*GetProviderStatsResponse, error)
+	SubscribeProviderStats(ctx context.Context, in *SubscribeProviderStatsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ProviderStatsEvent], error)
 	RenameSession(ctx context.Context, in *RenameSessionRequest, opts ...grpc.CallOption) (*RenameSessionResponse, error)
 	DeleteSession(ctx context.Context, in *DeleteSessionRequest, opts ...grpc.CallOption) (*DeleteSessionResponse, error)
+	UpdateSessionMetadata(ctx context.Context, in *UpdateSessionMetadataRequest, opts ...grpc.CallOption) (*UpdateSessionMetadataResponse, error)
 	UpdateSessionSettings(ctx context.Context, in *UpdateSessionSettingsRequest, opts ...grpc.CallOption) (*UpdateSessionSettingsResponse, error)
 	UpdateGlobalSettings(ctx context.Context, in *UpdateGlobalSettingsRequest, opts ...grpc.CallOption) (*UpdateGlobalSettingsResponse, error)
 	ListBridges(ctx context.Context, in *ListBridgesRequest, opts ...grpc.CallOption) (*ListBridgesResponse, error)
@@ -57,6 +68,7 @@ type ClydeServiceClient interface {
 	CompactPreview(ctx context.Context, in *CompactRunRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CompactEvent], error)
 	CompactApply(ctx context.Context, in *CompactRunRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CompactEvent], error)
 	CompactUndo(ctx context.Context, in *CompactUndoRequest, opts ...grpc.CallOption) (*CompactUndoResponse, error)
+	ProbeContextUsage(ctx context.Context, in *ProbeContextUsageRequest, opts ...grpc.CallOption) (*ProbeContextUsageResponse, error)
 }
 
 type clydeServiceClient struct {
@@ -107,6 +119,26 @@ func (c *clydeServiceClient) ListActiveSessions(ctx context.Context, in *ListAct
 	return out, nil
 }
 
+func (c *clydeServiceClient) ListSessions(ctx context.Context, in *ListSessionsRequest, opts ...grpc.CallOption) (*ListSessionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSessionsResponse)
+	err := c.cc.Invoke(ctx, ClydeService_ListSessions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clydeServiceClient) GetSessionDetail(ctx context.Context, in *GetSessionDetailRequest, opts ...grpc.CallOption) (*GetSessionDetailResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSessionDetailResponse)
+	err := c.cc.Invoke(ctx, ClydeService_GetSessionDetail_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *clydeServiceClient) TriggerScan(ctx context.Context, in *TriggerScanRequest, opts ...grpc.CallOption) (*TriggerScanResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(TriggerScanResponse)
@@ -136,6 +168,35 @@ func (c *clydeServiceClient) SubscribeRegistry(ctx context.Context, in *Subscrib
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ClydeService_SubscribeRegistryClient = grpc.ServerStreamingClient[SubscribeRegistryResponse]
 
+func (c *clydeServiceClient) GetProviderStats(ctx context.Context, in *GetProviderStatsRequest, opts ...grpc.CallOption) (*GetProviderStatsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetProviderStatsResponse)
+	err := c.cc.Invoke(ctx, ClydeService_GetProviderStats_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clydeServiceClient) SubscribeProviderStats(ctx context.Context, in *SubscribeProviderStatsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ProviderStatsEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ClydeService_ServiceDesc.Streams[1], ClydeService_SubscribeProviderStats_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[SubscribeProviderStatsRequest, ProviderStatsEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ClydeService_SubscribeProviderStatsClient = grpc.ServerStreamingClient[ProviderStatsEvent]
+
 func (c *clydeServiceClient) RenameSession(ctx context.Context, in *RenameSessionRequest, opts ...grpc.CallOption) (*RenameSessionResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RenameSessionResponse)
@@ -150,6 +211,16 @@ func (c *clydeServiceClient) DeleteSession(ctx context.Context, in *DeleteSessio
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DeleteSessionResponse)
 	err := c.cc.Invoke(ctx, ClydeService_DeleteSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clydeServiceClient) UpdateSessionMetadata(ctx context.Context, in *UpdateSessionMetadataRequest, opts ...grpc.CallOption) (*UpdateSessionMetadataResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateSessionMetadataResponse)
+	err := c.cc.Invoke(ctx, ClydeService_UpdateSessionMetadata_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -188,7 +259,7 @@ func (c *clydeServiceClient) ListBridges(ctx context.Context, in *ListBridgesReq
 
 func (c *clydeServiceClient) TailTranscript(ctx context.Context, in *TailTranscriptRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TailTranscriptResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &ClydeService_ServiceDesc.Streams[1], ClydeService_TailTranscript_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &ClydeService_ServiceDesc.Streams[2], ClydeService_TailTranscript_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +288,7 @@ func (c *clydeServiceClient) SendToSession(ctx context.Context, in *SendToSessio
 
 func (c *clydeServiceClient) CompactPreview(ctx context.Context, in *CompactRunRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CompactEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &ClydeService_ServiceDesc.Streams[2], ClydeService_CompactPreview_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &ClydeService_ServiceDesc.Streams[3], ClydeService_CompactPreview_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -236,7 +307,7 @@ type ClydeService_CompactPreviewClient = grpc.ServerStreamingClient[CompactEvent
 
 func (c *clydeServiceClient) CompactApply(ctx context.Context, in *CompactRunRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CompactEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &ClydeService_ServiceDesc.Streams[3], ClydeService_CompactApply_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &ClydeService_ServiceDesc.Streams[4], ClydeService_CompactApply_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -263,6 +334,16 @@ func (c *clydeServiceClient) CompactUndo(ctx context.Context, in *CompactUndoReq
 	return out, nil
 }
 
+func (c *clydeServiceClient) ProbeContextUsage(ctx context.Context, in *ProbeContextUsageRequest, opts ...grpc.CallOption) (*ProbeContextUsageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ProbeContextUsageResponse)
+	err := c.cc.Invoke(ctx, ClydeService_ProbeContextUsage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ClydeServiceServer is the server API for ClydeService service.
 // All implementations should embed UnimplementedClydeServiceServer
 // for forward compatibility.
@@ -271,10 +352,15 @@ type ClydeServiceServer interface {
 	ReleaseSession(context.Context, *ReleaseSessionRequest) (*ReleaseSessionResponse, error)
 	HookEvent(context.Context, *HookEventRequest) (*HookEventResponse, error)
 	ListActiveSessions(context.Context, *ListActiveSessionsRequest) (*ListActiveSessionsResponse, error)
+	ListSessions(context.Context, *ListSessionsRequest) (*ListSessionsResponse, error)
+	GetSessionDetail(context.Context, *GetSessionDetailRequest) (*GetSessionDetailResponse, error)
 	TriggerScan(context.Context, *TriggerScanRequest) (*TriggerScanResponse, error)
 	SubscribeRegistry(*SubscribeRegistryRequest, grpc.ServerStreamingServer[SubscribeRegistryResponse]) error
+	GetProviderStats(context.Context, *GetProviderStatsRequest) (*GetProviderStatsResponse, error)
+	SubscribeProviderStats(*SubscribeProviderStatsRequest, grpc.ServerStreamingServer[ProviderStatsEvent]) error
 	RenameSession(context.Context, *RenameSessionRequest) (*RenameSessionResponse, error)
 	DeleteSession(context.Context, *DeleteSessionRequest) (*DeleteSessionResponse, error)
+	UpdateSessionMetadata(context.Context, *UpdateSessionMetadataRequest) (*UpdateSessionMetadataResponse, error)
 	UpdateSessionSettings(context.Context, *UpdateSessionSettingsRequest) (*UpdateSessionSettingsResponse, error)
 	UpdateGlobalSettings(context.Context, *UpdateGlobalSettingsRequest) (*UpdateGlobalSettingsResponse, error)
 	ListBridges(context.Context, *ListBridgesRequest) (*ListBridgesResponse, error)
@@ -283,6 +369,7 @@ type ClydeServiceServer interface {
 	CompactPreview(*CompactRunRequest, grpc.ServerStreamingServer[CompactEvent]) error
 	CompactApply(*CompactRunRequest, grpc.ServerStreamingServer[CompactEvent]) error
 	CompactUndo(context.Context, *CompactUndoRequest) (*CompactUndoResponse, error)
+	ProbeContextUsage(context.Context, *ProbeContextUsageRequest) (*ProbeContextUsageResponse, error)
 }
 
 // UnimplementedClydeServiceServer should be embedded to have
@@ -304,17 +391,32 @@ func (UnimplementedClydeServiceServer) HookEvent(context.Context, *HookEventRequ
 func (UnimplementedClydeServiceServer) ListActiveSessions(context.Context, *ListActiveSessionsRequest) (*ListActiveSessionsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListActiveSessions not implemented")
 }
+func (UnimplementedClydeServiceServer) ListSessions(context.Context, *ListSessionsRequest) (*ListSessionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListSessions not implemented")
+}
+func (UnimplementedClydeServiceServer) GetSessionDetail(context.Context, *GetSessionDetailRequest) (*GetSessionDetailResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSessionDetail not implemented")
+}
 func (UnimplementedClydeServiceServer) TriggerScan(context.Context, *TriggerScanRequest) (*TriggerScanResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TriggerScan not implemented")
 }
 func (UnimplementedClydeServiceServer) SubscribeRegistry(*SubscribeRegistryRequest, grpc.ServerStreamingServer[SubscribeRegistryResponse]) error {
 	return status.Error(codes.Unimplemented, "method SubscribeRegistry not implemented")
 }
+func (UnimplementedClydeServiceServer) GetProviderStats(context.Context, *GetProviderStatsRequest) (*GetProviderStatsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetProviderStats not implemented")
+}
+func (UnimplementedClydeServiceServer) SubscribeProviderStats(*SubscribeProviderStatsRequest, grpc.ServerStreamingServer[ProviderStatsEvent]) error {
+	return status.Error(codes.Unimplemented, "method SubscribeProviderStats not implemented")
+}
 func (UnimplementedClydeServiceServer) RenameSession(context.Context, *RenameSessionRequest) (*RenameSessionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RenameSession not implemented")
 }
 func (UnimplementedClydeServiceServer) DeleteSession(context.Context, *DeleteSessionRequest) (*DeleteSessionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteSession not implemented")
+}
+func (UnimplementedClydeServiceServer) UpdateSessionMetadata(context.Context, *UpdateSessionMetadataRequest) (*UpdateSessionMetadataResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateSessionMetadata not implemented")
 }
 func (UnimplementedClydeServiceServer) UpdateSessionSettings(context.Context, *UpdateSessionSettingsRequest) (*UpdateSessionSettingsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateSessionSettings not implemented")
@@ -339,6 +441,9 @@ func (UnimplementedClydeServiceServer) CompactApply(*CompactRunRequest, grpc.Ser
 }
 func (UnimplementedClydeServiceServer) CompactUndo(context.Context, *CompactUndoRequest) (*CompactUndoResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CompactUndo not implemented")
+}
+func (UnimplementedClydeServiceServer) ProbeContextUsage(context.Context, *ProbeContextUsageRequest) (*ProbeContextUsageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ProbeContextUsage not implemented")
 }
 func (UnimplementedClydeServiceServer) testEmbeddedByValue() {}
 
@@ -432,6 +537,42 @@ func _ClydeService_ListActiveSessions_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ClydeService_ListSessions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSessionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).ListSessions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_ListSessions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).ListSessions(ctx, req.(*ListSessionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClydeService_GetSessionDetail_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSessionDetailRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).GetSessionDetail(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_GetSessionDetail_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).GetSessionDetail(ctx, req.(*GetSessionDetailRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ClydeService_TriggerScan_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(TriggerScanRequest)
 	if err := dec(in); err != nil {
@@ -460,6 +601,35 @@ func _ClydeService_SubscribeRegistry_Handler(srv interface{}, stream grpc.Server
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ClydeService_SubscribeRegistryServer = grpc.ServerStreamingServer[SubscribeRegistryResponse]
+
+func _ClydeService_GetProviderStats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetProviderStatsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).GetProviderStats(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_GetProviderStats_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).GetProviderStats(ctx, req.(*GetProviderStatsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClydeService_SubscribeProviderStats_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(SubscribeProviderStatsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ClydeServiceServer).SubscribeProviderStats(m, &grpc.GenericServerStream[SubscribeProviderStatsRequest, ProviderStatsEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ClydeService_SubscribeProviderStatsServer = grpc.ServerStreamingServer[ProviderStatsEvent]
 
 func _ClydeService_RenameSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RenameSessionRequest)
@@ -493,6 +663,24 @@ func _ClydeService_DeleteSession_Handler(srv interface{}, ctx context.Context, d
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ClydeServiceServer).DeleteSession(ctx, req.(*DeleteSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClydeService_UpdateSessionMetadata_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateSessionMetadataRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).UpdateSessionMetadata(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_UpdateSessionMetadata_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).UpdateSessionMetadata(ctx, req.(*UpdateSessionMetadataRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -620,6 +808,24 @@ func _ClydeService_CompactUndo_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ClydeService_ProbeContextUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProbeContextUsageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).ProbeContextUsage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_ProbeContextUsage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).ProbeContextUsage(ctx, req.(*ProbeContextUsageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ClydeService_ServiceDesc is the grpc.ServiceDesc for ClydeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -644,8 +850,20 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ClydeService_ListActiveSessions_Handler,
 		},
 		{
+			MethodName: "ListSessions",
+			Handler:    _ClydeService_ListSessions_Handler,
+		},
+		{
+			MethodName: "GetSessionDetail",
+			Handler:    _ClydeService_GetSessionDetail_Handler,
+		},
+		{
 			MethodName: "TriggerScan",
 			Handler:    _ClydeService_TriggerScan_Handler,
+		},
+		{
+			MethodName: "GetProviderStats",
+			Handler:    _ClydeService_GetProviderStats_Handler,
 		},
 		{
 			MethodName: "RenameSession",
@@ -654,6 +872,10 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteSession",
 			Handler:    _ClydeService_DeleteSession_Handler,
+		},
+		{
+			MethodName: "UpdateSessionMetadata",
+			Handler:    _ClydeService_UpdateSessionMetadata_Handler,
 		},
 		{
 			MethodName: "UpdateSessionSettings",
@@ -675,11 +897,20 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "CompactUndo",
 			Handler:    _ClydeService_CompactUndo_Handler,
 		},
+		{
+			MethodName: "ProbeContextUsage",
+			Handler:    _ClydeService_ProbeContextUsage_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "SubscribeRegistry",
 			Handler:       _ClydeService_SubscribeRegistry_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "SubscribeProviderStats",
+			Handler:       _ClydeService_SubscribeProviderStats_Handler,
 			ServerStreams: true,
 		},
 		{

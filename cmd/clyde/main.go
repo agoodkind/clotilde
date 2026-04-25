@@ -44,7 +44,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	closer, err := slogger.Setup(cfg.Logging)
+	closer, err := slogger.Setup(cfg.Logging, detectSlogRole(os.Args[1:]))
 	if err != nil {
 		slog.Error("clyde.slogger.setup_failed",
 			"component", "cli",
@@ -102,4 +102,28 @@ func main() {
 		os.Exit(1)
 	}
 	slog.Info("cli.execute.completed", "component", "cli")
+}
+
+func detectSlogRole(args []string) slogger.ProcessRole {
+	skipNext := false
+	for _, arg := range args {
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		switch {
+		case arg == "-r", arg == "--resume", arg == "--claude-bin":
+			skipNext = true
+			continue
+		case strings.HasPrefix(arg, "--resume="), strings.HasPrefix(arg, "--claude-bin="):
+			continue
+		case strings.HasPrefix(arg, "-"):
+			continue
+		case arg == "daemon":
+			return slogger.ProcessRoleDaemon
+		default:
+			return slogger.ProcessRoleTUI
+		}
+	}
+	return slogger.ProcessRoleTUI
 }
