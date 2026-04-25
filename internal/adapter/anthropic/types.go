@@ -74,15 +74,16 @@ type SystemBlock struct {
 // ContentBlock is one element in a message content array or a streamed
 // content block start payload subset we reuse for decoding.
 type ContentBlock struct {
-	Type         string          `json:"type"`
-	Text         string          `json:"text,omitempty"`
-	ID           string          `json:"id,omitempty"`
-	Name         string          `json:"name,omitempty"`
-	Input        json.RawMessage `json:"input,omitempty"`
-	ToolUseID    string          `json:"tool_use_id,omitempty"`
-	Content      string          `json:"content,omitempty"`
-	Source       *ImageSource    `json:"source,omitempty"`
-	CacheControl *CacheControl   `json:"cache_control,omitempty"`
+	Type           string          `json:"type"`
+	Text           string          `json:"text,omitempty"`
+	ID             string          `json:"id,omitempty"`
+	Name           string          `json:"name,omitempty"`
+	Input          json.RawMessage `json:"input,omitempty"`
+	ToolUseID      string          `json:"tool_use_id,omitempty"`
+	Content        string          `json:"content,omitempty"`
+	CacheReference string          `json:"cache_reference,omitempty"`
+	Source         *ImageSource    `json:"source,omitempty"`
+	CacheControl   *CacheControl   `json:"cache_control,omitempty"`
 }
 
 // ImageSource describes image bytes or a URL for image content blocks.

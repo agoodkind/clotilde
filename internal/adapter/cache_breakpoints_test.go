@@ -41,9 +41,13 @@ func TestApplyCacheBreakpointsStampsLastToolAndLastUserText(t *testing.T) {
 	}
 }
 
-func TestApplyCacheBreakpointsSkipsShortConversation(t *testing.T) {
+func TestApplyCacheBreakpointsStampsAssistantTailAndSkipsThinkingTail(t *testing.T) {
 	msgs := []anthropic.Message{
-		{Role: "user", Content: []anthropic.ContentBlock{{Type: "text", Text: "hi"}}},
+		{Role: "user", Content: []anthropic.ContentBlock{{Type: "text", Text: "question"}}},
+		{Role: "assistant", Content: []anthropic.ContentBlock{
+			{Type: "text", Text: "answer"},
+			{Type: "thinking", Text: "private"},
+		}},
 	}
 	tools := []anthropic.Tool{{Name: "only_tool"}}
 	applyCacheBreakpoints(msgs, tools)
@@ -51,14 +55,34 @@ func TestApplyCacheBreakpointsSkipsShortConversation(t *testing.T) {
 	if tools[0].CacheControl == nil {
 		t.Fatalf("tool marker should apply even on single-message calls")
 	}
-	if msgs[0].Content[0].CacheControl != nil {
-		t.Fatalf("single-message conversation should skip the conversation marker")
+	if msgs[1].Content[0].CacheControl == nil {
+		t.Fatalf("assistant tail text should carry cache marker")
+	}
+	if msgs[1].Content[1].CacheControl != nil {
+		t.Fatalf("thinking tail should not carry cache marker")
 	}
 }
 
 func TestApplyCacheBreakpointsNoToolsOrMessagesIsNoop(t *testing.T) {
 	applyCacheBreakpoints(nil, nil)
 	applyCacheBreakpoints([]anthropic.Message{}, []anthropic.Tool{})
+}
+
+func TestApplyCacheBreakpointsAddsCacheReferenceToPriorToolResults(t *testing.T) {
+	msgs := []anthropic.Message{
+		{Role: "user", Content: []anthropic.ContentBlock{
+			{Type: "tool_result", ToolUseID: "toolu_1", Content: "result 1"},
+			{Type: "text", Text: "follow-up"},
+		}},
+		{Role: "assistant", Content: []anthropic.ContentBlock{{Type: "text", Text: "assistant turn"}}},
+	}
+	applyCacheBreakpoints(msgs, nil)
+	if msgs[0].Content[0].CacheReference != "toolu_1" {
+		t.Fatalf("tool_result cache_reference = %q want toolu_1", msgs[0].Content[0].CacheReference)
+	}
+	if msgs[1].Content[0].CacheControl == nil {
+		t.Fatalf("assistant boundary message should carry cache marker")
+	}
 }
 
 func TestToAnthropicAPIRequestSerializesCacheControl(t *testing.T) {
@@ -86,6 +110,29 @@ func TestToAnthropicAPIRequestSerializesCacheControl(t *testing.T) {
 	}
 	if strings.Count(body, `"cache_control":{"type":"ephemeral"}`) < 2 {
 		t.Fatalf("expected two ephemeral cache_control markers, got body:\n%s", body)
+	}
+}
+
+func TestToAnthropicAPIRequestSerializesCacheReferenceOnPriorToolResult(t *testing.T) {
+	tr := tooltrans.AnthRequest{
+		System: "sys",
+		Messages: []tooltrans.AnthMessage{
+			{Role: "user", Content: []tooltrans.AnthContentBlock{
+				{Type: "tool_result", ToolUseID: "toolu_1", ResultContent: "result"},
+				{Type: "text", Text: "follow-up"},
+			}},
+			{Role: "assistant", Content: []tooltrans.AnthContentBlock{{Type: "text", Text: "answer"}}},
+		},
+		MaxTokens: 64,
+	}
+	req := toAnthropicAPIRequest(tr, "claude-model")
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, `"cache_reference":"toolu_1"`) {
+		t.Fatalf("missing cache_reference on prior tool_result: %s", body)
 	}
 }
 

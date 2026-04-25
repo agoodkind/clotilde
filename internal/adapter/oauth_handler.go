@@ -348,34 +348,58 @@ func buildSystemBlocks(billing, prefix, callerSystem, ttl, scope string, caching
 	return out
 }
 
-// applyCacheBreakpoints stamps ephemeral cache_control markers on the
-// outbound request. Two markers are placed: one on the last tool in
-// the tools array (caches the tools block plus the system prompt
-// prefix), and one on the last text block of the final user message
-// (pins the growing conversation prefix across turns). Mirrors the
-// minimal variant of addCacheBreakpoints in
-// src/services/api/claude.ts:3063. Single-message requests skip the
-// conversation marker because the 1.25x cache-write surcharge isn't
-// amortized on a one-shot call.
+// applyCacheBreakpoints stamps the message-level cache_control marker and
+// cache_reference fields that the live Claude CLI sends. The message marker
+// lands on the last eligible block of the last message, and prior user
+// tool_result blocks get cache_reference values so Anthropic can preserve the
+// cached prefix across turns.
 func applyCacheBreakpoints(msgs []anthropic.Message, tools []anthropic.Tool) {
 	ephemeral := &anthropic.CacheControl{Type: "ephemeral"}
 	if len(tools) > 0 {
 		tools[len(tools)-1].CacheControl = ephemeral
 	}
-	if len(msgs) < 2 {
+	if len(msgs) == 0 {
 		return
 	}
-	for i := len(msgs) - 1; i >= 0; i-- {
+	lastCCMsg := -1
+	markerIndex := len(msgs) - 1
+	msg := &msgs[markerIndex]
+	for j := len(msg.Content) - 1; j >= 0; j-- {
+		if !cacheableMessageBoundaryBlock(msg.Role, msg.Content[j].Type) {
+			continue
+		}
+		msg.Content[j].CacheControl = ephemeral
+		lastCCMsg = markerIndex
+		break
+	}
+	if lastCCMsg < 0 {
+		return
+	}
+	for i := 0; i < lastCCMsg; i++ {
 		if msgs[i].Role != "user" {
 			continue
 		}
-		for j := len(msgs[i].Content) - 1; j >= 0; j-- {
-			if msgs[i].Content[j].Type == "text" {
-				msgs[i].Content[j].CacheControl = ephemeral
-				return
+		for j := range msgs[i].Content {
+			block := &msgs[i].Content[j]
+			if block.Type != "tool_result" || strings.TrimSpace(block.ToolUseID) == "" {
+				continue
 			}
+			block.CacheReference = block.ToolUseID
 		}
-		return
+	}
+}
+
+func cacheableMessageBoundaryBlock(role, blockType string) bool {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "assistant":
+		switch blockType {
+		case "thinking", "redacted_thinking", "connector_text":
+			return false
+		default:
+			return true
+		}
+	default:
+		return true
 	}
 }
 
