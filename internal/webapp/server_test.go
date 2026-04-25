@@ -1,6 +1,7 @@
 package webapp
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -89,5 +90,39 @@ func TestTokenAuthEnforced(t *testing.T) {
 	}
 	if r2.StatusCode != 200 {
 		t.Fatalf("with token = %d, want 200", r2.StatusCode)
+	}
+}
+
+func TestStartSessionUsesDaemonLaunch(t *testing.T) {
+	var gotName, gotBasedir string
+	ts := newTestServer(t, config.WebAppConfig{}, Deps{
+		StartRemoteSession: func(_ context.Context, name, basedir string) (string, string, error) {
+			gotName = name
+			gotBasedir = basedir
+			return "chat-demo", "uuid-demo", nil
+		},
+	})
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/sessions", "application/json", strings.NewReader(`{"name":"demo","basedir":"/tmp/demo"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+	if gotName != "demo" || gotBasedir != "/tmp/demo" {
+		t.Fatalf("launch args = (%q, %q)", gotName, gotBasedir)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["name"] != "chat-demo" {
+		t.Fatalf("name = %v, want chat-demo", body["name"])
+	}
+	if body["session_id"] != "uuid-demo" {
+		t.Fatalf("session_id = %v, want uuid-demo", body["session_id"])
 	}
 }

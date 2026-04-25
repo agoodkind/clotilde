@@ -34,6 +34,7 @@ const (
 	ClydeService_UpdateSessionMetadata_FullMethodName  = "/clyde.v1.ClydeService/UpdateSessionMetadata"
 	ClydeService_UpdateSessionSettings_FullMethodName  = "/clyde.v1.ClydeService/UpdateSessionSettings"
 	ClydeService_UpdateGlobalSettings_FullMethodName   = "/clyde.v1.ClydeService/UpdateGlobalSettings"
+	ClydeService_StartRemoteSession_FullMethodName     = "/clyde.v1.ClydeService/StartRemoteSession"
 	ClydeService_ListBridges_FullMethodName            = "/clyde.v1.ClydeService/ListBridges"
 	ClydeService_TailTranscript_FullMethodName         = "/clyde.v1.ClydeService/TailTranscript"
 	ClydeService_SendToSession_FullMethodName          = "/clyde.v1.ClydeService/SendToSession"
@@ -62,6 +63,7 @@ type ClydeServiceClient interface {
 	UpdateSessionMetadata(ctx context.Context, in *UpdateSessionMetadataRequest, opts ...grpc.CallOption) (*UpdateSessionMetadataResponse, error)
 	UpdateSessionSettings(ctx context.Context, in *UpdateSessionSettingsRequest, opts ...grpc.CallOption) (*UpdateSessionSettingsResponse, error)
 	UpdateGlobalSettings(ctx context.Context, in *UpdateGlobalSettingsRequest, opts ...grpc.CallOption) (*UpdateGlobalSettingsResponse, error)
+	StartRemoteSession(ctx context.Context, in *StartRemoteSessionRequest, opts ...grpc.CallOption) (*StartRemoteSessionResponse, error)
 	ListBridges(ctx context.Context, in *ListBridgesRequest, opts ...grpc.CallOption) (*ListBridgesResponse, error)
 	TailTranscript(ctx context.Context, in *TailTranscriptRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TailTranscriptResponse], error)
 	SendToSession(ctx context.Context, in *SendToSessionRequest, opts ...grpc.CallOption) (*SendToSessionResponse, error)
@@ -247,6 +249,16 @@ func (c *clydeServiceClient) UpdateGlobalSettings(ctx context.Context, in *Updat
 	return out, nil
 }
 
+func (c *clydeServiceClient) StartRemoteSession(ctx context.Context, in *StartRemoteSessionRequest, opts ...grpc.CallOption) (*StartRemoteSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StartRemoteSessionResponse)
+	err := c.cc.Invoke(ctx, ClydeService_StartRemoteSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *clydeServiceClient) ListBridges(ctx context.Context, in *ListBridgesRequest, opts ...grpc.CallOption) (*ListBridgesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListBridgesResponse)
@@ -363,6 +375,7 @@ type ClydeServiceServer interface {
 	UpdateSessionMetadata(context.Context, *UpdateSessionMetadataRequest) (*UpdateSessionMetadataResponse, error)
 	UpdateSessionSettings(context.Context, *UpdateSessionSettingsRequest) (*UpdateSessionSettingsResponse, error)
 	UpdateGlobalSettings(context.Context, *UpdateGlobalSettingsRequest) (*UpdateGlobalSettingsResponse, error)
+	StartRemoteSession(context.Context, *StartRemoteSessionRequest) (*StartRemoteSessionResponse, error)
 	ListBridges(context.Context, *ListBridgesRequest) (*ListBridgesResponse, error)
 	TailTranscript(*TailTranscriptRequest, grpc.ServerStreamingServer[TailTranscriptResponse]) error
 	SendToSession(context.Context, *SendToSessionRequest) (*SendToSessionResponse, error)
@@ -423,6 +436,9 @@ func (UnimplementedClydeServiceServer) UpdateSessionSettings(context.Context, *U
 }
 func (UnimplementedClydeServiceServer) UpdateGlobalSettings(context.Context, *UpdateGlobalSettingsRequest) (*UpdateGlobalSettingsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateGlobalSettings not implemented")
+}
+func (UnimplementedClydeServiceServer) StartRemoteSession(context.Context, *StartRemoteSessionRequest) (*StartRemoteSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method StartRemoteSession not implemented")
 }
 func (UnimplementedClydeServiceServer) ListBridges(context.Context, *ListBridgesRequest) (*ListBridgesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListBridges not implemented")
@@ -721,6 +737,24 @@ func _ClydeService_UpdateGlobalSettings_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ClydeService_StartRemoteSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StartRemoteSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).StartRemoteSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_StartRemoteSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).StartRemoteSession(ctx, req.(*StartRemoteSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ClydeService_ListBridges_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListBridgesRequest)
 	if err := dec(in); err != nil {
@@ -884,6 +918,10 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateGlobalSettings",
 			Handler:    _ClydeService_UpdateGlobalSettings_Handler,
+		},
+		{
+			MethodName: "StartRemoteSession",
+			Handler:    _ClydeService_StartRemoteSession_Handler,
 		},
 		{
 			MethodName: "ListBridges",

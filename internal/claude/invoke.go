@@ -94,11 +94,16 @@ func Resume(
 // StartNewInteractive runs claude without --resume for a new named session.
 // env must set CLYDE_SESSION_NAME so the SessionStart hook can adopt the row.
 // settingsFile may be empty; remote-control and settings injection match Resume.
-func StartNewInteractive(env map[string]string, settingsFile string, workDir string, forceRemoteControl bool) error {
+// When sessionID is non-empty it is pre-assigned to Claude at launch so the
+// inject socket, metadata, and later resume flows all share one UUID.
+func StartNewInteractive(env map[string]string, settingsFile string, workDir string, forceRemoteControl bool, sessionID string) error {
 	args := []string{}
 	args = appendCommonArgs(args, settingsFile)
+	if sessionID != "" {
+		args = append(args, "--session-id", sessionID)
+	}
 	if forceRemoteControl || remoteControlEnabled(settingsFile) {
-		return invokeInteractivePTY(args, env, workDir, "")
+		return invokeInteractivePTY(args, env, workDir, sessionID)
 	}
 	return invokeInteractive(args, env, workDir)
 }

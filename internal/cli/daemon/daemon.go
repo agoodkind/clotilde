@@ -10,7 +10,7 @@ import (
 )
 
 func NewCmd(f *cli.Factory) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:    "daemon",
 		Short:  "Start the background daemon (internal)",
 		Hidden: true,
@@ -23,4 +23,6 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 			return daemonsvc.Run(log, pruneLoop(), oauthLoop())
 		},
 	}
+	cmd.AddCommand(newLaunchRemoteWorkerCmd(f))
+	return cmd
 }

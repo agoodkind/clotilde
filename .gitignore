@@ -45,3 +45,11 @@ CLAUDE.local.md
 
 # Reverse-engineering and decompile artifacts (large, regenerable)
 research/
+
+# Local scratch / build leftovers
+/.DS_Store
+/.clyde-build.lock
+/.tmp/
+/.tmp_print_clyde_models.go
+/clyde
+/tmp_check_detail_*.go

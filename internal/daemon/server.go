@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -30,6 +31,7 @@ import (
 	"goodkind.io/clyde/internal/outputstyle"
 	"goodkind.io/clyde/internal/session"
 	"goodkind.io/clyde/internal/sessionctx"
+	"goodkind.io/clyde/internal/util"
 )
 
 // Server implements the Clyde gRPC service.
@@ -69,6 +71,9 @@ type Server struct {
 	transcripts   *transcriptHub
 	providerStats *providerStatsHub
 
+	remoteMu      sync.Mutex
+	remoteWorkers map[string]*remoteWorker
+
 	contextMu         sync.Mutex
 	contextStates     map[string]sessionContextState
 	contextRefreshSem chan struct{}
@@ -81,6 +86,15 @@ type wrapperSession struct {
 	model       string
 	effortLevel string
 }
+
+type remoteWorker struct {
+	sessionName string
+	sessionID   string
+	incognito   bool
+	cmd         *exec.Cmd
+}
+
+var remoteWorkerExecutable = os.Executable
 
 type sessionContextState struct {
 	Usage      sessionctx.Usage
@@ -108,6 +122,7 @@ func New(log *slog.Logger) (*Server, error) {
 		bridges:           make(map[string]*clydev1.Bridge),
 		transcripts:       newTranscriptHub(),
 		providerStats:     newProviderStatsHub(log),
+		remoteWorkers:     make(map[string]*remoteWorker),
 		contextStates:     make(map[string]sessionContextState),
 		contextRefreshSem: make(chan struct{}, 2),
 	}
@@ -1332,6 +1347,81 @@ func (s *Server) UpdateGlobalSettings(ctx context.Context, req *clydev1.UpdateGl
 	return &clydev1.UpdateGlobalSettingsResponse{}, nil
 }
 
+// StartRemoteSession creates a canonical clyde session row, persists remote
+// control settings, then launches a daemon-owned headless worker that runs
+// Claude with --remote-control against the pre-assigned session UUID.
+func (s *Server) StartRemoteSession(ctx context.Context, req *clydev1.StartRemoteSessionRequest) (*clydev1.StartRemoteSessionResponse, error) {
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "store init: %v", err)
+	}
+	basedir := strings.TrimSpace(req.GetBasedir())
+	if basedir == "" {
+		if basedir, err = os.Getwd(); err != nil {
+			return nil, status.Errorf(codes.Internal, "resolve working directory: %v", err)
+		}
+	}
+	if info, err := os.Stat(basedir); err != nil || !info.IsDir() {
+		return nil, status.Errorf(codes.InvalidArgument, "basedir %q is not a directory", basedir)
+	}
+
+	name := strings.TrimSpace(req.GetSessionName())
+	if name == "" {
+		name, err = nextRemoteSessionName(store)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "allocate session name: %v", err)
+		}
+	} else if session.ValidateName(name) != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid session name %q", name)
+	}
+	if store.Exists(name) {
+		return nil, status.Errorf(codes.AlreadyExists, "session %q already exists", name)
+	}
+
+	sessionID := util.GenerateUUID()
+	sess := session.NewSession(name, sessionID)
+	sess.Metadata.WorkDir = basedir
+	sess.Metadata.WorkspaceRoot = basedir
+	sess.Metadata.IsIncognito = req.GetIncognito()
+	if err := store.Create(sess); err != nil {
+		return nil, status.Errorf(codes.Internal, "create session: %v", err)
+	}
+	if err := store.SaveSettings(name, &session.Settings{RemoteControl: true}); err != nil {
+		_ = store.Delete(name)
+		return nil, status.Errorf(codes.Internal, "save session settings: %v", err)
+	}
+	s.publishSessionSummaryEvent(clydev1.SubscribeRegistryResponse_KIND_SESSION_ADOPTED, store, sess, "")
+
+	cmd, err := s.startRemoteWorkerProcess(name, sessionID, basedir, req.GetIncognito())
+	if err != nil {
+		_ = store.Delete(name)
+		return nil, status.Errorf(codes.Internal, "launch remote session: %v", err)
+	}
+	worker := &remoteWorker{
+		sessionName: name,
+		sessionID:   sessionID,
+		incognito:   req.GetIncognito(),
+		cmd:         cmd,
+	}
+	s.remoteMu.Lock()
+	s.remoteWorkers[name] = worker
+	s.remoteMu.Unlock()
+	go s.waitRemoteWorker(worker)
+	s.log.Info("daemon.remote_session.started",
+		"component", "daemon",
+		"session", name,
+		"session_id", sessionID,
+		"basedir", basedir,
+		"incognito", req.GetIncognito(),
+		"pid", cmd.Process.Pid,
+	)
+	return &clydev1.StartRemoteSessionResponse{
+		SessionName: name,
+		SessionId:   sessionID,
+		LaunchState: clydev1.StartRemoteSessionResponse_LAUNCH_STATE_LAUNCHING,
+	}, nil
+}
+
 // ListBridges returns the current set of active claude --remote-control
 // bridges as discovered by the bridge watcher.
 func (s *Server) ListBridges(_ context.Context, _ *clydev1.ListBridgesRequest) (*clydev1.ListBridgesResponse, error) {
@@ -1491,6 +1581,90 @@ func (s *Server) SendToSession(_ context.Context, req *clydev1.SendToSessionRequ
 		return &clydev1.SendToSessionResponse{Delivered: false, BytesWritten: int32(n)}, nil
 	}
 	return &clydev1.SendToSessionResponse{Delivered: true, BytesWritten: int32(n)}, nil
+}
+
+func nextRemoteSessionName(store *session.FileStore) (string, error) {
+	list, err := store.List()
+	if err != nil {
+		return "", err
+	}
+	taken := make(map[string]bool, len(list))
+	for _, sess := range list {
+		if sess == nil {
+			continue
+		}
+		taken[sess.Name] = true
+	}
+	base := "chat-" + time.Now().UTC().Format("20060102-150405")
+	name := session.UniqueName(base, taken)
+	if name == "" {
+		return "", fmt.Errorf("could not allocate a unique session name")
+	}
+	return name, nil
+}
+
+func (s *Server) startRemoteWorkerProcess(sessionName, sessionID, basedir string, incognito bool) (*exec.Cmd, error) {
+	self, err := remoteWorkerExecutable()
+	if err != nil {
+		return nil, err
+	}
+	args := []string{
+		"daemon",
+		"launch-remote-worker",
+		"--session-name", sessionName,
+		"--session-id", sessionID,
+		"--basedir", basedir,
+	}
+	if incognito {
+		args = append(args, "--incognito")
+	}
+	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0o666)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(self, args...)
+	cmd.Dir = basedir
+	cmd.Stdin = devNull
+	cmd.Stdout = devNull
+	cmd.Stderr = devNull
+	if err := cmd.Start(); err != nil {
+		_ = devNull.Close()
+		return nil, err
+	}
+	_ = devNull.Close()
+	return cmd, nil
+}
+
+func (s *Server) waitRemoteWorker(worker *remoteWorker) {
+	if worker == nil || worker.cmd == nil {
+		return
+	}
+	err := worker.cmd.Wait()
+	s.remoteMu.Lock()
+	delete(s.remoteWorkers, worker.sessionName)
+	s.remoteMu.Unlock()
+	level := slog.LevelInfo
+	if err != nil {
+		level = slog.LevelWarn
+	}
+	s.log.LogAttrs(context.Background(), level, "daemon.remote_session.exited",
+		slog.String("component", "daemon"),
+		slog.String("session", worker.sessionName),
+		slog.String("session_id", worker.sessionID),
+		slog.Bool("incognito", worker.incognito),
+		slog.Any("err", err),
+	)
+	if !worker.incognito {
+		return
+	}
+	if _, delErr := s.DeleteSession(context.Background(), &clydev1.DeleteSessionRequest{Name: worker.sessionName}); delErr != nil {
+		s.log.Warn("daemon.remote_session.incognito_cleanup_failed",
+			"component", "daemon",
+			"session", worker.sessionName,
+			"session_id", worker.sessionID,
+			"err", delErr,
+		)
+	}
 }
 
 func (s *Server) ProbeContextUsage(ctx context.Context, req *clydev1.ProbeContextUsageRequest) (*clydev1.ProbeContextUsageResponse, error) {

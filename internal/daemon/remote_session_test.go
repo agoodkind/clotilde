@@ -1,0 +1,170 @@
+package daemon
+
+import (
+	"context"
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	clydev1 "goodkind.io/clyde/api/clyde/v1"
+	"goodkind.io/clyde/internal/session"
+)
+
+func TestStartRemoteSessionCreatesCanonicalSession(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "data"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(tmp, "run"))
+
+	script := filepath.Join(tmp, "fake-worker.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 1\n"), 0o755); err != nil {
+		t.Fatalf("write fake worker: %v", err)
+	}
+	oldExec := remoteWorkerExecutable
+	remoteWorkerExecutable = func() (string, error) { return script, nil }
+	defer func() { remoteWorkerExecutable = oldExec }()
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv, err := New(log)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Close()
+
+	basedir := filepath.Join(tmp, "workspace")
+	if err := os.MkdirAll(basedir, 0o755); err != nil {
+		t.Fatalf("mkdir basedir: %v", err)
+	}
+
+	resp, err := srv.StartRemoteSession(context.Background(), &clydev1.StartRemoteSessionRequest{
+		Basedir: basedir,
+	})
+	if err != nil {
+		t.Fatalf("start remote session: %v", err)
+	}
+	if resp.GetSessionName() == "" {
+		t.Fatalf("session name not set")
+	}
+	if resp.GetSessionId() == "" {
+		t.Fatalf("session id not set")
+	}
+	if resp.GetLaunchState() != clydev1.StartRemoteSessionResponse_LAUNCH_STATE_LAUNCHING {
+		t.Fatalf("launch state = %v", resp.GetLaunchState())
+	}
+
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	sess, err := store.Get(resp.GetSessionName())
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if sess.Metadata.SessionID != resp.GetSessionId() {
+		t.Fatalf("session id = %q want %q", sess.Metadata.SessionID, resp.GetSessionId())
+	}
+	if sess.Metadata.WorkDir != basedir {
+		t.Fatalf("workdir = %q want %q", sess.Metadata.WorkDir, basedir)
+	}
+	settings, err := store.LoadSettings(resp.GetSessionName())
+	if err != nil {
+		t.Fatalf("load settings: %v", err)
+	}
+	if settings == nil || !settings.RemoteControl {
+		t.Fatalf("remote control settings not persisted")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		srv.remoteMu.Lock()
+		_, ok := srv.remoteWorkers[resp.GetSessionName()]
+		srv.remoteMu.Unlock()
+		if ok {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("remote worker was not tracked")
+}
+
+func TestStartRemoteSessionRejectsExistingName(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "data"))
+
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	if err := store.Create(session.NewSession("chat-fixed", "uuid-1")); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv, err := New(log)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Close()
+
+	basedir := filepath.Join(tmp, "workspace")
+	if err := os.MkdirAll(basedir, 0o755); err != nil {
+		t.Fatalf("mkdir basedir: %v", err)
+	}
+
+	if _, err := srv.StartRemoteSession(context.Background(), &clydev1.StartRemoteSessionRequest{
+		SessionName: "chat-fixed",
+		Basedir:     basedir,
+	}); err == nil {
+		t.Fatalf("expected already exists error")
+	}
+}
+
+func TestStartRemoteSessionHonorsIncognito(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "data"))
+	script := filepath.Join(tmp, "fake-worker.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 1\n"), 0o755); err != nil {
+		t.Fatalf("write fake worker: %v", err)
+	}
+	oldExec := remoteWorkerExecutable
+	remoteWorkerExecutable = func() (string, error) { return script, nil }
+	defer func() { remoteWorkerExecutable = oldExec }()
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv, err := New(log)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Close()
+
+	basedir := filepath.Join(tmp, "workspace")
+	if err := os.MkdirAll(basedir, 0o755); err != nil {
+		t.Fatalf("mkdir basedir: %v", err)
+	}
+
+	resp, err := srv.StartRemoteSession(context.Background(), &clydev1.StartRemoteSessionRequest{
+		Basedir:   basedir,
+		Incognito: true,
+	})
+	if err != nil {
+		t.Fatalf("start remote session: %v", err)
+	}
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	sess, err := store.Get(resp.GetSessionName())
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if !sess.Metadata.IsIncognito {
+		t.Fatalf("incognito flag not persisted")
+	}
+}

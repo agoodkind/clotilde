@@ -103,6 +103,52 @@ func TestUX_NewSessionRemoteControlChoiceIsForwarded(t *testing.T) {
 	}
 }
 
+func TestUX_SidecarRemoteLaunchPinsCanonicalSession(t *testing.T) {
+	a, scr, cleanup := mkAppWithSessions(t, 2)
+	defer cleanup()
+
+	a.cb.StartRemoteSession = func(basedir string, incognito bool) (string, string, error) {
+		if basedir != "/tmp/remote" {
+			t.Fatalf("basedir = %q, want /tmp/remote", basedir)
+		}
+		if incognito {
+			t.Fatalf("incognito = true, want false")
+		}
+		return "chat-remote", "uuid-remote", nil
+	}
+
+	a.openSidecarLaunchTypeModal("/tmp/remote")
+	modal, ok := a.overlay.(*OptionsModal)
+	if !ok {
+		t.Fatalf("overlay = %T, want *OptionsModal", a.overlay)
+	}
+	action := findModalAction(modal, "Tracked remote session")
+	if action == nil {
+		t.Fatalf("missing tracked remote session action")
+	}
+	action()
+
+	ev := scr.PollEvent()
+	interrupt, ok := ev.(*tcell.EventInterrupt)
+	if !ok {
+		t.Fatalf("event = %T, want *tcell.EventInterrupt", ev)
+	}
+	a.handleEvent(interrupt)
+
+	if a.sidecar == nil {
+		t.Fatalf("sidecar not created")
+	}
+	if a.sidecar.SessionName != "chat-remote" {
+		t.Fatalf("sidecar session name = %q", a.sidecar.SessionName)
+	}
+	if a.sidecar.SessionID != "uuid-remote" {
+		t.Fatalf("sidecar session id = %q", a.sidecar.SessionID)
+	}
+	if a.sidecar.status == "" {
+		t.Fatalf("sidecar status should show pending state")
+	}
+}
+
 func TestUX_SessionOptionsIncludeExportWhenCallbackConfigured(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 2)
 	defer cleanup()

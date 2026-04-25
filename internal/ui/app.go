@@ -66,6 +66,10 @@ type AppCallbacks struct {
 	// to basedir. The session auto deletes on exit unless persisted
 	// later. enableRC requests the --remote-control flag at launch.
 	StartIncognitoWithBasedir func(basedir string, enableRC bool) error
+	// StartRemoteSession launches a daemon-owned remote-control session
+	// anchored at basedir and returns the canonical session name plus
+	// pre-assigned Claude session UUID.
+	StartRemoteSession func(basedir string, incognito bool) (sessionName, sessionID string, err error)
 	// SetBasedir rewrites the session's workspaceRoot field in metadata.
 	// newPath is already resolved by the caller; "" clears the field.
 	SetBasedir func(sess *session.Session, newPath string) error
@@ -301,11 +305,13 @@ type App struct {
 	// sidecar holds the live remote control panel. nil until the user
 	// pins a session by pressing S on a row. Recreated when the user
 	// pivots to a different session.
-	sidecar          *SidecarPanel
-	sidecarSessionID string
-	sidecarCancel    func() // cancels the daemon TailTranscript stream
-	compactCancel    func() // cancels in-flight compact preview/apply stream
-	reloadExecPath   string // set when the on-disk executable changed and Run should exec after teardown
+	sidecar            *SidecarPanel
+	sidecarSessionID   string
+	sidecarSessionName string
+	sidecarTailPending bool
+	sidecarCancel      func() // cancels the daemon TailTranscript stream
+	compactCancel      func() // cancels in-flight compact preview/apply stream
+	reloadExecPath     string // set when the on-disk executable changed and Run should exec after teardown
 
 	// Overlays (one at a time)
 	overlay Widget
@@ -1117,6 +1123,16 @@ type sidecarSendDone struct {
 	err error
 }
 
+type sidecarLaunchDone struct {
+	sessionName string
+	sessionID   string
+	err         error
+}
+
+type sidecarStatusUpdate struct {
+	status string
+}
+
 type viewContentLoaded struct {
 	sessionName string
 	content     string
@@ -1278,6 +1294,9 @@ func (a *App) applySessionEvent(ev SessionEvent) {
 	switch ev.Kind {
 	case "SESSION_ADOPTED", "SESSION_UPDATED":
 		a.upsertSessionEvent(ev)
+		if ev.Session != nil && a.sidecar != nil && (ev.Session.Name == a.sidecarSessionName || ev.Session.Metadata.SessionID == a.sidecarSessionID) {
+			a.maybeOpenSidecarTail()
+		}
 	case "SESSION_RENAMED":
 		a.renameSessionEvent(ev)
 	case "SESSION_DELETED":
@@ -1292,6 +1311,7 @@ func (a *App) applySessionEvent(ev SessionEvent) {
 		a.bridgeMu.Unlock()
 		if a.sidecar != nil && a.sidecarSessionID == ev.SessionID {
 			a.sidecar.BridgeURL = ev.BridgeURL
+			a.maybeOpenSidecarTail()
 		}
 	case "BRIDGE_CLOSED":
 		a.bridgeMu.Lock()
@@ -2308,6 +2328,7 @@ func (a *App) handleEvent(ev tcell.Event) {
 					a.sidecar.status = "tail failed: " + d.err.Error()
 					break
 				}
+				a.sidecarTailPending = false
 				a.sidecarCancel = d.cancel
 				go a.runSidecarTail(d.events, a.sidecar)
 			}
@@ -2318,6 +2339,36 @@ func (a *App) handleEvent(ev tcell.Event) {
 				} else {
 					a.sidecar.status = "sent"
 				}
+			}
+		case sidecarLaunchDone:
+			if d.err != nil {
+				if a.sidecar != nil {
+					a.sidecar.status = "launch failed: " + d.err.Error()
+				}
+				break
+			}
+			a.sidecarSessionName = d.sessionName
+			a.sidecarSessionID = d.sessionID
+			a.sidecarTailPending = true
+			panel := NewSidecarPanel(d.sessionName, d.sessionID, "")
+			panel.status = "waiting for transcript..."
+			panel.OnSend = func(text string) error {
+				if a.cb.SendToSession == nil {
+					return fmt.Errorf("daemon offline")
+				}
+				panel.status = "sending..."
+				go func() {
+					err := a.cb.SendToSession(d.sessionID, text)
+					a.postInterrupt(sidecarSendDone{err: err})
+				}()
+				return nil
+			}
+			a.sidecar = panel
+			a.refreshSessions()
+			a.maybeOpenSidecarTail()
+		case sidecarStatusUpdate:
+			if a.sidecar != nil {
+				a.sidecar.status = d.status
 			}
 		case viewContentLoaded:
 			if d.content == "" {
@@ -2501,7 +2552,11 @@ func (a *App) handleKey(e *tcell.EventKey) {
 		// the table uses for nvim-style movement (h/j/k/l/g/G) so the
 		// movement keys fall through to the table widget below.
 		case 'N':
-			a.newSession()
+			if a.activeTab == tabSidecar {
+				a.openSidecarLaunchStarterModal()
+			} else {
+				a.newSession()
+			}
 			return
 		case 'R':
 			if !a.isDaemonOnline() && a.cb.RestartDaemon != nil {
@@ -3667,6 +3722,35 @@ func (a *App) openNewStarterModal() {
 	a.mode = StatusFilter
 }
 
+func (a *App) openSidecarLaunchStarterModal() {
+	cwd := a.defaultLaunchCWD()
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+	entries := []OptionsModalEntry{
+		{
+			Label: "Launch remote here",
+			Hint:  shortPath(cwd),
+			Action: func() {
+				a.closeOverlay()
+				a.openSidecarLaunchTypeModal(cwd)
+			},
+		},
+		{
+			Label: "Choose folder",
+			Hint:  "browse",
+			Action: func() {
+				a.closeOverlay()
+				a.openSidecarLaunchPrompt()
+			},
+		},
+	}
+	modal := NewOptionsModal("Launch sidecar session", entries)
+	modal.OnCancel = func() { a.closeOverlay() }
+	a.overlay = modal
+	a.mode = StatusFilter
+}
+
 // openNewSessionPrompt opens the file picker so the user can navigate
 // to the directory the new session should be anchored under. Pressing
 // "s" in the picker commits the highlighted directory; Enter steps in.
@@ -3690,6 +3774,23 @@ func (a *App) openNewSessionPrompt() {
 			return
 		}
 		a.openNewSessionTypeModal(basedir)
+	}
+	a.overlay = picker
+	a.mode = StatusFilter
+}
+
+func (a *App) openSidecarLaunchPrompt() {
+	cwd, _ := os.Getwd()
+	picker := NewFilePickerOverlay("Pick basedir for sidecar session", cwd)
+	picker.OnCancel = func() { a.closeOverlay() }
+	picker.OnSelect = func(path string) {
+		a.closeOverlay()
+		basedir := strings.TrimSpace(path)
+		if info, err := os.Stat(basedir); err != nil || !info.IsDir() {
+			a.openSidecarCreateFolderConfirm(basedir)
+			return
+		}
+		a.openSidecarLaunchTypeModal(basedir)
 	}
 	a.overlay = picker
 	a.mode = StatusFilter
@@ -3728,6 +3829,35 @@ func (a *App) openCreateFolderConfirm(basedir string) {
 	a.mode = StatusFilter
 }
 
+func (a *App) openSidecarCreateFolderConfirm(basedir string) {
+	entries := []OptionsModalEntry{
+		{
+			Label: "Create folder and continue",
+			Hint:  basedir,
+			Action: func() {
+				a.closeOverlay()
+				if err := os.MkdirAll(basedir, 0o755); err != nil {
+					slog.Error("sidecar.mkdir failed", "basedir", basedir, "error", err)
+					return
+				}
+				a.openSidecarLaunchTypeModal(basedir)
+			},
+		},
+		{
+			Label: "Pick a different folder",
+			Hint:  "back to file picker",
+			Action: func() {
+				a.closeOverlay()
+				a.openSidecarLaunchPrompt()
+			},
+		},
+	}
+	modal := NewOptionsModal("Folder does not exist: "+shortPath(basedir), entries)
+	modal.OnCancel = func() { a.closeOverlay() }
+	a.overlay = modal
+	a.mode = StatusFilter
+}
+
 // openNewSessionTypeModal asks whether the new session should be a
 // regular tracked session or a temporary one (incognito). For the
 // temp path the session auto deletes on exit unless the user opts to
@@ -3753,6 +3883,53 @@ func (a *App) openNewSessionTypeModal(basedir string) {
 		},
 	}
 	modal := NewOptionsModal("Start at "+shortPath(basedir), entries)
+	modal.OnCancel = func() { a.closeOverlay() }
+	a.overlay = modal
+	a.mode = StatusFilter
+}
+
+func (a *App) openSidecarLaunchTypeModal(basedir string) {
+	launch := func(incognito bool) {
+		a.closeOverlay()
+		a.activeTab = tabSidecar
+		if a.tabs != nil {
+			a.tabs.SetActive(tabSidecar)
+		}
+		a.sidecar = NewSidecarPanel("launching…", "", "")
+		a.sidecar.status = "launching remote session..."
+		a.sidecarSessionName = ""
+		a.sidecarSessionID = ""
+		a.sidecarTailPending = false
+		go func() {
+			if a.cb.StartRemoteSession == nil {
+				a.postInterrupt(sidecarLaunchDone{err: fmt.Errorf("daemon remote launch unavailable")})
+				return
+			}
+			name, sessionID, err := a.cb.StartRemoteSession(basedir, incognito)
+			a.postInterrupt(sidecarLaunchDone{
+				sessionName: name,
+				sessionID:   sessionID,
+				err:         err,
+			})
+		}()
+	}
+	entries := []OptionsModalEntry{
+		{
+			Label: "Tracked remote session",
+			Hint:  "daemon-owned, re-enterable",
+			Action: func() {
+				launch(false)
+			},
+		},
+		{
+			Label: "Temporary remote session",
+			Hint:  "daemon-owned incognito",
+			Action: func() {
+				launch(true)
+			},
+		},
+	}
+	modal := NewOptionsModal("Launch sidecar session at "+shortPath(basedir), entries)
 	modal.OnCancel = func() { a.closeOverlay() }
 	a.overlay = modal
 	a.mode = StatusFilter
@@ -4057,7 +4234,8 @@ func (a *App) drawSidecarTab(r Rect) {
 	if a.sidecar == nil {
 		drawString(a.screen, r.X+2, r.Y+1, StyleDefault.Foreground(ColorAccent).Bold(true), "Sidecar", r.W-4)
 		drawString(a.screen, r.X+2, r.Y+3, StyleSubtext, "Press S on a Sessions row to pin its live transcript here.", r.W-4)
-		drawString(a.screen, r.X+2, r.Y+4, StyleSubtext, "Sessions launched with --remote-control accept text from this panel.", r.W-4)
+		drawString(a.screen, r.X+2, r.Y+4, StyleSubtext, "Press N here to launch a daemon-owned remote session directly into Sidecar.", r.W-4)
+		drawString(a.screen, r.X+2, r.Y+5, StyleSubtext, "Sessions launched with --remote-control accept text from this panel.", r.W-4)
 		return
 	}
 	a.sidecar.Draw(a.screen, r)
@@ -4091,7 +4269,9 @@ func (a *App) pinSidecar(sess *session.Session) {
 		return nil
 	}
 	a.sidecar = panel
+	a.sidecarSessionName = sess.Name
 	a.sidecarSessionID = sess.Metadata.SessionID
+	a.sidecarTailPending = false
 
 	if a.cb.TailTranscript == nil {
 		return
@@ -4118,6 +4298,27 @@ func (a *App) runSidecarTail(events <-chan TranscriptEntry, panel *SidecarPanel)
 		})
 		a.postInterrupt(a)
 	}
+}
+
+func (a *App) maybeOpenSidecarTail() {
+	if a.sidecar == nil || a.sidecarSessionID == "" || a.cb.TailTranscript == nil {
+		return
+	}
+	if a.sidecarCancel != nil {
+		return
+	}
+	a.sidecar.status = "opening tail..."
+	go func(sessionID string) {
+		events, cancel, err := a.cb.TailTranscript(sessionID, -1)
+		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "no transcript") {
+				a.sidecarTailPending = true
+				a.postInterrupt(sidecarStatusUpdate{status: "waiting for transcript..."})
+				return
+			}
+		}
+		a.postInterrupt(sidecarTailOpened{events: events, cancel: cancel, err: err})
+	}(a.sidecarSessionID)
 }
 
 // drawSettingsTab renders the Settings tab body. It surfaces the active

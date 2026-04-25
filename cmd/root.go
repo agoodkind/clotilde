@@ -164,6 +164,13 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			}
 			return startNewSessionInDir(basedir, store, dashboardLaunchCWD, enableRC)
 		},
+		StartRemoteSession: func(basedir string, incognito bool) (string, string, error) {
+			resp, err := daemon.StartRemoteSessionViaDaemon(context.Background(), "", basedir, incognito)
+			if err != nil {
+				return "", "", err
+			}
+			return resp.GetSessionName(), resp.GetSessionId(), nil
+		},
 		ResumeSession: func(sess *session.Session) error {
 			store, err := openStore()
 			if err != nil {
@@ -803,6 +810,7 @@ func startNewSessionInDir(basedir string, store session.Store, dashboardFallback
 	if err != nil {
 		return err
 	}
+	sessionID := util.GenerateUUID()
 
 	env := map[string]string{"CLYDE_SESSION_NAME": name}
 	_, _ = fmt.Fprintf(os.Stdout, "Starting new session %q in %s\n\n", name, workDir)
@@ -813,7 +821,7 @@ func startNewSessionInDir(basedir string, store session.Store, dashboardFallback
 		"remote_control", enableRemoteControl,
 	)
 
-	err = claude.StartNewInteractive(env, "", workDir, enableRemoteControl)
+	err = claude.StartNewInteractive(env, "", workDir, enableRemoteControl, sessionID)
 	if err != nil {
 		return err
 	}

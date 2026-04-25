@@ -712,6 +712,41 @@ func ListBridgesViaDaemon(ctx context.Context) ([]*clydev1.Bridge, error) {
 	return resp.Bridges, nil
 }
 
+// StartRemoteSessionViaDaemon asks the daemon to create and launch a
+// daemon-owned remote-control session. The returned response includes the
+// canonical session name and pre-assigned Claude session UUID.
+func StartRemoteSessionViaDaemon(ctx context.Context, sessionName, basedir string, incognito bool) (*clydev1.StartRemoteSessionResponse, error) {
+	log := daemonClientLog(ctx)
+	log.DebugContext(ctx, "daemon.client.start_remote_session.begin",
+		"session", sessionName,
+		"basedir", basedir,
+		"incognito", incognito,
+	)
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.start_remote_session.connect_failed", "err", err)
+		return nil, err
+	}
+	defer c.conn.Close()
+	rpcCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	resp, err := c.rpc.StartRemoteSession(rpcCtx, &clydev1.StartRemoteSessionRequest{
+		SessionName: sessionName,
+		Basedir:     basedir,
+		Incognito:   incognito,
+	})
+	if err != nil {
+		log.DebugContext(rpcCtx, "daemon.client.start_remote_session.rpc_failed", "err", err)
+		return nil, err
+	}
+	log.DebugContext(rpcCtx, "daemon.client.start_remote_session.ok",
+		"session", resp.GetSessionName(),
+		"session_id", resp.GetSessionId(),
+		"launch_state", resp.GetLaunchState().String(),
+	)
+	return resp, nil
+}
+
 // SendToSessionViaDaemon delivers text into a running claude session
 // through its inject socket. The daemon resolves the session id to a
 // socket path and forwards the bytes. Returns false when no listener

@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -34,6 +35,23 @@ import (
 // SendToSession path) and writes the bytes into the pty's stdin.
 // Returns when claude exits.
 func invokeInteractivePTY(args []string, env map[string]string, workDir, sessionID string) error {
+	return invokePTY(args, env, workDir, sessionID, true)
+}
+
+// StartHeadlessRemoteWorker runs Claude with remote control enabled in a PTY
+// that is owned by a background process instead of an interactive terminal.
+// The wrapper still exposes the inject socket so the daemon sidecar can send
+// text to the running Claude session, but local terminal IO is detached.
+func StartHeadlessRemoteWorker(env map[string]string, settingsFile string, workDir, sessionID string) error {
+	args := []string{}
+	args = appendCommonArgs(args, settingsFile)
+	if sessionID != "" {
+		args = append(args, "--session-id", sessionID)
+	}
+	return invokePTY(args, env, workDir, sessionID, false)
+}
+
+func invokePTY(args []string, env map[string]string, workDir, sessionID string, interactive bool) error {
 	claudeBin := ClaudeBinaryPathFunc()
 
 	// Daemon acquire mirrors the classic invokeInteractive path so
@@ -49,7 +67,16 @@ func invokeInteractivePTY(args []string, env map[string]string, workDir, session
 		client.Close()
 	}
 
-	displayCommand(claudeBin, args, env)
+	if interactive {
+		displayCommand(claudeBin, args, env)
+	} else {
+		slog.Info("wrapper.remote_headless.starting",
+			"component", "wrapper",
+			"session", sessionName,
+			"session_id", sessionID,
+			"workdir", workDir,
+		)
+	}
 
 	cmd := exec.Command(claudeBin, args...)
 	if workDir != "" {
@@ -66,26 +93,30 @@ func invokeInteractivePTY(args []string, env map[string]string, workDir, session
 	}
 	defer ptmx.Close()
 
-	// Forward initial size and propagate window changes so claude's
-	// TUI matches the terminal dimensions.
-	winchCh := make(chan os.Signal, 1)
-	signal.Notify(winchCh, syscall.SIGWINCH)
-	defer signal.Stop(winchCh)
-	go func() {
-		for range winchCh {
-			_ = pty.InheritSize(os.Stdin, ptmx)
-		}
-	}()
-	winchCh <- syscall.SIGWINCH
+	if interactive {
+		// Forward initial size and propagate window changes so claude's
+		// TUI matches the terminal dimensions.
+		winchCh := make(chan os.Signal, 1)
+		signal.Notify(winchCh, syscall.SIGWINCH)
+		defer signal.Stop(winchCh)
+		go func() {
+			for range winchCh {
+				_ = pty.InheritSize(os.Stdin, ptmx)
+			}
+		}()
+		winchCh <- syscall.SIGWINCH
 
-	// Switch the terminal into raw mode for the duration of the
-	// session so claude's rendering is not garbled by line discipline.
-	oldState, _ := term.MakeRaw(int(os.Stdin.Fd()))
-	defer func() {
-		if oldState != nil {
-			_ = term.Restore(int(os.Stdin.Fd()), oldState)
-		}
-	}()
+		// Switch the terminal into raw mode for the duration of the
+		// session so claude's rendering is not garbled by line discipline.
+		oldState, _ := term.MakeRaw(int(os.Stdin.Fd()))
+		defer func() {
+			if oldState != nil {
+				_ = term.Restore(int(os.Stdin.Fd()), oldState)
+			}
+		}()
+	} else {
+		_ = pty.Setsize(ptmx, &pty.Winsize{Rows: 40, Cols: 120})
+	}
 
 	// Inject socket lifecycle. The daemon dials this socket from
 	// SendToSession to forward text to the running claude process.
@@ -104,14 +135,21 @@ func invokeInteractivePTY(args []string, env map[string]string, workDir, session
 	var copyOnce sync.Once
 	finish := func() { copyOnce.Do(func() { close(done) }) }
 
-	go func() {
-		_, _ = io.Copy(ptmx, os.Stdin)
-		finish()
-	}()
-	go func() {
-		_, _ = io.Copy(os.Stdout, ptmx)
-		finish()
-	}()
+	if interactive {
+		go func() {
+			_, _ = io.Copy(ptmx, os.Stdin)
+			finish()
+		}()
+		go func() {
+			_, _ = io.Copy(os.Stdout, ptmx)
+			finish()
+		}()
+	} else {
+		go func() {
+			_, _ = io.Copy(io.Discard, ptmx)
+			finish()
+		}()
+	}
 
 	// Daemon settings sync runs alongside the pty path too so global
 	// settings changes propagate to this session like any other.
@@ -125,7 +163,7 @@ func invokeInteractivePTY(args []string, env map[string]string, workDir, session
 	<-monitorStopped
 	finish()
 	<-done
-	if shouldSelfReloadWrapper(env, runErr, monitor) {
+	if interactive && shouldSelfReloadWrapper(env, runErr, monitor) {
 		if reloadErr := selfReloadCurrentProcess(); reloadErr != nil {
 			return fmt.Errorf("self reload: %w", reloadErr)
 		}

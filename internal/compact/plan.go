@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"sort"
 	"time"
 )
@@ -114,9 +115,10 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 	}
 
 	opts := SynthOptions{
-		ToolDefault:        ToolDetailFull,
-		ToolDetailOverride: map[string]ToolDetail{},
-		DroppedChatEntries: map[int]bool{},
+		ToolDefault:          ToolDetailFull,
+		ToolDetailOverride:   map[string]ToolDetail{},
+		DroppedChatEntries:   map[int]bool{},
+		DroppedSummaryChunks: map[int]map[string]bool{},
 	}
 	// Strippers without a target: apply the full effect of each flag
 	// and return without any count_tokens iterations.
@@ -183,7 +185,7 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 			}
 		}
 		toolsFull := totalToolPairs - toolsLineOnly - toolsDropped
-		chatDropped := len(opts.DroppedChatEntries)
+		chatDropped := len(opts.DroppedChatEntries) + droppedSummaryChunkCount(opts)
 
 		record := IterationRecord{
 			Step:              label,
@@ -422,8 +424,8 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 			if batchEnd > len(dropOrder) {
 				batchEnd = len(dropOrder)
 			}
-			for _, ei := range dropOrder[i:batchEnd] {
-				opts.DroppedChatEntries[ei] = true
+			for _, step := range dropOrder[i:batchEnd] {
+				applyChatDropStep(opts.DroppedChatEntries, opts.DroppedSummaryChunks, step)
 			}
 			label := fmt.Sprintf("drop oldest chat turns (%d)", batchEnd-i)
 			rec, err = measure(label)
@@ -432,8 +434,8 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 			}
 			if rec.CtxTotal < in.Target {
 				// Undo this drop; near the floor we must not cross below.
-				for _, ei := range dropOrder[i:batchEnd] {
-					delete(opts.DroppedChatEntries, ei)
+				for _, step := range dropOrder[i:batchEnd] {
+					revertChatDropStep(opts.DroppedChatEntries, opts.DroppedSummaryChunks, step)
 				}
 				if batchSize > 1 {
 					lastDropTurns = 0
@@ -485,8 +487,8 @@ func applyStrippersFully(slice *Slice, s Strippers, opts *SynthOptions) {
 		}
 	}
 	if s.Chat {
-		for _, ei := range chatDropOrder(slice) {
-			opts.DroppedChatEntries[ei] = true
+		for _, step := range chatDropOrder(slice) {
+			applyChatDropStep(opts.DroppedChatEntries, opts.DroppedSummaryChunks, step)
 		}
 	}
 }
@@ -533,15 +535,41 @@ func orderedToolUseIDs(slice *Slice) []string {
 // drop-priority order: oldest first, but the most recent assistant
 // turn AND its immediate preceding user turn are excluded so the
 // model always sees the latest exchange verbatim.
-func chatDropOrder(slice *Slice) []int {
-	chatEntries := []int{}
+type chatDropStep struct {
+	EntryIdx  int
+	ChunkKey  string
+	IsSummary bool
+}
+
+func chatDropOrder(slice *Slice) []chatDropStep {
+	chatEntries := []chatDropStep{}
 	lastAssistant := -1
 	for ei, e := range slice.PostBoundary {
 		if e.Type == "user" && !isToolResultOnly(e) {
-			chatEntries = append(chatEntries, ei)
+			if summary, ok := parseSyntheticSummary(e); ok {
+				slog.Debug("compact.plan.synthetic_summary_detected",
+					"component", "compact",
+					"subcomponent", "plan",
+					"entry_index", ei,
+					"drop_units", len(summary.DropOrder())+1,
+				)
+				for _, key := range summary.DropOrder() {
+					chatEntries = append(chatEntries, chatDropStep{
+						EntryIdx:  ei,
+						ChunkKey:  key,
+						IsSummary: true,
+					})
+				}
+				chatEntries = append(chatEntries, chatDropStep{
+					EntryIdx:  ei,
+					IsSummary: true,
+				})
+			} else {
+				chatEntries = append(chatEntries, chatDropStep{EntryIdx: ei})
+			}
 		}
 		if e.Type == "assistant" {
-			chatEntries = append(chatEntries, ei)
+			chatEntries = append(chatEntries, chatDropStep{EntryIdx: ei})
 			lastAssistant = ei
 		}
 	}
@@ -556,14 +584,77 @@ func chatDropOrder(slice *Slice) []int {
 			}
 		}
 	}
-	out := make([]int, 0, len(chatEntries))
-	for _, ei := range chatEntries {
-		if preserve[ei] {
+	out := make([]chatDropStep, 0, len(chatEntries))
+	for _, step := range chatEntries {
+		if preserve[step.EntryIdx] {
 			continue
 		}
-		out = append(out, ei)
+		out = append(out, step)
 	}
 	return out
+}
+
+func droppedSummaryChunkCount(opts SynthOptions) int {
+	total := 0
+	for _, chunks := range opts.DroppedSummaryChunks {
+		total += len(chunks)
+	}
+	return total
+}
+
+func applyChatDropStep(droppedEntries map[int]bool, droppedChunks map[int]map[string]bool, step chatDropStep) {
+	if step.ChunkKey == "" {
+		slog.Debug("compact.plan.chat_drop_applied",
+			"component", "compact",
+			"subcomponent", "plan",
+			"entry_index", step.EntryIdx,
+			"summary_chunk", false,
+		)
+		droppedEntries[step.EntryIdx] = true
+		if droppedChunks != nil {
+			delete(droppedChunks, step.EntryIdx)
+		}
+		return
+	}
+	if droppedChunks[step.EntryIdx] == nil {
+		droppedChunks[step.EntryIdx] = map[string]bool{}
+	}
+	droppedChunks[step.EntryIdx][step.ChunkKey] = true
+	slog.Debug("compact.plan.chat_drop_applied",
+		"component", "compact",
+		"subcomponent", "plan",
+		"entry_index", step.EntryIdx,
+		"summary_chunk", true,
+		"chunk_key", step.ChunkKey,
+	)
+}
+
+func revertChatDropStep(droppedEntries map[int]bool, droppedChunks map[int]map[string]bool, step chatDropStep) {
+	if step.ChunkKey == "" {
+		slog.Debug("compact.plan.chat_drop_reverted",
+			"component", "compact",
+			"subcomponent", "plan",
+			"entry_index", step.EntryIdx,
+			"summary_chunk", false,
+		)
+		delete(droppedEntries, step.EntryIdx)
+		return
+	}
+	chunks := droppedChunks[step.EntryIdx]
+	if chunks == nil {
+		return
+	}
+	delete(chunks, step.ChunkKey)
+	if len(chunks) == 0 {
+		delete(droppedChunks, step.EntryIdx)
+	}
+	slog.Debug("compact.plan.chat_drop_reverted",
+		"component", "compact",
+		"subcomponent", "plan",
+		"entry_index", step.EntryIdx,
+		"summary_chunk", true,
+		"chunk_key", step.ChunkKey,
+	)
 }
 
 func finalize(in PlanInput, opts SynthOptions, baseline, finalTail int, log []IterationRecord, hit bool) *PlanResult {

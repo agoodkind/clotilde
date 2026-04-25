@@ -158,6 +158,16 @@ func startWebApp(log *slog.Logger, srv *Server) func() {
 			}
 			return out
 		},
+		StartRemoteSession: func(ctx context.Context, name, basedir string) (string, string, error) {
+			resp, err := srv.StartRemoteSession(ctx, &clydev1.StartRemoteSessionRequest{
+				SessionName: name,
+				Basedir:     basedir,
+			})
+			if err != nil {
+				return "", "", err
+			}
+			return resp.GetSessionName(), resp.GetSessionId(), nil
+		},
 	}
 	srvW := webapp.New(cfg.WebApp, deps, log)
 	ctx, cancel := context.WithCancel(context.Background())

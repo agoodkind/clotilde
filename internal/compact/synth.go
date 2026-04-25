@@ -57,6 +57,12 @@ type SynthOptions struct {
 	// preceding user turn.
 	DroppedChatEntries map[int]bool
 
+	// DroppedSummaryChunks lists per-entry virtual chunks that should
+	// be omitted from a prior synthetic compact summary. Keyed first by
+	// post-boundary entry index, then by chunk key from
+	// syntheticSummary.DropOrder.
+	DroppedSummaryChunks map[int]map[string]bool
+
 	// TruncTokens caps tool result body length when ToolDefault is
 	// Full. Approximated as 4 chars per token. Default 4000.
 	TruncTokens int
@@ -238,6 +244,11 @@ func renderChat(slice *Slice, opts SynthOptions) []OutputBlock {
 				// Tool results render in the tool activity section.
 				continue
 			}
+			if summary, ok := parseSyntheticSummary(e); ok {
+				dropped := droppedSummaryChunkSet(opts, ei)
+				out = append(out, summary.Render(dropped)...)
+				continue
+			}
 			text := chatTextFrom(e, opts)
 			if text == "" && !hasRenderableImage(e, opts) {
 				continue
@@ -262,6 +273,13 @@ func renderChat(slice *Slice, opts SynthOptions) []OutputBlock {
 		}
 	}
 	return out
+}
+
+func droppedSummaryChunkSet(opts SynthOptions, entryIdx int) map[string]bool {
+	if opts.DroppedSummaryChunks == nil {
+		return nil
+	}
+	return opts.DroppedSummaryChunks[entryIdx]
 }
 
 // renderToolActivity emits one trailing section summarising tool

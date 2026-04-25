@@ -7,6 +7,8 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
+const optionsModalHintMinGap = 3
+
 // OptionsModalEntry is one selectable row in the options popup.
 // Hint is the short description rendered in dim text on the right.
 // Disabled entries draw muted and ignore activation.
@@ -473,7 +475,7 @@ func (m *OptionsModal) drawOptionsPane(scr tcell.Screen, r Rect) {
 		drawString(scr, r.X, y, style, label, contentW)
 		if entry.Hint != "" {
 			hintX := r.X + contentW - runeCount(entry.Hint)
-			if hintX > r.X+runeCount(label)+1 {
+			if hintX >= r.X+runeCount(label)+optionsModalHintMinGap {
 				drawString(scr, hintX, y, StyleMuted, entry.Hint, contentW)
 			}
 		}

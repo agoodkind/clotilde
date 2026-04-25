@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 )
@@ -129,6 +130,38 @@ func renderDroppedForSummary(slice *Slice, opts SynthOptions) string {
 				continue
 			}
 			fmt.Fprintf(&sb, "## %s (%s)\n\n%s\n\n", strings.Title(e.Type), e.Timestamp.UTC().Format(time.RFC3339), text)
+		}
+	}
+
+	if opts.DroppedSummaryChunks != nil && len(opts.DroppedSummaryChunks) > 0 {
+		indexes := make([]int, 0, len(opts.DroppedSummaryChunks))
+		for ei := range opts.DroppedSummaryChunks {
+			indexes = append(indexes, ei)
+		}
+		sort.Ints(indexes)
+		wroteHeader := false
+		for _, ei := range indexes {
+			dropped := opts.DroppedSummaryChunks[ei]
+			if len(dropped) == 0 {
+				continue
+			}
+			if ei < 0 || ei >= len(slice.PostBoundary) {
+				continue
+			}
+			summary, ok := parseSyntheticSummary(slice.PostBoundary[ei])
+			if !ok {
+				continue
+			}
+			text := summary.DroppedText(dropped)
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+			if !wroteHeader {
+				sb.WriteString("# Dropped prior compact summary chunks\n\n")
+				wroteHeader = true
+			}
+			sb.WriteString(text)
+			sb.WriteString("\n\n")
 		}
 	}
 

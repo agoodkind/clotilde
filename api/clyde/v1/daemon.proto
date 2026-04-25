@@ -18,6 +18,7 @@ service ClydeService {
   rpc UpdateSessionMetadata(UpdateSessionMetadataRequest) returns (UpdateSessionMetadataResponse);
   rpc UpdateSessionSettings(UpdateSessionSettingsRequest) returns (UpdateSessionSettingsResponse);
   rpc UpdateGlobalSettings(UpdateGlobalSettingsRequest) returns (UpdateGlobalSettingsResponse);
+  rpc StartRemoteSession(StartRemoteSessionRequest) returns (StartRemoteSessionResponse);
   rpc ListBridges(ListBridgesRequest) returns (ListBridgesResponse);
   rpc TailTranscript(TailTranscriptRequest) returns (stream TailTranscriptResponse);
   rpc SendToSession(SendToSessionRequest) returns (SendToSessionResponse);
@@ -241,6 +242,23 @@ message UpdateGlobalSettingsRequest {
 }
 
 message UpdateGlobalSettingsResponse {}
+
+message StartRemoteSessionRequest {
+  string session_name = 1;
+  string basedir = 2;
+  bool incognito = 3;
+}
+
+message StartRemoteSessionResponse {
+  enum LaunchState {
+    LAUNCH_STATE_UNSPECIFIED = 0;
+    LAUNCH_STATE_LAUNCHING = 1;
+    LAUNCH_STATE_FAILED = 2;
+  }
+  string session_name = 1;
+  string session_id = 2;
+  LaunchState launch_state = 3;
+}
 
 message Bridge {
   string session_id = 1;

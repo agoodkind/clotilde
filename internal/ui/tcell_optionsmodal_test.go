@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
@@ -122,5 +123,45 @@ func TestOptionsModalOptionsScrollbarDragScrolls(t *testing.T) {
 	_ = modal.HandleEvent(tcell.NewEventMouse(dragX, dragY, tcell.Button1, tcell.ModNone))
 	if modal.optionsOffset == 0 {
 		t.Fatalf("expected options offset to increase after scrollbar drag start")
+	}
+}
+
+func TestOptionsModalHintKeepsBreathingRoomFromLabel(t *testing.T) {
+	scr := tcell.NewSimulationScreen("UTF-8")
+	if err := scr.Init(); err != nil {
+		t.Fatalf("init simulation screen: %v", err)
+	}
+	defer scr.Fini()
+	scr.SetSize(100, 25)
+
+	modal := NewOptionsModal("return", []OptionsModalEntry{
+		{Label: "Quit clyde", Hint: "q", Action: func() {}},
+		{Label: "Return back to chat", Hint: "enter", Action: func() {}},
+		{Label: "Resume", Hint: "load this session", Action: func() {}},
+	})
+	modal.Context = OptionsModalContextReturn
+	modal.Draw(scr, Rect{X: 0, Y: 0, W: 100, H: 25})
+	scr.Show()
+
+	cells, width, _ := scr.GetContents()
+	rowY := modal.entryRects[1].Y
+	row := make([]rune, 0, width)
+	for x := 0; x < width; x++ {
+		cell := cells[rowY*width+x]
+		if len(cell.Runes) == 0 || cell.Runes[0] == 0 {
+			row = append(row, ' ')
+			continue
+		}
+		row = append(row, cell.Runes[0])
+	}
+	line := string(row)
+	labelIdx := strings.Index(line, "Return back to chat")
+	hintIdx := strings.Index(line, "enter")
+	if labelIdx < 0 || hintIdx < 0 {
+		t.Fatalf("row missing label or hint: %q", line)
+	}
+	gap := hintIdx - (labelIdx + len("Return back to chat"))
+	if gap < optionsModalHintMinGap {
+		t.Fatalf("gap=%d want >= %d in row %q", gap, optionsModalHintMinGap, line)
 	}
 }

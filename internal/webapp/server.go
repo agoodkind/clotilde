@@ -15,7 +15,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"strconv"
 	"sync"
 	"time"
@@ -51,8 +50,8 @@ type BridgeSource func() []Bridge
 // is the path used to spawn new sessions; CloseFn is called when
 // Start exits so callers can release resources.
 type Deps struct {
-	Bridges     BridgeSource
-	ClydeBinary string
+	Bridges            BridgeSource
+	StartRemoteSession func(ctx context.Context, name, basedir string) (sessionName, sessionID string, err error)
 }
 
 // Server is the HTTP facade for the dashboard.
@@ -173,40 +172,20 @@ func (s *Server) handleStartSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	bin := s.cfg.ClydeBinary
-	if bin == "" {
-		bin = s.deps.ClydeBinary
+	if s.deps.StartRemoteSession == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "remote launch unavailable"})
+		return
 	}
-	if bin == "" {
-		bin = "clyde"
-	}
-	args := []string{"start", "--remote-control"}
-	if body.Basedir != "" {
-		args = append(args, "--basedir", body.Basedir)
-	}
-	if body.Model != "" {
-		args = append(args, "--model", body.Model)
-	}
-	if body.Effort != "" {
-		args = append(args, "--effort", body.Effort)
-	}
-	if body.Name != "" {
-		args = append(args, body.Name)
-	}
-	cmd := exec.Command(bin, args...)
-	cmd.Stdin = nil
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	if err := cmd.Start(); err != nil {
+	sessionName, sessionID, err := s.deps.StartRemoteSession(r.Context(), body.Name, body.Basedir)
+	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
-	go func() { _ = cmd.Wait() }()
 	s.mu.Lock()
 	s.starting = append(s.starting, startedSession{
-		Name:      body.Name,
+		Name:      sessionName,
 		StartedAt: time.Now(),
-		Cmd:       bin + " " + joinArgs(args),
+		Cmd:       "daemon StartRemoteSession",
 		Note:      "spawned, waiting for bridge URL to appear",
 	})
 	if len(s.starting) > 50 {
@@ -214,10 +193,10 @@ func (s *Server) handleStartSession(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 	writeJSON(w, http.StatusAccepted, map[string]any{
-		"name": body.Name,
-		"pid":  cmd.Process.Pid,
-		"cmd":  bin + " " + joinArgs(args),
-		"note": "session is starting; refresh /api/bridges in a few seconds",
+		"name":       sessionName,
+		"session_id": sessionID,
+		"cmd":        "daemon StartRemoteSession",
+		"note":       "session is starting; refresh /api/bridges in a few seconds",
 	})
 }
 
@@ -234,30 +213,6 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
-}
-
-func joinArgs(parts []string) string {
-	out := ""
-	for i, p := range parts {
-		if i > 0 {
-			out += " "
-		}
-		if needsQuote(p) {
-			out += `"` + p + `"`
-		} else {
-			out += p
-		}
-	}
-	return out
-}
-
-func needsQuote(s string) bool {
-	for _, r := range s {
-		if r == ' ' || r == '\t' || r == '"' {
-			return true
-		}
-	}
-	return false
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
