@@ -142,6 +142,40 @@ func TestBuildCodexRequestUsesResponsesReasoningFields(t *testing.T) {
 	}
 }
 
+func TestBuildCodexRequestAddsEncryptedReasoningIncludeAutomatically(t *testing.T) {
+	req := ChatRequest{
+		Reasoning: &Reasoning{
+			Effort: "medium",
+		},
+		Messages: []ChatMessage{{
+			Role:    "user",
+			Content: json.RawMessage(`"hello"`),
+		}},
+	}
+	model := ResolvedModel{Alias: "gpt-5.4"}
+
+	out := buildCodexRequest(req, model, "")
+	if len(out.Include) != 1 || out.Include[0] != "reasoning.encrypted_content" {
+		t.Fatalf("include=%v", out.Include)
+	}
+}
+
+func TestBuildCodexRequestUsesStablePromptCacheKeyFromMetadata(t *testing.T) {
+	req := ChatRequest{
+		Metadata: mustRaw(`{"conversation_id":"thread-123"}`),
+		Messages: []ChatMessage{{
+			Role:    "user",
+			Content: json.RawMessage(`"hello"`),
+		}},
+	}
+	model := ResolvedModel{Alias: "clyde-gpt-5.4"}
+
+	out := buildCodexRequest(req, model, "")
+	if out.PromptCache != "meta:thread-123" {
+		t.Fatalf("prompt_cache_key=%q want %q", out.PromptCache, "meta:thread-123")
+	}
+}
+
 func TestParseCodexSSERetainsReasoningSignalWithoutVisibleText(t *testing.T) {
 	stream := strings.NewReader(strings.Join([]string{
 		"event: response.output_text.delta",

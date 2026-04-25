@@ -33,6 +33,7 @@ type codexRequest struct {
 	Store        bool             `json:"store"`
 	Stream       bool             `json:"stream"`
 	Include      []string         `json:"include,omitempty"`
+	PromptCache  string           `json:"prompt_cache_key,omitempty"`
 	Reasoning    *codexReasoning  `json:"reasoning,omitempty"`
 	Input        []codexInputItem `json:"input"`
 }
@@ -204,15 +205,47 @@ func buildCodexRequest(req ChatRequest, model ResolvedModel, effort string) code
 		})
 	}
 	reasoning := effectiveCodexReasoning(req, effort)
+	include := codexRequestInclude(req.Include, reasoning != nil)
+	promptCacheKey := requestContextTrackerKey(req, model.Alias)
 	return codexRequest{
 		Model:        modelName,
 		Instructions: instructions,
 		Store:        false,
 		Stream:       true,
-		Include:      append([]string(nil), req.Include...),
+		Include:      include,
+		PromptCache:  promptCacheKey,
 		Reasoning:    reasoning,
 		Input:        input,
 	}
+}
+
+func codexRequestInclude(requested []string, reasoningEnabled bool) []string {
+	if len(requested) == 0 && !reasoningEnabled {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(requested)+1)
+	out := make([]string, 0, len(requested)+1)
+	for _, item := range requested {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	if reasoningEnabled {
+		const encryptedReasoning = "reasoning.encrypted_content"
+		if _, ok := seen[encryptedReasoning]; !ok {
+			out = append(out, encryptedReasoning)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func effectiveCodexReasoning(req ChatRequest, effort string) *codexReasoning {
@@ -391,6 +424,10 @@ func (s *Server) runCodexDirect(
 	httpReq.Header.Set("Authorization", "Bearer "+token)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
+	if conversationID := payload.PromptCache; conversationID != "" {
+		httpReq.Header.Set("x-client-request-id", conversationID)
+		httpReq.Header.Set("x-codex-window-id", conversationID+":0")
+	}
 
 	resp, err := s.httpClient.Do(httpReq)
 	if err != nil {
