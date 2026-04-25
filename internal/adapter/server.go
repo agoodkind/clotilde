@@ -98,10 +98,11 @@ type Server struct {
 	// fb is the optional `claude -p` fallback driver. nil unless
 	// cfg.Fallback.Enabled. When set, fbSem caps its concurrency
 	// independently of sem.
-	fb         *fallback.Client
-	fbSem      chan struct{}
-	httpClient *http.Client
-	ctxUsage   *contextUsageTracker
+	fb            *fallback.Client
+	fbSem         chan struct{}
+	httpClient    *http.Client
+	ctxUsage      *contextUsageTracker
+	codexSessions *codexSessionManager
 }
 
 // New constructs a Server from the given adapter config. The deps
@@ -145,6 +146,11 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 			Timeout: 120 * time.Second,
 		},
 		ctxUsage: newContextUsageTracker(),
+	}
+	if cfg.Codex.Enabled {
+		s.codexSessions = newCodexSessionManager(log.With("subcomponent", "codex_session"), func(spec codexSessionSpec) (codexManagedTransport, error) {
+			return newCodexAppTransport(s.codexAppServerPath(), spec)
+		})
 	}
 	if cfg.DirectOAuth {
 		s.oauthMgr = oauth.NewManager(cfg.OAuth, "")

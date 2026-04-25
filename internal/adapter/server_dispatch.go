@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/adapter/chatemit"
+	"goodkind.io/clyde/internal/cursorctx"
 	"goodkind.io/gklog"
 )
 
@@ -180,7 +181,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	for _, f := range req.Functions {
 		toolNames = append(toolNames, f.Name)
 	}
-	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.chat.received",
+	cursor := cursorctx.FromOpenAI(req.User, req.Metadata)
+	attrs := []slog.Attr{
 		slog.String("request_id", reqID),
 		slog.String("alias", req.Model),
 		slog.String("backend", string(model.Backend)),
@@ -188,6 +190,15 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		slog.Int("tool_count", len(req.Tools)+len(req.Functions)),
 		slog.Any("tool_names", toolNames),
 		slog.Bool("stream", req.Stream),
+	}
+	if cursor.ConversationID != "" {
+		attrs = append(attrs, slog.String("cursor_conversation_id", cursor.ConversationID))
+	}
+	if cursor.RequestID != "" {
+		attrs = append(attrs, slog.String("cursor_request_id", cursor.RequestID))
+	}
+	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.chat.received",
+		attrs...,
 	)
 
 	if perr := s.preflightChat(r.Context(), &req, model, reqID); perr != nil {
@@ -508,19 +519,19 @@ func (s *Server) collectChat(w http.ResponseWriter, ctx context.Context, req Cha
 		slog.Bool("json_retried", jsonRetried),
 	)
 	chatemit.LogTerminal(s.log, ctx, s.deps.RequestEvents, chatemit.RequestEvent{
-		Stage:             chatemit.RequestStageCompleted,
-		Provider:          providerName(model, ""),
-		Backend:           model.Backend,
-		RequestID:         reqID,
-		Alias:             model.Alias,
-		ModelID:           model.ClaudeModel,
-		Stream:            false,
-		FinishReason:      "stop",
-		TokensIn:          usage.PromptTokens,
-		TokensOut:         usage.CompletionTokens,
-		CacheReadTokens:   usage.CachedTokens(),
+		Stage:               chatemit.RequestStageCompleted,
+		Provider:            providerName(model, ""),
+		Backend:             model.Backend,
+		RequestID:           reqID,
+		Alias:               model.Alias,
+		ModelID:             model.ClaudeModel,
+		Stream:              false,
+		FinishReason:        "stop",
+		TokensIn:            usage.PromptTokens,
+		TokensOut:           usage.CompletionTokens,
+		CacheReadTokens:     usage.CachedTokens(),
 		CacheCreationTokens: 0,
-		DurationMs:        time.Since(started).Milliseconds(),
+		DurationMs:          time.Since(started).Milliseconds(),
 	})
 }
 

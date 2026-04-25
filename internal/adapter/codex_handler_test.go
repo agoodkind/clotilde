@@ -176,6 +176,56 @@ func TestBuildCodexRequestUsesStablePromptCacheKeyFromMetadata(t *testing.T) {
 	}
 }
 
+func TestBuildCodexRequestPrefersCursorConversationPromptCacheKey(t *testing.T) {
+	req := ChatRequest{
+		User:     "user-1",
+		Metadata: mustRaw(`{"cursorConversationId":"conv-123"}`),
+		Messages: []ChatMessage{{
+			Role:    "user",
+			Content: json.RawMessage(`"hello"`),
+		}},
+	}
+	model := ResolvedModel{Alias: "clyde-gpt-5.4"}
+
+	out := buildCodexRequest(req, model, "")
+	if out.PromptCache != "cursor:conv-123" {
+		t.Fatalf("prompt_cache_key=%q want %q", out.PromptCache, "cursor:conv-123")
+	}
+}
+
+func TestBuildCodexManagedPromptPlanUsesAssistantAnchorForIncrementalPrompt(t *testing.T) {
+	plan := buildCodexManagedPromptPlan([]ChatMessage{
+		{Role: "system", Content: mustRaw(`"sys"`)},
+		{Role: "user", Content: mustRaw(`"first user"`)},
+		{Role: "assistant", Content: mustRaw(`"first answer"`)},
+		{Role: "user", Content: mustRaw(`"second user"`)},
+	})
+	if plan.System != "sys" {
+		t.Fatalf("System=%q", plan.System)
+	}
+	if !strings.Contains(plan.FullPrompt, "assistant: first answer") {
+		t.Fatalf("FullPrompt=%q", plan.FullPrompt)
+	}
+	if plan.IncrementalPrompt != "user: second user" {
+		t.Fatalf("IncrementalPrompt=%q", plan.IncrementalPrompt)
+	}
+	if plan.AssistantAnchor != "first answer" {
+		t.Fatalf("AssistantAnchor=%q", plan.AssistantAnchor)
+	}
+}
+
+func TestBuildCodexManagedPromptPlanStripsThinkingEnvelopeFromAssistantAnchor(t *testing.T) {
+	assistant := mustRaw(`"<!--clyde-thinking-->\n> **💭 Thinking**\n> \n\n<!--/clyde-thinking-->\n\nFinal answer.\n"`)
+	plan := buildCodexManagedPromptPlan([]ChatMessage{
+		{Role: "user", Content: mustRaw(`"question"`)},
+		{Role: "assistant", Content: assistant},
+		{Role: "user", Content: mustRaw(`"follow up"`)},
+	})
+	if plan.AssistantAnchor != "Final answer." {
+		t.Fatalf("AssistantAnchor=%q want %q", plan.AssistantAnchor, "Final answer.")
+	}
+}
+
 func TestParseCodexSSERetainsReasoningSignalWithoutVisibleText(t *testing.T) {
 	stream := strings.NewReader(strings.Join([]string{
 		"event: response.output_text.delta",

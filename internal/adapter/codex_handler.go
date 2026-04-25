@@ -662,14 +662,23 @@ func (s *Server) runCodexAppFallback(
 }
 
 func (s *Server) collectCodex(w http.ResponseWriter, r *http.Request, req ChatRequest, model ResolvedModel, effort, reqID string, started time.Time) error {
-	s.emitRequestStarted(r.Context(), model, "direct", reqID, model.Alias, false)
-	usedAppFallback := false
 	var text strings.Builder
-	res, err := s.runCodexDirect(r.Context(), req, model, effort, reqID, func(delta string) error {
+	path := "direct"
+	s.emitRequestStarted(r.Context(), model, path, reqID, model.Alias, false)
+	res, _, managed, err := s.runCodexManaged(r.Context(), req, model, effort, reqID, func(delta string) error {
 		text.WriteString(delta)
 		return nil
 	})
-	if err != nil && s.cfg.Codex.AppFallback {
+	if managed {
+		path = "app"
+	}
+	if !managed && err == nil {
+		res, err = s.runCodexDirect(r.Context(), req, model, effort, reqID, func(delta string) error {
+			text.WriteString(delta)
+			return nil
+		})
+	}
+	if err != nil && !managed && s.cfg.Codex.AppFallback {
 		chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{
 			Stage:      chatemit.RequestStageFailed,
 			Provider:   providerName(model, "direct"),
@@ -686,18 +695,14 @@ func (s *Server) collectCodex(w http.ResponseWriter, r *http.Request, req ChatRe
 			slog.Any("err", err),
 		)
 		text.Reset()
-		usedAppFallback = true
-		s.emitRequestStarted(r.Context(), model, "app", reqID, model.Alias, false)
+		path = "app"
+		s.emitRequestStarted(r.Context(), model, path, reqID, model.Alias, false)
 		res, err = s.runCodexAppFallback(r.Context(), req, reqID, func(delta string) error {
 			text.WriteString(delta)
 			return nil
 		})
 	}
 	if err != nil {
-		path := "direct"
-		if usedAppFallback {
-			path = "app"
-		}
 		chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{
 			Stage:      chatemit.RequestStageFailed,
 			Provider:   providerName(model, path),
@@ -744,13 +749,9 @@ func (s *Server) collectCodex(w http.ResponseWriter, r *http.Request, req ChatRe
 		slog.Bool("reasoning_signaled", res.ReasoningSignaled),
 		slog.Bool("reasoning_visible", res.ReasoningVisible),
 	)
-	providerPath := "direct"
-	if usedAppFallback {
-		providerPath = "app"
-	}
 	chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{
 		Stage:           chatemit.RequestStageCompleted,
-		Provider:        providerName(model, providerPath),
+		Provider:        providerName(model, path),
 		Backend:         model.Backend,
 		RequestID:       reqID,
 		Alias:           model.Alias,
@@ -766,14 +767,14 @@ func (s *Server) collectCodex(w http.ResponseWriter, r *http.Request, req ChatRe
 }
 
 func (s *Server) streamCodex(w http.ResponseWriter, r *http.Request, req ChatRequest, model ResolvedModel, effort, reqID string, started time.Time) error {
-	s.emitRequestStarted(r.Context(), model, "direct", reqID, model.Alias, true)
-	usedAppFallback := false
+	path := "direct"
+	s.emitRequestStarted(r.Context(), model, path, reqID, model.Alias, true)
 	sw, err := newSSEWriter(w)
 	if err != nil {
 		return err
 	}
 	sw.writeSSEHeaders()
-	s.emitRequestStreamOpened(r.Context(), model, "direct", reqID, model.Alias, true)
+	s.emitRequestStreamOpened(r.Context(), model, path, reqID, model.Alias, true)
 	created := time.Now().Unix()
 	emit := func(chunk StreamChunk) error { return sw.emitStreamChunk(systemFingerprint, chunk) }
 	emitDelta := func(delta string) error {
@@ -789,8 +790,14 @@ func (s *Server) streamCodex(w http.ResponseWriter, r *http.Request, req ChatReq
 		})
 	}
 
-	res, runErr := s.runCodexDirect(r.Context(), req, model, effort, reqID, emitDelta)
-	if runErr != nil && s.cfg.Codex.AppFallback {
+	res, _, managed, runErr := s.runCodexManaged(r.Context(), req, model, effort, reqID, emitDelta)
+	if managed {
+		path = "app"
+	}
+	if !managed && runErr == nil {
+		res, runErr = s.runCodexDirect(r.Context(), req, model, effort, reqID, emitDelta)
+	}
+	if runErr != nil && !managed && s.cfg.Codex.AppFallback {
 		chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{
 			Stage:      chatemit.RequestStageFailed,
 			Provider:   providerName(model, "direct"),
@@ -806,16 +813,12 @@ func (s *Server) streamCodex(w http.ResponseWriter, r *http.Request, req ChatReq
 			slog.String("request_id", reqID),
 			slog.Any("err", runErr),
 		)
-		usedAppFallback = true
-		s.emitRequestStarted(r.Context(), model, "app", reqID, model.Alias, true)
-		s.emitRequestStreamOpened(r.Context(), model, "app", reqID, model.Alias, true)
+		path = "app"
+		s.emitRequestStarted(r.Context(), model, path, reqID, model.Alias, true)
+		s.emitRequestStreamOpened(r.Context(), model, path, reqID, model.Alias, true)
 		res, runErr = s.runCodexAppFallback(r.Context(), req, reqID, emitDelta)
 	}
 	if runErr != nil {
-		path := "direct"
-		if usedAppFallback {
-			path = "app"
-		}
 		chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{
 			Stage:      chatemit.RequestStageFailed,
 			Provider:   providerName(model, path),
@@ -875,13 +878,9 @@ func (s *Server) streamCodex(w http.ResponseWriter, r *http.Request, req ChatReq
 		slog.Bool("reasoning_signaled", res.ReasoningSignaled),
 		slog.Bool("reasoning_visible", res.ReasoningVisible),
 	)
-	providerPath := "direct"
-	if usedAppFallback {
-		providerPath = "app"
-	}
 	chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{
 		Stage:           chatemit.RequestStageCompleted,
-		Provider:        providerName(model, providerPath),
+		Provider:        providerName(model, path),
 		Backend:         model.Backend,
 		RequestID:       reqID,
 		Alias:           model.Alias,

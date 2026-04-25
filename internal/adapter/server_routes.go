@@ -33,6 +33,9 @@ func (s *Server) Start(ctx context.Context) error {
 		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = s.httpSrv.Shutdown(shutCtx)
+		if s.codexSessions != nil {
+			s.codexSessions.closeAll()
+		}
 		return nil
 	case err := <-errCh:
 		if errors.Is(err, http.ErrServerClosed) {
