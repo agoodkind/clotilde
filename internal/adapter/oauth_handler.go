@@ -61,6 +61,7 @@ func (s *Server) handleOAuth(w http.ResponseWriter, r *http.Request, req ChatReq
 	defer s.release()
 
 	jsonSpec := ParseResponseFormat(req.ResponseFormat)
+	trackerKey := requestContextTrackerKey(req, model.Alias)
 	anthReq, err := s.buildAnthropicWire(req, model, effort, jsonSpec)
 	if err != nil {
 		if err2 := chatemit.EscalateOrWrite(
@@ -85,9 +86,9 @@ func (s *Server) handleOAuth(w http.ResponseWriter, r *http.Request, req ChatReq
 		// (Cursor, etc.) read per-turn token counts from it without setting
 		// stream_options.include_usage.
 		_ = req.StreamOptions
-		return s.streamOAuth(w, r, anthReq, model, reqID, started, escalate, true)
+		return s.streamOAuth(w, r, anthReq, model, reqID, started, escalate, true, trackerKey)
 	}
-	return s.collectOAuth(w, r.Context(), anthReq, model, reqID, started, jsonSpec, escalate)
+	return s.collectOAuth(w, r.Context(), anthReq, model, reqID, started, jsonSpec, escalate, trackerKey)
 }
 
 // buildAnthropicWire maps the OpenAI chat request to a native messages body
@@ -177,9 +178,12 @@ func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort
 	if effort != "" && len(model.Efforts) > 0 {
 		out.OutputConfig = &anthropic.OutputConfig{Effort: effort}
 	}
-	switch model.Thinking {
+	switch effectiveThinkingMode(model) {
 	case ThinkingAdaptive:
-		out.Thinking = &anthropic.Thinking{Type: "adaptive"}
+		out.Thinking = &anthropic.Thinking{
+			Type:    "adaptive",
+			Display: "summarized",
+		}
 	case ThinkingEnabled:
 		// Mirror the canonical Claude Code CLI formula. See
 		// claude-code-source-code-full/src/services/api/claude.ts:1617-1628
@@ -214,11 +218,23 @@ func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort
 		out.Thinking = &anthropic.Thinking{
 			Type:         "enabled",
 			BudgetTokens: cap - 1,
+			Display:      "summarized",
 		}
 	case ThinkingDisabled:
 		out.Thinking = &anthropic.Thinking{Type: "disabled"}
 	}
 	return out, nil
+}
+
+func effectiveThinkingMode(model ResolvedModel) string {
+	// Claude Opus 4.7 only supports adaptive thinking upstream. Keep the
+	// `...-thinking-enabled` aliases for compatibility, but normalize them
+	// before we hit Anthropic so the request shape matches the current API.
+	if strings.EqualFold(stripContextSuffix(model.ClaudeModel), "claude-opus-4-7") &&
+		model.Thinking == ThinkingEnabled {
+		return ThinkingAdaptive
+	}
+	return model.Thinking
 }
 
 func toAnthropicAPIRequest(tr tooltrans.AnthRequest, claudeModel string) anthropic.Request {
@@ -576,7 +592,8 @@ func (s *Server) runOAuthTranslatorStream(
 	return anthUsage, streamStopReason, finishReason, nil
 }
 
-func (s *Server) collectOAuth(w http.ResponseWriter, ctx context.Context, req anthropic.Request, model ResolvedModel, reqID string, started time.Time, jsonSpec JSONResponseSpec, escalate bool) error {
+func (s *Server) collectOAuth(w http.ResponseWriter, ctx context.Context, req anthropic.Request, model ResolvedModel, reqID string, started time.Time, jsonSpec JSONResponseSpec, escalate bool, trackerKey string) error {
+	s.emitRequestStarted(ctx, model, "oauth", reqID, req.Model, false)
 	var buf []tooltrans.OpenAIStreamChunk
 	var notice *anthropic.Notice
 	emit := func(ch tooltrans.OpenAIStreamChunk) error {
@@ -590,11 +607,23 @@ func (s *Server) collectOAuth(w http.ResponseWriter, ctx context.Context, req an
 	if err != nil {
 		chatemit.LogFailed(s.log, ctx, chatemit.FailedAttrs{
 			Backend:    "anthropic",
+			Provider:   providerName(model, "oauth"),
 			RequestID:  reqID,
 			Alias:      model.Alias,
 			ModelID:    req.Model,
 			Err:        err,
 			DurationMs: time.Since(started).Milliseconds(),
+		})
+		chatemit.LogTerminal(s.log, ctx, s.deps.RequestEvents, chatemit.RequestEvent{
+			Stage:      chatemit.RequestStageFailed,
+			Provider:   providerName(model, "oauth"),
+			Backend:    model.Backend,
+			RequestID:  reqID,
+			Alias:      model.Alias,
+			ModelID:    req.Model,
+			Stream:     false,
+			DurationMs: time.Since(started).Milliseconds(),
+			Err:        err.Error(),
 		})
 		errMsg := err.Error()
 		if notice != nil {
@@ -634,13 +663,28 @@ func (s *Server) collectOAuth(w http.ResponseWriter, ctx context.Context, req an
 		}
 		return nil
 	}
-	u := usageFromAnthropic(anthUsage)
+	rawUsage := usageFromAnthropic(anthUsage)
+	tracked := s.ctxUsage.Track(trackerKey, rawUsage)
+	u := tracked.usage
 	resp := mergeOAuthStreamChunks(reqID, model.Alias, buf, u, finishReason, jsonSpec, anthStopReason)
 	resp, _ = chatemit.NoticeForResponseHeaders(resp, notice, Unclaim, json.Marshal)
 	writeJSON(w, http.StatusOK, resp)
+	if u.PromptTokens != rawUsage.PromptTokens || u.TotalTokens != rawUsage.TotalTokens {
+		s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.context_usage.tracked",
+			slog.String("backend", "anthropic"),
+			slog.String("request_id", reqID),
+			slog.String("alias", model.Alias),
+			slog.Int("raw_prompt_tokens", tracked.rawPrompt),
+			slog.Int("raw_total_tokens", tracked.rawTotal),
+			slog.Int("rolled_output_tokens", tracked.rolledFrom),
+			slog.Int("surfaced_prompt_tokens", u.PromptTokens),
+			slog.Int("surfaced_total_tokens", u.TotalTokens),
+		)
+	}
 	s.logCacheUsageAnthropic(ctx, "anthropic", reqID, model.Alias, anthUsage)
 	chatemit.LogCompleted(s.log, ctx, chatemit.CompletedAttrs{
 		Backend:             "anthropic",
+		Provider:            providerName(model, "oauth"),
 		Path:                "oauth",
 		SessionID:           reqID,
 		RequestID:           reqID,
@@ -654,6 +698,30 @@ func (s *Server) collectOAuth(w http.ResponseWriter, ctx context.Context, req an
 		CacheTTL:            s.cfg.ClientIdentity.PromptCacheTTL,
 		DurationMs:          time.Since(started).Milliseconds(),
 		Stream:              false,
+	})
+	breakdown := chatemit.EstimateCost(chatemit.CostInputs{
+		ModelID:             req.Model,
+		TTL:                 s.cfg.ClientIdentity.PromptCacheTTL,
+		InputTokens:         u.PromptTokens,
+		OutputTokens:        u.CompletionTokens,
+		CacheCreationTokens: anthUsage.CacheCreationInputTokens,
+		CacheReadTokens:     anthUsage.CacheReadInputTokens,
+	})
+	chatemit.LogTerminal(s.log, ctx, s.deps.RequestEvents, chatemit.RequestEvent{
+		Stage:               chatemit.RequestStageCompleted,
+		Provider:            providerName(model, "oauth"),
+		Backend:             model.Backend,
+		RequestID:           reqID,
+		Alias:               model.Alias,
+		ModelID:             req.Model,
+		Stream:              false,
+		FinishReason:        finishReason,
+		TokensIn:            u.PromptTokens,
+		TokensOut:           u.CompletionTokens,
+		CacheReadTokens:     anthUsage.CacheReadInputTokens,
+		CacheCreationTokens: anthUsage.CacheCreationInputTokens,
+		CostMicrocents:      breakdown.TotalMicrocents,
+		DurationMs:          time.Since(started).Milliseconds(),
 	})
 	return nil
 }
@@ -725,7 +793,8 @@ func (s *Server) logCacheUsageAnthropic(ctx context.Context, backend, reqID, ali
 // the function commits and never escalates (the response headers
 // are already flushed and the dispatcher cannot retry without
 // confusing the OpenAI client).
-func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthropic.Request, model ResolvedModel, reqID string, started time.Time, escalate bool, includeUsage bool) error {
+func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthropic.Request, model ResolvedModel, reqID string, started time.Time, escalate bool, includeUsage bool, trackerKey string) error {
+	s.emitRequestStarted(r.Context(), model, "oauth", reqID, req.Model, true)
 	sw, err := newSSEWriter(w)
 	if err != nil {
 		if err := chatemit.EscalateOrWrite(
@@ -749,8 +818,13 @@ func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthrop
 	// Large prompts spend ~1-3s on TTFT; without an early flush, strict
 	// streaming clients close the connection on timeout.
 	sw.writeSSEHeaders()
+	s.emitRequestStreamOpened(r.Context(), model, "oauth", reqID, req.Model, true)
 
+	emittedContent := false
 	emit := func(chunk StreamChunk) error {
+		if streamChunkHasVisibleContent(chunk) {
+			emittedContent = true
+		}
 		return sw.emitStreamChunk(systemFingerprint, chunk)
 	}
 
@@ -793,12 +867,78 @@ func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthrop
 		if escalate && !sw.hasCommittedHeaders() {
 			return err
 		}
+		if !emittedContent {
+			_ = emitActionableStreamError(emit, reqID, model.Alias, err)
+			finishReason = "stop"
+		}
+		chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{
+			Stage:      chatemit.RequestStageFailed,
+			Provider:   providerName(model, "oauth"),
+			Backend:    model.Backend,
+			RequestID:  reqID,
+			Alias:      model.Alias,
+			ModelID:    req.Model,
+			Stream:     true,
+			DurationMs: time.Since(started).Milliseconds(),
+			Err:        err.Error(),
+		})
+	}
+	if err == nil && !emittedContent && finishReason == "" && anthUsage.InputTokens == 0 && anthUsage.OutputTokens == 0 && anthUsage.CacheReadInputTokens == 0 && anthUsage.CacheCreationInputTokens == 0 {
+		streamErr := fmt.Errorf("anthropic stream ended without content; claude authentication may be invalid")
+		s.log.LogAttrs(r.Context(), slog.LevelWarn, "adapter.chat.stream_empty",
+			slog.String("backend", "anthropic"),
+			slog.String("request_id", reqID),
+			slog.String("alias", model.Alias),
+			slog.String("model", req.Model),
+			slog.Any("err", streamErr),
+		)
+		_ = emit(StreamChunk{
+			ID:      reqID,
+			Object:  "chat.completion.chunk",
+			Created: time.Now().Unix(),
+			Model:   model.Alias,
+			Choices: []StreamChoice{{
+				Index: 0,
+				Delta: StreamDelta{
+					Role:    "assistant",
+					Content: "Clyde adapter upstream stream ended before producing content. Claude authentication may be invalid. Run `claude /login`, then retry.",
+				},
+			}},
+		})
+		finishReason = "stop"
 	}
 
 	fr := finishReason
 	_ = chatemit.EmitFinishChunk(emit, reqID, model.Alias, time.Now().Unix(), fr)
 
-	finalUsage := usageFromAnthropic(anthUsage)
+	rawFinalUsage := usageFromAnthropic(anthUsage)
+	tracked := s.ctxUsage.Track(trackerKey, rawFinalUsage)
+	finalUsage := tracked.usage
+	if err == nil && emittedContent && finalUsage.PromptTokens == 0 && finalUsage.CompletionTokens == 0 {
+		s.log.LogAttrs(r.Context(), slog.LevelWarn, "adapter.anthropic.usage_missing",
+			slog.String("backend", "anthropic"),
+			slog.String("request_id", reqID),
+			slog.String("alias", model.Alias),
+			slog.String("model", req.Model),
+			slog.String("stop_reason", fr),
+			slog.Int("raw_input_tokens", anthUsage.InputTokens),
+			slog.Int("raw_output_tokens", anthUsage.OutputTokens),
+			slog.Int("raw_cache_read_tokens", anthUsage.CacheReadInputTokens),
+			slog.Int("raw_cache_creation_tokens", anthUsage.CacheCreationInputTokens),
+		)
+	}
+	if finalUsage.PromptTokens != rawFinalUsage.PromptTokens || finalUsage.TotalTokens != rawFinalUsage.TotalTokens {
+		s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.context_usage.tracked",
+			slog.String("backend", "anthropic"),
+			slog.String("request_id", reqID),
+			slog.String("alias", model.Alias),
+			slog.Int("raw_prompt_tokens", tracked.rawPrompt),
+			slog.Int("raw_total_tokens", tracked.rawTotal),
+			slog.Int("rolled_output_tokens", tracked.rolledFrom),
+			slog.Int("surfaced_prompt_tokens", finalUsage.PromptTokens),
+			slog.Int("surfaced_total_tokens", finalUsage.TotalTokens),
+		)
+	}
 	if includeUsage {
 		_ = chatemit.EmitUsageChunk(emit, reqID, model.Alias, time.Now().Unix(), finalUsage)
 	}
@@ -807,6 +947,7 @@ func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthrop
 	s.logCacheUsageAnthropic(r.Context(), "anthropic", reqID, model.Alias, anthUsage)
 	chatemit.LogCompleted(s.log, r.Context(), chatemit.CompletedAttrs{
 		Backend:             "anthropic",
+		Provider:            providerName(model, "oauth"),
 		Path:                "oauth",
 		SessionID:           reqID,
 		RequestID:           reqID,
@@ -821,6 +962,32 @@ func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthrop
 		DurationMs:          time.Since(started).Milliseconds(),
 		Stream:              true,
 	})
+	breakdown := chatemit.EstimateCost(chatemit.CostInputs{
+		ModelID:             req.Model,
+		TTL:                 s.cfg.ClientIdentity.PromptCacheTTL,
+		InputTokens:         finalUsage.PromptTokens,
+		OutputTokens:        finalUsage.CompletionTokens,
+		CacheCreationTokens: anthUsage.CacheCreationInputTokens,
+		CacheReadTokens:     anthUsage.CacheReadInputTokens,
+	})
+	if err == nil {
+		chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{
+			Stage:               chatemit.RequestStageCompleted,
+			Provider:            providerName(model, "oauth"),
+			Backend:             model.Backend,
+			RequestID:           reqID,
+			Alias:               model.Alias,
+			ModelID:             req.Model,
+			Stream:              true,
+			FinishReason:        fr,
+			TokensIn:            finalUsage.PromptTokens,
+			TokensOut:           finalUsage.CompletionTokens,
+			CacheReadTokens:     anthUsage.CacheReadInputTokens,
+			CacheCreationTokens: anthUsage.CacheCreationInputTokens,
+			CostMicrocents:      breakdown.TotalMicrocents,
+			DurationMs:          time.Since(started).Milliseconds(),
+		})
+	}
 	return nil
 }
 
