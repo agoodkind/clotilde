@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"goodkind.io/clyde/internal/adapter/chatemit"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 )
 
 func (s *Server) forwardShunt(w http.ResponseWriter, r *http.Request, model ResolvedModel, body []byte) {
@@ -59,8 +59,8 @@ func (s *Server) forwardShunt(w http.ResponseWriter, r *http.Request, model Reso
 
 	respBody, status, hdr, err := shuntCall(r.Context(), shunt.BaseURL, apiKey, body)
 	if err != nil {
-		chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{
-			Stage:      chatemit.RequestStageFailed,
+		adapterruntime.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, adapterruntime.RequestEvent{
+			Stage:      adapterruntime.RequestStageFailed,
 			Provider:   providerName(model, ""),
 			Backend:    model.Backend,
 			RequestID:  reqID,
@@ -115,13 +115,13 @@ func (s *Server) forwardShunt(w http.ResponseWriter, r *http.Request, model Reso
 	_, _ = w.Write(respBody)
 
 	usage := shuntUsageFromBody(respBody)
-	stage := chatemit.RequestStageCompleted
+	stage := adapterruntime.RequestStageCompleted
 	terminalErr := ""
 	if status >= 400 {
-		stage = chatemit.RequestStageFailed
+		stage = adapterruntime.RequestStageFailed
 		terminalErr = "upstream returned status " + strconv.Itoa(status)
 	}
-	chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{
+	adapterruntime.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, adapterruntime.RequestEvent{
 		Stage:               stage,
 		Provider:            providerName(model, ""),
 		Backend:             model.Backend,

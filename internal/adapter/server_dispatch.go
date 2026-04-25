@@ -12,7 +12,7 @@ import (
 	"time"
 
 	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
-	"goodkind.io/clyde/internal/adapter/chatemit"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	"goodkind.io/gklog"
@@ -258,8 +258,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	spawnCtx := gklog.WithLogger(r.Context(), s.log.With("request_id", reqID))
 	stdout, cancel, err := runner.Spawn(spawnCtx)
 	if err != nil {
-		chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{
-			Stage:      chatemit.RequestStageFailed,
+		adapterruntime.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, adapterruntime.RequestEvent{
+			Stage:      adapterruntime.RequestStageFailed,
 			Provider:   providerName(model, ""),
 			Backend:    model.Backend,
 			RequestID:  reqID,
@@ -485,8 +485,8 @@ func normalizeInputParts(parts []map[string]any) (json.RawMessage, error) {
 func (s *Server) collectChat(w http.ResponseWriter, ctx context.Context, req ChatRequest, model ResolvedModel, stdout io.ReadCloser, reqID string, started time.Time, jsonSpec JSONResponseSpec) {
 	text, usage, err := CollectStream(stdout)
 	if err != nil {
-		chatemit.LogTerminal(s.log, ctx, s.deps.RequestEvents, chatemit.RequestEvent{
-			Stage:      chatemit.RequestStageFailed,
+		adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
+			Stage:      adapterruntime.RequestStageFailed,
 			Provider:   providerName(model, ""),
 			Backend:    model.Backend,
 			RequestID:  reqID,
@@ -528,8 +528,8 @@ func (s *Server) collectChat(w http.ResponseWriter, ctx context.Context, req Cha
 		slog.String("json_mode", jsonSpec.Mode),
 		slog.Bool("json_retried", jsonRetried),
 	)
-	chatemit.LogTerminal(s.log, ctx, s.deps.RequestEvents, chatemit.RequestEvent{
-		Stage:               chatemit.RequestStageCompleted,
+	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
+		Stage:               adapterruntime.RequestStageCompleted,
 		Provider:            providerName(model, ""),
 		Backend:             model.Backend,
 		RequestID:           reqID,

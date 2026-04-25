@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"goodkind.io/clyde/internal/adapter/chatemit"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 )
 
 func testProviderStatsLogger() *slog.Logger {
@@ -18,23 +18,23 @@ func TestProviderStatsHubTracksInflightStreamingAndTerminal(t *testing.T) {
 	hub := newProviderStatsHub(testProviderStatsLogger())
 	hub.providers = map[string]*providerAggregate{}
 	hub.active = map[string]activeProviderRequest{}
-	hub.terminalSeen = map[string]chatemit.RequestStage{}
+	hub.terminalSeen = map[string]adapterruntime.RequestStage{}
 
 	ctx := context.Background()
-	hub.Record(ctx, chatemit.RequestEvent{Stage: chatemit.RequestStageStarted, Provider: "openai-codex", RequestID: "req-1"})
+	hub.Record(ctx, adapterruntime.RequestEvent{Stage: adapterruntime.RequestStageStarted, Provider: "openai-codex", RequestID: "req-1"})
 	stats := hub.snapshot()
 	if len(stats) != 1 || stats[0].GetInflight() != 1 || stats[0].GetStreaming() != 0 {
 		t.Fatalf("after start: %+v", stats)
 	}
 
-	hub.Record(ctx, chatemit.RequestEvent{Stage: chatemit.RequestStageStreamOpened, Provider: "openai-codex", RequestID: "req-1"})
+	hub.Record(ctx, adapterruntime.RequestEvent{Stage: adapterruntime.RequestStageStreamOpened, Provider: "openai-codex", RequestID: "req-1"})
 	stats = hub.snapshot()
 	if stats[0].GetInflight() != 1 || stats[0].GetStreaming() != 1 {
 		t.Fatalf("after stream open: %+v", stats[0])
 	}
 
-	hub.Record(ctx, chatemit.RequestEvent{
-		Stage:                      chatemit.RequestStageCompleted,
+	hub.Record(ctx, adapterruntime.RequestEvent{
+		Stage:                      adapterruntime.RequestStageCompleted,
 		Provider:                   "openai-codex",
 		RequestID:                  "req-1",
 		TokensIn:                   100,
@@ -58,12 +58,12 @@ func TestProviderStatsHubIgnoresDuplicateTerminal(t *testing.T) {
 	hub := newProviderStatsHub(testProviderStatsLogger())
 	hub.providers = map[string]*providerAggregate{}
 	hub.active = map[string]activeProviderRequest{}
-	hub.terminalSeen = map[string]chatemit.RequestStage{}
+	hub.terminalSeen = map[string]adapterruntime.RequestStage{}
 
 	ctx := context.Background()
-	hub.Record(ctx, chatemit.RequestEvent{Stage: chatemit.RequestStageStarted, Provider: "anthropic-oauth", RequestID: "req-2"})
-	ev := chatemit.RequestEvent{
-		Stage:     chatemit.RequestStageFailed,
+	hub.Record(ctx, adapterruntime.RequestEvent{Stage: adapterruntime.RequestStageStarted, Provider: "anthropic-oauth", RequestID: "req-2"})
+	ev := adapterruntime.RequestEvent{
+		Stage:     adapterruntime.RequestStageFailed,
 		Provider:  "anthropic-oauth",
 		RequestID: "req-2",
 		Err:       "boom",
@@ -84,13 +84,13 @@ func TestProviderStatsHubBroadcastsToSubscribers(t *testing.T) {
 	hub := newProviderStatsHub(testProviderStatsLogger())
 	hub.providers = map[string]*providerAggregate{}
 	hub.active = map[string]activeProviderRequest{}
-	hub.terminalSeen = map[string]chatemit.RequestStage{}
+	hub.terminalSeen = map[string]adapterruntime.RequestStage{}
 
 	ch := hub.subscribe()
 	defer hub.unsubscribe(ch)
 
-	hub.Record(context.Background(), chatemit.RequestEvent{
-		Stage:     chatemit.RequestStageStarted,
+	hub.Record(context.Background(), adapterruntime.RequestEvent{
+		Stage:     adapterruntime.RequestStageStarted,
 		Provider:  "openai-codex",
 		RequestID: "req-3",
 	})

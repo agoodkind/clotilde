@@ -1,4 +1,4 @@
-package chatemit
+package runtime
 
 import adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 

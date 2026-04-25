@@ -1,4 +1,4 @@
-package chatemit
+package runtime
 
 type ErrorWriter func(status int, code, msg string) error
 

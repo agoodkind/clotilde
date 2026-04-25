@@ -1,4 +1,4 @@
-package chatemit
+package runtime
 
 import "testing"
 

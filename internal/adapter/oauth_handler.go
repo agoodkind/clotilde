@@ -11,7 +11,7 @@ import (
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
-	"goodkind.io/clyde/internal/adapter/chatemit"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
@@ -272,7 +272,7 @@ func (s *Server) runOAuthTranslatorStream(
 func (s *Server) collectOAuth(w http.ResponseWriter, ctx context.Context, req anthropic.Request, model ResolvedModel, reqID string, started time.Time, jsonSpec JSONResponseSpec, escalate bool, trackerKey string) error {
 	var notice *anthropic.Notice
 	req.OnHeaders = func(h http.Header) {
-		notice = chatemit.EvaluateNoticeFromHeaders(h, s.cfg.Notices.EnabledOrDefault(), Claim)
+		notice = adapterruntime.EvaluateNoticeFromHeaders(h, s.cfg.Notices.EnabledOrDefault(), Claim)
 	}
 	return anthropicbackend.CollectResponse(s, w, ctx, req, model, reqID, started, jsonSpec, escalate, trackerKey, &notice)
 }
@@ -341,7 +341,7 @@ func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthrop
 		if emitTool == nil {
 			return
 		}
-		notice, err := chatemit.NoticeForStreamHeaders(
+		notice, err := adapterruntime.NoticeForStreamHeaders(
 			reqID,
 			model.Alias,
 			h,

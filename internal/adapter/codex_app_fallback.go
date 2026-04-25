@@ -4,68 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
-	"strconv"
 	"strings"
 
+	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
-
-type codexRPCMsg struct {
-	ID     any             `json:"id,omitempty"`
-	Method string          `json:"method,omitempty"`
-	Params json.RawMessage `json:"params,omitempty"`
-	Result json.RawMessage `json:"result,omitempty"`
-	Error  *struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-	} `json:"error,omitempty"`
-}
-
-func (c *codexRPCClient) send(id int, method string, params any) error {
-	body := map[string]any{
-		"jsonrpc": "2.0",
-		"id":      id,
-		"method":  method,
-		"params":  params,
-	}
-	raw, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
-	_, err = io.WriteString(c.stdin, string(raw)+"\n")
-	return err
-}
-
-func (c *codexRPCClient) next() (codexRPCMsg, error) {
-	line, err := c.stdout.ReadString('\n')
-	if err != nil {
-		return codexRPCMsg{}, err
-	}
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return codexRPCMsg{}, io.EOF
-	}
-	var msg codexRPCMsg
-	if err := json.Unmarshal([]byte(line), &msg); err != nil {
-		return codexRPCMsg{}, err
-	}
-	return msg, nil
-}
-
-func rpcIDEquals(v any, want int) bool {
-	switch id := v.(type) {
-	case float64:
-		return int(id) == want
-	case int:
-		return id == want
-	case string:
-		return id == strconv.Itoa(want)
-	default:
-		return false
-	}
-}
 
 func (s *Server) runCodexAppFallback(
 	ctx context.Context,
@@ -75,33 +19,29 @@ func (s *Server) runCodexAppFallback(
 ) (codexRunResult, error) {
 	cctx, cancel := context.WithTimeout(ctx, s.codexAppFallbackTimeout())
 	defer cancel()
-	rpc, err := startCodexRPC(cctx, s.codexAppServerPath())
+	rpc, err := adaptercodex.StartRPC(cctx, s.codexAppServerPath())
 	if err != nil {
 		return codexRunResult{FinishReason: "stop"}, err
 	}
-	defer func() {
-		_ = rpc.stdin.Close()
-		_ = rpc.cmd.Process.Kill()
-		_, _ = io.Copy(io.Discard, rpc.stdout)
-	}()
+	defer func() { _ = rpc.Close() }()
 
-	waitFor := func(id int) (codexRPCMsg, error) {
+	waitFor := func(id int) (adaptercodex.RPCMessage, error) {
 		for {
-			msg, err := rpc.next()
+			msg, err := rpc.Next()
 			if err != nil {
-				return codexRPCMsg{}, err
+				return adaptercodex.RPCMessage{}, err
 			}
-			if msg.ID == nil || !rpcIDEquals(msg.ID, id) {
+			if msg.ID == nil || !adaptercodex.RPCIDEquals(msg.ID, id) {
 				continue
 			}
 			if msg.Error != nil {
-				return codexRPCMsg{}, fmt.Errorf("codex rpc %s", msg.Error.Message)
+				return adaptercodex.RPCMessage{}, fmt.Errorf("codex rpc %s", msg.Error.Message)
 			}
 			return msg, nil
 		}
 	}
 
-	if err := rpc.send(1, "initialize", map[string]any{
+	if err := rpc.Send(1, "initialize", map[string]any{
 		"clientInfo": map[string]any{
 			"name":    "clyde-adapter",
 			"title":   "Clyde Adapter",
@@ -113,14 +53,13 @@ func (s *Server) runCodexAppFallback(
 	if _, err := waitFor(1); err != nil {
 		return codexRunResult{FinishReason: "stop"}, err
 	}
-	rawInit, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": "initialized", "params": map[string]any{}})
-	if _, err := io.WriteString(rpc.stdin, string(rawInit)+"\n"); err != nil {
+	if err := rpc.Notify("initialized", map[string]any{}); err != nil {
 		return codexRunResult{FinishReason: "stop"}, err
 	}
 
 	system, prompt := BuildPrompt(req.Messages)
 	threadID := ""
-	if err := rpc.send(2, "thread/start", map[string]any{
+	if err := rpc.Send(2, "thread/start", map[string]any{
 		"cwd":              ".",
 		"approvalPolicy":   "never",
 		"ephemeral":        true,
@@ -146,10 +85,10 @@ func (s *Server) runCodexAppFallback(
 		if threadID == "" {
 			return
 		}
-		_ = rpc.send(9, "thread/archive", map[string]any{"threadId": threadID})
+		_ = rpc.Send(9, "thread/archive", map[string]any{"threadId": threadID})
 	}()
 
-	if err := rpc.send(3, "turn/start", map[string]any{
+	if err := rpc.Send(3, "turn/start", map[string]any{
 		"threadId":       threadID,
 		"approvalPolicy": "never",
 		"effort":         effectiveCodexAppEffort(req),
@@ -165,24 +104,24 @@ func (s *Server) runCodexAppFallback(
 	out := codexRunResult{FinishReason: "stop"}
 	renderer := tooltrans.NewEventRenderer(reqID, req.Model, "codex", s.log)
 	for {
-		msg, err := rpc.next()
+		msg, err := rpc.Next()
 		if err != nil {
 			return out, err
 		}
-		if msg.ID != nil && rpcIDEquals(msg.ID, 3) {
+		if msg.ID != nil && adaptercodex.RPCIDEquals(msg.ID, 3) {
 			if msg.Error != nil {
 				return out, fmt.Errorf("codex turn/start: %s", msg.Error.Message)
 			}
 			continue
 		}
-		logAdapterProtocolEvent(ctx, reqID, "codex", msg.Method, slog.Int("params_bytes", len(msg.Params)))
+		adaptercodex.LogProtocolEvent(ctx, reqID, "codex", msg.Method, slog.Int("params_bytes", len(msg.Params)))
 		switch msg.Method {
 		case "item/agentMessage/delta":
 			var p struct{ Delta string `json:"delta"` }
 			_ = json.Unmarshal(msg.Params, &p)
-			logCodexToolingEvent(s.log, ctx, reqID, msg.Method, slog.Int("delta_len", len(p.Delta)))
+			adaptercodex.LogToolingEvent(s.log, ctx, reqID, msg.Method, slog.Int("delta_len", len(p.Delta)))
 			if p.Delta != "" {
-				if err := emitCodexRendered(renderer, tooltrans.Event{Kind: tooltrans.EventAssistantTextDelta, Text: p.Delta}, emit, nil); err != nil {
+				if err := adaptercodex.EmitRendered(renderer, tooltrans.Event{Kind: tooltrans.EventAssistantTextDelta, Text: p.Delta}, emit, nil); err != nil {
 					return out, err
 				}
 			}
@@ -199,18 +138,18 @@ func (s *Server) runCodexAppFallback(
 			for _, step := range p.Plan {
 				plan = append(plan, map[string]string{"step": step.Step, "status": step.Status})
 			}
-			logCodexToolingEvent(s.log, ctx, reqID, msg.Method, slog.Int("plan_steps", len(plan)), slog.Bool("has_explanation", strings.TrimSpace(p.Explanation) != ""))
-			if ev, ok := codexPlanEvent(p.Explanation, plan); ok {
-				if err := emitCodexRendered(renderer, ev, emit, nil); err != nil {
+			adaptercodex.LogToolingEvent(s.log, ctx, reqID, msg.Method, slog.Int("plan_steps", len(plan)), slog.Bool("has_explanation", strings.TrimSpace(p.Explanation) != ""))
+			if ev, ok := adaptercodex.PlanEvent(p.Explanation, plan); ok {
+				if err := adaptercodex.EmitRendered(renderer, ev, emit, nil); err != nil {
 					return out, err
 				}
 			}
 		case "item/started", "item/completed":
 			var p struct{ Item map[string]any `json:"item"` }
 			_ = json.Unmarshal(msg.Params, &p)
-			logCodexToolingEvent(s.log, ctx, reqID, msg.Method, slog.String("item_type", codexItemType(p.Item)), slog.String("item_status", codexItemStatus(p.Item)))
-			if ev, ok := codexLifecycleEvent(p.Item, msg.Method == "item/completed"); ok {
-				if err := emitCodexRendered(renderer, ev, emit, nil); err != nil {
+			adaptercodex.LogToolingEvent(s.log, ctx, reqID, msg.Method, slog.String("item_type", codexItemType(p.Item)), slog.String("item_status", codexItemStatus(p.Item)))
+			if ev, ok := adaptercodex.LifecycleEvent(p.Item, msg.Method == "item/completed"); ok {
+				if err := adaptercodex.EmitRendered(renderer, ev, emit, nil); err != nil {
 					return out, err
 				}
 			}
@@ -220,9 +159,9 @@ func (s *Server) runCodexAppFallback(
 				ItemID string `json:"itemId"`
 			}
 			_ = json.Unmarshal(msg.Params, &p)
-			logCodexToolingEvent(s.log, ctx, reqID, msg.Method, slog.String("item_id", p.ItemID), slog.Int("delta_len", len(p.Delta)))
-			if ev, ok := codexProgressEvent(msg.Method, p.ItemID, p.Delta); ok {
-				if err := emitCodexRendered(renderer, ev, emit, nil); err != nil {
+			adaptercodex.LogToolingEvent(s.log, ctx, reqID, msg.Method, slog.String("item_id", p.ItemID), slog.Int("delta_len", len(p.Delta)))
+			if ev, ok := adaptercodex.ProgressEvent(msg.Method, p.ItemID, p.Delta); ok {
+				if err := adaptercodex.EmitRendered(renderer, ev, emit, nil); err != nil {
 					return out, err
 				}
 			}
@@ -232,9 +171,9 @@ func (s *Server) runCodexAppFallback(
 				ItemID  string `json:"itemId"`
 			}
 			_ = json.Unmarshal(msg.Params, &p)
-			logCodexToolingEvent(s.log, ctx, reqID, msg.Method, slog.String("item_id", p.ItemID), slog.Int("message_len", len(p.Message)))
-			if ev, ok := codexProgressEvent(msg.Method, p.ItemID, p.Message); ok {
-				if err := emitCodexRendered(renderer, ev, emit, nil); err != nil {
+			adaptercodex.LogToolingEvent(s.log, ctx, reqID, msg.Method, slog.String("item_id", p.ItemID), slog.Int("message_len", len(p.Message)))
+			if ev, ok := adaptercodex.ProgressEvent(msg.Method, p.ItemID, p.Message); ok {
+				if err := adaptercodex.EmitRendered(renderer, ev, emit, nil); err != nil {
 					return out, err
 				}
 			}
@@ -244,14 +183,14 @@ func (s *Server) runCodexAppFallback(
 				Changes []any  `json:"changes"`
 			}
 			_ = json.Unmarshal(msg.Params, &p)
-			logCodexToolingEvent(s.log, ctx, reqID, msg.Method, slog.String("item_id", p.ItemID), slog.Int("change_count", len(p.Changes)))
+			adaptercodex.LogToolingEvent(s.log, ctx, reqID, msg.Method, slog.String("item_id", p.ItemID), slog.Int("change_count", len(p.Changes)))
 			changeCount := len(p.Changes)
 			if changeCount < 1 {
 				changeCount = 1
 			}
-			if ev, ok := codexProgressEvent(msg.Method, p.ItemID, fmt.Sprintf("Patch updated for %d file(s)", changeCount)); ok {
+			if ev, ok := adaptercodex.ProgressEvent(msg.Method, p.ItemID, fmt.Sprintf("Patch updated for %d file(s)", changeCount)); ok {
 				ev.ChangeCount = changeCount
-				if err := emitCodexRendered(renderer, ev, emit, nil); err != nil {
+				if err := adaptercodex.EmitRendered(renderer, ev, emit, nil); err != nil {
 					return out, err
 				}
 			}
@@ -259,8 +198,8 @@ func (s *Server) runCodexAppFallback(
 			var p struct{ SummaryIndex int `json:"summaryIndex"` }
 			_ = json.Unmarshal(msg.Params, &p)
 			out.ReasoningSignaled = true
-			logCodexReasoningEvent(s.log, ctx, reqID, msg.Method, slog.Int("summary_index", p.SummaryIndex), slog.Bool("thinking_visible", renderer.State().ReasoningVisible))
-			if err := emitCodexRendered(renderer, tooltrans.Event{Kind: tooltrans.EventReasoningSignaled}, emit, nil); err != nil {
+			adaptercodex.LogReasoningEvent(s.log, ctx, reqID, msg.Method, slog.Int("summary_index", p.SummaryIndex), slog.Bool("thinking_visible", renderer.State().ReasoningVisible))
+			if err := adaptercodex.EmitRendered(renderer, tooltrans.Event{Kind: tooltrans.EventReasoningSignaled}, emit, nil); err != nil {
 				return out, err
 			}
 		case "item/reasoning/summaryTextDelta", "item/reasoning/textDelta":
@@ -270,7 +209,7 @@ func (s *Server) runCodexAppFallback(
 			}
 			_ = json.Unmarshal(msg.Params, &p)
 			out.ReasoningSignaled = true
-			logCodexReasoningEvent(s.log, ctx, reqID, msg.Method, slog.Int("summary_index", p.SummaryIndex), slog.Int("delta_len", len(p.Delta)), slog.Bool("thinking_visible_before", renderer.State().ReasoningVisible))
+			adaptercodex.LogReasoningEvent(s.log, ctx, reqID, msg.Method, slog.Int("summary_index", p.SummaryIndex), slog.Int("delta_len", len(p.Delta)), slog.Bool("thinking_visible_before", renderer.State().ReasoningVisible))
 			if p.Delta != "" {
 				kind := "text"
 				var summaryIdx *int
@@ -278,22 +217,22 @@ func (s *Server) runCodexAppFallback(
 					kind = "summary"
 					summaryIdx = &p.SummaryIndex
 				}
-				if err := emitCodexRendered(renderer, tooltrans.Event{Kind: tooltrans.EventReasoningDelta, Text: p.Delta, ReasoningKind: kind, SummaryIndex: summaryIdx}, emit, nil); err != nil {
+				if err := adaptercodex.EmitRendered(renderer, tooltrans.Event{Kind: tooltrans.EventReasoningDelta, Text: p.Delta, ReasoningKind: kind, SummaryIndex: summaryIdx}, emit, nil); err != nil {
 					return out, err
 				}
 			}
 		case "turn/completed":
-			if err := emitCodexRendered(renderer, tooltrans.Event{Kind: tooltrans.EventReasoningFinished}, emit, nil); err != nil {
+			if err := adaptercodex.EmitRendered(renderer, tooltrans.Event{Kind: tooltrans.EventReasoningFinished}, emit, nil); err != nil {
 				return out, err
 			}
 			state := renderer.State()
 			out.ReasoningSignaled = out.ReasoningSignaled || state.ReasoningSignaled
 			out.ReasoningVisible = state.ReasoningVisible
-			logCodexReasoningEvent(s.log, ctx, reqID, msg.Method, slog.Bool("reasoning_signaled", out.ReasoningSignaled), slog.Bool("thinking_visible", out.ReasoningVisible))
+			adaptercodex.LogReasoningEvent(s.log, ctx, reqID, msg.Method, slog.Bool("reasoning_signaled", out.ReasoningSignaled), slog.Bool("thinking_visible", out.ReasoningVisible))
 			return out, nil
 		default:
 			if strings.HasPrefix(msg.Method, "item/") || strings.HasPrefix(msg.Method, "thread/") || strings.HasPrefix(msg.Method, "turn/") {
-				logCodexToolingEvent(s.log, ctx, reqID, "ignored", slog.String("method", msg.Method), slog.Int("params_bytes", len(msg.Params)))
+				adaptercodex.LogToolingEvent(s.log, ctx, reqID, "ignored", slog.String("method", msg.Method), slog.Int("params_bytes", len(msg.Params)))
 			}
 		}
 	}

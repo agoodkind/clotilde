@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"goodkind.io/clyde/internal/adapter/chatemit"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
@@ -36,7 +36,7 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, req ChatRequ
 	}
 
 	usage, finishReason, err := TranslateStream(stdout, model.Alias, reqID, sink)
-	terminalStage := chatemit.RequestStageCompleted
+	terminalStage := adapterruntime.RequestStageCompleted
 	terminalErr := ""
 	if err != nil {
 		s.log.LogAttrs(r.Context(), slog.LevelWarn, "stream translate error",
@@ -45,10 +45,10 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, req ChatRequ
 		)
 		if !emittedContent {
 			_ = emitActionableStreamError(sink, reqID, model.Alias, err)
-			_ = chatemit.EmitFinishChunk(sink, reqID, model.Alias, time.Now().Unix(), "stop")
+			_ = adapterruntime.EmitFinishChunk(sink, reqID, model.Alias, time.Now().Unix(), "stop")
 			finishReason = "stop"
 		}
-		terminalStage = chatemit.RequestStageFailed
+		terminalStage = adapterruntime.RequestStageFailed
 		terminalErr = err.Error()
 	}
 	if req.StreamOptions != nil && req.StreamOptions.IncludeUsage {
@@ -73,7 +73,7 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, req ChatRequ
 		slog.Int64("duration_ms", time.Since(started).Milliseconds()),
 		slog.Bool("stream", true),
 	)
-	chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{
+	adapterruntime.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, adapterruntime.RequestEvent{
 		Stage:           terminalStage,
 		Provider:        providerName(model, ""),
 		Backend:         model.Backend,

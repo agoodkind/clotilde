@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"goodkind.io/clyde/internal/adapter/chatemit"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	"goodkind.io/clyde/internal/adapter/tooltrans"
@@ -28,7 +28,7 @@ type Dispatcher interface {
 	StreamChunkFromTooltrans(tooltrans.OpenAIStreamChunk) adapteropenai.StreamChunk
 	MergeChunks(string, string, []tooltrans.OpenAIStreamChunk, any) any
 	WriteJSON(http.ResponseWriter, int, any)
-	LogTerminal(context.Context, chatemit.RequestEvent)
+	LogTerminal(context.Context, adapterruntime.RequestEvent)
 	Log() *slog.Logger
 	SystemFingerprint() string
 	ResultUsage(any) *adapteropenai.Usage
@@ -73,7 +73,7 @@ func Collect(d Dispatcher, w http.ResponseWriter, r *http.Request, req adapterop
 		}
 	}
 	if err != nil && d.AppFallbackEnabled() {
-		d.LogTerminal(r.Context(), chatemit.RequestEvent{Stage: chatemit.RequestStageFailed, Provider: providerName(model, "direct"), Backend: model.Backend, RequestID: reqID, Alias: model.Alias, ModelID: model.Alias, Stream: false, DurationMs: time.Since(started).Milliseconds(), Err: err.Error()})
+		d.LogTerminal(r.Context(), adapterruntime.RequestEvent{Stage: adapterruntime.RequestStageFailed, Provider: providerName(model, "direct"), Backend: model.Backend, RequestID: reqID, Alias: model.Alias, ModelID: model.Alias, Stream: false, DurationMs: time.Since(started).Milliseconds(), Err: err.Error()})
 		d.Log().LogAttrs(r.Context(), slog.LevelWarn, "adapter.codex.fallback.escalating", slog.String("request_id", reqID), slog.Any("err", err))
 		chunks = nil
 		path = "app"
@@ -86,14 +86,14 @@ func Collect(d Dispatcher, w http.ResponseWriter, r *http.Request, req adapterop
 		}
 	}
 	if err != nil {
-		d.LogTerminal(r.Context(), chatemit.RequestEvent{Stage: chatemit.RequestStageFailed, Provider: providerName(model, path), Backend: model.Backend, RequestID: reqID, Alias: model.Alias, ModelID: model.Alias, Stream: false, DurationMs: time.Since(started).Milliseconds(), Err: err.Error()})
+		d.LogTerminal(r.Context(), adapterruntime.RequestEvent{Stage: adapterruntime.RequestStageFailed, Provider: providerName(model, path), Backend: model.Backend, RequestID: reqID, Alias: model.Alias, ModelID: model.Alias, Stream: false, DurationMs: time.Since(started).Milliseconds(), Err: err.Error()})
 		return err
 	}
 	d.WriteJSON(w, http.StatusOK, d.MergeChunks(reqID, model.Alias, chunks, res))
 	usage := d.ResultUsage(res)
 	reasoningSignaled, reasoningVisible := d.ResultReasoning(res)
 	d.Log().LogAttrs(r.Context(), slog.LevelInfo, "adapter.chat.completed", slog.String("request_id", reqID), slog.String("model", model.Alias), slog.Int("prompt_tokens", usage.PromptTokens), slog.Int("completion_tokens", usage.CompletionTokens), slog.Int("cache_read_tokens", usage.CachedTokens()), slog.Int("cache_creation_tokens", 0), slog.Int("derived_cache_creation_tokens", d.ResultDerivedCacheCreationTokens(res)), slog.Int64("duration_ms", time.Since(started).Milliseconds()), slog.Bool("stream", false), slog.String("backend", "codex"), slog.Bool("reasoning_signaled", reasoningSignaled), slog.Bool("reasoning_visible", reasoningVisible))
-	d.LogTerminal(r.Context(), chatemit.RequestEvent{Stage: chatemit.RequestStageCompleted, Provider: providerName(model, path), Backend: model.Backend, RequestID: reqID, Alias: model.Alias, ModelID: model.Alias, Stream: false, FinishReason: d.ResultFinishReason(res), TokensIn: usage.PromptTokens, TokensOut: usage.CompletionTokens, CacheReadTokens: usage.CachedTokens(), CacheCreationTokens: 0, DerivedCacheCreationTokens: d.ResultDerivedCacheCreationTokens(res), DurationMs: time.Since(started).Milliseconds()})
+	d.LogTerminal(r.Context(), adapterruntime.RequestEvent{Stage: adapterruntime.RequestStageCompleted, Provider: providerName(model, path), Backend: model.Backend, RequestID: reqID, Alias: model.Alias, ModelID: model.Alias, Stream: false, FinishReason: d.ResultFinishReason(res), TokensIn: usage.PromptTokens, TokensOut: usage.CompletionTokens, CacheReadTokens: usage.CachedTokens(), CacheCreationTokens: 0, DerivedCacheCreationTokens: d.ResultDerivedCacheCreationTokens(res), DurationMs: time.Since(started).Milliseconds()})
 	return nil
 }
 
@@ -138,7 +138,7 @@ func Stream(d Dispatcher, w http.ResponseWriter, r *http.Request, req adapterope
 		}
 	}
 	if runErr != nil && d.AppFallbackEnabled() {
-		d.LogTerminal(r.Context(), chatemit.RequestEvent{Stage: chatemit.RequestStageFailed, Provider: providerName(model, "direct"), Backend: model.Backend, RequestID: reqID, Alias: model.Alias, ModelID: model.Alias, Stream: true, DurationMs: time.Since(started).Milliseconds(), Err: runErr.Error()})
+		d.LogTerminal(r.Context(), adapterruntime.RequestEvent{Stage: adapterruntime.RequestStageFailed, Provider: providerName(model, "direct"), Backend: model.Backend, RequestID: reqID, Alias: model.Alias, ModelID: model.Alias, Stream: true, DurationMs: time.Since(started).Milliseconds(), Err: runErr.Error()})
 		d.Log().LogAttrs(r.Context(), slog.LevelWarn, "adapter.codex.fallback.escalating", slog.String("request_id", reqID), slog.Any("err", runErr))
 		path = "app"
 		d.EmitRequestStarted(r.Context(), model, path, reqID, model.Alias, true)
@@ -154,7 +154,7 @@ func Stream(d Dispatcher, w http.ResponseWriter, r *http.Request, req adapterope
 		}
 	}
 	if runErr != nil {
-		d.LogTerminal(r.Context(), chatemit.RequestEvent{Stage: chatemit.RequestStageFailed, Provider: providerName(model, path), Backend: model.Backend, RequestID: reqID, Alias: model.Alias, ModelID: model.Alias, Stream: true, DurationMs: time.Since(started).Milliseconds(), Err: runErr.Error()})
+		d.LogTerminal(r.Context(), adapterruntime.RequestEvent{Stage: adapterruntime.RequestStageFailed, Provider: providerName(model, path), Backend: model.Backend, RequestID: reqID, Alias: model.Alias, ModelID: model.Alias, Stream: true, DurationMs: time.Since(started).Milliseconds(), Err: runErr.Error()})
 		return runErr
 	}
 	if path == "direct" && d.AppFallbackEnabled() {
@@ -172,7 +172,7 @@ func Stream(d Dispatcher, w http.ResponseWriter, r *http.Request, req adapterope
 	usage := d.ResultUsage(res)
 	reasoningSignaled, reasoningVisible := d.ResultReasoning(res)
 	d.Log().LogAttrs(r.Context(), slog.LevelInfo, "adapter.chat.completed", slog.String("request_id", reqID), slog.String("model", model.Alias), slog.Int("prompt_tokens", usage.PromptTokens), slog.Int("completion_tokens", usage.CompletionTokens), slog.Int("cache_read_tokens", usage.CachedTokens()), slog.Int("cache_creation_tokens", 0), slog.Int("derived_cache_creation_tokens", d.ResultDerivedCacheCreationTokens(res)), slog.Int64("duration_ms", time.Since(started).Milliseconds()), slog.Bool("stream", true), slog.String("backend", "codex"), slog.Bool("reasoning_signaled", reasoningSignaled), slog.Bool("reasoning_visible", reasoningVisible))
-	d.LogTerminal(r.Context(), chatemit.RequestEvent{Stage: chatemit.RequestStageCompleted, Provider: providerName(model, path), Backend: model.Backend, RequestID: reqID, Alias: model.Alias, ModelID: model.Alias, Stream: true, FinishReason: d.ResultFinishReason(res), TokensIn: usage.PromptTokens, TokensOut: usage.CompletionTokens, CacheReadTokens: usage.CachedTokens(), CacheCreationTokens: 0, DerivedCacheCreationTokens: d.ResultDerivedCacheCreationTokens(res), DurationMs: time.Since(started).Milliseconds()})
+	d.LogTerminal(r.Context(), adapterruntime.RequestEvent{Stage: adapterruntime.RequestStageCompleted, Provider: providerName(model, path), Backend: model.Backend, RequestID: reqID, Alias: model.Alias, ModelID: model.Alias, Stream: true, FinishReason: d.ResultFinishReason(res), TokensIn: usage.PromptTokens, TokensOut: usage.CompletionTokens, CacheReadTokens: usage.CachedTokens(), CacheCreationTokens: 0, DerivedCacheCreationTokens: d.ResultDerivedCacheCreationTokens(res), DurationMs: time.Since(started).Milliseconds()})
 	return nil
 }
 

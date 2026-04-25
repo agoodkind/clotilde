@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
@@ -873,7 +874,7 @@ func TestCodexLifecycleEventSummarizesFileChange(t *testing.T) {
 			map[string]any{},
 		},
 	}
-	got, ok := codexLifecycleEvent(item, true)
+	got, ok := adaptercodex.LifecycleEvent(item, true)
 	if !ok {
 		t.Fatalf("expected lifecycle event")
 	}
@@ -886,7 +887,7 @@ func TestCodexLifecycleEventSummarizesFileChange(t *testing.T) {
 }
 
 func TestCodexPlanEventFormatsSteps(t *testing.T) {
-	got, ok := codexPlanEvent("Clarifying tool usage", []map[string]string{
+	got, ok := adaptercodex.PlanEvent("Clarifying tool usage", []map[string]string{
 		{"step": "inspect payloads", "status": "completed"},
 		{"step": "render tool output", "status": "inProgress"},
 	})

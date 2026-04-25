@@ -1,4 +1,4 @@
-package chatemit
+package runtime
 
 // EmitUsageChunk emits one SSE chunk containing usage telemetry.
 func EmitUsageChunk(emit func(StreamChunk) error, reqID string, modelAlias string, created int64, usage Usage) error {

@@ -14,7 +14,7 @@ import (
 	"time"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
-	"goodkind.io/clyde/internal/adapter/chatemit"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/config"
 )
 
@@ -43,7 +43,7 @@ type providerStatsHub struct {
 	mu           sync.RWMutex
 	providers    map[string]*providerAggregate
 	active       map[string]activeProviderRequest
-	terminalSeen map[string]chatemit.RequestStage
+	terminalSeen map[string]adapterruntime.RequestStage
 	subscribers  map[chan *clydev1.ProviderStatsEvent]struct{}
 	loadedAt     time.Time
 }
@@ -53,7 +53,7 @@ func newProviderStatsHub(log *slog.Logger) *providerStatsHub {
 		log:          log,
 		providers:    make(map[string]*providerAggregate),
 		active:       make(map[string]activeProviderRequest),
-		terminalSeen: make(map[string]chatemit.RequestStage),
+		terminalSeen: make(map[string]adapterruntime.RequestStage),
 		subscribers:  make(map[chan *clydev1.ProviderStatsEvent]struct{}),
 		loadedAt:     time.Now(),
 	}
@@ -114,23 +114,23 @@ func resolveProviderStatsLogPath() (string, error) {
 	return filepath.Join(state, "clyde.jsonl"), nil
 }
 
-func requestEventFromLogRecord(msg string, rec map[string]any) (chatemit.RequestEvent, bool) {
-	stage := chatemit.RequestStage("")
+func requestEventFromLogRecord(msg string, rec map[string]any) (adapterruntime.RequestEvent, bool) {
+	stage := adapterruntime.RequestStage("")
 	switch msg {
 	case "adapter.request.started":
-		stage = chatemit.RequestStageStarted
+		stage = adapterruntime.RequestStageStarted
 	case "adapter.request.stream_opened":
-		stage = chatemit.RequestStageStreamOpened
+		stage = adapterruntime.RequestStageStreamOpened
 	case "adapter.request.completed":
-		stage = chatemit.RequestStageCompleted
+		stage = adapterruntime.RequestStageCompleted
 	case "adapter.request.failed":
-		stage = chatemit.RequestStageFailed
+		stage = adapterruntime.RequestStageFailed
 	case "adapter.request.cancelled":
-		stage = chatemit.RequestStageCancelled
+		stage = adapterruntime.RequestStageCancelled
 	default:
-		return chatemit.RequestEvent{}, false
+		return adapterruntime.RequestEvent{}, false
 	}
-	ev := chatemit.RequestEvent{
+	ev := adapterruntime.RequestEvent{
 		Stage:                      stage,
 		Provider:                   stringValue(rec, "provider"),
 		Backend:                    stringValue(rec, "backend"),
@@ -152,7 +152,7 @@ func requestEventFromLogRecord(msg string, rec map[string]any) (chatemit.Request
 		ev.Err = stringValue(rec, "err")
 	}
 	if ev.Provider == "" || ev.RequestID == "" {
-		return chatemit.RequestEvent{}, false
+		return adapterruntime.RequestEvent{}, false
 	}
 	return ev, true
 }
@@ -208,7 +208,7 @@ func (h *providerStatsHub) ensureProvider(provider string) *providerAggregate {
 	return agg
 }
 
-func (h *providerStatsHub) Record(ctx context.Context, ev chatemit.RequestEvent) {
+func (h *providerStatsHub) Record(ctx context.Context, ev adapterruntime.RequestEvent) {
 	h.apply(ev, true)
 	if h.log != nil {
 		h.log.DebugContext(ctx, "provider_stats.recorded",
@@ -220,7 +220,7 @@ func (h *providerStatsHub) Record(ctx context.Context, ev chatemit.RequestEvent)
 	}
 }
 
-func (h *providerStatsHub) apply(ev chatemit.RequestEvent, broadcast bool) {
+func (h *providerStatsHub) apply(ev adapterruntime.RequestEvent, broadcast bool) {
 	if strings.TrimSpace(ev.Provider) == "" || strings.TrimSpace(ev.RequestID) == "" {
 		return
 	}
@@ -234,13 +234,13 @@ func (h *providerStatsHub) apply(ev chatemit.RequestEvent, broadcast bool) {
 	key := providerRequestKey(ev.Provider, ev.RequestID)
 
 	switch ev.Stage {
-	case chatemit.RequestStageStarted:
+	case adapterruntime.RequestStageStarted:
 		delete(h.terminalSeen, key)
 		if _, exists := h.active[key]; !exists {
 			h.active[key] = activeProviderRequest{Provider: ev.Provider, Streaming: false}
 			agg.Inflight++
 		}
-	case chatemit.RequestStageStreamOpened:
+	case adapterruntime.RequestStageStreamOpened:
 		active, exists := h.active[key]
 		if !exists {
 			active = activeProviderRequest{Provider: ev.Provider}
@@ -253,7 +253,7 @@ func (h *providerStatsHub) apply(ev chatemit.RequestEvent, broadcast bool) {
 				agg.Inflight++
 			}
 		}
-	case chatemit.RequestStageCompleted, chatemit.RequestStageFailed, chatemit.RequestStageCancelled:
+	case adapterruntime.RequestStageCompleted, adapterruntime.RequestStageFailed, adapterruntime.RequestStageCancelled:
 		if _, seen := h.terminalSeen[key]; seen {
 			return
 		}

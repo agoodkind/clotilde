@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
-	"goodkind.io/clyde/internal/adapter/chatemit"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	"goodkind.io/clyde/internal/adapter/tooltrans"
@@ -42,7 +42,7 @@ type ResponseDispatcher interface {
 	MergeAnthropicStreamChunks(string, string, []tooltrans.OpenAIStreamChunk, adapteropenai.Usage, string, any, string) any
 	NoticeForResponseHeaders(any, *anthropic.Notice) (any, error)
 	WriteJSON(http.ResponseWriter, int, any)
-	LogTerminal(context.Context, chatemit.RequestEvent)
+	LogTerminal(context.Context, adapterruntime.RequestEvent)
 	LogCacheUsageAnthropic(context.Context, string, string, string, anthropic.Usage)
 	CacheTTL() string
 	UnclaimNotice(*anthropic.Notice)
@@ -69,7 +69,7 @@ func CollectResponse(
 	}
 	anthUsage, anthStopReason, finishReason, err := d.RunOAuthTranslatorStream(ctx, req, model, reqID, emit)
 	if err != nil {
-		chatemit.LogFailed(d.Log(), ctx, chatemit.FailedAttrs{
+		adapterruntime.LogFailed(d.Log(), ctx, adapterruntime.FailedAttrs{
 			Backend:    "anthropic",
 			Provider:   "anthropic-oauth",
 			RequestID:  reqID,
@@ -78,8 +78,8 @@ func CollectResponse(
 			Err:        err,
 			DurationMs: time.Since(started).Milliseconds(),
 		})
-		d.LogTerminal(ctx, chatemit.RequestEvent{
-			Stage:      chatemit.RequestStageFailed,
+		d.LogTerminal(ctx, adapterruntime.RequestEvent{
+			Stage:      adapterruntime.RequestStageFailed,
 			Provider:   "anthropic-oauth",
 			Backend:    model.Backend,
 			RequestID:  reqID,
@@ -110,7 +110,7 @@ func CollectResponse(
 				)
 			}
 		}
-		return chatemit.EscalateOrWrite(
+		return adapterruntime.EscalateOrWrite(
 			err,
 			escalate,
 			func(status int, code, msg string) error {
@@ -141,7 +141,7 @@ func CollectResponse(
 		)
 	}
 	d.LogCacheUsageAnthropic(ctx, "anthropic", reqID, model.Alias, anthUsage)
-	chatemit.LogCompleted(d.Log(), ctx, chatemit.CompletedAttrs{
+	adapterruntime.LogCompleted(d.Log(), ctx, adapterruntime.CompletedAttrs{
 		Backend:             "anthropic",
 		Provider:            "anthropic-oauth",
 		Path:                "oauth",
@@ -158,7 +158,7 @@ func CollectResponse(
 		DurationMs:          time.Since(started).Milliseconds(),
 		Stream:              false,
 	})
-	breakdown := chatemit.EstimateCost(chatemit.CostInputs{
+	breakdown := adapterruntime.EstimateCost(adapterruntime.CostInputs{
 		ModelID:             req.Model,
 		TTL:                 d.CacheTTL(),
 		InputTokens:         u.PromptTokens,
@@ -166,8 +166,8 @@ func CollectResponse(
 		CacheCreationTokens: anthUsage.CacheCreationInputTokens,
 		CacheReadTokens:     anthUsage.CacheReadInputTokens,
 	})
-	d.LogTerminal(ctx, chatemit.RequestEvent{
-		Stage:               chatemit.RequestStageCompleted,
+	d.LogTerminal(ctx, adapterruntime.RequestEvent{
+		Stage:               adapterruntime.RequestStageCompleted,
 		Provider:            "anthropic-oauth",
 		Backend:             model.Backend,
 		RequestID:           reqID,
@@ -201,7 +201,7 @@ func StreamResponse(
 	d.EmitRequestStarted(r.Context(), model, "oauth", reqID, req.Model, true)
 	sw, err := d.NewAnthropicSSEWriter(w)
 	if err != nil {
-		return chatemit.EscalateOrWrite(
+		return adapterruntime.EscalateOrWrite(
 			fmt.Errorf("no_flusher: streaming not supported by transport"),
 			escalate,
 			func(status int, code, msg string) error {
@@ -246,8 +246,8 @@ func StreamResponse(
 			_ = d.EmitActionableStreamError(emit, reqID, model.Alias, err)
 			finishReason = "stop"
 		}
-		d.LogTerminal(r.Context(), chatemit.RequestEvent{
-			Stage:      chatemit.RequestStageFailed,
+		d.LogTerminal(r.Context(), adapterruntime.RequestEvent{
+			Stage:      adapterruntime.RequestStageFailed,
 			Provider:   "anthropic-oauth",
 			Backend:    model.Backend,
 			RequestID:  reqID,
@@ -330,7 +330,7 @@ func StreamResponse(
 	_ = sw.WriteStreamDone()
 
 	d.LogCacheUsageAnthropic(r.Context(), "anthropic", reqID, model.Alias, anthUsage)
-	chatemit.LogCompleted(d.Log(), r.Context(), chatemit.CompletedAttrs{
+	adapterruntime.LogCompleted(d.Log(), r.Context(), adapterruntime.CompletedAttrs{
 		Backend:             "anthropic",
 		Provider:            "anthropic-oauth",
 		Path:                "oauth",
@@ -347,7 +347,7 @@ func StreamResponse(
 		DurationMs:          time.Since(started).Milliseconds(),
 		Stream:              true,
 	})
-	breakdown := chatemit.EstimateCost(chatemit.CostInputs{
+	breakdown := adapterruntime.EstimateCost(adapterruntime.CostInputs{
 		ModelID:             req.Model,
 		TTL:                 d.CacheTTL(),
 		InputTokens:         finalUsage.PromptTokens,
@@ -356,8 +356,8 @@ func StreamResponse(
 		CacheReadTokens:     anthUsage.CacheReadInputTokens,
 	})
 	if err == nil {
-		d.LogTerminal(r.Context(), chatemit.RequestEvent{
-			Stage:               chatemit.RequestStageCompleted,
+		d.LogTerminal(r.Context(), adapterruntime.RequestEvent{
+			Stage:               adapterruntime.RequestStageCompleted,
 			Provider:            "anthropic-oauth",
 			Backend:             model.Backend,
 			RequestID:           reqID,

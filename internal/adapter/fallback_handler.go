@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"goodkind.io/clyde/internal/adapter/chatemit"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/adapter/fallback"
 	"goodkind.io/clyde/internal/adapter/finishreason"
 )
@@ -92,7 +92,7 @@ func claudeConfigHome() string {
 // errors are written to w directly.
 func (s *Server) handleFallback(w http.ResponseWriter, r *http.Request, req ChatRequest, model ResolvedModel, reqID string, escalate bool) error {
 	if s.fb == nil {
-		if err := chatemit.EscalateOrWrite(
+		if err := adapterruntime.EscalateOrWrite(
 			fmt.Errorf("fallback_unconfigured: adapter built without fallback client"),
 			escalate,
 			func(status int, code, msg string) error {
@@ -108,7 +108,7 @@ func (s *Server) handleFallback(w http.ResponseWriter, r *http.Request, req Chat
 		return nil
 	}
 	if model.CLIAlias == "" {
-		if err := chatemit.EscalateOrWrite(
+		if err := adapterruntime.EscalateOrWrite(
 			fmt.Errorf("fallback_no_cli_alias: family %q has no CLI alias bound", model.FamilySlug),
 			escalate,
 			func(status int, code, msg string) error {
@@ -124,7 +124,7 @@ func (s *Server) handleFallback(w http.ResponseWriter, r *http.Request, req Chat
 		return nil
 	}
 	if req.Stream && !s.cfg.Fallback.StreamPassthrough {
-		if err := chatemit.EscalateOrWrite(
+		if err := adapterruntime.EscalateOrWrite(
 			fmt.Errorf("fallback_stream_disabled: stream_passthrough=false"),
 			escalate,
 			func(status int, code, msg string) error {
@@ -141,7 +141,7 @@ func (s *Server) handleFallback(w http.ResponseWriter, r *http.Request, req Chat
 	}
 
 	if err := s.acquireFallback(r.Context()); err != nil {
-		if err2 := chatemit.EscalateOrWrite(
+		if err2 := adapterruntime.EscalateOrWrite(
 			fmt.Errorf("rate_limited: %w", err),
 			escalate,
 			func(status int, code, msg string) error {
@@ -238,7 +238,7 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 	s.emitRequestStarted(ctx, model, "fallback", reqID, req.Model, false)
 	result, err := s.fb.Collect(ctx, req)
 	if err != nil {
-		chatemit.LogFailed(s.log, ctx, chatemit.FailedAttrs{
+		adapterruntime.LogFailed(s.log, ctx, adapterruntime.FailedAttrs{
 			Backend:    "fallback",
 			Provider:   providerName(model, "fallback"),
 			RequestID:  reqID,
@@ -247,8 +247,8 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 			Err:        err,
 			DurationMs: time.Since(started).Milliseconds(),
 		})
-		chatemit.LogTerminal(s.log, ctx, s.deps.RequestEvents, chatemit.RequestEvent{
-			Stage:      chatemit.RequestStageFailed,
+		adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
+			Stage:      adapterruntime.RequestStageFailed,
 			Provider:   providerName(model, "fallback"),
 			Backend:    model.Backend,
 			RequestID:  reqID,
@@ -258,7 +258,7 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 			DurationMs: time.Since(started).Milliseconds(),
 			Err:        err.Error(),
 		})
-		if err := chatemit.EscalateOrWrite(
+		if err := adapterruntime.EscalateOrWrite(
 			err,
 			escalate,
 			func(status int, code, msg string) error {
@@ -334,7 +334,7 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 	writeJSON(w, http.StatusOK, resp)
 	s.logCacheUsage(ctx, "fallback", reqID, model.Alias,
 		result.Usage.PromptTokens, result.Usage.CacheCreationInputTokens, result.Usage.CacheReadInputTokens)
-	chatemit.LogCompleted(s.log, ctx, chatemit.CompletedAttrs{
+	adapterruntime.LogCompleted(s.log, ctx, adapterruntime.CompletedAttrs{
 		Backend:             "fallback",
 		Provider:            providerName(model, "fallback"),
 		Path:                fallbackPathLabel(req),
@@ -351,7 +351,7 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 		DurationMs:          time.Since(started).Milliseconds(),
 		Stream:              false,
 	})
-	breakdown := chatemit.EstimateCost(chatemit.CostInputs{
+	breakdown := adapterruntime.EstimateCost(adapterruntime.CostInputs{
 		ModelID:             req.Model,
 		TTL:                 s.cfg.ClientIdentity.PromptCacheTTL,
 		InputTokens:         usage.PromptTokens,
@@ -359,8 +359,8 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 		CacheCreationTokens: result.Usage.CacheCreationInputTokens,
 		CacheReadTokens:     result.Usage.CacheReadInputTokens,
 	})
-	chatemit.LogTerminal(s.log, ctx, s.deps.RequestEvents, chatemit.RequestEvent{
-		Stage:               chatemit.RequestStageCompleted,
+	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
+		Stage:               adapterruntime.RequestStageCompleted,
 		Provider:            providerName(model, "fallback"),
 		Backend:             model.Backend,
 		RequestID:           reqID,
@@ -399,7 +399,7 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 	s.emitRequestStarted(r.Context(), model, "fallback", reqID, req.Model, true)
 	sw, err := newSSEWriter(w)
 	if err != nil {
-		if err := chatemit.EscalateOrWrite(
+		if err := adapterruntime.EscalateOrWrite(
 			fmt.Errorf("no_flusher: streaming not supported by transport"),
 			escalate,
 			func(status int, code, msg string) error {
@@ -469,8 +469,8 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 		if escalate && !sw.HasCommittedHeaders() {
 			return streamErr
 		}
-		chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{
-			Stage:      chatemit.RequestStageFailed,
+		adapterruntime.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, adapterruntime.RequestEvent{
+			Stage:      adapterruntime.RequestStageFailed,
 			Provider:   providerName(model, "fallback"),
 			Backend:    model.Backend,
 			RequestID:  reqID,
@@ -560,7 +560,7 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 	} else {
 		finalFinish = finishreason.FromAnthropicNonStream(sr.Stop)
 	}
-	_ = chatemit.EmitFinishChunk(emit, reqID, model.Alias, created, finalFinish)
+	_ = adapterruntime.EmitFinishChunk(emit, reqID, model.Alias, created, finalFinish)
 
 	finalUsage := Usage{
 		PromptTokens:     sr.Usage.PromptTokens,
@@ -571,12 +571,12 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 		finalUsage.PromptTokensDetails = &PromptTokensDetails{CachedTokens: sr.Usage.CacheReadInputTokens}
 	}
 	if includeUsage {
-		_ = chatemit.EmitUsageChunk(emit, reqID, model.Alias, created, finalUsage)
+		_ = adapterruntime.EmitUsageChunk(emit, reqID, model.Alias, created, finalUsage)
 	}
 	_ = sw.WriteStreamDone()
 	s.logCacheUsage(r.Context(), "fallback", reqID, model.Alias,
 		sr.Usage.PromptTokens, sr.Usage.CacheCreationInputTokens, sr.Usage.CacheReadInputTokens)
-	chatemit.LogCompleted(s.log, r.Context(), chatemit.CompletedAttrs{
+	adapterruntime.LogCompleted(s.log, r.Context(), adapterruntime.CompletedAttrs{
 		Backend:             "fallback",
 		Provider:            providerName(model, "fallback"),
 		Path:                fallbackPathLabel(req),
@@ -594,7 +594,7 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 		Stream:              true,
 	})
 	if streamErr == nil {
-		breakdown := chatemit.EstimateCost(chatemit.CostInputs{
+		breakdown := adapterruntime.EstimateCost(adapterruntime.CostInputs{
 			ModelID:             req.Model,
 			TTL:                 s.cfg.ClientIdentity.PromptCacheTTL,
 			InputTokens:         finalUsage.PromptTokens,
@@ -602,8 +602,8 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 			CacheCreationTokens: sr.Usage.CacheCreationInputTokens,
 			CacheReadTokens:     sr.Usage.CacheReadInputTokens,
 		})
-		chatemit.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, chatemit.RequestEvent{
-			Stage:               chatemit.RequestStageCompleted,
+		adapterruntime.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, adapterruntime.RequestEvent{
+			Stage:               adapterruntime.RequestStageCompleted,
 			Provider:            providerName(model, "fallback"),
 			Backend:             model.Backend,
 			RequestID:           reqID,

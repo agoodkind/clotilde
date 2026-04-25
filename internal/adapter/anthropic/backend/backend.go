@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
-	"goodkind.io/clyde/internal/adapter/chatemit"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
@@ -40,7 +40,7 @@ type Dispatcher interface {
 
 func Handle(d Dispatcher, w http.ResponseWriter, r *http.Request, req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort, reqID string, escalate bool) error {
 	if !d.AnthropicConfigured() {
-		if err := chatemit.EscalateOrWrite(
+		if err := adapterruntime.EscalateOrWrite(
 			fmt.Errorf("oauth_unconfigured: adapter built without anthropic client"),
 			escalate,
 			func(status int, code, msg string) error {
@@ -56,7 +56,7 @@ func Handle(d Dispatcher, w http.ResponseWriter, r *http.Request, req adapterope
 		return nil
 	}
 	if err := d.AcquirePrimary(r.Context()); err != nil {
-		if err2 := chatemit.EscalateOrWrite(
+		if err2 := adapterruntime.EscalateOrWrite(
 			fmt.Errorf("rate_limited: %w", err),
 			escalate,
 			func(status int, code, msg string) error {
@@ -77,7 +77,7 @@ func Handle(d Dispatcher, w http.ResponseWriter, r *http.Request, req adapterope
 	trackerKey := d.RequestContextTrackerKey(req, model.Alias)
 	anthReq, err := d.BuildAnthropicWire(req, model, effort, jsonSpec, reqID)
 	if err != nil {
-		if err2 := chatemit.EscalateOrWrite(
+		if err2 := adapterruntime.EscalateOrWrite(
 			fmt.Errorf("oauth_translate: %w", err),
 			escalate,
 			func(status int, code, msg string) error {

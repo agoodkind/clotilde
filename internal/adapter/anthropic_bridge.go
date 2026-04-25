@@ -9,7 +9,7 @@ import (
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
-	"goodkind.io/clyde/internal/adapter/chatemit"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	"goodkind.io/clyde/internal/adapter/tooltrans"
@@ -109,7 +109,7 @@ func (s *Server) MergeAnthropicStreamChunks(reqID, alias string, chunks []tooltr
 }
 
 func (s *Server) NoticeForResponseHeaders(resp any, notice *anthropic.Notice) (any, error) {
-	out, _ := chatemit.NoticeForResponseHeaders(resp.(ChatResponse), notice, Unclaim, json.Marshal)
+	out, _ := adapterruntime.NoticeForResponseHeaders(resp.(ChatResponse), notice, Unclaim, json.Marshal)
 	return out, nil
 }
 

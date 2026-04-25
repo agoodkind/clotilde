@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"strings"
 
@@ -41,13 +40,7 @@ func newCodexSessionManager(log *slog.Logger, start func(spec codexSessionSpec) 
 }
 
 func newCodexAppTransport(bin string, spec codexSessionSpec) (*codexAppTransport, error) {
-	t, err := adaptercodex.NewAppTransport(bin, spec, func(ctx context.Context, bin string) (adaptercodex.RPCClient, error) {
-		rpc, err := startCodexRPC(ctx, bin)
-		if err != nil {
-			return nil, err
-		}
-		return codexRPCTransport{client: rpc}, nil
-	})
+	t, err := adaptercodex.NewAppTransport(bin, spec, adaptercodex.StartRPC)
 	if err != nil {
 		return nil, err
 	}
@@ -91,16 +84,16 @@ func (t *codexAppTransport) runTurn(ctx context.Context, requestID string, model
 			}
 			continue
 		}
-		logAdapterProtocolEvent(ctx, requestID, "codex", msg.Method, slog.Int("params_bytes", len(msg.Params)))
+		adaptercodex.LogProtocolEvent(ctx, requestID, "codex", msg.Method, slog.Int("params_bytes", len(msg.Params)))
 		switch msg.Method {
 		case "item/agentMessage/delta":
 			var p struct {
 				Delta string `json:"delta"`
 			}
 			_ = json.Unmarshal(msg.Params, &p)
-			logCodexToolingEvent(nil, ctx, requestID, msg.Method, slog.Int("delta_len", len(p.Delta)))
+			adaptercodex.LogToolingEvent(nil, ctx, requestID, msg.Method, slog.Int("delta_len", len(p.Delta)))
 			if p.Delta != "" {
-				if err := emitCodexRendered(renderer, tooltrans.Event{Kind: tooltrans.EventAssistantTextDelta, Text: p.Delta}, emit, &assistantText); err != nil {
+				if err := adaptercodex.EmitRendered(renderer, tooltrans.Event{Kind: tooltrans.EventAssistantTextDelta, Text: p.Delta}, emit, &assistantText); err != nil {
 					return out, assistantText.String(), err
 				}
 			}
@@ -117,9 +110,9 @@ func (t *codexAppTransport) runTurn(ctx context.Context, requestID string, model
 			for _, step := range p.Plan {
 				plan = append(plan, map[string]string{"step": step.Step, "status": step.Status})
 			}
-			logCodexToolingEvent(nil, ctx, requestID, msg.Method, slog.Int("plan_steps", len(plan)), slog.Bool("has_explanation", strings.TrimSpace(p.Explanation) != ""))
-			if ev, ok := codexPlanEvent(p.Explanation, plan); ok {
-				if err := emitCodexRendered(renderer, ev, emit, &assistantText); err != nil {
+			adaptercodex.LogToolingEvent(nil, ctx, requestID, msg.Method, slog.Int("plan_steps", len(plan)), slog.Bool("has_explanation", strings.TrimSpace(p.Explanation) != ""))
+			if ev, ok := adaptercodex.PlanEvent(p.Explanation, plan); ok {
+				if err := adaptercodex.EmitRendered(renderer, ev, emit, &assistantText); err != nil {
 					return out, assistantText.String(), err
 				}
 			}
@@ -128,9 +121,9 @@ func (t *codexAppTransport) runTurn(ctx context.Context, requestID string, model
 				Item map[string]any `json:"item"`
 			}
 			_ = json.Unmarshal(msg.Params, &p)
-			logCodexToolingEvent(nil, ctx, requestID, msg.Method, slog.String("item_type", codexItemType(p.Item)), slog.String("item_status", codexItemStatus(p.Item)))
-			if ev, ok := codexLifecycleEvent(p.Item, msg.Method == "item/completed"); ok {
-				if err := emitCodexRendered(renderer, ev, emit, &assistantText); err != nil {
+			adaptercodex.LogToolingEvent(nil, ctx, requestID, msg.Method, slog.String("item_type", codexItemType(p.Item)), slog.String("item_status", codexItemStatus(p.Item)))
+			if ev, ok := adaptercodex.LifecycleEvent(p.Item, msg.Method == "item/completed"); ok {
+				if err := adaptercodex.EmitRendered(renderer, ev, emit, &assistantText); err != nil {
 					return out, assistantText.String(), err
 				}
 			}
@@ -140,9 +133,9 @@ func (t *codexAppTransport) runTurn(ctx context.Context, requestID string, model
 				ItemID string `json:"itemId"`
 			}
 			_ = json.Unmarshal(msg.Params, &p)
-			logCodexToolingEvent(nil, ctx, requestID, msg.Method, slog.String("item_id", p.ItemID), slog.Int("delta_len", len(p.Delta)))
-			if ev, ok := codexProgressEvent(msg.Method, p.ItemID, p.Delta); ok {
-				if err := emitCodexRendered(renderer, ev, emit, &assistantText); err != nil {
+			adaptercodex.LogToolingEvent(nil, ctx, requestID, msg.Method, slog.String("item_id", p.ItemID), slog.Int("delta_len", len(p.Delta)))
+			if ev, ok := adaptercodex.ProgressEvent(msg.Method, p.ItemID, p.Delta); ok {
+				if err := adaptercodex.EmitRendered(renderer, ev, emit, &assistantText); err != nil {
 					return out, assistantText.String(), err
 				}
 			}
@@ -152,9 +145,9 @@ func (t *codexAppTransport) runTurn(ctx context.Context, requestID string, model
 				ItemID  string `json:"itemId"`
 			}
 			_ = json.Unmarshal(msg.Params, &p)
-			logCodexToolingEvent(nil, ctx, requestID, msg.Method, slog.String("item_id", p.ItemID), slog.Int("message_len", len(p.Message)))
-			if ev, ok := codexProgressEvent(msg.Method, p.ItemID, p.Message); ok {
-				if err := emitCodexRendered(renderer, ev, emit, &assistantText); err != nil {
+			adaptercodex.LogToolingEvent(nil, ctx, requestID, msg.Method, slog.String("item_id", p.ItemID), slog.Int("message_len", len(p.Message)))
+			if ev, ok := adaptercodex.ProgressEvent(msg.Method, p.ItemID, p.Message); ok {
+				if err := adaptercodex.EmitRendered(renderer, ev, emit, &assistantText); err != nil {
 					return out, assistantText.String(), err
 				}
 			}
@@ -164,14 +157,14 @@ func (t *codexAppTransport) runTurn(ctx context.Context, requestID string, model
 				Changes []any  `json:"changes"`
 			}
 			_ = json.Unmarshal(msg.Params, &p)
-			logCodexToolingEvent(nil, ctx, requestID, msg.Method, slog.String("item_id", p.ItemID), slog.Int("change_count", len(p.Changes)))
+			adaptercodex.LogToolingEvent(nil, ctx, requestID, msg.Method, slog.String("item_id", p.ItemID), slog.Int("change_count", len(p.Changes)))
 			changeCount := len(p.Changes)
 			if changeCount < 1 {
 				changeCount = 1
 			}
-			if ev, ok := codexProgressEvent(msg.Method, p.ItemID, fmt.Sprintf("Patch updated for %d file(s)", changeCount)); ok {
+			if ev, ok := adaptercodex.ProgressEvent(msg.Method, p.ItemID, fmt.Sprintf("Patch updated for %d file(s)", changeCount)); ok {
 				ev.ChangeCount = changeCount
-				if err := emitCodexRendered(renderer, ev, emit, &assistantText); err != nil {
+				if err := adaptercodex.EmitRendered(renderer, ev, emit, &assistantText); err != nil {
 					return out, assistantText.String(), err
 				}
 			}
@@ -181,8 +174,8 @@ func (t *codexAppTransport) runTurn(ctx context.Context, requestID string, model
 			}
 			_ = json.Unmarshal(msg.Params, &p)
 			out.ReasoningSignaled = true
-			logCodexReasoningEvent(nil, ctx, requestID, msg.Method, slog.Int("summary_index", p.SummaryIndex), slog.Bool("thinking_visible", renderer.State().ReasoningVisible))
-			if err := emitCodexRendered(renderer, tooltrans.Event{Kind: tooltrans.EventReasoningSignaled}, emit, &assistantText); err != nil {
+			adaptercodex.LogReasoningEvent(nil, ctx, requestID, msg.Method, slog.Int("summary_index", p.SummaryIndex), slog.Bool("thinking_visible", renderer.State().ReasoningVisible))
+			if err := adaptercodex.EmitRendered(renderer, tooltrans.Event{Kind: tooltrans.EventReasoningSignaled}, emit, &assistantText); err != nil {
 				return out, assistantText.String(), err
 			}
 		case "item/reasoning/summaryTextDelta", "item/reasoning/textDelta":
@@ -192,7 +185,7 @@ func (t *codexAppTransport) runTurn(ctx context.Context, requestID string, model
 			}
 			_ = json.Unmarshal(msg.Params, &p)
 			out.ReasoningSignaled = true
-			logCodexReasoningEvent(nil, ctx, requestID, msg.Method, slog.Int("summary_index", p.SummaryIndex), slog.Int("delta_len", len(p.Delta)), slog.Bool("thinking_visible_before", renderer.State().ReasoningVisible))
+			adaptercodex.LogReasoningEvent(nil, ctx, requestID, msg.Method, slog.Int("summary_index", p.SummaryIndex), slog.Int("delta_len", len(p.Delta)), slog.Bool("thinking_visible_before", renderer.State().ReasoningVisible))
 			if p.Delta != "" {
 				kind := "text"
 				var summaryIdx *int
@@ -200,7 +193,7 @@ func (t *codexAppTransport) runTurn(ctx context.Context, requestID string, model
 					kind = "summary"
 					summaryIdx = &p.SummaryIndex
 				}
-				if err := emitCodexRendered(renderer, tooltrans.Event{Kind: tooltrans.EventReasoningDelta, Text: p.Delta, ReasoningKind: kind, SummaryIndex: summaryIdx}, emit, &assistantText); err != nil {
+				if err := adaptercodex.EmitRendered(renderer, tooltrans.Event{Kind: tooltrans.EventReasoningDelta, Text: p.Delta, ReasoningKind: kind, SummaryIndex: summaryIdx}, emit, &assistantText); err != nil {
 					return out, assistantText.String(), err
 				}
 			}
@@ -220,7 +213,7 @@ func (t *codexAppTransport) runTurn(ctx context.Context, requestID string, model
 			currentCached := p.TokenUsage.Last.CachedInputTokens
 			derivedCacheCreate := deriveCodexCacheCreationTokens(t.CachedInputTokens(), currentCached)
 			logAttrs := []slog.Attr{slog.Int("prompt_tokens", p.TokenUsage.Last.InputTokens), slog.Int("completion_tokens", p.TokenUsage.Last.OutputTokens), slog.Int("cached_input_tokens", currentCached), slog.Int("derived_cache_creation_tokens", derivedCacheCreate), slog.Int("reasoning_output_tokens", p.TokenUsage.Last.ReasoningOutputTokens), slog.Bool("native_cache_creation_metric_available", false)}
-			logCodexToolingEvent(nil, ctx, requestID, msg.Method, logAttrs...)
+			adaptercodex.LogToolingEvent(nil, ctx, requestID, msg.Method, logAttrs...)
 			out.Usage = Usage{PromptTokens: p.TokenUsage.Last.InputTokens, CompletionTokens: p.TokenUsage.Last.OutputTokens, TotalTokens: p.TokenUsage.Last.TotalTokens}
 			if currentCached > 0 {
 				out.Usage.PromptTokensDetails = &PromptTokensDetails{CachedTokens: currentCached}
@@ -231,17 +224,17 @@ func (t *codexAppTransport) runTurn(ctx context.Context, requestID string, model
 				out.ReasoningSignaled = true
 			}
 		case "turn/completed":
-			if err := emitCodexRendered(renderer, tooltrans.Event{Kind: tooltrans.EventReasoningFinished}, emit, &assistantText); err != nil {
+			if err := adaptercodex.EmitRendered(renderer, tooltrans.Event{Kind: tooltrans.EventReasoningFinished}, emit, &assistantText); err != nil {
 				return out, assistantText.String(), err
 			}
 			state := renderer.State()
 			out.ReasoningSignaled = out.ReasoningSignaled || state.ReasoningSignaled
 			out.ReasoningVisible = state.ReasoningVisible
-			logCodexReasoningEvent(nil, ctx, requestID, msg.Method, slog.Bool("reasoning_signaled", out.ReasoningSignaled), slog.Bool("thinking_visible", out.ReasoningVisible))
+			adaptercodex.LogReasoningEvent(nil, ctx, requestID, msg.Method, slog.Bool("reasoning_signaled", out.ReasoningSignaled), slog.Bool("thinking_visible", out.ReasoningVisible))
 			return out, assistantText.String(), nil
 		default:
 			if strings.HasPrefix(msg.Method, "item/") || strings.HasPrefix(msg.Method, "thread/") || strings.HasPrefix(msg.Method, "turn/") {
-				logCodexToolingEvent(nil, ctx, requestID, "ignored", slog.String("method", msg.Method), slog.Int("params_bytes", len(msg.Params)))
+				adaptercodex.LogToolingEvent(nil, ctx, requestID, "ignored", slog.String("method", msg.Method), slog.Int("params_bytes", len(msg.Params)))
 			}
 		}
 	}
@@ -316,53 +309,4 @@ func (rt codexManagedRuntime) RunManagedTurn(
 		return codexRunResult{}, "", adaptercodex.ManagedTransportTypeMismatch()
 	}
 	return transport.runTurn(ctx, reqID, spec.Model, effort, summary, prompt, emit)
-}
-
-type codexRPCTransport struct {
-	client *codexRPCClient
-}
-
-func (t codexRPCTransport) Send(id int, method string, params any) error {
-	return t.client.send(id, method, params)
-}
-
-func (t codexRPCTransport) Notify(method string, params any) error {
-	raw, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": method, "params": params})
-	if err != nil {
-		return err
-	}
-	_, err = io.WriteString(t.client.stdin, string(raw)+"\n")
-	return err
-}
-
-func (t codexRPCTransport) Next() (adaptercodex.RPCMessage, error) {
-	msg, err := t.client.next()
-	if err != nil {
-		return adaptercodex.RPCMessage{}, err
-	}
-	var rpcErr *adaptercodex.RPCError
-	if msg.Error != nil {
-		rpcErr = &adaptercodex.RPCError{Code: msg.Error.Code, Message: msg.Error.Message}
-	}
-	return adaptercodex.RPCMessage{
-		ID:     msg.ID,
-		Method: msg.Method,
-		Params: msg.Params,
-		Result: msg.Result,
-		Error:  rpcErr,
-	}, nil
-}
-
-func (t codexRPCTransport) Close() error {
-	if t.client == nil {
-		return nil
-	}
-	_ = t.client.stdin.Close()
-	if t.client.cmd != nil && t.client.cmd.Process != nil {
-		_ = t.client.cmd.Process.Kill()
-	}
-	if t.client.stdout != nil {
-		_, _ = io.Copy(io.Discard, t.client.stdout)
-	}
-	return nil
 }

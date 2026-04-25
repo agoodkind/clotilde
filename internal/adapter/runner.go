@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"goodkind.io/clyde/internal/adapter/chatemit"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/gklog"
 )
 
@@ -25,7 +25,7 @@ type Deps struct {
 	ScratchDir func() string
 	// RequestEvents receives normalized adapter request lifecycle
 	// updates so the daemon can aggregate live provider stats.
-	RequestEvents chatemit.RequestEventSink
+	RequestEvents adapterruntime.RequestEventSink
 }
 
 // Runner spawns claude -p for one request. Each HTTP request builds

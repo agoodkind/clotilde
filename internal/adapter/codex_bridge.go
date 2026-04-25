@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"goodkind.io/clyde/internal/adapter/chatemit"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
@@ -65,8 +65,8 @@ func (s *Server) WriteJSON(w http.ResponseWriter, status int, v any) {
 	writeJSON(w, status, v)
 }
 
-func (s *Server) LogTerminal(ctx context.Context, ev chatemit.RequestEvent) {
-	chatemit.LogTerminal(s.log, ctx, s.deps.RequestEvents, ev)
+func (s *Server) LogTerminal(ctx context.Context, ev adapterruntime.RequestEvent) {
+	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, ev)
 }
 
 func (s *Server) SystemFingerprint() string {

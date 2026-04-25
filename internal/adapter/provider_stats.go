@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"goodkind.io/clyde/internal/adapter/chatemit"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 )
 
 func providerName(model ResolvedModel, path string) string {
@@ -30,7 +30,7 @@ func providerName(model ResolvedModel, path string) string {
 }
 
 func (s *Server) emitRequestStarted(ctx context.Context, model ResolvedModel, path, reqID, modelID string, stream bool) {
-	chatemit.LogStarted(s.log, ctx, s.deps.RequestEvents, chatemit.StartedAttrs{
+	adapterruntime.LogStarted(s.log, ctx, s.deps.RequestEvents, adapterruntime.StartedAttrs{
 		Provider:  providerName(model, path),
 		Backend:   model.Backend,
 		RequestID: reqID,
@@ -41,7 +41,7 @@ func (s *Server) emitRequestStarted(ctx context.Context, model ResolvedModel, pa
 }
 
 func (s *Server) emitRequestStreamOpened(ctx context.Context, model ResolvedModel, path, reqID, modelID string, stream bool) {
-	chatemit.LogStreamOpened(s.log, ctx, s.deps.RequestEvents, chatemit.StreamOpenedAttrs{
+	adapterruntime.LogStreamOpened(s.log, ctx, s.deps.RequestEvents, adapterruntime.StreamOpenedAttrs{
 		Provider:  providerName(model, path),
 		Backend:   model.Backend,
 		RequestID: reqID,
