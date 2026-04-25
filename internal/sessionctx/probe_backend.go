@@ -50,9 +50,10 @@ func (p *probeBackend) Fetch(ctx context.Context) (compact.ContextUsage, error) 
 		"timeout_s", int(p.timeout.Seconds()),
 	)
 	usage, err := p.probe(ctx, compact.ProbeOptions{
-		SessionID: p.sessionID,
-		WorkDir:   p.workDir,
-		Timeout:   p.timeout,
+		SessionID:   p.sessionID,
+		WorkDir:     p.workDir,
+		Timeout:     p.timeout,
+		ForkSession: true,
 	})
 	duration := time.Since(started)
 	if err != nil {

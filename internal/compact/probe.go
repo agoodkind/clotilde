@@ -9,10 +9,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // ContextUsage is the payload returned by Claude Code's
@@ -44,9 +47,9 @@ type ContextCategory struct {
 // and is added back by the planner; including it here would double
 // count. Free space is a visualization artifact, not real tokens.
 var categoryNamesExcludedFromOverhead = map[string]bool{
-	"Messages":      true,
+	"Messages":       true,
 	"Compact buffer": true,
-	"Free space":    true,
+	"Free space":     true,
 }
 
 // StaticOverheadFromUsage sums the category tokens that behave as a
@@ -85,6 +88,11 @@ type ProbeOptions struct {
 	// take 15-30 seconds on a large workspace, so callers should
 	// budget at least 60 seconds for the default.
 	Timeout time.Duration
+
+	// ForkSession, when true, resumes the target session through a
+	// disposable fork so the probe does not append /context noise to
+	// the real transcript that compaction is about to mutate.
+	ForkSession bool
 }
 
 // ProbeContextUsage spawns claude in SDK stream-json mode against a
@@ -105,7 +113,6 @@ func ProbeContextUsage(ctx context.Context, opts ProbeOptions) (ContextUsage, er
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
-
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -123,18 +130,12 @@ func ProbeContextUsage(ctx context.Context, opts ProbeOptions) (ContextUsage, er
 	}
 	reqLine = append(reqLine, '\n')
 
-	args := []string{
-		"-p",
-		"--resume", opts.SessionID,
-		"--input-format", "stream-json",
-		"--output-format", "stream-json",
-		"--verbose",
-		"--no-session-persistence",
-	}
+	args := buildProbeArgs(opts)
 	cmd := exec.CommandContext(probeCtx, binary, args...)
 	if opts.WorkDir != "" {
 		cmd.Dir = opts.WorkDir
 	}
+	cmd.Env = append(os.Environ(), "CLYDE_SUPPRESS_HOOKS=1")
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -235,6 +236,28 @@ func ProbeContextUsage(ctx context.Context, opts ProbeOptions) (ContextUsage, er
 		"categories", len(usage.Categories),
 	)
 	return usage, nil
+}
+
+func buildProbeArgs(opts ProbeOptions) []string {
+	args := []string{
+		"-p",
+		"--resume", opts.SessionID,
+	}
+	if opts.ForkSession {
+		probeID := uuid.NewString()
+		args = append(args,
+			"--fork-session",
+			"--session-id", probeID,
+			"-n", "clyde-probe-"+probeID[:8],
+		)
+	}
+	args = append(args,
+		"--input-format", "stream-json",
+		"--output-format", "stream-json",
+		"--verbose",
+		"--no-session-persistence",
+	)
+	return args
 }
 
 // scanForUsage reads stdout line by line looking for a control_response

@@ -76,7 +76,9 @@ func (t *Tool) UnmarshalJSON(raw []byte) error {
 		Function    *ToolFunctionSchema `json:"function"`
 		Name        string              `json:"name"`
 		Description string              `json:"description"`
+		Parameters  json.RawMessage     `json:"parameters"`
 		InputSchema json.RawMessage     `json:"input_schema"`
+		Strict      *bool               `json:"strict"`
 	}
 
 	var w rawTool
@@ -103,11 +105,17 @@ func (t *Tool) UnmarshalJSON(raw []byte) error {
 		return fmt.Errorf("tool has unsupported type %q", w.Type)
 	}
 
+	parameters := w.Parameters
+	if len(parameters) == 0 {
+		parameters = w.InputSchema
+	}
+
 	t.Type = "function"
 	t.Function = ToolFunctionSchema{
 		Name:        w.Name,
 		Description: w.Description,
-		Parameters:  w.InputSchema,
+		Parameters:  parameters,
+		Strict:      w.Strict,
 	}
 	return nil
 }

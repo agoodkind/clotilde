@@ -10,18 +10,19 @@ import (
 func TestProviderStatsFromProto(t *testing.T) {
 	now := time.Now().Unix()
 	out := providerStatsFromProto([]*clydev1.ProviderStats{{
-		Provider:                "openai-codex",
-		Requests:                3,
-		Inflight:                1,
-		Streaming:               1,
-		InputTokens:             120,
-		OutputTokens:            45,
-		CacheReadTokens:         22,
-		CacheCreationTokens:     5,
-		HitRatio:                0.15,
-		EstimatedCostMicrocents: 1234,
-		LastSeenUnix:            now,
-		Error:                   "boom",
+		Provider:                   "openai-codex",
+		Requests:                   3,
+		Inflight:                   1,
+		Streaming:                  1,
+		InputTokens:                120,
+		OutputTokens:               45,
+		CacheReadTokens:            22,
+		CacheCreationTokens:        5,
+		DerivedCacheCreationTokens: 11,
+		HitRatio:                   0.15,
+		EstimatedCostMicrocents:    1234,
+		LastSeenUnix:               now,
+		Error:                      "boom",
 	}})
 	if len(out) != 1 {
 		t.Fatalf("providers=%d want 1", len(out))
@@ -32,5 +33,8 @@ func TestProviderStatsFromProto(t *testing.T) {
 	}
 	if got.LastSeen.Unix() != now {
 		t.Fatalf("last_seen=%d want %d", got.LastSeen.Unix(), now)
+	}
+	if got.DerivedCacheCreationTokens != 11 {
+		t.Fatalf("derived_cache_creation_tokens=%d want 11", got.DerivedCacheCreationTokens)
 	}
 }

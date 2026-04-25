@@ -16,39 +16,39 @@ const (
 )
 
 type RequestEvent struct {
-	Stage                 RequestStage
-	Provider              string
-	Backend               string
-	RequestID             string
-	Alias                 string
-	ModelID               string
-	Stream                bool
-	FinishReason          string
-	TokensIn              int
-	TokensOut             int
-	CacheReadTokens       int
-	CacheCreationTokens   int
+	Stage                      RequestStage
+	Provider                   string
+	Backend                    string
+	RequestID                  string
+	Alias                      string
+	ModelID                    string
+	Stream                     bool
+	FinishReason               string
+	TokensIn                   int
+	TokensOut                  int
+	CacheReadTokens            int
+	CacheCreationTokens        int
 	DerivedCacheCreationTokens int
-	CostMicrocents        int64
-	DurationMs            int64
-	Err                   string
+	CostMicrocents             int64
+	DurationMs                 int64
+	Err                        string
 }
 
 type RequestEventSink func(context.Context, RequestEvent)
 
 type CompletedAttrs struct {
-	Backend             string
-	RequestID           string
-	Alias               string
-	ModelID             string
-	FinishReason        string
-	TokensIn            int
-	TokensOut           int
-	CacheReadTokens     int
-	CacheCreationTokens int
+	Backend                    string
+	RequestID                  string
+	Alias                      string
+	ModelID                    string
+	FinishReason               string
+	TokensIn                   int
+	TokensOut                  int
+	CacheReadTokens            int
+	CacheCreationTokens        int
 	DerivedCacheCreationTokens int
-	DurationMs          int64
-	Stream              bool
+	DurationMs                 int64
+	Stream                     bool
 
 	// Path tags which dispatch leg handled the request so aggregators
 	// can compare costs across backends. Known values: "oauth",

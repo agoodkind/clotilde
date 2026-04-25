@@ -86,9 +86,10 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 		StrippersText: strippersDescribe(req.Strippers),
 	}
 	usage, usageErr := ProbeContextUsage(ctx, ProbeOptions{
-		SessionID: req.Session.Metadata.SessionID,
-		WorkDir:   req.Session.Metadata.WorkDir,
-		Timeout:   30 * time.Second,
+		SessionID:   req.Session.Metadata.SessionID,
+		WorkDir:     req.Session.Metadata.WorkDir,
+		Timeout:     30 * time.Second,
+		ForkSession: true,
 	})
 	if usageErr == nil {
 		upfront.CurrentTotal = usage.TotalTokens

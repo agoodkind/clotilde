@@ -29,19 +29,19 @@ func providerStatsFromProto(list []*clydev1.ProviderStats) []ui.ProviderStats {
 			continue
 		}
 		out = append(out, ui.ProviderStats{
-			Provider:                item.GetProvider(),
-			Requests:                int(item.GetRequests()),
-			Inflight:                int(item.GetInflight()),
-			Streaming:               int(item.GetStreaming()),
-			InputTokens:             item.GetInputTokens(),
-			OutputTokens:            item.GetOutputTokens(),
-			CacheReadTokens:         item.GetCacheReadTokens(),
-			CacheCreationTokens:     item.GetCacheCreationTokens(),
+			Provider:                   item.GetProvider(),
+			Requests:                   int(item.GetRequests()),
+			Inflight:                   int(item.GetInflight()),
+			Streaming:                  int(item.GetStreaming()),
+			InputTokens:                item.GetInputTokens(),
+			OutputTokens:               item.GetOutputTokens(),
+			CacheReadTokens:            item.GetCacheReadTokens(),
+			CacheCreationTokens:        item.GetCacheCreationTokens(),
 			DerivedCacheCreationTokens: item.GetDerivedCacheCreationTokens(),
-			HitRatio:                item.GetHitRatio(),
-			EstimatedCostMicrocents: item.GetEstimatedCostMicrocents(),
-			LastSeen:                time.Unix(item.GetLastSeenUnix(), 0),
-			Error:                   item.GetError(),
+			HitRatio:                   item.GetHitRatio(),
+			EstimatedCostMicrocents:    item.GetEstimatedCostMicrocents(),
+			LastSeen:                   time.Unix(item.GetLastSeenUnix(), 0),
+			Error:                      item.GetError(),
 		})
 	}
 	slog.Debug("dashboard.stats.loaded",

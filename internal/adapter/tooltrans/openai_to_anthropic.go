@@ -10,6 +10,7 @@ import (
 )
 
 var noticeSentinelRE = regexp.MustCompile(`(?s)<!--clyde-notice-->.*?<!--/clyde-notice-->\s*`)
+var activitySentinelRE = regexp.MustCompile(`(?s)<!--clyde-activity-->.*?<!--/clyde-activity-->\s*`)
 
 // TranslateRequest maps an OpenAI-shaped chat request to Anthropic /v1/messages fields.
 func TranslateRequest(req OpenAIRequest, systemPrefix string, maxTokens int) (AnthRequest, error) {
@@ -229,6 +230,14 @@ func StripNoticeSentinel(text string) string {
 		return ""
 	}
 	return noticeSentinelRE.ReplaceAllString(text, "")
+}
+
+// StripActivitySentinel removes the shared activity envelope.
+func StripActivitySentinel(text string) string {
+	if text == "" {
+		return ""
+	}
+	return activitySentinelRE.ReplaceAllString(text, "")
 }
 
 // flattenToolResultContent normalizes a tool_result content payload to a

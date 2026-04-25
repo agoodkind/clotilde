@@ -6,8 +6,8 @@ import (
 	"io"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
-	"goodkind.io/clyde/internal/daemon"
 	compactengine "goodkind.io/clyde/internal/compact"
+	"goodkind.io/clyde/internal/daemon"
 )
 
 type compactDaemonRunInput struct {
@@ -41,12 +41,13 @@ func runCompactViaDaemon(ctx context.Context, out io.Writer, in compactDaemonRun
 	}
 
 	var events <-chan *clydev1.CompactEvent
+	var done <-chan error
 	var cancel context.CancelFunc
 	var err error
 	if in.Mode == ModeApply {
-		events, cancel, err = daemon.CompactApplyViaDaemon(ctx, streamInput)
+		events, done, cancel, err = daemon.CompactApplyViaDaemon(ctx, streamInput)
 	} else {
-		events, cancel, err = daemon.CompactPreviewViaDaemon(ctx, streamInput)
+		events, done, cancel, err = daemon.CompactPreviewViaDaemon(ctx, streamInput)
 	}
 	if err != nil {
 		return err
@@ -118,6 +119,11 @@ func runCompactViaDaemon(ctx context.Context, out io.Writer, in compactDaemonRun
 			final = ev.GetFinal()
 		case clydev1.CompactEvent_KIND_APPLY_MUTATION:
 			mutation = ev.GetApplyMutation()
+		}
+	}
+	if done != nil {
+		if streamErr := <-done; streamErr != nil {
+			return streamErr
 		}
 	}
 

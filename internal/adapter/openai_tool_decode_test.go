@@ -55,6 +55,28 @@ func TestToolUnmarshalAnthropicNative(t *testing.T) {
 	}
 }
 
+func TestToolUnmarshalCursorFlattenedFunction(t *testing.T) {
+	t.Parallel()
+
+	raw := json.RawMessage(`{"type":"function","name":"ReadFile","description":"Read a file","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]},"strict":false}`)
+	var tool Tool
+	if err := json.Unmarshal(raw, &tool); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if tool.Type != "function" {
+		t.Fatalf("tool type = %q, want function", tool.Type)
+	}
+	if tool.Function.Name != "ReadFile" {
+		t.Fatalf("name = %q, want ReadFile", tool.Function.Name)
+	}
+	if tool.Function.Strict == nil || *tool.Function.Strict {
+		t.Fatalf("strict = %v, want false", tool.Function.Strict)
+	}
+	if !strings.Contains(string(tool.Function.Parameters), `"required":["path"]`) {
+		t.Fatalf("parameters lost required path schema: %s", tool.Function.Parameters)
+	}
+}
+
 func TestToolUnmarshalAnthropicCustomType(t *testing.T) {
 	t.Parallel()
 

@@ -3,42 +3,30 @@ package tooltrans
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
-	"time"
 
 	"goodkind.io/clyde/internal/adapter/finishreason"
 )
 
 // StreamTranslator converts Anthropic SSE events into OpenAI streaming chunks.
 type StreamTranslator struct {
-	createdUnix        int64
-	modelAlias         string
-	reqID              string
 	blockIndex         int
 	currentBlockType   string
 	toolCallIndex      int
 	toolCallByBlockIdx map[int]int
-	seenRole           bool
 	pendingInputTokens int
 	lastStopReason     string
 	lastOutputTokens   int
 	visibleText        strings.Builder
-
-	// thinkingOpen tracks whether we've already written the opening
-	// <think> tag into the content stream for the current Anthropic
-	// thinking block. Subsequent thinking_delta events within the same
-	// block append without re-opening; the closing </think> is emitted
-	// on the matching content_block_stop.
-	thinkingOpen bool
+	renderer           *EventRenderer
 }
 
 // NewStreamTranslator builds per-request stream state.
 func NewStreamTranslator(reqID, modelAlias string) *StreamTranslator {
 	return &StreamTranslator{
-		createdUnix:        time.Now().Unix(),
-		modelAlias:         modelAlias,
-		reqID:              reqID,
 		toolCallByBlockIdx: make(map[int]int),
+		renderer:           NewEventRenderer(reqID, modelAlias, "anthropic", slog.Default()),
 	}
 }
 
@@ -94,7 +82,8 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 			idx := t.toolCallIndex
 			t.toolCallIndex++
 			t.toolCallByBlockIdx[ev.Index] = idx
-			ch := t.baseChunk(OpenAIStreamDelta{
+			return t.renderer.HandleEvent(Event{
+				Kind: EventToolCallDelta,
 				ToolCalls: []OpenAIToolCall{{
 					Index: idx,
 					ID:    ev.ContentBlock.ID,
@@ -104,15 +93,10 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 						Arguments: "",
 					},
 				}},
-			})
-			return []OpenAIStreamChunk{ch}, false, "", nil, nil
+			}), false, "", nil, nil
 		case "thinking":
 			t.currentBlockType = "thinking"
-			if !t.seenRole {
-				t.seenRole = true
-				ch := t.baseChunk(OpenAIStreamDelta{Role: "assistant"})
-				return []OpenAIStreamChunk{ch}, false, "", nil, nil
-			}
+			return t.renderer.HandleEvent(Event{Kind: EventReasoningSignaled}), false, "", nil, nil
 		default:
 			t.currentBlockType = ev.ContentBlock.Type
 		}
@@ -131,20 +115,15 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 		}
 		switch ev.Delta.Type {
 		case "text_delta":
-			delta := OpenAIStreamDelta{Content: ev.Delta.Text}
 			t.visibleText.WriteString(ev.Delta.Text)
-			if !t.seenRole {
-				delta.Role = "assistant"
-				t.seenRole = true
-			}
-			ch := t.baseChunk(delta)
-			return []OpenAIStreamChunk{ch}, false, "", nil, nil
+			return t.renderer.HandleEvent(Event{Kind: EventAssistantTextDelta, Text: ev.Delta.Text}), false, "", nil, nil
 		case "input_json_delta":
 			tcIdx, ok := t.toolCallByBlockIdx[ev.Index]
 			if !ok {
 				return nil, false, "", nil, fmt.Errorf("unknown tool block index %d", ev.Index)
 			}
-			ch := t.baseChunk(OpenAIStreamDelta{
+			return t.renderer.HandleEvent(Event{
+				Kind: EventToolCallDelta,
 				ToolCalls: []OpenAIToolCall{{
 					Index: tcIdx,
 					Type:  "function",
@@ -152,38 +131,19 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 						Arguments: ev.Delta.PartialJSON,
 					},
 				}},
-			})
-			return []OpenAIStreamChunk{ch}, false, "", nil, nil
+			}), false, "", nil, nil
 		case "thinking_delta":
-			// Cursor BYOK 3.2 does not parse any reasoning field on
-			// stream deltas (the installed workbench only reads
-			// delta.content and delta.tool_calls). Emitting thinking
-			// as delta.reasoning / delta.reasoning_content buys us
-			// nothing for the observed consumer today. Collapsibles
-			// (<details>) block progressive render because the
-			// markdown renderer waits for the closing tag. Plain
-			// blockquote content renders line by line as it streams,
-			// which is the shape that already worked in Cursor.
-			//
-			// Sentinel HTML comments bookend the block so
-			// stripThinkingBlockquote in openai_to_anthropic.go can
-			// remove the whole envelope on the return trip, keeping
-			// the Anthropic cached prefix byte-stable across turns.
-			text := ev.Delta.Thinking
-			contentOut := FormatThinkingInlineDelta(!t.thinkingOpen, text)
-			if !t.thinkingOpen {
-				t.thinkingOpen = true
+			chunks := t.renderer.HandleEvent(Event{
+				Kind:          EventReasoningDelta,
+				Text:          ev.Delta.Thinking,
+				ReasoningKind: "text",
+			})
+			for _, ch := range chunks {
+				if len(ch.Choices) > 0 {
+					t.visibleText.WriteString(ch.Choices[0].Delta.Content)
+				}
 			}
-			delta := OpenAIStreamDelta{
-				Content: contentOut,
-			}
-			if !t.seenRole {
-				delta.Role = "assistant"
-				t.seenRole = true
-			}
-			t.visibleText.WriteString(contentOut)
-			ch := t.baseChunk(delta)
-			return []OpenAIStreamChunk{ch}, false, "", nil, nil
+			return chunks, false, "", nil, nil
 		default:
 			return nil, false, "", nil, nil
 		}
@@ -195,12 +155,9 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 		// stripThinkingBlockquote on the return trip matches the
 		// full envelope including the trailing whitespace so the
 		// cached prefix stays byte-stable across turns.
-		if t.currentBlockType == "thinking" && t.thinkingOpen {
+		if t.currentBlockType == "thinking" {
 			t.currentBlockType = ""
-			t.thinkingOpen = false
-			return []OpenAIStreamChunk{t.baseChunk(OpenAIStreamDelta{
-				Content: ThinkingInlineClose(),
-			})}, false, "", nil, nil
+			return t.renderer.HandleEvent(Event{Kind: EventReasoningFinished}), false, "", nil, nil
 		}
 		t.currentBlockType = ""
 		return nil, false, "", nil, nil
@@ -233,7 +190,13 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 		}
 		var extra []OpenAIStreamChunk
 		if t.lastStopReason == "refusal" && t.visibleText.Len() > 0 {
-			extra = append(extra, t.baseChunk(OpenAIStreamDelta{Refusal: t.visibleText.String()}))
+			extra = append(extra, OpenAIStreamChunk{
+				ID:      t.renderer.reqID,
+				Object:  "chat.completion.chunk",
+				Created: t.renderer.createdUnix,
+				Model:   t.renderer.modelAlias,
+				Choices: []OpenAIStreamChoice{{Index: 0, Delta: OpenAIStreamDelta{Refusal: t.visibleText.String()}}},
+			})
 		}
 		return extra, true, reason, u, nil
 
@@ -257,18 +220,5 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 
 	default:
 		return nil, false, "", nil, nil
-	}
-}
-
-func (t *StreamTranslator) baseChunk(delta OpenAIStreamDelta) OpenAIStreamChunk {
-	return OpenAIStreamChunk{
-		ID:      t.reqID,
-		Object:  "chat.completion.chunk",
-		Created: t.createdUnix,
-		Model:   t.modelAlias,
-		Choices: []OpenAIStreamChoice{{
-			Index: 0,
-			Delta: delta,
-		}},
 	}
 }

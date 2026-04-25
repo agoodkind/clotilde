@@ -233,24 +233,41 @@ func (s *Server) codexAppFallbackTimeout() time.Duration {
 type codexAuthFile struct {
 	AuthMode string `json:"auth_mode"`
 	Tokens   struct {
+		AccountID   string `json:"account_id"`
 		AccessToken string `json:"access_token"`
 	} `json:"tokens"`
 }
 
-func (s *Server) readCodexAccessToken() (string, error) {
+func (s *Server) readCodexAuthFile() (codexAuthFile, error) {
 	p := resolveCodexAuthFile(s.cfg.Codex.AuthFile)
 	data, err := os.ReadFile(p)
 	if err != nil {
-		return "", fmt.Errorf("read codex auth file: %w", err)
+		return codexAuthFile{}, fmt.Errorf("read codex auth file: %w", err)
 	}
 	var doc codexAuthFile
 	if err := json.Unmarshal(data, &doc); err != nil {
-		return "", fmt.Errorf("parse codex auth file: %w", err)
+		return codexAuthFile{}, fmt.Errorf("parse codex auth file: %w", err)
+	}
+	return doc, nil
+}
+
+func (s *Server) readCodexAccessToken() (string, error) {
+	doc, err := s.readCodexAuthFile()
+	if err != nil {
+		return "", err
 	}
 	if strings.TrimSpace(doc.Tokens.AccessToken) == "" {
 		return "", errors.New("codex auth file missing tokens.access_token")
 	}
 	return doc.Tokens.AccessToken, nil
+}
+
+func (s *Server) readCodexAccountID() string {
+	doc, err := s.readCodexAuthFile()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(doc.Tokens.AccountID)
 }
 
 type codexRPCClient struct {

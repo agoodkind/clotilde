@@ -115,9 +115,9 @@ type AppCallbacks struct {
 	// fallback poller still runs.
 	SubscribeRegistry func() (events <-chan SessionEvent, cancel func(), err error)
 	// CompactPreview streams compact progress events in preview mode.
-	CompactPreview func(req CompactRunRequest) (events <-chan CompactEvent, cancel func(), err error)
+	CompactPreview func(req CompactRunRequest) (events <-chan CompactEvent, done <-chan error, cancel func(), err error)
 	// CompactApply streams compact progress events in apply mode.
-	CompactApply func(req CompactRunRequest) (events <-chan CompactEvent, cancel func(), err error)
+	CompactApply func(req CompactRunRequest) (events <-chan CompactEvent, done <-chan error, cancel func(), err error)
 	// CompactUndo rolls back the latest compact apply for a session.
 	CompactUndo func(sessionName string) (*CompactUndoResult, error)
 }
@@ -208,19 +208,19 @@ type SessionDetail struct {
 }
 
 type ProviderStats struct {
-	Provider                string
-	Requests                int
-	Inflight                int
-	Streaming               int
-	InputTokens             int64
-	OutputTokens            int64
-	CacheReadTokens         int64
-	CacheCreationTokens     int64
+	Provider                   string
+	Requests                   int
+	Inflight                   int
+	Streaming                  int
+	InputTokens                int64
+	OutputTokens               int64
+	CacheReadTokens            int64
+	CacheCreationTokens        int64
 	DerivedCacheCreationTokens int64
-	HitRatio                float64
-	EstimatedCostMicrocents int64
-	LastSeen                time.Time
-	Error                   string
+	HitRatio                   float64
+	EstimatedCostMicrocents    int64
+	LastSeen                   time.Time
+	Error                      string
 }
 
 type DashboardStats struct {
@@ -1100,6 +1100,7 @@ type compactStreamEvent struct {
 type compactStreamOpened struct {
 	action string
 	events <-chan CompactEvent
+	done   <-chan error
 	cancel func()
 	err    error
 }
@@ -2300,7 +2301,7 @@ func (a *App) handleEvent(ev tcell.Event) {
 					break
 				}
 				a.compactCancel = d.cancel
-				go a.runCompactStream(d.events, d.action)
+				go a.runCompactStream(d.events, d.done, d.action)
 			}
 		case compactStreamDone:
 			a.compactCancel = nil
@@ -4103,7 +4104,7 @@ func (a *App) openRichCompactForm(sess *session.Session) {
 }
 
 func (a *App) startCompactRun(req CompactRunRequest, apply bool, panel *CompactPanel) {
-	var runner func(CompactRunRequest) (<-chan CompactEvent, func(), error)
+	var runner func(CompactRunRequest) (<-chan CompactEvent, <-chan error, func(), error)
 	action := "preview"
 	if apply {
 		runner = a.cb.CompactApply
@@ -4124,21 +4125,26 @@ func (a *App) startCompactRun(req CompactRunRequest, apply bool, panel *CompactP
 	}
 	panel.SetBusy(action, true)
 	go func() {
-		events, cancel, err := runner(req)
+		events, done, cancel, err := runner(req)
 		a.postInterrupt(compactStreamOpened{
 			action: action,
 			events: events,
+			done:   done,
 			cancel: cancel,
 			err:    err,
 		})
 	}()
 }
 
-func (a *App) runCompactStream(events <-chan CompactEvent, action string) {
+func (a *App) runCompactStream(events <-chan CompactEvent, done <-chan error, action string) {
+	var streamErr error
 	for ev := range events {
 		a.postInterrupt(compactStreamEvent{event: ev})
 	}
-	a.postInterrupt(compactStreamDone{action: action})
+	if done != nil {
+		streamErr = <-done
+	}
+	a.postInterrupt(compactStreamDone{action: action, err: streamErr})
 }
 
 func (a *App) startCompactUndo(sessionName string, panel *CompactPanel) {

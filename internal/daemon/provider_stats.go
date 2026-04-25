@@ -19,18 +19,18 @@ import (
 )
 
 type providerAggregate struct {
-	Provider                string
-	Requests                int64
-	Inflight                int64
-	Streaming               int64
-	InputTokens             int64
-	OutputTokens            int64
-	CacheReadTokens         int64
-	CacheCreationTokens     int64
+	Provider                   string
+	Requests                   int64
+	Inflight                   int64
+	Streaming                  int64
+	InputTokens                int64
+	OutputTokens               int64
+	CacheReadTokens            int64
+	CacheCreationTokens        int64
 	DerivedCacheCreationTokens int64
-	EstimatedCostMicrocents int64
-	LastSeenUnix            int64
-	Error                   string
+	EstimatedCostMicrocents    int64
+	LastSeenUnix               int64
+	Error                      string
 }
 
 type activeProviderRequest struct {
@@ -131,22 +131,22 @@ func requestEventFromLogRecord(msg string, rec map[string]any) (chatemit.Request
 		return chatemit.RequestEvent{}, false
 	}
 	ev := chatemit.RequestEvent{
-		Stage:               stage,
-		Provider:            stringValue(rec, "provider"),
-		Backend:             stringValue(rec, "backend"),
-		RequestID:           stringValue(rec, "request_id"),
-		Alias:               stringValue(rec, "alias"),
-		ModelID:             stringValue(rec, "model"),
-		Stream:              boolValue(rec, "stream"),
-		FinishReason:        stringValue(rec, "finish_reason"),
-		TokensIn:            intValue(rec, "prompt_tokens"),
-		TokensOut:           intValue(rec, "completion_tokens"),
-		CacheReadTokens:     intValue(rec, "cache_read_tokens"),
-		CacheCreationTokens: intValue(rec, "cache_creation_tokens"),
+		Stage:                      stage,
+		Provider:                   stringValue(rec, "provider"),
+		Backend:                    stringValue(rec, "backend"),
+		RequestID:                  stringValue(rec, "request_id"),
+		Alias:                      stringValue(rec, "alias"),
+		ModelID:                    stringValue(rec, "model"),
+		Stream:                     boolValue(rec, "stream"),
+		FinishReason:               stringValue(rec, "finish_reason"),
+		TokensIn:                   intValue(rec, "prompt_tokens"),
+		TokensOut:                  intValue(rec, "completion_tokens"),
+		CacheReadTokens:            intValue(rec, "cache_read_tokens"),
+		CacheCreationTokens:        intValue(rec, "cache_creation_tokens"),
 		DerivedCacheCreationTokens: intValue(rec, "derived_cache_creation_tokens"),
-		CostMicrocents:      int64Value(rec, "cost_microcents"),
-		DurationMs:          int64Value(rec, "duration_ms"),
-		Err:                 stringValue(rec, "error"),
+		CostMicrocents:             int64Value(rec, "cost_microcents"),
+		DurationMs:                 int64Value(rec, "duration_ms"),
+		Err:                        stringValue(rec, "error"),
 	}
 	if ev.Err == "" {
 		ev.Err = stringValue(rec, "err")
@@ -291,19 +291,19 @@ func (h *providerStatsHub) protoFor(agg *providerAggregate) *clydev1.ProviderSta
 		hitRatio = float64(agg.CacheReadTokens) / float64(denom)
 	}
 	return &clydev1.ProviderStats{
-		Provider:                agg.Provider,
-		Requests:                int32(agg.Requests),
-		Inflight:                int32(agg.Inflight),
-		Streaming:               int32(agg.Streaming),
-		InputTokens:             agg.InputTokens,
-		OutputTokens:            agg.OutputTokens,
-		CacheReadTokens:         agg.CacheReadTokens,
-		CacheCreationTokens:     agg.CacheCreationTokens,
+		Provider:                   agg.Provider,
+		Requests:                   int32(agg.Requests),
+		Inflight:                   int32(agg.Inflight),
+		Streaming:                  int32(agg.Streaming),
+		InputTokens:                agg.InputTokens,
+		OutputTokens:               agg.OutputTokens,
+		CacheReadTokens:            agg.CacheReadTokens,
+		CacheCreationTokens:        agg.CacheCreationTokens,
 		DerivedCacheCreationTokens: agg.DerivedCacheCreationTokens,
-		HitRatio:                hitRatio,
-		EstimatedCostMicrocents: agg.EstimatedCostMicrocents,
-		LastSeenUnix:            agg.LastSeenUnix,
-		Error:                   agg.Error,
+		HitRatio:                   hitRatio,
+		EstimatedCostMicrocents:    agg.EstimatedCostMicrocents,
+		LastSeenUnix:               agg.LastSeenUnix,
+		Error:                      agg.Error,
 	}
 }
 

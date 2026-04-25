@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -840,15 +841,15 @@ type CompactRunOptions struct {
 	Force          bool
 }
 
-func CompactPreviewViaDaemon(parent context.Context, in CompactRunOptions) (<-chan *clydev1.CompactEvent, context.CancelFunc, error) {
+func CompactPreviewViaDaemon(parent context.Context, in CompactRunOptions) (<-chan *clydev1.CompactEvent, <-chan error, context.CancelFunc, error) {
 	return openCompactStream(parent, in, false)
 }
 
-func CompactApplyViaDaemon(parent context.Context, in CompactRunOptions) (<-chan *clydev1.CompactEvent, context.CancelFunc, error) {
+func CompactApplyViaDaemon(parent context.Context, in CompactRunOptions) (<-chan *clydev1.CompactEvent, <-chan error, context.CancelFunc, error) {
 	return openCompactStream(parent, in, true)
 }
 
-func openCompactStream(parent context.Context, in CompactRunOptions, apply bool) (<-chan *clydev1.CompactEvent, context.CancelFunc, error) {
+func openCompactStream(parent context.Context, in CompactRunOptions, apply bool) (<-chan *clydev1.CompactEvent, <-chan error, context.CancelFunc, error) {
 	log := daemonClientLog(parent)
 	log.DebugContext(parent, "daemon.client.compact.begin",
 		"session", in.SessionName,
@@ -858,7 +859,7 @@ func openCompactStream(parent context.Context, in CompactRunOptions, apply bool)
 	c, err := ConnectOrStart(parent)
 	if err != nil {
 		log.DebugContext(parent, "daemon.client.compact.connect_failed", "err", err)
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	ctx, cancel := context.WithCancel(parent)
 	req := &clydev1.CompactRunRequest{
@@ -886,17 +887,24 @@ func openCompactStream(parent context.Context, in CompactRunOptions, apply bool)
 		log.DebugContext(ctx, "daemon.client.compact.stream_open_failed", "apply", apply, "err", err)
 		cancel()
 		c.conn.Close()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	log.DebugContext(ctx, "daemon.client.compact.stream_open", "apply", apply)
 	out := make(chan *clydev1.CompactEvent, 64)
+	done := make(chan error, 1)
 	go func() {
 		defer close(out)
+		defer close(done)
 		defer c.conn.Close()
 		for {
 			ev, recvErr := stream.Recv()
 			if recvErr != nil {
 				log.DebugContext(ctx, "daemon.client.compact.recv_done", "apply", apply, "err", recvErr)
+				if recvErr == io.EOF {
+					done <- nil
+				} else {
+					done <- recvErr
+				}
 				return
 			}
 			select {
@@ -906,7 +914,7 @@ func openCompactStream(parent context.Context, in CompactRunOptions, apply bool)
 			}
 		}
 	}()
-	return out, cancel, nil
+	return out, done, cancel, nil
 }
 
 func CompactUndoViaDaemon(ctx context.Context, sessionName string) (*clydev1.CompactUndoResponse, error) {

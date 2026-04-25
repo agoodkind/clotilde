@@ -22,7 +22,9 @@ type DiscoveryResult struct {
 	Entrypoint     string
 	FirstEntryTime time.Time
 	CustomTitle    string // user-given chat name from Claude Code "custom-title" entries
+	ForkParentID   string // parent session UUID when this transcript was created as a fork
 	IsAutoName     bool   // SDK-CLI invocation that looks like a clyde auto-name call
+	IsForked       bool   // transcript carries fork lineage from Claude Code
 	IsSubagent     bool   // file lives in a subagents/ directory
 }
 
@@ -74,6 +76,9 @@ type transcriptHeader struct {
 	Type        string `json:"type"`
 	Content     string `json:"content"`     // present on queue-operation entries
 	CustomTitle string `json:"customTitle"` // present on custom-title entries
+	ForkedFrom  struct {
+		SessionID string `json:"sessionId"`
+	} `json:"forkedFrom"`
 }
 
 // ScanProjects walks ~/.claude/projects/<encoded-cwd>/*.jsonl and returns
@@ -180,10 +185,18 @@ func readTranscriptHeader(path string) (DiscoveryResult, bool) {
 			if h.SessionID != "" && dr.SessionID == "" {
 				dr.SessionID = h.SessionID
 			}
+			if h.ForkedFrom.SessionID != "" && dr.ForkParentID == "" {
+				dr.ForkParentID = h.ForkedFrom.SessionID
+				dr.IsForked = true
+			}
 			continue
 		}
 		if h.SessionID != "" && dr.SessionID == "" {
 			dr.SessionID = h.SessionID
+		}
+		if h.ForkedFrom.SessionID != "" && dr.ForkParentID == "" {
+			dr.ForkParentID = h.ForkedFrom.SessionID
+			dr.IsForked = true
 		}
 		if h.CWD != "" && dr.WorkspaceRoot == "" {
 			dr.WorkspaceRoot = h.CWD
@@ -298,7 +311,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 			skippedNoSessionID++
 			continue
 		}
-		if known[r.SessionID] {
+		if _, ok := known[r.SessionID]; ok {
 			skippedKnown++
 			continue
 		}
@@ -306,12 +319,18 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 		existingNames[name] = true
 
 		md := Metadata{
-			Name:           name,
-			SessionID:      r.SessionID,
-			TranscriptPath: r.TranscriptPath,
-			WorkspaceRoot:  r.WorkspaceRoot,
-			WorkDir:        r.WorkspaceRoot,
-			DisplayTitle:   r.CustomTitle,
+			Name:            name,
+			SessionID:       r.SessionID,
+			TranscriptPath:  r.TranscriptPath,
+			WorkspaceRoot:   r.WorkspaceRoot,
+			WorkDir:         r.WorkspaceRoot,
+			DisplayTitle:    r.CustomTitle,
+			IsForkedSession: r.IsForked,
+		}
+		if r.IsForked && r.ForkParentID != "" {
+			if parentName, ok := known[r.ForkParentID]; ok {
+				md.ParentSession = parentName
+			}
 		}
 		fi, err := os.Stat(r.TranscriptPath)
 		if err == nil {
@@ -346,13 +365,15 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 			"subcomponent", "adopt",
 			"session", name,
 			"session_id", r.SessionID,
+			"forked", md.IsForkedSession,
+			"parent_session", md.ParentSession,
 			"transcript", r.TranscriptPath,
 			"workspace", r.WorkspaceRoot,
 			"name_source", nameSource,
 			"display_title", r.CustomTitle,
 		)
 		adopted = append(adopted, AdoptedSession{Name: name, Metadata: md})
-		known[r.SessionID] = true
+		known[r.SessionID] = name
 	}
 	slog.Debug("session.adopt.completed",
 		"component", "session",
@@ -412,18 +433,18 @@ func pickAdoptedName(r DiscoveryResult, taken map[string]bool) (string, string) 
 // buildKnownUUIDSet returns the set of UUIDs the store already manages.
 // Both current and previous IDs are included so a session that has gone
 // through /clear cycles is not double-adopted.
-func buildKnownUUIDSet(store *FileStore) (map[string]bool, error) {
+func buildKnownUUIDSet(store *FileStore) (map[string]string, error) {
 	all, err := store.List()
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]bool, len(all)*2)
+	out := make(map[string]string, len(all)*2)
 	for _, s := range all {
 		if s.Metadata.SessionID != "" {
-			out[s.Metadata.SessionID] = true
+			out[s.Metadata.SessionID] = s.Name
 		}
 		for _, id := range s.Metadata.PreviousSessionIDs {
-			out[id] = true
+			out[id] = s.Name
 		}
 	}
 	return out, nil

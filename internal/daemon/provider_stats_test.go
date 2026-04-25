@@ -34,21 +34,22 @@ func TestProviderStatsHubTracksInflightStreamingAndTerminal(t *testing.T) {
 	}
 
 	hub.Record(ctx, chatemit.RequestEvent{
-		Stage:               chatemit.RequestStageCompleted,
-		Provider:            "openai-codex",
-		RequestID:           "req-1",
-		TokensIn:            100,
-		TokensOut:           50,
-		CacheReadTokens:     25,
-		CacheCreationTokens: 5,
-		CostMicrocents:      700,
+		Stage:                      chatemit.RequestStageCompleted,
+		Provider:                   "openai-codex",
+		RequestID:                  "req-1",
+		TokensIn:                   100,
+		TokensOut:                  50,
+		CacheReadTokens:            25,
+		CacheCreationTokens:        5,
+		DerivedCacheCreationTokens: 9,
+		CostMicrocents:             700,
 	})
 	stats = hub.snapshot()
 	got := stats[0]
 	if got.GetInflight() != 0 || got.GetStreaming() != 0 || got.GetRequests() != 1 {
 		t.Fatalf("after terminal counts wrong: %+v", got)
 	}
-	if got.GetInputTokens() != 100 || got.GetOutputTokens() != 50 || got.GetCacheReadTokens() != 25 || got.GetCacheCreationTokens() != 5 {
+	if got.GetInputTokens() != 100 || got.GetOutputTokens() != 50 || got.GetCacheReadTokens() != 25 || got.GetCacheCreationTokens() != 5 || got.GetDerivedCacheCreationTokens() != 9 {
 		t.Fatalf("after terminal tokens wrong: %+v", got)
 	}
 }

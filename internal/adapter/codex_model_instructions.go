@@ -1,0 +1,45 @@
+package adapter
+
+import (
+	_ "embed"
+	"encoding/json"
+	"log/slog"
+	"strings"
+)
+
+//go:embed codex_model_instructions.json
+var codexModelInstructionsJSON []byte
+
+var codexModelInstructions = loadCodexModelInstructions()
+
+type codexModelInstructionCatalog struct {
+	Models []struct {
+		Slug             string `json:"slug"`
+		BaseInstructions string `json:"base_instructions"`
+	} `json:"models"`
+}
+
+func loadCodexModelInstructions() map[string]string {
+	var catalog codexModelInstructionCatalog
+	if err := json.Unmarshal(codexModelInstructionsJSON, &catalog); err != nil {
+		slog.Error("adapter.codex.instructions_catalog.parse_failed",
+			"component", "adapter",
+			"subcomponent", "codex",
+			"err", err,
+		)
+		return nil
+	}
+	out := make(map[string]string, len(catalog.Models))
+	for _, model := range catalog.Models {
+		slug := strings.TrimSpace(model.Slug)
+		if slug == "" {
+			continue
+		}
+		text := strings.TrimSpace(model.BaseInstructions)
+		if text == "" {
+			continue
+		}
+		out[slug] = text
+	}
+	return out
+}

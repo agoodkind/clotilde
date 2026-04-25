@@ -85,8 +85,36 @@ func TestStreamTranslatorThinkingEmitsBlockquoteContent(t *testing.T) {
 
 func TestStreamTranslatorThinkingClosesWithSentinelOnBlockStop(t *testing.T) {
 	tr := NewStreamTranslator("req2", "clyde-test")
-	tr.currentBlockType = "thinking"
-	tr.thinkingOpen = true
+	startThinking, err := json.Marshal(struct {
+		Index        int `json:"index"`
+		ContentBlock struct {
+			Type string `json:"type"`
+		} `json:"content_block"`
+	}{
+		Index: 0,
+		ContentBlock: struct {
+			Type string `json:"type"`
+		}{Type: "thinking"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, err := tr.HandleEvent("content_block_start", startThinking); err != nil {
+		t.Fatalf("HandleEvent start: %v", err)
+	}
+	deltaThinking, err := json.Marshal(struct {
+		Index int           `json:"index"`
+		Delta *AnthSSEDelta `json:"delta"`
+	}{
+		Index: 0,
+		Delta: &AnthSSEDelta{Type: "thinking_delta", Thinking: "step one"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, err := tr.HandleEvent("content_block_delta", deltaThinking); err != nil {
+		t.Fatalf("HandleEvent delta: %v", err)
+	}
 
 	stopEv, err := json.Marshal(struct {
 		Index int `json:"index"`

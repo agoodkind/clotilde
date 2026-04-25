@@ -40,6 +40,7 @@ func (sw *sseWriter) writeSSEHeaders() {
 	sw.w.Header().Set("Connection", "keep-alive")
 	sw.w.WriteHeader(http.StatusOK)
 	sw.headersCommitted = true
+	sw.f.Flush()
 }
 
 func (sw *sseWriter) emitStreamChunk(systemFingerprint string, chunk StreamChunk) error {

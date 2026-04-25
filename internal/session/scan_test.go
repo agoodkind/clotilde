@@ -43,8 +43,21 @@ var _ = Describe("ScanProjects", func() {
 		Expect(r.WorkspaceRoot).To(Equal("/Users/agoodkind/Sites/foo"))
 		Expect(r.Entrypoint).To(Equal("cli"))
 		Expect(r.IsAutoName).To(BeFalse())
+		Expect(r.IsForked).To(BeFalse())
 		Expect(r.IsSubagent).To(BeFalse())
 		Expect(r.FirstEntryTime.IsZero()).To(BeFalse())
+	})
+
+	It("captures fork lineage from transcript headers", func() {
+		writeTranscript("bbbbbbbb-1111-2222-3333-444444444444",
+			`{"type":"system","timestamp":"2026-04-15T10:00:00Z","entrypoint":"cli","cwd":"/Users/agoodkind/Sites/foo","sessionId":"bbbbbbbb-1111-2222-3333-444444444444","forkedFrom":{"sessionId":"aaaaaaaa-1111-2222-3333-444444444444"}}`+"\n",
+		)
+
+		out, err := session.ScanProjects(projectsRoot)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(out).To(HaveLen(1))
+		Expect(out[0].IsForked).To(BeTrue())
+		Expect(out[0].ForkParentID).To(Equal("aaaaaaaa-1111-2222-3333-444444444444"))
 	})
 
 	It("flags sdk-cli entrypoints as auto-name", func() {
@@ -126,6 +139,31 @@ var _ = Describe("AdoptUnknown", func() {
 		adopted, err := session.AdoptUnknown(store, results)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(adopted).To(BeEmpty())
+	})
+
+	It("marks adopted fork sessions and links the parent when known", func() {
+		parentUUID := "aaaaaaaa-1111-2222-3333-444444444444"
+		childUUID := "bbbbbbbb-1111-2222-3333-444444444444"
+		Expect(store.Create(&session.Session{
+			Name: "parent-session",
+			Metadata: session.Metadata{
+				Name:      "parent-session",
+				SessionID: parentUUID,
+			},
+		})).To(Succeed())
+		dir := filepath.Join(projectsRoot, "-Users-agoodkind-Sites-foo")
+		Expect(os.MkdirAll(dir, 0o755)).To(Succeed())
+		path := filepath.Join(dir, childUUID+".jsonl")
+		body := `{"type":"system","timestamp":"2026-04-15T10:00:00Z","entrypoint":"cli","cwd":"/Users/agoodkind/Sites/foo","sessionId":"` + childUUID + `","forkedFrom":{"sessionId":"` + parentUUID + `"}}` + "\n"
+		Expect(os.WriteFile(path, []byte(body), 0o600)).To(Succeed())
+
+		results, err := session.ScanProjects(projectsRoot)
+		Expect(err).ToNot(HaveOccurred())
+		adopted, err := session.AdoptUnknown(store, results)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(adopted).To(HaveLen(1))
+		Expect(adopted[0].Metadata.IsForkedSession).To(BeTrue())
+		Expect(adopted[0].Metadata.ParentSession).To(Equal("parent-session"))
 	})
 
 	It("skips auto-name and subagent transcripts", func() {

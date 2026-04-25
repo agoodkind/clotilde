@@ -1688,9 +1688,10 @@ func (s *Server) ProbeContextUsage(ctx context.Context, req *clydev1.ProbeContex
 		return nil, status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
 	}
 	usage, err := compactengine.ProbeContextUsage(ctx, compactengine.ProbeOptions{
-		SessionID: sess.Metadata.SessionID,
-		WorkDir:   s.contextProbeWorkDir(sess),
-		Timeout:   60 * time.Second,
+		SessionID:   sess.Metadata.SessionID,
+		WorkDir:     s.contextProbeWorkDir(sess),
+		Timeout:     60 * time.Second,
+		ForkSession: true,
 	})
 	if err != nil {
 		s.log.Warn("daemon.context_usage.probe.failed",

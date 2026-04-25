@@ -87,14 +87,31 @@ func autoAdoptSession(
 	// hook handles the pre-named path (CLYDE_SESSION_NAME set), so Name
 	// stays authoritative; DisplayTitle is purely decorative.
 	if hookData.TranscriptPath != "" {
-		if dr, ok := session.ReadTranscriptHeader(hookData.TranscriptPath); ok && dr.CustomTitle != "" {
-			sess.Metadata.DisplayTitle = dr.CustomTitle
-			log.Debug("hook.sessionstart.display_title_captured",
-				"component", "hook",
-				"subject", "sessionstart",
-				"session", name,
-				"display_title", dr.CustomTitle,
-			)
+		if dr, ok := session.ReadTranscriptHeader(hookData.TranscriptPath); ok {
+			if dr.CustomTitle != "" {
+				sess.Metadata.DisplayTitle = dr.CustomTitle
+				log.Debug("hook.sessionstart.display_title_captured",
+					"component", "hook",
+					"subject", "sessionstart",
+					"session", name,
+					"display_title", dr.CustomTitle,
+				)
+			}
+			if dr.IsForked {
+				sess.Metadata.IsForkedSession = true
+				if dr.ForkParentID != "" {
+					if parentName, err := findSessionByUUID(store, dr.ForkParentID); err == nil {
+						sess.Metadata.ParentSession = parentName
+					}
+				}
+				log.Debug("hook.sessionstart.fork_lineage_captured",
+					"component", "hook",
+					"subject", "sessionstart",
+					"session", name,
+					"parent_session", sess.Metadata.ParentSession,
+					"parent_session_id", dr.ForkParentID,
+				)
+			}
 		}
 	}
 

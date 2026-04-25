@@ -359,8 +359,8 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			}()
 			return out, cancel, nil
 		},
-		CompactPreview: func(req ui.CompactRunRequest) (<-chan ui.CompactEvent, func(), error) {
-			raw, cancel, err := daemon.CompactPreviewViaDaemon(context.Background(), daemon.CompactRunOptions{
+		CompactPreview: func(req ui.CompactRunRequest) (<-chan ui.CompactEvent, <-chan error, func(), error) {
+			raw, done, cancel, err := daemon.CompactPreviewViaDaemon(context.Background(), daemon.CompactRunOptions{
 				SessionName:    req.SessionName,
 				TargetTokens:   req.TargetTokens,
 				ReservedTokens: req.ReservedTokens,
@@ -374,7 +374,7 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 				Force:          req.Force,
 			})
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			out := make(chan ui.CompactEvent, 64)
 			go func() {
@@ -383,10 +383,10 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 					out <- compactEventFromProto(ev)
 				}
 			}()
-			return out, cancel, nil
+			return out, done, cancel, nil
 		},
-		CompactApply: func(req ui.CompactRunRequest) (<-chan ui.CompactEvent, func(), error) {
-			raw, cancel, err := daemon.CompactApplyViaDaemon(context.Background(), daemon.CompactRunOptions{
+		CompactApply: func(req ui.CompactRunRequest) (<-chan ui.CompactEvent, <-chan error, func(), error) {
+			raw, done, cancel, err := daemon.CompactApplyViaDaemon(context.Background(), daemon.CompactRunOptions{
 				SessionName:    req.SessionName,
 				TargetTokens:   req.TargetTokens,
 				ReservedTokens: req.ReservedTokens,
@@ -400,7 +400,7 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 				Force:          req.Force,
 			})
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			out := make(chan ui.CompactEvent, 64)
 			go func() {
@@ -409,7 +409,7 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 					out <- compactEventFromProto(ev)
 				}
 			}()
-			return out, cancel, nil
+			return out, done, cancel, nil
 		},
 		CompactUndo: func(sessionName string) (*ui.CompactUndoResult, error) {
 			resp, err := daemon.CompactUndoViaDaemon(context.Background(), sessionName)
