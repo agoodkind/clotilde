@@ -7,301 +7,33 @@ import (
 	"io"
 	"log/slog"
 	"strings"
-	"sync"
-	"time"
 
+	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
-const (
-	defaultCodexSessionTTL = 20 * time.Minute
-	defaultCodexSessionMax = 8
-)
-
-type codexManagedPromptPlan struct {
-	System            string
-	FullPrompt        string
-	IncrementalPrompt string
-	AssistantAnchor   string
-}
+type codexManagedPromptPlan = adaptercodex.ManagedPromptPlan
+type codexSessionSpec = adaptercodex.SessionSpec
+type codexSessionAcquireResult = adaptercodex.SessionAcquireResult
+type codexManagedTransport = adaptercodex.ManagedTransport
+type codexManagedSession = adaptercodex.ManagedSession
+type codexSessionManager = adaptercodex.SessionManager
 
 func normalizeCodexAssistantAnchor(text string) string {
-	return strings.TrimSpace(sanitizeForUpstreamCache(text))
+	return adaptercodex.NormalizeAssistantAnchor(text, sanitizeForUpstreamCache)
 }
 
 func deriveCodexCacheCreationTokens(previousCachedInputTokens, currentCachedInputTokens int) int {
-	derived := currentCachedInputTokens - previousCachedInputTokens
-	if derived < 0 {
-		return 0
-	}
-	return derived
+	return adaptercodex.DeriveCacheCreationTokens(previousCachedInputTokens, currentCachedInputTokens)
 }
 
 func buildCodexManagedPromptPlan(messages []ChatMessage) codexManagedPromptPlan {
-	system, fullPrompt := BuildPrompt(messages)
-	lastAssistant := -1
-	for i := len(messages) - 1; i >= 0; i-- {
-		if strings.EqualFold(strings.TrimSpace(messages[i].Role), "assistant") {
-			lastAssistant = i
-			break
-		}
-	}
-	incrementalMsgs := messages
-	assistantAnchor := ""
-	if lastAssistant >= 0 {
-		incrementalMsgs = messages[lastAssistant+1:]
-		assistantAnchor = normalizeCodexAssistantAnchor(FlattenContent(messages[lastAssistant].Content))
-	}
-	_, incrementalPrompt := BuildPrompt(incrementalMsgs)
-	incrementalPrompt = strings.TrimSpace(incrementalPrompt)
-	if incrementalPrompt == "" {
-		incrementalPrompt = strings.TrimSpace(fullPrompt)
-	}
-	return codexManagedPromptPlan{
-		System:            system,
-		FullPrompt:        strings.TrimSpace(fullPrompt),
-		IncrementalPrompt: incrementalPrompt,
-		AssistantAnchor:   assistantAnchor,
-	}
-}
-
-type codexSessionSpec struct {
-	Key     string
-	Model   string
-	Effort  string
-	Summary string
-	System  string
-}
-
-type codexSessionAcquireResult struct {
-	Session     *codexManagedSession
-	Created     bool
-	ResetReason string
-}
-
-type codexManagedTransport interface {
-	runTurn(ctx context.Context, requestID string, model string, effort any, summary any, prompt string, emit func(tooltrans.OpenAIStreamChunk) error) (codexRunResult, string, error)
-	close() error
-}
-
-type codexManagedSession struct {
-	key           string
-	transport     codexManagedTransport
-	model         string
-	effort        string
-	summary       string
-	system        string
-	lastAssistant string
-	createdAt     time.Time
-	lastUsed      time.Time
-
-	runMu sync.Mutex
-	refs  int
-}
-
-type codexSessionManager struct {
-	mu       sync.Mutex
-	sessions map[string]*codexManagedSession
-	ttl      time.Duration
-	max      int
-	log      *slog.Logger
-	now      func() time.Time
-	start    func(spec codexSessionSpec) (codexManagedTransport, error)
+	return adaptercodex.BuildManagedPromptPlan(messages, BuildPrompt, FlattenContent, sanitizeForUpstreamCache)
 }
 
 func newCodexSessionManager(log *slog.Logger, start func(spec codexSessionSpec) (codexManagedTransport, error)) *codexSessionManager {
-	if log == nil {
-		log = slog.Default()
-	}
-	return &codexSessionManager{
-		sessions: make(map[string]*codexManagedSession),
-		ttl:      defaultCodexSessionTTL,
-		max:      defaultCodexSessionMax,
-		log:      log,
-		now:      time.Now,
-		start:    start,
-	}
-}
-
-func (m *codexSessionManager) acquire(ctx context.Context, spec codexSessionSpec) (codexSessionAcquireResult, error) {
-	if m == nil {
-		return codexSessionAcquireResult{}, fmt.Errorf("codex session manager not configured")
-	}
-	now := m.now()
-	var toClose []closeWithReason
-
-	m.mu.Lock()
-	toClose = append(toClose, m.sweepLocked(now)...)
-	if existing := m.sessions[spec.Key]; existing != nil {
-		if reason := codexSessionResetReason(existing, spec); reason != "" {
-			delete(m.sessions, spec.Key)
-			toClose = append(toClose, closeWithReason{session: existing, reason: reason})
-		} else {
-			existing.refs++
-			existing.lastUsed = now
-			m.mu.Unlock()
-			closeSessions(toClose)
-			return codexSessionAcquireResult{Session: existing}, nil
-		}
-	}
-	m.mu.Unlock()
-	closeSessions(toClose)
-
-	transport, err := m.start(spec)
-	if err != nil {
-		return codexSessionAcquireResult{}, err
-	}
-	session := &codexManagedSession{
-		key:       spec.Key,
-		transport: transport,
-		model:     spec.Model,
-		effort:    spec.Effort,
-		summary:   spec.Summary,
-		system:    spec.System,
-		createdAt: now,
-		lastUsed:  now,
-		refs:      1,
-	}
-
-	var postCreateClose []closeWithReason
-	m.mu.Lock()
-	postCreateClose = append(postCreateClose, m.sweepLocked(now)...)
-	if existing := m.sessions[spec.Key]; existing != nil {
-		if reason := codexSessionResetReason(existing, spec); reason == "" {
-			existing.refs++
-			existing.lastUsed = now
-			m.mu.Unlock()
-			_ = transport.close()
-			closeSessions(postCreateClose)
-			return codexSessionAcquireResult{Session: existing}, nil
-		}
-		delete(m.sessions, spec.Key)
-		postCreateClose = append(postCreateClose, closeWithReason{session: existing, reason: "replaced_during_create"})
-	}
-	m.sessions[spec.Key] = session
-	postCreateClose = append(postCreateClose, m.enforceCapLocked(now)...)
-	m.mu.Unlock()
-	closeSessions(postCreateClose)
-	return codexSessionAcquireResult{Session: session, Created: true}, nil
-}
-
-func (m *codexSessionManager) release(session *codexManagedSession) {
-	if m == nil || session == nil {
-		return
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if current := m.sessions[session.key]; current == session && session.refs > 0 {
-		session.refs--
-		session.lastUsed = m.now()
-	}
-}
-
-func (m *codexSessionManager) drop(session *codexManagedSession, reason string) {
-	if m == nil || session == nil {
-		return
-	}
-	m.mu.Lock()
-	if current := m.sessions[session.key]; current == session {
-		delete(m.sessions, session.key)
-	}
-	m.mu.Unlock()
-	_ = session.transport.close()
-	m.log.LogAttrs(context.Background(), slog.LevelInfo, "adapter.codex.session.dropped",
-		slog.String("session_key", session.key),
-		slog.String("reason", reason),
-	)
-}
-
-func (m *codexSessionManager) closeAll() {
-	if m == nil {
-		return
-	}
-	m.mu.Lock()
-	sessions := make([]*codexManagedSession, 0, len(m.sessions))
-	for key, session := range m.sessions {
-		delete(m.sessions, key)
-		sessions = append(sessions, session)
-	}
-	m.mu.Unlock()
-	for _, session := range sessions {
-		_ = session.transport.close()
-	}
-}
-
-type closeWithReason struct {
-	session *codexManagedSession
-	reason  string
-}
-
-func closeSessions(items []closeWithReason) {
-	for _, item := range items {
-		if item.session == nil {
-			continue
-		}
-		_ = item.session.transport.close()
-	}
-}
-
-func codexSessionResetReason(session *codexManagedSession, spec codexSessionSpec) string {
-	switch {
-	case session.model != spec.Model:
-		return "model_changed"
-	case session.effort != spec.Effort:
-		return "effort_changed"
-	case session.summary != spec.Summary:
-		return "summary_changed"
-	case session.system != spec.System:
-		return "system_changed"
-	default:
-		return ""
-	}
-}
-
-func (m *codexSessionManager) sweepLocked(now time.Time) []closeWithReason {
-	if m.ttl <= 0 {
-		return nil
-	}
-	var out []closeWithReason
-	for key, session := range m.sessions {
-		if session.refs > 0 {
-			continue
-		}
-		if now.Sub(session.lastUsed) <= m.ttl {
-			continue
-		}
-		delete(m.sessions, key)
-		out = append(out, closeWithReason{session: session, reason: "idle_ttl"})
-	}
-	return out
-}
-
-func (m *codexSessionManager) enforceCapLocked(now time.Time) []closeWithReason {
-	if m.max <= 0 || len(m.sessions) <= m.max {
-		return nil
-	}
-	var out []closeWithReason
-	for len(m.sessions) > m.max {
-		var oldestKey string
-		var oldest *codexManagedSession
-		for key, session := range m.sessions {
-			if session.refs > 0 {
-				continue
-			}
-			if oldest == nil || session.lastUsed.Before(oldest.lastUsed) {
-				oldest = session
-				oldestKey = key
-			}
-		}
-		if oldest == nil {
-			break
-		}
-		delete(m.sessions, oldestKey)
-		out = append(out, closeWithReason{session: oldest, reason: "max_sessions"})
-	}
-	_ = now
-	return out
+	return adaptercodex.NewSessionManager(log, start)
 }
 
 type codexAppTransport struct {
@@ -405,6 +137,8 @@ func (t *codexAppTransport) close() error {
 	}
 	return nil
 }
+
+func (t *codexAppTransport) Close() error { return t.close() }
 
 func (t *codexAppTransport) runTurn(ctx context.Context, requestID string, model string, effort any, summary any, prompt string, emit func(tooltrans.OpenAIStreamChunk) error) (codexRunResult, string, error) {
 	if strings.TrimSpace(prompt) == "" {
@@ -644,12 +378,12 @@ func (s *Server) runCodexManaged(
 		spec.Model = strings.TrimSpace(model.Alias)
 	}
 
-	acquired, err := s.codexSessions.acquire(ctx, spec)
+	acquired, err := s.codexSessions.Acquire(ctx, spec)
 	if err != nil {
 		return codexRunResult{}, "", false, err
 	}
 	session := acquired.Session
-	defer s.codexSessions.release(session)
+	defer s.codexSessions.Release(session)
 
 	prompt := plan.IncrementalPrompt
 	promptMode := "incremental"
@@ -661,21 +395,21 @@ func (s *Server) runCodexManaged(
 
 	if !acquired.Created {
 		switch {
-		case session.lastAssistant == "" && plan.AssistantAnchor != "":
+		case session.LastAssistant == "" && plan.AssistantAnchor != "":
 			resetReason = "assistant_anchor_missing"
-		case session.lastAssistant != "" && plan.AssistantAnchor == "":
+		case session.LastAssistant != "" && plan.AssistantAnchor == "":
 			resetReason = "assistant_anchor_dropped"
-		case session.lastAssistant != "" && plan.AssistantAnchor != "" && session.lastAssistant != plan.AssistantAnchor:
+		case session.LastAssistant != "" && plan.AssistantAnchor != "" && session.LastAssistant != plan.AssistantAnchor:
 			resetReason = "assistant_anchor_mismatch"
 		}
 		if resetReason != "" {
-			s.codexSessions.drop(session, resetReason)
-			acquired, err = s.codexSessions.acquire(ctx, spec)
+			s.codexSessions.Drop(session, resetReason)
+			acquired, err = s.codexSessions.Acquire(ctx, spec)
 			if err != nil {
 				return codexRunResult{}, "", false, err
 			}
 			session = acquired.Session
-			defer s.codexSessions.release(session)
+			defer s.codexSessions.Release(session)
 			prompt = plan.FullPrompt
 			promptMode = "full"
 		}
@@ -690,13 +424,17 @@ func (s *Server) runCodexManaged(
 		slog.String("prompt_mode", promptMode),
 	)
 
-	session.runMu.Lock()
-	defer session.runMu.Unlock()
-	res, assistantText, err := session.transport.runTurn(ctx, reqID, spec.Model, effectiveCodexAppEffort(req), effectiveCodexAppSummary(req), prompt, emit)
+	session.RunMu.Lock()
+	defer session.RunMu.Unlock()
+	transport, _ := session.Transport.(*codexAppTransport)
+	if transport == nil {
+		return codexRunResult{}, "", true, fmt.Errorf("codex session transport type mismatch")
+	}
+	res, assistantText, err := transport.runTurn(ctx, reqID, spec.Model, effectiveCodexAppEffort(req), effectiveCodexAppSummary(req), prompt, emit)
 	if err != nil {
-		s.codexSessions.drop(session, "transport_error")
+		s.codexSessions.Drop(session, "transport_error")
 		return codexRunResult{}, "", true, err
 	}
-	session.lastAssistant = normalizeCodexAssistantAnchor(assistantText)
+	session.LastAssistant = normalizeCodexAssistantAnchor(assistantText)
 	return res, assistantText, true, nil
 }

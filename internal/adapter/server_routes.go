@@ -34,7 +34,7 @@ func (s *Server) Start(ctx context.Context) error {
 		defer cancel()
 		_ = s.httpSrv.Shutdown(shutCtx)
 		if s.codexSessions != nil {
-			s.codexSessions.closeAll()
+			s.codexSessions.CloseAll()
 		}
 		return nil
 	case err := <-errCh:

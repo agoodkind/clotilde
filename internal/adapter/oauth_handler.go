@@ -218,24 +218,8 @@ func toAnthropicAPIRequest(tr tooltrans.AnthRequest, claudeModel string, emitToo
 			InputSchema: t.InputSchema,
 		})
 	}
-	var tc *anthropic.ToolChoice
-	if tr.ToolChoice != nil {
-		tc = &anthropic.ToolChoice{
-			Type:                   tr.ToolChoice.Type,
-			Name:                   tr.ToolChoice.Name,
-			DisableParallelToolUse: tr.ToolChoice.DisableParallelToolUse,
-		}
-	}
-	stats := applyCacheBreakpoints(msgs, tools, emitToolResultCacheReference)
-	return anthropic.Request{
-		Model:      claudeModel,
-		System:     tr.System,
-		Messages:   msgs,
-		MaxTokens:  tr.MaxTokens,
-		Stream:     false,
-		Tools:      tools,
-		ToolChoice: tc,
-	}, stats
+	req, stats := anthropicbackend.ToAPIRequest(tr, claudeModel, emitToolResultCacheReference)
+	return req, cacheBreakpointStats(stats)
 }
 
 // buildSystemBlocks assembles the typed system-prompt array with
@@ -254,50 +238,10 @@ func toAnthropicAPIRequest(tr tooltrans.AnthRequest, claudeModel string, emitToo
 // the blocks ship plain; the array form still communicates the three
 // logical segments to the server, which accepts either shape.
 func buildSystemBlocks(billing, prefix, callerSystem, ttl, scope string, cachingEnabled bool) []anthropic.SystemBlock {
-	// Scope applies only to the CLI-prefix block. The caller-system
-	// block stays session-scoped because its content varies per
-	// caller and does not benefit from a global key. Mirrors
-	// splitSysPromptPrefix in src/utils/api.ts:321 where the static
-	// CLI prefix gets cacheScope='global' and dynamic blocks get
-	// cacheScope=null.
-	var cacheMarker *anthropic.CacheControl
-	var prefixMarker *anthropic.CacheControl
-	if cachingEnabled {
-		cacheMarker = &anthropic.CacheControl{Type: "ephemeral", TTL: ttl}
-		prefixMarker = &anthropic.CacheControl{Type: "ephemeral", TTL: ttl, Scope: scope}
-	}
-	var out []anthropic.SystemBlock
-	if strings.TrimSpace(billing) != "" {
-		out = append(out, anthropic.SystemBlock{
-			Type: "text",
-			Text: billing,
-			// Billing line is intentionally uncached: cch varies per
-			// request, so caching would produce immediate misses and
-			// waste a marker slot. Mirrors CLI behavior at
-			// src/services/api/claude.ts:3230 (cacheScope: null).
-		})
-	}
-	if strings.TrimSpace(prefix) != "" {
-		out = append(out, anthropic.SystemBlock{
-			Type:         "text",
-			Text:         prefix,
-			CacheControl: prefixMarker,
-		})
-	}
-	if strings.TrimSpace(callerSystem) != "" {
-		out = append(out, anthropic.SystemBlock{
-			Type:         "text",
-			Text:         callerSystem,
-			CacheControl: cacheMarker,
-		})
-	}
-	return out
+	return anthropicbackend.BuildSystemBlocks(billing, prefix, callerSystem, ttl, scope, cachingEnabled)
 }
 
-type cacheBreakpointStats struct {
-	ToolResultCandidates int
-	ToolResultApplied    int
-}
+type cacheBreakpointStats = anthropicbackend.CacheBreakpointStats
 
 // applyCacheBreakpoints stamps the message-level cache_control marker matching
 // the live Claude CLI. tool_result.cache_reference is separately gated because
@@ -306,60 +250,11 @@ type cacheBreakpointStats struct {
 // did not include it. Keep the knob for controlled upstream experiments rather
 // than assuming every Claude transport accepts the cached-MC shape.
 func applyCacheBreakpoints(msgs []anthropic.Message, tools []anthropic.Tool, emitToolResultCacheReference bool) cacheBreakpointStats {
-	var stats cacheBreakpointStats
-	ephemeral := &anthropic.CacheControl{Type: "ephemeral"}
-	if len(tools) > 0 {
-		tools[len(tools)-1].CacheControl = ephemeral
-	}
-	if len(msgs) == 0 {
-		return stats
-	}
-	lastCCMsg := -1
-	markerIndex := len(msgs) - 1
-	msg := &msgs[markerIndex]
-	for j := len(msg.Content) - 1; j >= 0; j-- {
-		if !cacheableMessageBoundaryBlock(msg.Role, msg.Content[j].Type) {
-			continue
-		}
-		msg.Content[j].CacheControl = ephemeral
-		lastCCMsg = markerIndex
-		break
-	}
-	if lastCCMsg < 0 {
-		return stats
-	}
-	for i := 0; i < lastCCMsg; i++ {
-		if msgs[i].Role != "user" {
-			continue
-		}
-		for j := range msgs[i].Content {
-			block := &msgs[i].Content[j]
-			if block.Type != "tool_result" || strings.TrimSpace(block.ToolUseID) == "" {
-				continue
-			}
-			stats.ToolResultCandidates++
-			if !emitToolResultCacheReference {
-				continue
-			}
-			block.CacheReference = block.ToolUseID
-			stats.ToolResultApplied++
-		}
-	}
-	return stats
+	return anthropicbackend.ApplyCacheBreakpoints(msgs, tools, emitToolResultCacheReference)
 }
 
 func cacheableMessageBoundaryBlock(role, blockType string) bool {
-	switch strings.ToLower(strings.TrimSpace(role)) {
-	case "assistant":
-		switch blockType {
-		case "thinking", "redacted_thinking", "connector_text":
-			return false
-		default:
-			return true
-		}
-	default:
-		return true
-	}
+	return anthropicbackend.CacheableMessageBoundaryBlock(role, blockType)
 }
 
 // streamEventToTranslatorSSE maps decoded native stream signals to the JSON
@@ -367,115 +262,7 @@ func cacheableMessageBoundaryBlock(role, blockType string) bool {
 // (content_block_start, content_block_delta, content_block_stop). Raw SSE is
 // decoded first; this layer re-encodes the subset the translator consumes.
 func streamEventToTranslatorSSE(ev anthropic.StreamEvent) (eventName string, payload []byte, ok bool) {
-	switch ev.Kind {
-	case "text":
-		p := struct {
-			Index int `json:"index"`
-			Delta struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"delta"`
-		}{
-			Index: ev.BlockIndex,
-			Delta: struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			}{Type: "text_delta", Text: ev.Text},
-		}
-		b, err := json.Marshal(p)
-		if err != nil {
-			return "", nil, false
-		}
-		return "content_block_delta", b, true
-	case "tool_use_start":
-		p := struct {
-			Index        int `json:"index"`
-			ContentBlock struct {
-				Type string `json:"type"`
-				ID   string `json:"id"`
-				Name string `json:"name"`
-			} `json:"content_block"`
-		}{
-			Index: ev.BlockIndex,
-			ContentBlock: struct {
-				Type string `json:"type"`
-				ID   string `json:"id"`
-				Name string `json:"name"`
-			}{Type: "tool_use", ID: ev.ToolUseID, Name: ev.ToolUseName},
-		}
-		b, err := json.Marshal(p)
-		if err != nil {
-			return "", nil, false
-		}
-		return "content_block_start", b, true
-	case "tool_use_arg_delta":
-		p := struct {
-			Index int `json:"index"`
-			Delta struct {
-				Type        string `json:"type"`
-				PartialJSON string `json:"partial_json"`
-			} `json:"delta"`
-		}{
-			Index: ev.BlockIndex,
-			Delta: struct {
-				Type        string `json:"type"`
-				PartialJSON string `json:"partial_json"`
-			}{Type: "input_json_delta", PartialJSON: ev.PartialJSON},
-		}
-		b, err := json.Marshal(p)
-		if err != nil {
-			return "", nil, false
-		}
-		return "content_block_delta", b, true
-	case "tool_use_stop":
-		p := struct {
-			Index int `json:"index"`
-		}{Index: ev.BlockIndex}
-		b, err := json.Marshal(p)
-		if err != nil {
-			return "", nil, false
-		}
-		return "content_block_stop", b, true
-	case "thinking":
-		if ev.Text != "" {
-			p := struct {
-				Index int `json:"index"`
-				Delta struct {
-					Type     string `json:"type"`
-					Thinking string `json:"thinking"`
-				} `json:"delta"`
-			}{
-				Index: ev.BlockIndex,
-				Delta: struct {
-					Type     string `json:"type"`
-					Thinking string `json:"thinking"`
-				}{Type: "thinking_delta", Thinking: ev.Text},
-			}
-			b, err := json.Marshal(p)
-			if err != nil {
-				return "", nil, false
-			}
-			return "content_block_delta", b, true
-		}
-		p := struct {
-			Index        int `json:"index"`
-			ContentBlock struct {
-				Type string `json:"type"`
-			} `json:"content_block"`
-		}{
-			Index: ev.BlockIndex,
-			ContentBlock: struct {
-				Type string `json:"type"`
-			}{Type: "thinking"},
-		}
-		b, err := json.Marshal(p)
-		if err != nil {
-			return "", nil, false
-		}
-		return "content_block_start", b, true
-	default:
-		return "", nil, false
-	}
+	return anthropicbackend.StreamEventToTranslatorSSE(ev)
 }
 
 // runOAuthTranslatorStream drives tooltrans.StreamTranslator from decoded
@@ -728,16 +515,7 @@ func (s *Server) collectOAuth(w http.ResponseWriter, ctx context.Context, req an
 // what Cursor expects; prompt_tokens_details.cached_tokens still
 // exposes the cache-read breakdown for tools that know to read it.
 func usageFromAnthropic(a anthropic.Usage) Usage {
-	totalInput := a.InputTokens + a.CacheReadInputTokens + a.CacheCreationInputTokens
-	u := Usage{
-		PromptTokens:     totalInput,
-		CompletionTokens: a.OutputTokens,
-		TotalTokens:      totalInput + a.OutputTokens,
-	}
-	if a.CacheReadInputTokens > 0 {
-		u.PromptTokensDetails = &PromptTokensDetails{CachedTokens: a.CacheReadInputTokens}
-	}
-	return u
+	return Usage(anthropicbackend.UsageFromAnthropic(a))
 }
 
 // logCacheUsage emits a dedicated adapter.cache.usage slog event when
@@ -1062,17 +840,5 @@ func extractFingerprint(line string) string {
 }
 
 func derivePerRequestBetas(model ResolvedModel, perCtx map[string]string) []string {
-	if len(perCtx) == 0 {
-		return nil
-	}
-	var out []string
-	for suffix, beta := range perCtx {
-		if beta == "" {
-			continue
-		}
-		if strings.Contains(model.ClaudeModel, suffix) {
-			out = append(out, beta)
-		}
-	}
-	return out
+	return anthropicbackend.DerivePerRequestBetas(model, perCtx)
 }
