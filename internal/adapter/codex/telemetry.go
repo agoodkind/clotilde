@@ -21,6 +21,7 @@ type TransportTelemetry struct {
 	FunctionToolCount  int
 	WebsocketWarmup    bool
 	PreviousResponseID string
+	TurnStatePresent   bool
 	FallbackToHTTP     bool
 	ContextWindowError bool
 }
@@ -59,6 +60,7 @@ func LogTransportPrepared(ctx context.Context, log *slog.Logger, telemetry Trans
 		"function_tool_count", telemetry.FunctionToolCount,
 		"websocket_warmup", telemetry.WebsocketWarmup,
 		"has_previous_response_id", telemetry.PreviousResponseID != "",
+		"has_turn_state", telemetry.TurnStatePresent,
 		"fallback_to_http", telemetry.FallbackToHTTP,
 		"context_window_error", telemetry.ContextWindowError,
 	)

@@ -52,7 +52,7 @@ func RunHTTPTransport(
 	conversationID := strings.TrimSpace(payload.PromptCache)
 	windowID := ""
 	if conversationID != "" {
-		windowID = conversationID + ":0"
+		windowID = CodexWindowID(conversationID)
 		payload.ClientMetadata = ClientMetadata(cfg.AccountID, windowID)
 	}
 

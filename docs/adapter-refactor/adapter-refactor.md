@@ -1353,10 +1353,13 @@ Known remaining gap inventory:
 - Initial `previous_response_id` reuse is implemented as daemon-local
   websocket continuation state keyed by prompt/conversation identity.
   It is still not full Codex Rust parity because Clyde does not yet
-  persist server-returned output-item baselines or turn-state headers.
-- `x-codex-turn-state`, richer turn metadata, installation/window ids,
-  and session-source headers are not yet proven equivalent to the Rust
-  client path.
+  persist server-returned output-item baselines.
+- Websocket identity headers now include conversation id, `session_id`,
+  `x-codex-window-id`, `x-codex-installation-id`, and the websocket
+  beta header; request-scoped `x-codex-turn-state` is captured from the
+  websocket handshake and replay-capable within that request. Remaining
+  header parity gaps are richer turn metadata, session-source lineage,
+  reconnect semantics, and live validation.
 - `service_tier`, response-length controls, and text/verbosity controls
   have partial request-shape coverage, but they still need end-to-end
   validation against live long-running turns.
@@ -1449,10 +1452,15 @@ how to realize that intent on the provider path.
    - Add a Codex websocket transport path modeled after the Rust client:
      - websocket `response.create`
      - optional `generate=false` prewarm
-     - per-turn sticky routing state
+     - per-turn sticky routing state via `x-codex-turn-state`
      - previous-response reuse within a turn where applicable
    - Keep HTTP SSE as fallback. Do not force websocket into root adapter
      abstractions.
+   - Current implementation: `internal/adapter/codex/ws_headers.go`
+     builds websocket identity headers using conversation id,
+     `session_id`, window id, installation id, the websocket beta
+     header, optional turn metadata, optional beta features, and a
+     request-scoped turn-state token when present.
 
 7. Response-thread continuation parity:
    - Treat `previous_response_id` reuse as a state-machine feature, not
@@ -1489,10 +1497,10 @@ how to realize that intent on the provider path.
   `LastResponse.items_added` path does.
    - Reuse policy:
      - Use `previous_response_id` only on websocket transport.
-  - Use it only when non-input request fields are identical and the
-    new input is either a strict extension of the previous input or a
-    Cursor-style replay with a latest assistant anchor followed by new
-    context/user input.
+     - Use it only when non-input request fields are identical and the
+       new input is either a strict extension of the previous input or a
+       Cursor-style replay with a latest assistant anchor followed by
+       new context/user input.
      - Send only the incremental input delta when reuse is valid.
      - Fall back to full websocket request when the ledger is absent,
        stale, incomplete, or invalidated.
@@ -1504,8 +1512,7 @@ how to realize that intent on the provider path.
        reasoning-summary change, service tier change, tools or tool
        schema change, system/instruction change, output/text controls
        change, workspace/conversation key change, request-shape
-       mismatch, missing response id, failed/canceled response, and
-       websocket reconnect when sticky turn state cannot be replayed.
+       mismatch, missing response id, and failed/canceled response.
      - Keep HTTP fallback and app-fallback session state separate from
        direct websocket continuation state; do not mix Codex app
        session continuation with Responses `previous_response_id`.
@@ -2328,9 +2335,19 @@ workstream above. The concrete execution order is:
    assistant anchor, config/model mismatch, explicit invalidation, and
    websocket response id capture. Remaining work before full Rust
    `ModelClientSession` parity: capture server-returned output items,
-   compare against those items when forming the baseline, add turn-state
-   headers/reconnect semantics, and validate live Cursor turns.
-5. [done] Added `internal/adapter/codex/capabilities.go` with the
+   compare against those items when forming the baseline, add reconnect
+   semantics, and validate live Cursor turns.
+5. [partial] Added websocket header and turn-state parity. Clyde now
+   builds websocket headers with the conversation id as
+   `x-client-request-id`, emits `session_id`, `x-codex-window-id`,
+   `x-codex-installation-id`, and the websocket beta header, captures
+   `x-codex-turn-state` from the websocket handshake, and exposes
+   `has_turn_state` in Codex transport telemetry. Tests cover header
+   construction, live websocket handshake identity headers, turn-state
+   capture, and telemetry. Remaining work: richer turn metadata,
+   session-source/parent-thread headers, reconnect reuse, and live
+   provider validation.
+6. [done] Added `internal/adapter/codex/capabilities.go` with the
    three distinct context windows needed for Codex parity:
    advertised (`ResolvedModel.Context`), observed (active transport /
    provider reality), and effective safe operating window (currently
@@ -2347,7 +2364,7 @@ workstream above. The concrete execution order is:
    `TestCapabilityReportForModelPreservesAdvertisedContextWhenWebsocketEnabled`,
    `TestApplyCapabilityReportOverridesContextFields`, and
    `TestCodexCapabilityOverlayAppliesTransportAwareContextTruth`.
-6. [done] Added `internal/adapter/codex/output_controls.go` and moved
+7. [done] Added `internal/adapter/codex/output_controls.go` and moved
    the currently implemented output-shaping knobs out of the inline
    root builder. `BuildOutputControls` now owns
    `max_completion_tokens` passthrough, and
@@ -2364,7 +2381,7 @@ workstream above. The concrete execution order is:
    general area is the still-unimplemented Codex `text` / verbosity /
    schema-format controls, which will require expanding the Codex
    request model beyond the currently shipped fields.
-7. [done] Added `internal/adapter/codex/service_tier.go` and split
+8. [done] Added `internal/adapter/codex/service_tier.go` and split
    `service_tier` mapping out of `output_controls.go`, so the Codex
    request builder no longer owns that policy inline. Added
    `internal/adapter/codex/ws_headers.go` for the currently justified
@@ -2372,17 +2389,17 @@ workstream above. The concrete execution order is:
    Current audit result versus `codex-rs`: the local runtime now emits
    the websocket beta header
    (`OpenAI-Beta: responses_websockets=2026-02-06`) and
-   `x-client-request-id`, while `service_tier` stays request-body
-   driven (`fast -> priority`, `flex` preserved). We intentionally did
-   not add `x-codex-turn-state`, `x-codex-turn-metadata`, or richer
-   session-source / lineage headers yet because the current local
-   runtime does not persist the corresponding turn-state or session
-   metadata in a provider-accurate form. Lock-in tests:
+   `x-client-request-id`; `service_tier` stays request-body driven
+   (`fast -> priority`, `flex` preserved). The later turn-state slice
+   added request-scoped `x-codex-turn-state` capture/replay support,
+   while `x-codex-turn-metadata` and richer session-source / lineage
+   headers remain future work pending provider-accurate metadata.
+   Lock-in tests:
    `TestServiceTierFromMetadataMapsFastToPriority`,
    `TestServiceTierFromMetadataPreservesFlex`,
    `TestServiceTierFromMetadataIgnoresInvalidMetadata`, and
    `TestBuildResponsesWebsocketHeadersIncludesCurrentParityHeaders`.
-8. [done] Consolidated HTTP and websocket stream parsing behind the
+9. [done] Consolidated HTTP and websocket stream parsing behind the
    explicit Codex-owned event entrypoint in `internal/adapter/codex/events.go`.
    Added `ParseTransportStream(body, requestID, alias, log, emit)`, which
    constructs the `EventRenderer` and drives `ParseSSE` for both transport
@@ -2391,7 +2408,7 @@ workstream above. The concrete execution order is:
    parser flow inline. Websocket still bridges by translating JSON messages
    into synthetic `event:` / `data:` frames, but the transport convergence
    is now explicit in code ownership rather than implicit by convention.
-9. [done] Added Codex-backend transport telemetry in
+10. [done] Added Codex-backend transport telemetry in
    `internal/adapter/codex/telemetry.go` and routed both
    `transport_http.go` and `transport_ws.go` through it. The shared
    `TransportTelemetry` record now logs: resolved upstream model,
@@ -2404,7 +2421,7 @@ workstream above. The concrete execution order is:
    request/tool-prepared logs; `transport_ws.go` emits the same schema
    for normal websocket runs and explicit `426 -> HTTP` fallback.
    Lock-in test: `TestLogTransportPreparedIncludesParityFields`.
-10. [done] Added an explicit parity test matrix instead of relying only
+11. [done] Added an explicit parity test matrix instead of relying only
    on scattered single-purpose assertions. The Codex-package test
    `TestCodexTransportParityMatrixSerialization` covers HTTP request
    serialization, websocket `response.create` serialization,
@@ -2640,12 +2657,13 @@ workstream above. The concrete execution order is:
   and test relocation still have open work. Codex app parity is also
   not close to done yet: Clyde has useful HTTP/websocket wire,
   capability-reporting, telemetry, and initial websocket
-  response-thread continuation slices, but the remaining work still
-  includes turn-state/header parity, server-output-item baseline
-  validation, response/text-control parity, transport-specific context
-  measurement, app/RPC versus direct transport characterization, and
-  long-running tool-turn behavior. With websocket enabled, eligible
-  repeated turns should now log continuation hits and
+  response-thread continuation plus websocket header/turn-state slices,
+  but the remaining work still includes server-output-item baseline validation,
+  turn metadata/session-source lineage, reconnect behavior,
+  response/text-control parity, transport-specific context measurement,
+  app/RPC versus direct transport characterization, and long-running
+  tool-turn behavior. With websocket enabled, eligible repeated turns
+  should now log continuation hits with
   `has_previous_response_id=true`; misses should include a
   `continuation_miss_reason`.
 
@@ -2719,11 +2737,12 @@ entries, and orders the real work by dependency and debugging value.
    fingerprints, slices incremental input, sets `previous_response_id`,
    invalidates on mismatch/failure/fallback, and logs deterministic
    reuse or miss reasons. Remaining parity work is server-output-item
-   baseline capture/comparison plus turn-state and reconnect semantics.
-3. Validate Codex turn-state/header parity against the Rust client:
-   `x-codex-turn-state`, turn metadata, installation/window identity,
-   session source, websocket beta headers, reconnect behavior, and
-   prewarm semantics.
+   baseline capture/comparison plus reconnect semantics.
+3. [partial] Codex turn-state/header parity now covers websocket beta
+   headers, conversation identity, `session_id`, installation/window
+   identity, request-scoped `x-codex-turn-state` capture, and telemetry.
+   Remaining parity work: turn metadata, session-source/parent-thread
+   headers, reconnect behavior, and prewarm semantics.
 4. Validate Codex response/text controls end to end: `service_tier`,
    `max_completion_tokens`, text/verbosity controls, output budget, and
    long-running turn behavior under real Cursor/Clyde requests.

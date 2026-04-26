@@ -135,8 +135,23 @@ func TestRunWebsocketTransportParsesTextAndCompletion(t *testing.T) {
 	t.Parallel()
 
 	upgrader := websocket.Upgrader{}
+	turnState := NewTurnState()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
+		if got := r.Header.Get("x-client-request-id"); got != "cursor:conv-123" {
+			t.Fatalf("x-client-request-id=%q want cursor:conv-123", got)
+		}
+		if got := r.Header.Get("session_id"); got != "cursor:conv-123" {
+			t.Fatalf("session_id=%q want cursor:conv-123", got)
+		}
+		if got := r.Header.Get(CodexWindowIDHeader); got != "cursor:conv-123:0" {
+			t.Fatalf("%s=%q want cursor:conv-123:0", CodexWindowIDHeader, got)
+		}
+		if got := r.Header.Get(CodexInstallationIDHeader); got != "acct-123" {
+			t.Fatalf("%s=%q want acct-123", CodexInstallationIDHeader, got)
+		}
+		responseHeader := http.Header{}
+		responseHeader.Set(CodexTurnStateHeader, "turn-123")
+		conn, err := upgrader.Upgrade(w, r, responseHeader)
 		if err != nil {
 			t.Fatalf("upgrade: %v", err)
 		}
@@ -175,10 +190,13 @@ func TestRunWebsocketTransportParsesTextAndCompletion(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	var chunks []tooltrans.OpenAIStreamChunk
 	result, err := RunWebsocketTransport(context.Background(), WebsocketTransportConfig{
-		URL:       wsURL,
-		Token:     "test-token",
-		RequestID: "req-ws",
-		Alias:     "gpt-5.4",
+		URL:            wsURL,
+		Token:          "test-token",
+		AccountID:      "acct-123",
+		RequestID:      "req-ws",
+		Alias:          "gpt-5.4",
+		ConversationID: "cursor:conv-123",
+		TurnState:      turnState,
 	}, ResponseCreateWsRequest{Type: "response.create"}, func(ch tooltrans.OpenAIStreamChunk) error {
 		chunks = append(chunks, ch)
 		return nil
@@ -191,6 +209,9 @@ func TestRunWebsocketTransportParsesTextAndCompletion(t *testing.T) {
 	}
 	if result.ResponseID != "resp-1" {
 		t.Fatalf("response_id=%q want resp-1", result.ResponseID)
+	}
+	if got := turnState.Value(); got != "turn-123" {
+		t.Fatalf("turn_state=%q want turn-123", got)
 	}
 	if result.Usage.PromptTokens != 10 || result.Usage.CompletionTokens != 4 || result.Usage.TotalTokens != 14 {
 		t.Fatalf("usage=%+v", result.Usage)

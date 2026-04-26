@@ -66,6 +66,7 @@ func (s *Server) runCodexDirect(
 	if s.codexWebsocketEnabled() {
 		wsReq := adaptercodex.ResponseCreateRequestFromHTTP(transportPayload)
 		fullWSReq := wsReq
+		turnState := adaptercodex.NewTurnState()
 		var continuation adaptercodex.ContinuationDecision
 		if s.codexContinue != nil {
 			continuation = s.codexContinue.Prepare(fullWSReq)
@@ -85,10 +86,13 @@ func (s *Server) runCodexDirect(
 			}
 		}
 		res, wsErr := adaptercodex.RunWebsocketTransport(ctx, adaptercodex.WebsocketTransportConfig{
-			URL:       s.codexWebsocketURL(),
-			Token:     token,
-			RequestID: reqID,
-			Alias:     model.Alias,
+			URL:            s.codexWebsocketURL(),
+			Token:          token,
+			AccountID:      s.readCodexAccountID(),
+			RequestID:      reqID,
+			Alias:          model.Alias,
+			ConversationID: strings.TrimSpace(transportPayload.PromptCache),
+			TurnState:      turnState,
 		}, wsReq, emit)
 		if wsErr == nil {
 			if s.codexContinue != nil {

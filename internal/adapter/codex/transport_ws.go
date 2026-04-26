@@ -73,10 +73,13 @@ func MarshalResponseCreateWsRequest(req ResponseCreateWsRequest) ([]byte, error)
 }
 
 type WebsocketTransportConfig struct {
-	URL       string
-	Token     string
-	RequestID string
-	Alias     string
+	URL            string
+	Token          string
+	AccountID      string
+	RequestID      string
+	Alias          string
+	ConversationID string
+	TurnState      *TurnState
 }
 
 func websocketMessageToSyntheticSSE(message []byte) ([]byte, error) {
@@ -134,22 +137,32 @@ func RunWebsocketTransport(
 	emit func(tooltrans.OpenAIStreamChunk) error,
 ) (RunResult, error) {
 	dialer := websocket.Dialer{}
-	header := BuildResponsesWebsocketHeaders(cfg.RequestID, cfg.Token)
+	header := BuildResponsesWebsocketHeaders(ResponsesWebsocketHeaderConfig{
+		RequestID:      cfg.RequestID,
+		ConversationID: cfg.ConversationID,
+		Token:          cfg.Token,
+		InstallationID: cfg.AccountID,
+		TurnState:      cfg.TurnState,
+	})
 
 	conn, resp, err := dialer.DialContext(ctx, cfg.URL, header)
+	if resp != nil && cfg.TurnState != nil {
+		cfg.TurnState.CaptureFromHeaders(resp.Header)
+	}
 	if resp != nil && resp.StatusCode == http.StatusUpgradeRequired {
 		LogTransportPrepared(ctx, nil, TransportTelemetry{
-			RequestID:      cfg.RequestID,
-			Alias:          cfg.Alias,
-			UpstreamModel:  payload.Model,
-			Transport:      "responses_websocket",
-			ServiceTier:    payload.ServiceTier,
-			MaxCompletion:  payload.MaxCompletion,
-			PromptCacheKey: payload.PromptCacheKey,
-			ClientMetadata: map[string]string(payload.ClientMetadata),
-			InputCount:     len(payload.Input),
-			ToolCount:      len(payload.Tools),
-			FallbackToHTTP: true,
+			RequestID:        cfg.RequestID,
+			Alias:            cfg.Alias,
+			UpstreamModel:    payload.Model,
+			Transport:        "responses_websocket",
+			ServiceTier:      payload.ServiceTier,
+			MaxCompletion:    payload.MaxCompletion,
+			PromptCacheKey:   payload.PromptCacheKey,
+			ClientMetadata:   map[string]string(payload.ClientMetadata),
+			InputCount:       len(payload.Input),
+			ToolCount:        len(payload.Tools),
+			FallbackToHTTP:   true,
+			TurnStatePresent: cfg.TurnState.Value() != "",
 		})
 		return NewRunResult("stop"), ErrWebsocketFallbackToHTTP
 	}
@@ -171,6 +184,7 @@ func RunWebsocketTransport(
 		ToolCount:          len(payload.Tools),
 		WebsocketWarmup:    payload.Generate != nil && !*payload.Generate,
 		PreviousResponseID: payload.PreviousResponseID,
+		TurnStatePresent:   cfg.TurnState.Value() != "",
 	})
 
 	raw, err := MarshalResponseCreateWsRequest(payload)
