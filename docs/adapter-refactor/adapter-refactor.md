@@ -22,401 +22,150 @@ Definition of done:
 
 ## Current state
 
-The codebase is already partway through this split, but ownership is still
-mixed.
+This is the current code state after the April 26 refactor batches. Historical
+research notes and completed milestone details belong in the progress log or a
+future research/history split; this section is only the live architecture
+snapshot.
 
-### Cursor first-class concerns
+### Live package ownership
 
-Cursor is the actual product consumer, even though the adapter accepts an
-OpenAI-compatible request shape. That means the architecture should treat
-Cursor as a first-class integration boundary, not as "just another OpenAI
-client."
+- `internal/adapter/` is the OpenAI-compatible HTTP facade and backend router.
+  It still owns daemon-local dependencies such as config, auth lookups, SSE
+  writer construction, and bridge methods for backend dispatch.
+- `internal/adapter/cursor/` is the Cursor product boundary. It owns Cursor
+  request metadata, conversation keys, workspace extraction, mode detection,
+  model normalization, product tool vocabulary, and Codex-facing tool-name
+  translation helpers.
+- `internal/adapter/anthropic/backend/` owns Anthropic request construction,
+  translated Anthropic request types, stream translation, response merging,
+  notice/error surfacing, microcompact policy, cache breakpoints, fallback
+  escalation, and fallback HTTP/SSE response handling.
+- `internal/adapter/anthropic/fallback/` owns the configured `claude -p`
+  fallback driver, fallback request construction, fallback response mapping,
+  transcript-resume mechanics, and fallback stream conversion.
+- `internal/adapter/codex/` owns Codex request construction, instruction
+  assembly, native tool shaping, direct HTTP/websocket transports, direct/app
+  selection, response parsing, response merging, continuation state, app-server
+  session management, app fallback RPC execution, capability reporting, service
+  tier/output controls, and transport telemetry.
+- `internal/adapter/openai/` owns OpenAI-compatible request, response, model,
+  usage, stream, error, and SSE wire types.
+- `internal/adapter/render/` owns the normalized event model and OpenAI stream
+  rendering for text, reasoning, plans, tool calls, tool progress, file changes,
+  and notices.
+- `internal/adapter/runtime/` owns backend-neutral request lifecycle logging,
+  notice injection helpers, response helpers, and stream terminal handling.
+- `internal/adapter/finishreason/` owns provider-to-OpenAI finish-reason
+  mapping.
+- `internal/adapter/tooltrans/` now contains only cross-backend sentinel cleanup
+  helpers and their tests.
 
-Concrete Cursor-specific behaviors already present:
+### Deleted or retired shims
 
-- Live requests use an OpenAI-compatible JSON envelope, but often populate
-  `input` heavily rather than classic `messages`.
-- Cursor sends `metadata.cursorConversationId` and
-  `metadata.cursorRequestId`, and the adapter already reads those exact keys in
-  `internal/adapter/cursor/request.go`.
-- Cursor also sends top-level `user`, which the adapter already carries into
-  Cursor context.
-- Cursor conversation identity is already normalized as
-  `cursor:<conversationId>` in `internal/adapter/cursor/context.go`.
-- That Cursor conversation ID is already used as a strong key for prompt/cache
-  tracking in `internal/adapter/context_tracker.go` and Codex managed runtime
-  continuity in `internal/adapter/codex/managed_runtime.go`.
-- The adapter extracts `Workspace Path:` from prompt content in
-  `internal/adapter/cursor/workspace.go`, scanning both flattened `messages`
-  and `input`. That is a Cursor convention, not generic OpenAI semantics.
-- Cursor can send tools in a flattened function shape rather than only the
-  canonical nested OpenAI `function: {...}` shape.
-- Cursor tool inventory includes product-specific tools such as `TodoWrite`,
-  `ReadLints`, `SemanticSearch`, `Subagent`, `FetchMcpResource`,
-  `SwitchMode`, `CallMcpTool`, and in plan mode `CreatePlan`.
-- Cursor tool-name mapping into Codex currently lives in
-  `internal/adapter/codex_handler.go` and `internal/adapter/codex/protocol.go`,
-  even though those names are Cursor product vocabulary rather than backend
-  vocabulary.
-- Cursor plan mode injects plan-mode guardrails and a `CreatePlan` tool.
-- Cursor exposes `SwitchMode` and injects mode-selection instructions that
-  describe `Agent Mode` and `Plan Mode`.
-- Cursor prompt content injects MCP conventions such as schema-first tool use,
-  `CallMcpTool`, and `FetchMcpResource`.
-- Cursor UI and catalog state can use native provider-facing model identity
-  such as `gpt-5.4` plus separate UI state for context window and reasoning
-  effort. Observed native Cursor GPT traffic does not send a separate `1m`
-  model suffix in the request body.
-- Background, resume, and subagent flows are therefore part of the Cursor
-  integration boundary, because they can diverge from the foreground submit
-  routing path and fail with `AI Model Not Found` or an opaque streaming error
-  when provider identity, context window, or effort state is reconstructed
-  differently.
-- The adapter already treats `x-cursor-*` headers as sensitive.
-- The adapter already contains Cursor-specific reasoning/rendering behavior
-  because Cursor does not consume OpenAI reasoning fields the same way some
-  other clients do.
-- Several comments note that Cursor resends full history on each turn, and
-  session/cache logic already relies on stable Cursor conversation identity.
+The plan should not treat these as live code:
 
-### Cursor wire contract and tool inventory
+- `internal/adapter/codex_handler.go`
+- `internal/adapter/codex_handler_test.go`
+- `internal/adapter/fallback_handler.go`
+- `internal/adapter/tooltrans/types.go`
+- `internal/adapter/tooltrans/openai_to_anthropic.go`
+- `internal/adapter/tooltrans/stream.go`
+- `internal/adapter/tooltrans/event_renderer.go`
+- `internal/adapter/tooltrans/types_openai_local.go`
+- `internal/adapter/tooltrans/thinking_inline.go`
 
-The refactor should preserve the exact Cursor-facing contract we have already
-observed rather than treating it as generic OpenAI traffic.
+### Remaining root bridges
 
-Wire/schema details to preserve:
+These files still exist and should be treated as bridge/dependency plumbing,
+not backend policy owners:
 
-- Cursor uses an OpenAI-compatible request envelope.
-- Cursor often sends large `input` payloads rather than relying only on classic
-  `messages`.
-- Cursor sends `metadata.cursorConversationId`.
-- Cursor sends `metadata.cursorRequestId`.
-- Cursor sends top-level `user`.
-- Cursor can send tools in a flattened function schema:
-  `{"type":"function","name":"ReadFile","description":"...","parameters":{...}}`
-  and not only the canonical nested OpenAI `function: {...}` shape.
-- Cursor plan-mode requests add a `CreatePlan` tool.
-- Cursor plan-mode requests inject plan-mode guardrails.
-- The current Codex adapter injects the wrong plan-mode instructions, so
-  plan-mode translation is not just an ownership concern. It is also a current
-  correctness bug that the refactor must preserve as a known gotcha and fix in
-  the Cursor layer rather than re-embedding in Codex-specific request shaping.
-- Cursor mode requests inject mode-selection instructions such as `Agent Mode`
-  and `Plan Mode`.
-- Cursor MCP-related prompt content injects conventions around schema-first
-  tool use, `CallMcpTool`, and `FetchMcpResource`.
-- Cursor can select native provider model ids and carry context-window or
-  effort state outside the `model` string. Clyde must preserve the raw Cursor
-  model id and route through a declarative provider classifier instead of
-  inventing backend preference from a custom flat alias.
-- Foreground submit, background task launch, background task resume, subagent
-  launch, and subagent resume must all use the same provider-classification
-  inputs for model identity, context window, effort, and max-mode state.
+- `internal/adapter/anthropic_bridge.go`
+- `internal/adapter/codex_bridge.go`
+- `internal/adapter/codex_runtime.go`
+- `internal/adapter/codex_sessions.go`
+- `internal/adapter/codex_app_fallback.go`
+- selected config/auth helpers in `internal/adapter/oauth_handler.go`
+- shared response and stream helpers in `internal/adapter/server_response.go`
+  and `internal/adapter/server_streaming.go`
 
-Enumerated Cursor tool inventory observed in non-plan requests:
+### Active architectural gaps
 
-- `Shell`
-- `Glob`
-- `rg`
-- `AwaitShell`
-- `ReadFile`
-- `Delete`
-- `ApplyPatch`
-- `EditNotebook`
-- `TodoWrite`
-- `ReadLints`
-- `SemanticSearch`
-- `WebSearch`
-- `WebFetch`
-- `AskQuestion`
-- `Subagent`
-- `FetchMcpResource`
-- `SwitchMode`
-- `CallMcpTool`
+- Cursor mode/background/subagent/resume semantics still need a final sweep so
+  product state is explicit instead of inferred from prompt text or tool names.
+- Anthropic response ownership is mostly in the backend, but bridge deletion,
+  finish-reason cleanup, notice live validation, and test relocation remain.
+- Codex request/response/runtime ownership is mostly in the backend, but root
+  bridge deletion, full normalized-event output boundaries, and app-parity
+  evidence remain.
+- Codex MAX / ChatGPT Pro parity is still a substantial workstream: request
+  shape, websocket behavior, response-thread continuation, output controls,
+  cache behavior, and context-window truth need more live evidence.
+- Test layout still lags ownership. Root tests should focus on routing/auth/API
+  surface, while backend wire behavior should live under provider packages and
+  render/runtime behavior should live under shared packages.
 
-Additional tool observed in plan-mode requests:
+### Research and evidence location
 
-- `CreatePlan`
+The main plan should stay execution-oriented. Use these supporting sources when
+research or observed product behavior is needed:
 
-Enumerated Cursor-to-Codex tool-name mappings already embedded in the adapter:
-
-- `AwaitShell` -> `await_shell`
-- `EditNotebook` -> `edit_notebook`
-- `TodoWrite` -> `todo_write`
-- `ReadLints` -> `read_lints`
-- `SemanticSearch` -> `semantic_search`
-- `Subagent` -> `spawn_agent`
-- `FetchMcpResource` -> `fetch_mcp_resource`
-- `SwitchMode` -> `switch_mode`
-- `CallMcpTool` -> `call_mcp_tool`
-- plus shared file/shell tools such as `ReadFile`, `ApplyPatch`, `Glob`, `rg`,
-  and `Shell`
-
-Architectural implication:
-
-- This enumerated tool vocabulary should be treated as Cursor product
-  vocabulary.
-- The Cursor layer should own translation between Cursor tool naming/contracts
-  and backend-local naming/contracts.
-- The Cursor layer should own correct plan-mode instruction injection, because
-  the current Codex adapter behavior is already known to be wrong here.
-- The Cursor layer should preserve raw Cursor model identity and request state,
-  then hand those fields to the shared provider resolver without encoding
-  backend preference into custom flat aliases.
-- Cursor boundary logging should record the raw model id, classified provider
-  family, selected backend route, context-window state, effort state,
-  request-path kind, raw tool names, and any derived mode/tool state so future
-  Cursor contract mismatches can be debugged without backend-local logs.
-- Backend packages should consume translated tool semantics where possible,
-  rather than depending directly on Cursor product names.
-
-Architectural consequence:
-
-1. `internal/adapter/cursor/...` should be a true product-integration
-   boundary.
-2. Cursor prompt, mode, tool, and context quirks should move there.
-3. Backend modules should stay independent of Cursor naming where possible.
-4. Cursor tool names and UX contracts should be translated at the Cursor layer,
-   not deep in backend code.
-
-### Research sources
-
-The refactor should stay grounded in observed live traffic, current adapter
-implementation, and local research trees rather than relying only on the target
-architecture.
-
-Observed Cursor model/routing mismatch to preserve as a first-class refactor
-input:
-
-- Cursor native GPT selection can render as `GPT-5.4 1M High` while the request
-  body carries `model: "gpt-5.4"` plus reasoning state such as
-  `reasoning.effort: "high"`.
-- Earlier Clyde-specific `clyde-gpt-*` flat aliases are a migration hazard, not
-  the target architecture. They should not be the primary Codex/GPT routing
-  mechanism once native Cursor model identity is supported.
-- Live requests do expose a real `Subagent` tool, so subagent failures in this
-  class are not evidence of a missing ingress tool. They are evidence of Cursor
-  contract or state mismatch.
-- Architecturally, this is a Cursor product-integration issue rather than a
-  Codex backend issue, and it should not be fixed by teaching backend-local
-  packages about Cursor catalog or UI naming.
-
-Live observed requests:
-
-- Raw adapter request log:
-  `~/.local/state/clyde/clyde-daemon.jsonl`
-- What it contains:
-  - full `adapter.chat.raw` entries
-  - `body_summary`
-  - truncated `body`
-  - `body_b64` when captured
-  - headers, model, tool list, metadata, and prompt text
-- Best place to inspect:
-  `~/.local/state/clyde/clyde-daemon.jsonl:1`
-- This is the main source for observed Cursor request shapes, plan-mode
-  prompts, tool inventories, and outbound payloads entering Clyde.
-
-Observed Anthropic internals and wire behavior:
-
-- Anthropic client and wire types:
-  - `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/anthropic/client.go`
-  - `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/anthropic/types.go`
-  - `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/anthropic/stream_parse.go`
-- Anthropic backend helpers and policy:
-  - `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/anthropic/backend/wire_helpers.go`
-  - `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/oauth_handler.go`
-- Observed Anthropic logging:
-  `~/.local/state/clyde/anthropic.jsonl`
-- Best test and spec references:
-  - `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/anthropic/anthropic_test.go`
-  - `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/cache_breakpoints_test.go`
-  - `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/tooltrans/stream_test.go`
-
-Observed Codex internals and wire behavior:
-
-- Codex request shaping:
-  `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/codex_handler.go`
-- Codex SSE and protocol parsing:
-  `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/codex/protocol.go`
-- Codex backend and runtime:
-  - `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/codex/backend.go`
-  - `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/codex/managed_runtime.go`
-  - `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/codex/app_transport.go`
-- Best test and spec references:
-  - `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/codex/request_builder_test.go`
-  - `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/codex/parser_test.go`
-  - `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/codex/transport_ws_test.go`
-
-Observed Cursor internals and request conventions:
-
-- Cursor integration boundary:
-  - `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/cursor/doc.go`
-  - `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/cursor/request.go`
-  - `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/cursor/context.go`
-  - `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/cursor/workspace.go`
-- Cursor-specific decoding and tests:
-  `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/openai_tool_decode_test.go`
-- Observed Cursor live payloads:
-  `~/.local/state/clyde/clyde-daemon.jsonl`
-- Useful search terms in that log:
-  - `Cursor/1.0`
-  - `cursorConversationId`
-  - `cursorRequestId`
-  - `CreatePlan`
-  - `SwitchMode`
-  - `TodoWrite`
-  - `CallMcpTool`
-
-Research, decompiled, and external source trees:
-
-- Local Cursor research and decomp area:
-  `/Users/agoodkind/Sites/clyde-research/`
-- Earlier-referenced Cursor source and decomp workspace:
-  `/Users/agoodkind/Sites/clyde-research/cursor-src-decomp/`
-- These are the best places to look for:
-  - model catalog merge scripts
-  - product prompt text
-  - client-side tool and schema definitions
-  - plan mode and mode switch behavior
-  - subagent resume and background task semantics
-
-Additional local source references for the remaining Cursor-layer work:
-
-- `/Users/agoodkind/Sites/clyde-dev/clyde/research/claude-code-source-code-full/src/tools/EnterPlanModeTool/EnterPlanModeTool.ts`
-  shows plan mode as an explicit tool-driven state transition with dedicated
-  tool-result instructions, not just free-form prompt text.
-- `/Users/agoodkind/Sites/clyde-dev/clyde/research/claude-code-source-code-full/src/utils/toolResultStorage.ts`
-  carries a dedicated `reconstructForSubagentResume(...)` path, which is
-  evidence that subagent resume semantics are explicit product behavior.
-- `/Users/agoodkind/Sites/clyde-dev/clyde/research/claude-code-source-code-full/src/utils/messages.ts`
-  injects prior plan-file state through explicit attachments such as
-  `plan_file_reference`, which suggests that plan and resume semantics belong
-  in a product boundary rather than as opaque text conventions.
-- `/Users/agoodkind/Sites/clyde-dev/clyde/research/codex/codex-rs/tui/src/app/background_requests.rs`
-  shows background fetch/write flows as explicit app-owned event producers,
-  which is the same architectural direction this Cursor extraction should
-  follow.
-
-Codex base instruction snapshots used by Clyde:
-
-- Embedded model and base-instruction snapshot:
-  `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/codex/codex_model_instructions.json`
-- Useful for:
-  - what Clyde thinks Codex supports
-  - planning and tool wording
-  - drift versus live Cursor requests
-
-High-signal plan and doc history:
-
-- Adapter package boundary:
-  `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/doc.go`
-- Prompt-caching research and history:
-  `/Users/agoodkind/Sites/clyde-dev/clyde/docs/plans/adapter-prompt-caching.md`
-
-Shortest "start here" list for future work:
-
-1. `~/.local/state/clyde/clyde-daemon.jsonl`
-2. `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/codex_handler.go`
-3. `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/codex/protocol.go`
-4. `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/oauth_handler.go`
-5. `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/anthropic/backend/wire_helpers.go`
-6. `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/cursor/request.go`
-7. `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/codex/request_builder_test.go`
-8. `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/openai_tool_decode_test.go`
+- Live adapter logs: `~/.local/state/clyde/clyde-daemon.jsonl`
+- Anthropic logs: `~/.local/state/clyde/anthropic.jsonl`
+- Local research tree: `/Users/agoodkind/Sites/clyde-dev/clyde/research`
+- Cursor/Codex/Claude source references symlinked under
+  `/Users/agoodkind/Sites/clyde-dev/clyde/research`
+- Progress log: `docs/adapter-refactor/last_agent_progress_apr_26_2026.md`
+- Plan audit: `docs/adapter-refactor/adapter-refactor-audit.md`
 
 ### Current diagram
 
 ```mermaid
 flowchart TD
-    OpenAIClient[OpenAIClient]
-    RootAdapter["internal/adapter/root"]
-    ServerDispatch[server_dispatch.go]
-    OAuthHandler[oauth_handler.go]
-    CodexRuntime[codex_runtime.go]
-    CodexBridge[codex_bridge.go]
-    ServerResponse[server_response.go]
-    Tooltrans[tooltrans]
-    AnthBackend["anthropic/backend"]
-    CodexBackend[codex]
-    Render[render]
-    Runtime[runtime]
-    OpenAIShared[openai]
-    FallbackPkg[fallback]
-    AnthropicAPI[AnthropicAPI]
-    CodexAPI[CodexAPI]
-    CodexApp[CodexApp]
-    ClaudeCLI[ClaudeCLI]
+    Cursor[Cursor / OpenAI-compatible client]
+    Root["Root adapter
+HTTP facade + routing"]
+    CursorLayer["cursor
+product translation"]
+    Anthropic["anthropic/backend
+request + response + fallback policy"]
+    AnthFallback["anthropic/fallback
+claude -p driver"]
+    Codex["codex
+request + transport + app policy"]
+    OpenAI["openai
+wire types + SSE"]
+    Render["render
+normalized events -> OpenAI chunks"]
+    Runtime["runtime
+lifecycle + notices"]
+    Finish["finishreason"]
+    Tooltrans["tooltrans
+sentinel cleanup only"]
+    AnthAPI[Anthropic API]
+    CodexAPI[Codex API]
+    CodexApp[Codex app server]
+    ClaudeCLI[Claude CLI]
 
-    OpenAIClient --> RootAdapter
-    RootAdapter --> ServerDispatch
-    ServerDispatch --> OAuthHandler
-    ServerDispatch --> AnthBackend
-    ServerDispatch --> CodexBackend
-    RootAdapter --> CodexRuntime
-    RootAdapter --> CodexBridge
+    Cursor --> Root
+    Root --> CursorLayer
+    Root --> Anthropic
+    Root --> Codex
+    Root --> OpenAI
+    Root --> Runtime
 
-    OAuthHandler --> Tooltrans
-    OAuthHandler --> AnthBackend
-    OAuthHandler --> ServerResponse
-    CodexBridge --> Tooltrans
-    CodexBridge --> ServerResponse
-    CodexRuntime --> CodexBackend
-    ServerResponse --> OpenAIShared
+    Anthropic --> AnthAPI
+    Anthropic --> AnthFallback
+    AnthFallback --> ClaudeCLI
+    Codex --> CodexAPI
+    Codex --> CodexApp
 
-    Tooltrans --> Render
-    AnthBackend --> AnthropicAPI
-    AnthBackend --> FallbackPkg
-    AnthBackend --> Render
-    AnthBackend --> Runtime
-    CodexBackend --> CodexAPI
-    CodexBackend --> CodexApp
-    CodexBackend --> Runtime
-    FallbackPkg --> ClaudeCLI
-
-    RootAdapter --> Runtime
-    RootAdapter --> OpenAIShared
+    Anthropic --> Render
+    Codex --> Render
+    Render --> OpenAI
+    Anthropic --> Finish
+    Codex --> Finish
+    Codex --> Tooltrans
 ```
-
-What is already in place:
-
-- `internal/adapter/doc.go` already documents the intended narrow root facade.
-- `internal/adapter/cursor/` already exists and owns a small amount of
-  Cursor-specific metadata and workspace extraction.
-- `internal/adapter/anthropic/backend/backend.go` already provides an
-  Anthropic dispatcher seam around `Handle` and `Dispatch`.
-- `internal/adapter/codex/backend.go` already provides a Codex dispatcher seam
-  around `Dispatch`, `Collect`, and `Stream`.
-- `internal/adapter/render/event_renderer.go` already owns the normalized event
-  model and shared rendering layer.
-- `internal/adapter/openai/sse.go` already owns the shared SSE writer.
-- `internal/adapter/runtime/` already owns backend-neutral lifecycle logging,
-  notices, finish handling, and cost accounting.
-
-Where ownership still leaks:
-
-- `internal/adapter/server_dispatch.go` still knows backend-specific dispatch
-  details and special cases `anthropic`, `codex`, `fallback`, and `shunt`.
-- `internal/adapter/oauth_handler.go` still constructs Anthropic wire requests,
-  applies Anthropic prompt policy, sets thinking config, and chooses
-  Anthropic-specific betas.
-- `internal/adapter/server_response.go` still assembles final Anthropic/Codex
-  OpenAI responses from accumulated chunks in the root package.
-- Cursor-specific translation is still implicit rather than first-class:
-  `server_dispatch.go`, `context_tracker.go`, `codex_sessions.go`, and
-  Codex session/runtime bridge code each derive parts of Cursor context
-  separately.
-- `internal/adapter/codex_handler.go` has been deleted. Codex request
-  shaping, response merging, parser tests, and transport request construction
-  now live under `internal/adapter/codex/`; the remaining root Codex files are
-  `codex_runtime.go`, `codex_bridge.go`, `codex_sessions.go`, and
-  `codex_app_fallback.go`, which still provide Server-owned auth/session/app
-  transport plumbing.
-- `internal/adapter/anthropic/backend/fallback_runtime.go` now owns the
-  Anthropic fallback entrypoint. The root package still exposes narrow bridge
-  methods for semaphore/config access, but `internal/adapter/fallback_handler.go`
-  has been deleted.
-- `internal/adapter/tooltrans/` still mixes truly shared compatibility helpers
-  with Anthropic-specific translation behavior.
 
 ## Target package ownership
 
@@ -804,7 +553,7 @@ Likely end-state files:
 
 - `internal/adapter/anthropic/backend/doc.go`
 - `internal/adapter/anthropic/backend/backend.go`
-- `internal/adapter/anthropic/backend/mapper.go`
+- `internal/adapter/anthropic/backend/mapper_impl.go`
 - `internal/adapter/anthropic/backend/policy.go`
 - `internal/adapter/anthropic/backend/transport.go`
 - `internal/adapter/anthropic/backend/stream.go`
@@ -824,17 +573,19 @@ Codex should own:
 - Codex fallback/app escalation policy.
 - Codex-to-normalized and Codex-to-OpenAI final mapping.
 
-Likely end-state files:
+Current end-state files:
 
 - `internal/adapter/codex/doc.go`
 - `internal/adapter/codex/backend.go`
-- `internal/adapter/codex/mapper.go`
-- `internal/adapter/codex/policy.go`
-- `internal/adapter/codex/transport.go`
-- `internal/adapter/codex/stream.go`
+- `internal/adapter/codex/request_builder.go`
+- `internal/adapter/codex/selection.go`
+- `internal/adapter/codex/direct_runtime.go`
+- `internal/adapter/codex/managed_runtime.go`
+- `internal/adapter/codex/transport_http.go`
+- `internal/adapter/codex/transport_ws.go`
+- `internal/adapter/codex/transport_app.go`
+- `internal/adapter/codex/protocol.go`
 - `internal/adapter/codex/respond.go`
-- `internal/adapter/codex/fallback/...` if app/direct fallback logic benefits
-  from its own package boundary.
 
 ### Truly shared only
 
@@ -880,7 +631,7 @@ time.
 
 Deliverables:
 
-- `docs/adapter-architecture.md`
+- `docs/adapter-refactor/adapter-refactor.md`
 - One short package doc per backend module where the ownership is not already
   explicit.
 - A written Cursor translation contract and a written backend contract in root
@@ -983,7 +734,7 @@ Current ownership leaks:
 - fine-grained tool streaming beta handling
 - per-request beta derivation
 - microcompact invocation
-- OpenAI request marshalling into `tooltrans.TranslateRequest(...)`
+- OpenAI request marshalling into `anthropicbackend.TranslateRequest(...)`
 
 Codex app-parity workstream to fold alongside this phase:
 
@@ -998,7 +749,7 @@ Codex app-parity workstream to fold alongside this phase:
   - the direct Codex OAuth route Clyde currently uses behaves like an
     approximately `272k` input-context path in direct probing
   - Clyde's direct Codex transport is plain HTTP SSE in
-    `internal/adapter/codex_handler.go`, while the Codex Rust client has a
+    `internal/adapter/codex/direct_runtime.go`, while the Codex Rust client has a
     richer transport/request layer
 - Current observed request-shaping gap:
   - Clyde accepts `max_completion_tokens` on the OpenAI surface but does not
@@ -1045,12 +796,12 @@ Codex app-parity workstream to fold alongside this phase:
   - fold context-window truth reporting into model and capability cleanup after
     transport ownership is explicit
 
-Planned destination:
+Live destination files:
 
-- `internal/adapter/anthropic/backend/mapper.go`
-- `internal/adapter/anthropic/backend/policy.go`
-- `internal/adapter/anthropic/backend/transport.go` only if transport setup
-  needs to be separated from pure mapping
+- `internal/adapter/anthropic/backend/mapper_impl.go`
+- `internal/adapter/anthropic/backend/request_builder.go`
+- `internal/adapter/anthropic/backend/microcompact.go`
+- `internal/adapter/anthropic/backend/wire_helpers.go`
 
 Expected file moves or wrappers:
 
@@ -1084,10 +835,12 @@ Current ownership leaks:
 - Anthropic stream error shaping and empty-stream handling currently coordinated
   through root bridge methods
 
-Planned destination:
+Live destination files:
 
-- `internal/adapter/anthropic/backend/stream.go`
-- `internal/adapter/anthropic/backend/respond.go`
+- `internal/adapter/anthropic/backend/stream_translator.go`
+- `internal/adapter/anthropic/backend/response_merge.go`
+- `internal/adapter/anthropic/backend/response_runtime.go`
+- `internal/adapter/anthropic/backend/stream_errors.go`
 
 Files involved:
 
@@ -1187,17 +940,20 @@ Current state:
   store coordination, and account metadata wiring.
 - `internal/adapter/codex_handler.go` has been deleted.
 
-Planned destination:
+Live destination files in the Codex package:
 
-- `internal/adapter/codex/mapper.go`
-- `internal/adapter/codex/policy.go`
-
-Related files already in Codex package:
-
+- `internal/adapter/codex/request_builder.go`
+- `internal/adapter/codex/output_controls.go`
+- `internal/adapter/codex/service_tier.go`
 - `internal/adapter/codex/instructions.go`
 - `internal/adapter/codex/native_tools.go`
 - `internal/adapter/codex/protocol.go`
 - `internal/adapter/codex/events.go`
+- `internal/adapter/codex/direct_runtime.go`
+- `internal/adapter/codex/managed_runtime.go`
+- `internal/adapter/codex/transport_app.go`
+- `internal/adapter/codex/transport_http.go`
+- `internal/adapter/codex/transport_ws.go`
 
 Remaining planned changes:
 
@@ -1229,10 +985,13 @@ Current ownership leaks:
 - root-owned direct transport auth/session plumbing still sits outside the
   Codex package because it depends on daemon-local auth/config state
 
-Planned destination:
+Live destination files:
 
-- `internal/adapter/codex/stream.go`
+- `internal/adapter/codex/protocol.go`
 - `internal/adapter/codex/respond.go`
+- `internal/adapter/codex/app_transport.go`
+- `internal/adapter/codex/transport_http.go`
+- `internal/adapter/codex/transport_ws.go`
 
 Files involved:
 
@@ -1308,40 +1067,40 @@ Exit criteria:
 
 Primary objective:
 
-Turn `internal/adapter/tooltrans/` into a small shared compatibility layer
-instead of a backend implementation layer.
+Keep `internal/adapter/tooltrans/` from becoming a hidden backend or output
+package.
 
 Current state:
 
-- `tooltrans/types.go` and `tooltrans/openai_to_anthropic.go` are explicitly
-  Anthropic-shaped.
-- `tooltrans/stream.go` converts Anthropic SSE into OpenAI stream chunks.
-- `tooltrans/event_renderer.go` is already mostly an alias layer over
-  `render`.
+- Complete for Anthropic translation ownership. Anthropic request translation,
+  translated request types, content normalization, and stream translation now
+  live in `internal/adapter/anthropic/backend/`.
+- Complete for output alias cleanup. OpenAI wire types are imported from
+  `internal/adapter/openai`, and event rendering is imported from
+  `internal/adapter/render`.
+- `internal/adapter/tooltrans/` now contains only sentinel cleanup helpers and
+  their tests: `doc.go`, `sentinels.go`, and `thinking_strip_test.go`.
 
-Keep in `tooltrans` only if truly shared:
+Allowed in `tooltrans`:
 
-- shared compatibility types needed to avoid import cycles
-- small conversion helpers
-- alias shims that intentionally preserve compatibility during migration
+- cross-backend sentinel cleanup for Clyde-injected notice/activity/thinking
+  envelopes
+- tests for that sentinel cleanup
 
-Move out of `tooltrans`:
+Not allowed in `tooltrans`:
 
-- Anthropic-specific request translation
-- Anthropic-specific SSE translation
-- backend-specific reasoning/thinking formatting rules
+- provider request translation
+- provider SSE translation
+- OpenAI wire aliases
+- render aliases
 - backend-specific tool-call semantics
-
-Possible destinations:
-
-- `internal/adapter/anthropic/backend/...`
-- `internal/adapter/render/...`
-- `internal/adapter/openai/...`
 
 Exit criteria:
 
-- `tooltrans` no longer acts as a hidden Anthropic backend package.
+- `tooltrans` is sentinel cleanup only.
 - Backend-specific logic lives with its backend.
+- Shared output logic lives in `internal/adapter/render` and
+  `internal/adapter/openai`.
 
 ## Phase 9: Normalize output around one internal event model
 
@@ -1378,8 +1137,8 @@ Files involved:
 
 - `internal/adapter/render/event_renderer.go`
 - `internal/adapter/anthropic/backend/translator.go`
-- future `internal/adapter/anthropic/backend/stream.go`
-- future `internal/adapter/codex/stream.go`
+- `internal/adapter/anthropic/backend/stream_translator.go`
+- `internal/adapter/codex/protocol.go`
 - `internal/adapter/server_response.go`
 
 Exit criteria:
@@ -1401,7 +1160,7 @@ Current notable tests:
 - `internal/adapter/server_streaming_test.go`
 - `internal/adapter/server_fallback_test.go`
 - `internal/adapter/refactor_regression_test.go`
-- `internal/adapter/tooltrans/..._test.go`
+- `internal/adapter/tooltrans/thinking_strip_test.go`
 - `internal/adapter/anthropic/anthropic_test.go`
 
 Target layout:
@@ -2673,9 +2432,9 @@ workstream above. The concrete execution order is:
    `TestResolveTransportSelectionReturnsFallbackError`.
 4. [done] Removed the remaining root-side direct degradation helper and
    stale bridge assumption. The old adapter-root direct escalation copy is
-  gone with `codex_handler.go`, and `internal/adapter/codex/selection.go`
-  now calls the Codex-local `ShouldEscalateDirect(...)` helper directly
-  instead of routing that decision back through the root `Dispatcher` interface.
+   gone with `codex_handler.go`, and `internal/adapter/codex/selection.go`
+   now calls the Codex-local `ShouldEscalateDirect(...)` helper directly
+   instead of routing that decision back through the root `Dispatcher` interface.
    The corresponding `ShouldEscalateDirect` bridge method was removed
    from `internal/adapter/codex_bridge.go`, and the `codex.Dispatcher`
    interface no longer exposes that policy hook.
@@ -2693,39 +2452,15 @@ workstream above. The concrete execution order is:
 
 ### Phase 8 todos: shrink `tooltrans`
 
-1. [done] Inventoried current `tooltrans` content at the Anthropic seam.
-   Live Anthropic request shaping now enters through
-   `anthropicbackend.TranslateRequest(...)`, live Anthropic stream
-   translation enters through `anthropicbackend.RunTranslatorStream(...)`,
-   and the duplicate Anthropic-focused `tooltrans` test files
-   (`openai_to_anthropic_test.go`, `stream_test.go`,
-   `anthropic_to_openai_test.go`) are gone. The remaining `tooltrans`
-   Go files now only cover shared docs, OpenAI aliases, render aliases,
-   inline-thinking aliases, cross-backend sentinel cleanup, and sentinel tests.
-2. [done 2026-04-26] Moved Anthropic request translation implementation out of
-   `tooltrans` and into `internal/adapter/anthropic/backend/mapper_impl.go`.
-   The backend now owns `TranslateRequest(...)`, Anthropic-specific mapper
-   errors, OpenAI-to-Anthropic message/content/tool conversion, and mapper
-   logging.
-3. [done 2026-04-26] Moved Anthropic translated request and Anthropic SSE helper
-   types out of `tooltrans/types.go` and into
-   `internal/adapter/anthropic/backend/types.go`.
-4. [done 2026-04-26] Moved Anthropic stream translation implementation out of
-   `tooltrans` and into `internal/adapter/anthropic/backend/stream_translator.go`.
-   `RunTranslatorStream(...)` now calls the backend-owned translator directly.
-5. [done 2026-04-26] Moved Anthropic content normalization helpers into
-   `internal/adapter/anthropic/backend/normalize.go`.
-6. [done 2026-04-26] Kept only the small shared compatibility surface in
-   `internal/adapter/tooltrans/` and added `doc.go` to describe what is
-   allowed to live there.
-7. [done] Deleted the duplicate Anthropic-focused `tooltrans` test files
-   once backend-local coverage replaced them:
-   `internal/adapter/tooltrans/openai_to_anthropic_test.go`,
-   `internal/adapter/tooltrans/stream_test.go`, and
-   `internal/adapter/tooltrans/anthropic_to_openai_test.go`.
-8. [todo] Continue shrinking `tooltrans` during Phase 9 by replacing OpenAI
-   stream alias use with `internal/adapter/openai` and render alias use with
-   `internal/adapter/render` where doing so does not create import cycles.
+1. [done 2026-04-26] Move Anthropic request translation, translated request
+   types, content normalization, and stream translation into
+   `internal/adapter/anthropic/backend/`.
+2. [done 2026-04-26] Remove OpenAI and render aliases from `tooltrans`; callers
+   now import `internal/adapter/openai` and `internal/adapter/render` directly.
+3. [done 2026-04-26] Delete obsolete `tooltrans` files:
+   `types.go`, `openai_to_anthropic.go`, `stream.go`, `event_renderer.go`,
+   `types_openai_local.go`, and `thinking_inline.go`.
+4. [done 2026-04-26] Keep `tooltrans` as sentinel cleanup only.
 
 ### Phase 9 todos: normalize output around one event model
 
@@ -2864,7 +2599,7 @@ workstream above. The concrete execution order is:
   `Dispatcher` interface. Codex finish-reason normalization is now closed
   through the shared `finishreason` helper.
 - Phases 4 (backend-owned Anthropic fallback escalation), 8 (further
-  `tooltrans` shrinkage), 9 (event-renderer normalization at the
+  `tooltrans` cleanup), 9 (event-renderer normalization at the
   output boundary), 10 (test relocation under the backend packages),
   and 11 (full bridge file deletion) are still future work. The
   bridges (`anthropic_bridge.go`, `codex_bridge.go`) currently serve
@@ -2874,7 +2609,7 @@ workstream above. The concrete execution order is:
 - The Anthropic notice/error classification slice is largely complete,
   but Anthropic backend parity is not complete. Request construction,
   response assembly, stream translation, usage/finish handling,
-  fallback escalation, `tooltrans` cleanup, notice delivery validation,
+  fallback escalation, notice delivery validation,
   and test relocation still have open work. Codex app parity is also
   not close to done yet: Clyde has useful HTTP/websocket wire,
   capability-reporting, telemetry, and initial websocket

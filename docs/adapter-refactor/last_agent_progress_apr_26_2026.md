@@ -1604,3 +1604,34 @@ Next large batch:
 - Continue Phase 9 by changing Anthropic and Codex stream parser boundaries to
   emit `render.Event` streams first, with OpenAI chunk rendering tested only in
   `internal/adapter/render`.
+
+## 2026-04-26 Adapter plan cleanup checkpoint
+
+Follow-up to the adapter plan audit. This was a docs-only hygiene pass to make
+the main plan usable again before the next implementation phase.
+
+What changed:
+
+- Replaced the long top-level current-state/history section with a concise
+  live architecture snapshot.
+- Moved stale research/history framing out of the main execution path by
+  pointing readers to the progress log, research tree, daemon logs, and plan
+  audit.
+- Rewrote Phase 8 to match the current `tooltrans` state:
+  `internal/adapter/tooltrans/` now owns only sentinel cleanup helpers and
+  tests.
+- Removed obsolete live references to deleted `tooltrans` and Codex root files
+  where they appeared as future destinations instead of historical notes.
+- Preserved historical deleted-file references only where they explicitly mark
+  completed work.
+
+Verification:
+
+- `git diff --check -- docs/adapter-refactor/adapter-refactor.md` passed.
+- Docs-only change; no build, tests, or daemon reload were needed.
+
+Next large batch:
+
+- Split research/evidence and completed milestone history out of
+  `docs/adapter-refactor/adapter-refactor.md` into focused supporting docs, then
+  leave the main plan as a phase checklist plus dependency map.
