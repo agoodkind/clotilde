@@ -1,0 +1,105 @@
+package codex
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"strings"
+
+	"goodkind.io/clyde/internal/adapter/tooltrans"
+)
+
+// HTTPTransportRequest is the current root-owned Codex request wire shape.
+// This stays in the Codex package so the direct HTTP SSE transport can be
+// exercised and moved independently of the root adapter facade.
+type HTTPTransportRequest struct {
+	Model             string            `json:"model"`
+	Instructions      string            `json:"instructions"`
+	Store             bool              `json:"store"`
+	Stream            bool              `json:"stream"`
+	Include           []string          `json:"include,omitempty"`
+	PromptCache       string            `json:"prompt_cache_key,omitempty"`
+	ServiceTier       string            `json:"service_tier,omitempty"`
+	ClientMetadata    map[string]string `json:"client_metadata,omitempty"`
+	Reasoning         *Reasoning        `json:"reasoning,omitempty"`
+	MaxCompletion     *int              `json:"max_completion_tokens,omitempty"`
+	Input             []map[string]any  `json:"input"`
+	Tools             []any             `json:"tools,omitempty"`
+	ToolChoice        string            `json:"tool_choice,omitempty"`
+	ParallelToolCalls bool              `json:"parallel_tool_calls,omitempty"`
+}
+
+type HTTPTransportConfig struct {
+	BaseURL        string
+	Token          string
+	AccountID      string
+	RequestID      string
+	Alias          string
+	ConversationID string
+}
+
+func RunHTTPTransport(
+	ctx context.Context,
+	httpClient *http.Client,
+	cfg HTTPTransportConfig,
+	payload HTTPTransportRequest,
+	emit func(tooltrans.OpenAIStreamChunk) error,
+) (RunResult, error) {
+	conversationID := strings.TrimSpace(payload.PromptCache)
+	windowID := ""
+	if conversationID != "" {
+		windowID = conversationID + ":0"
+		payload.ClientMetadata = ClientMetadata(cfg.AccountID, windowID)
+	}
+
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return NewRunResult("stop"), err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.BaseURL, bytes.NewReader(raw))
+	if err != nil {
+		return NewRunResult("stop"), err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+cfg.Token)
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+	if conversationID != "" {
+		httpReq.Header.Set("x-client-request-id", conversationID)
+		httpReq.Header.Set("session_id", conversationID)
+		if windowID != "" {
+			httpReq.Header.Set("x-codex-window-id", windowID)
+		}
+	}
+
+	nativeShellCount, nativeCustomCount, functionToolCount := ToolSpecCounts(payload.Tools)
+	LogTransportPrepared(ctx, slog.Default(), TransportTelemetry{
+		RequestID:         cfg.RequestID,
+		Alias:             cfg.Alias,
+		UpstreamModel:     payload.Model,
+		Transport:         "responses_http",
+		ServiceTier:       payload.ServiceTier,
+		MaxCompletion:     payload.MaxCompletion,
+		PromptCacheKey:    conversationID,
+		ClientMetadata:    payload.ClientMetadata,
+		InputCount:        len(payload.Input),
+		ToolCount:         len(payload.Tools),
+		NativeShellCount:  nativeShellCount,
+		NativeCustomCount: nativeCustomCount,
+		FunctionToolCount: functionToolCount,
+	})
+
+	resp, err := httpClient.Do(httpReq)
+	if err != nil {
+		return NewRunResult("stop"), err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return NewRunResult("stop"), fmt.Errorf("codex backend %s: %s", resp.Status, strings.TrimSpace(string(b)))
+	}
+	return ParseTransportStream(resp.Body, cfg.RequestID, cfg.Alias, slog.Default(), emit)
+}

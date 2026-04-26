@@ -62,6 +62,7 @@ type EventRenderer struct {
 	reqID                 string
 	backend               string
 	log                   *slog.Logger
+	suppressed            map[EventKind]*deltaSummary
 	seenRole              bool
 	reasoningOpen         bool
 	lastReasoningKind     string
@@ -70,6 +71,14 @@ type EventRenderer struct {
 	pendingReasoningBreak bool
 	reasoningSignaled     bool
 	reasoningVisible      bool
+}
+
+type deltaSummary struct {
+	Count        int
+	Chars        int
+	MaxChars     int
+	ToolCalls    int
+	ToolArgChars int
 }
 
 func NewEventRenderer(reqID, modelAlias, backend string, log *slog.Logger) *EventRenderer {
@@ -95,8 +104,18 @@ func (r *EventRenderer) CreatedUnix() int64 { return r.createdUnix }
 
 func (r *EventRenderer) ModelAlias() string { return r.modelAlias }
 
+func (r *EventRenderer) Flush() {
+	r.flushSuppressedEventSummaries()
+}
+
 func (r *EventRenderer) HandleEvent(ev Event) []adapteropenai.StreamChunk {
-	r.logNormalized(ev)
+	logEvent := shouldLogEvent(ev)
+	if logEvent {
+		r.flushSuppressedEventSummaries()
+		r.logNormalized(ev)
+	} else {
+		r.recordSuppressedEvent(ev)
+	}
 	var out []adapteropenai.StreamChunk
 	switch ev.Kind {
 	case EventReasoningSignaled:
@@ -149,7 +168,9 @@ func (r *EventRenderer) HandleEvent(ev Event) []adapteropenai.StreamChunk {
 		}
 	}
 	for _, ch := range out {
-		r.logRender(ev, ch)
+		if logEvent {
+			r.logRender(ev, ch)
+		}
 	}
 	return out
 }
@@ -346,7 +367,7 @@ func formatFileChangeLifecycle(ev Event) string {
 }
 
 func (r *EventRenderer) logNormalized(ev Event) {
-	r.log.LogAttrs(context.Background(), slog.LevelDebug, "adapter.event.normalized",
+	attrs := []slog.Attr{
 		slog.String("component", "adapter"),
 		slog.String("subcomponent", "renderer"),
 		slog.String("request_id", r.reqID),
@@ -359,7 +380,9 @@ func (r *EventRenderer) logNormalized(ev Event) {
 		slog.Bool("reasoning_signaled", r.reasoningSignaled || ev.Kind == EventReasoningSignaled || ev.Kind == EventReasoningDelta),
 		slog.Bool("reasoning_visible", r.reasoningVisible || ev.Kind == EventReasoningDelta),
 		slog.Int("delta_len", len(ev.Text)),
-	)
+	}
+	attrs = append(attrs, toolCallLogAttrs(ev.ToolCalls)...)
+	r.log.LogAttrs(context.Background(), slog.LevelDebug, "adapter.event.normalized", attrs...)
 }
 
 func (r *EventRenderer) logRender(ev Event, ch adapteropenai.StreamChunk) {
@@ -367,7 +390,7 @@ func (r *EventRenderer) logRender(ev Event, ch adapteropenai.StreamChunk) {
 	if len(ch.Choices) > 0 {
 		delta = ch.Choices[0].Delta
 	}
-	r.log.LogAttrs(context.Background(), slog.LevelDebug, "adapter.render.event",
+	attrs := []slog.Attr{
 		slog.String("component", "adapter"),
 		slog.String("subcomponent", "renderer"),
 		slog.String("request_id", r.reqID),
@@ -377,7 +400,114 @@ func (r *EventRenderer) logRender(ev Event, ch adapteropenai.StreamChunk) {
 		slog.String("event_kind", string(ev.Kind)),
 		slog.String("render_policy", renderPolicyForEvent(ev.Kind)),
 		slog.Int("delta_len", len(delta.Content)+len(delta.Reasoning)+len(delta.ReasoningContent)),
-	)
+	}
+	attrs = append(attrs, toolCallLogAttrs(delta.ToolCalls)...)
+	r.log.LogAttrs(context.Background(), slog.LevelDebug, "adapter.render.event", attrs...)
+}
+
+func shouldLogEvent(ev Event) bool {
+	switch ev.Kind {
+	case EventAssistantTextDelta, EventReasoningDelta:
+		return false
+	case EventToolCallDelta:
+		return toolCallDeltaHasIdentity(ev.ToolCalls)
+	default:
+		return true
+	}
+}
+
+func toolCallDeltaHasIdentity(toolCalls []adapteropenai.ToolCall) bool {
+	for _, tc := range toolCalls {
+		if strings.TrimSpace(tc.ID) != "" || strings.TrimSpace(tc.Function.Name) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func toolCallLogAttrs(toolCalls []adapteropenai.ToolCall) []slog.Attr {
+	if len(toolCalls) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(toolCalls))
+	ids := make([]string, 0, len(toolCalls))
+	argChars := 0
+	for _, tc := range toolCalls {
+		appendUniqueLogValue(&names, tc.Function.Name, 4)
+		appendUniqueLogValue(&ids, tc.ID, 4)
+		argChars += len(tc.Function.Arguments)
+	}
+	return []slog.Attr{
+		slog.Int("tool_call_count", len(toolCalls)),
+		slog.Any("tool_call_names", names),
+		slog.Any("tool_call_ids", ids),
+		slog.Int("tool_call_arg_chars", argChars),
+	}
+}
+
+func appendUniqueLogValue(values *[]string, value string, limit int) {
+	value = strings.TrimSpace(value)
+	if value == "" || limit <= 0 || len(*values) >= limit {
+		return
+	}
+	for _, existing := range *values {
+		if existing == value {
+			return
+		}
+	}
+	*values = append(*values, value)
+}
+
+func (r *EventRenderer) recordSuppressedEvent(ev Event) {
+	if r.suppressed == nil {
+		r.suppressed = make(map[EventKind]*deltaSummary)
+	}
+	summary := r.suppressed[ev.Kind]
+	if summary == nil {
+		summary = &deltaSummary{}
+		r.suppressed[ev.Kind] = summary
+	}
+	summary.Count++
+	chars := len(ev.Text)
+	for _, tc := range ev.ToolCalls {
+		summary.ToolCalls++
+		chars += len(tc.Function.Arguments)
+		summary.ToolArgChars += len(tc.Function.Arguments)
+	}
+	summary.Chars += chars
+	if chars > summary.MaxChars {
+		summary.MaxChars = chars
+	}
+}
+
+func (r *EventRenderer) flushSuppressedEventSummaries() {
+	if len(r.suppressed) == 0 {
+		return
+	}
+	for _, kind := range []EventKind{EventAssistantTextDelta, EventReasoningDelta, EventToolCallDelta} {
+		summary := r.suppressed[kind]
+		if summary == nil || summary.Count == 0 {
+			continue
+		}
+		r.log.LogAttrs(context.Background(), slog.LevelDebug, "adapter.event.delta_summary",
+			slog.String("component", "adapter"),
+			slog.String("subcomponent", "renderer"),
+			slog.String("request_id", r.reqID),
+			slog.String("backend", r.backend),
+			slog.String("model", r.modelAlias),
+			slog.String("alias", r.modelAlias),
+			slog.String("event_kind", string(kind)),
+			slog.Int("delta_count", summary.Count),
+			slog.Int("delta_chars", summary.Chars),
+			slog.Int("max_delta_chars", summary.MaxChars),
+			slog.Int("tool_call_count", summary.ToolCalls),
+			slog.Int("tool_call_arg_chars", summary.ToolArgChars),
+		)
+		delete(r.suppressed, kind)
+	}
+	if len(r.suppressed) == 0 {
+		r.suppressed = nil
+	}
 }
 
 func renderPolicyForEvent(kind EventKind) string {

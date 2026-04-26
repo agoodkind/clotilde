@@ -147,6 +147,85 @@ func TestBuildCodexRequestUsesResponsesReasoningFields(t *testing.T) {
 	}
 }
 
+func TestBuildCodexRequestPassesThroughMaxCompletionTokens(t *testing.T) {
+	maxCompletion := 4096
+	req := ChatRequest{
+		MaxComplTokens: &maxCompletion,
+		Messages: []ChatMessage{{
+			Role:    "user",
+			Content: json.RawMessage(`"hello"`),
+		}},
+	}
+	out := buildCodexRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	if out.MaxCompletion == nil {
+		t.Fatalf("expected max_completion_tokens passthrough")
+	}
+	if *out.MaxCompletion != maxCompletion {
+		t.Fatalf("max_completion_tokens=%d want %d", *out.MaxCompletion, maxCompletion)
+	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if got, _ := payload["max_completion_tokens"].(float64); int(got) != maxCompletion {
+		t.Fatalf("serialized max_completion_tokens=%v want %d", payload["max_completion_tokens"], maxCompletion)
+	}
+}
+
+func TestBuildCodexRequestMapsFastServiceTierToPriority(t *testing.T) {
+	req := ChatRequest{
+		Metadata: mustRaw(`{"service_tier":"fast"}`),
+		Messages: []ChatMessage{{
+			Role:    "user",
+			Content: json.RawMessage(`"hello"`),
+		}},
+	}
+	out := buildCodexRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	if out.ServiceTier != "priority" {
+		t.Fatalf("service_tier=%q want priority", out.ServiceTier)
+	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if got, _ := payload["service_tier"].(string); got != "priority" {
+		t.Fatalf("serialized service_tier=%q want priority", got)
+	}
+}
+
+func TestBuildCodexRequestPreservesFlexServiceTier(t *testing.T) {
+	req := ChatRequest{
+		Metadata: mustRaw(`{"service_tier":"flex"}`),
+		Messages: []ChatMessage{{
+			Role:    "user",
+			Content: json.RawMessage(`"hello"`),
+		}},
+	}
+	out := buildCodexRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	if out.ServiceTier != "flex" {
+		t.Fatalf("service_tier=%q want flex", out.ServiceTier)
+	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if got, _ := payload["service_tier"].(string); got != "flex" {
+		t.Fatalf("serialized service_tier=%q want flex", got)
+	}
+}
+
 func TestBuildCodexRequestReplaysAssistantTurnsAsOutputText(t *testing.T) {
 	oldNow := codexNow
 	oldGetwd := codexGetwd
@@ -252,8 +331,30 @@ func TestBuildCodexRequestUsesCatalogBaseInstructions(t *testing.T) {
 		Messages: []ChatMessage{{Role: "user", Content: mustRaw(`"hello"`)}},
 	}
 	out := buildCodexRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	if !strings.Contains(out.Instructions, "Agent Mode") {
+		t.Fatalf("instructions missing agent mode prefix")
+	}
 	if !strings.Contains(out.Instructions, "You are Codex, a coding agent") {
 		t.Fatalf("instructions did not come from catalog")
+	}
+}
+
+func TestBuildCodexRequestUsesPlanModeInstructionPrefix(t *testing.T) {
+	req := ChatRequest{
+		Tools: []Tool{{
+			Type: "function",
+			Function: ToolFunctionSchema{
+				Name: "CreatePlan",
+			},
+		}},
+		Messages: []ChatMessage{{Role: "user", Content: mustRaw(`"draft the plan"`)}},
+	}
+	out := buildCodexRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	if !strings.Contains(out.Instructions, "Plan Mode") {
+		t.Fatalf("instructions missing plan mode prefix: %q", out.Instructions)
+	}
+	if !strings.Contains(out.Instructions, "Only edit markdown files") {
+		t.Fatalf("instructions missing plan mode guardrail: %q", out.Instructions)
 	}
 }
 
@@ -360,13 +461,16 @@ func TestBuildCodexRequestUsesNativeCodexToolsForShellAndApplyPatch(t *testing.T
 	}
 }
 
-func TestBuildCodexRequestPrunesDirectToolsForWriteIntent(t *testing.T) {
+func TestBuildCodexRequestPreservesCursorProductToolsForWriteIntent(t *testing.T) {
 	req := ChatRequest{
 		Tools: []Tool{
 			{Type: "function", Function: ToolFunctionSchema{Name: "ReadFile", Parameters: mustRaw(`{"type":"object"}`)}},
 			{Type: "function", Function: ToolFunctionSchema{Name: "ApplyPatch", Parameters: mustRaw(`{"type":"object"}`)}},
 			{Type: "function", Function: ToolFunctionSchema{Name: "WebSearch", Parameters: mustRaw(`{"type":"object"}`)}},
 			{Type: "function", Function: ToolFunctionSchema{Name: "Subagent", Parameters: mustRaw(`{"type":"object"}`)}},
+			{Type: "function", Function: ToolFunctionSchema{Name: "SwitchMode", Parameters: mustRaw(`{"type":"object"}`)}},
+			{Type: "function", Function: ToolFunctionSchema{Name: "CreatePlan", Parameters: mustRaw(`{"type":"object"}`)}},
+			{Type: "function", Function: ToolFunctionSchema{Name: "CallMcpTool", Parameters: mustRaw(`{"type":"object"}`)}},
 		},
 		Messages: []ChatMessage{{
 			Role:    "user",
@@ -383,7 +487,35 @@ func TestBuildCodexRequestPrunesDirectToolsForWriteIntent(t *testing.T) {
 		}
 	}
 	got := strings.Join(names, ",")
-	if got != "read_file,apply_patch" && got != "read_file" {
+	for _, want := range []string{"read_file", "apply_patch", "web_search", "spawn_agent", "switch_mode", "create_plan", "call_mcp_tool"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("tool names=%q missing %q", got, want)
+		}
+	}
+}
+
+func TestBuildCodexRequestStillPrunesUnknownToolsForWriteIntent(t *testing.T) {
+	req := ChatRequest{
+		Tools: []Tool{
+			{Type: "function", Function: ToolFunctionSchema{Name: "ReadFile", Parameters: mustRaw(`{"type":"object"}`)}},
+			{Type: "function", Function: ToolFunctionSchema{Name: "UntrustedCustomTool", Parameters: mustRaw(`{"type":"object"}`)}},
+		},
+		Messages: []ChatMessage{{
+			Role:    "user",
+			Content: mustRaw(`"Please write your answer to a markdown file on disk"`),
+		}},
+	}
+
+	out := buildCodexRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	var names []string
+	for _, raw := range out.Tools {
+		tool, _ := raw.(map[string]any)
+		if name, _ := tool["name"].(string); name != "" {
+			names = append(names, name)
+		}
+	}
+	got := strings.Join(names, ",")
+	if got != "read_file" {
 		t.Fatalf("tool names=%q", got)
 	}
 }
@@ -596,168 +728,6 @@ func TestBuildCodexRequestUsesStablePromptCacheKeyFromMetadata(t *testing.T) {
 	out := buildCodexRequest(req, model, "")
 	if out.PromptCache != "meta:thread-123" {
 		t.Fatalf("prompt_cache_key=%q want %q", out.PromptCache, "meta:thread-123")
-	}
-}
-
-func TestCodexShouldEscalateDirectForWriteIntentClarification(t *testing.T) {
-	req := ChatRequest{
-		Tools: []Tool{{
-			Type: "function",
-			Function: ToolFunctionSchema{
-				Name:       "WriteFile",
-				Parameters: mustRaw(`{"type":"object"}`),
-			},
-		}},
-		Messages: []ChatMessage{
-			{Role: "user", Content: mustRaw(`"Please write your answer to a markdown file on disk"`)}},
-	}
-	chunks := []tooltrans.OpenAIStreamChunk{{
-		Choices: []tooltrans.OpenAIStreamChoice{{
-			Delta: tooltrans.OpenAIStreamDelta{
-				Content: "I need to know the destination path. Where would you like the Markdown file saved?",
-			},
-		}},
-	}}
-	escalate, reason := codexShouldEscalateDirect(req, chunks, codexRunResult{FinishReason: "stop"})
-	if !escalate {
-		t.Fatalf("expected escalation")
-	}
-	if reason == "" {
-		t.Fatalf("expected reason")
-	}
-}
-
-func TestCodexShouldNotEscalateWhenToolCallsPresent(t *testing.T) {
-	req := ChatRequest{
-		Tools: []Tool{{
-			Type: "function",
-			Function: ToolFunctionSchema{
-				Name:       "WriteFile",
-				Parameters: mustRaw(`{"type":"object"}`),
-			},
-		}},
-		Messages: []ChatMessage{
-			{Role: "user", Content: mustRaw(`"Please write your answer to a markdown file on disk"`)}},
-	}
-	chunks := []tooltrans.OpenAIStreamChunk{{
-		Choices: []tooltrans.OpenAIStreamChoice{{
-			Delta: tooltrans.OpenAIStreamDelta{
-				ToolCalls: []tooltrans.OpenAIToolCall{{
-					Index: 0,
-					ID:    "call_1",
-					Type:  "function",
-					Function: tooltrans.OpenAIToolCallFunction{
-						Name:      "WriteFile",
-						Arguments: `{"path":"out.md"}`,
-					},
-				}},
-			},
-		}},
-	}}
-	escalate, _ := codexShouldEscalateDirect(req, chunks, codexRunResult{FinishReason: "tool_calls"})
-	if escalate {
-		t.Fatalf("did not expect escalation")
-	}
-}
-
-func TestCodexShouldEscalateWhenToolCallsHaveEmptyArguments(t *testing.T) {
-	req := ChatRequest{
-		Tools: []Tool{{
-			Type: "function",
-			Function: ToolFunctionSchema{
-				Name:       "WriteFile",
-				Parameters: mustRaw(`{"type":"object"}`),
-			},
-		}},
-		Messages: []ChatMessage{
-			{Role: "user", Content: mustRaw(`"Please write your answer to a markdown file on disk"`)}},
-	}
-	chunks := []tooltrans.OpenAIStreamChunk{{
-		Choices: []tooltrans.OpenAIStreamChoice{{
-			Delta: tooltrans.OpenAIStreamDelta{
-				ToolCalls: []tooltrans.OpenAIToolCall{{
-					Index: 0,
-					ID:    "call_1",
-					Type:  "function",
-					Function: tooltrans.OpenAIToolCallFunction{
-						Name:      "ReadFile",
-						Arguments: "{}",
-					},
-				}},
-			},
-		}},
-	}}
-	escalate, reason := codexShouldEscalateDirect(req, chunks, codexRunResult{FinishReason: "tool_calls"})
-	if !escalate {
-		t.Fatalf("expected escalation")
-	}
-	if reason != "write_intent_empty_tool_arguments" {
-		t.Fatalf("reason=%q", reason)
-	}
-}
-
-func TestCodexShouldEscalateWhenToolCallsAssembleToEmptyObject(t *testing.T) {
-	req := ChatRequest{
-		Tools: []Tool{{
-			Type: "function",
-			Function: ToolFunctionSchema{
-				Name:       "Glob",
-				Parameters: mustRaw(`{"type":"object","required":["glob_pattern"]}`),
-			},
-		}},
-		Messages: []ChatMessage{
-			{Role: "user", Content: mustRaw(`"Please write your answer to a markdown file on disk"`)}},
-	}
-	chunks := []tooltrans.OpenAIStreamChunk{
-		{
-			Choices: []tooltrans.OpenAIStreamChoice{{
-				Delta: tooltrans.OpenAIStreamDelta{
-					ToolCalls: []tooltrans.OpenAIToolCall{{
-						Index: 0,
-						ID:    "call_1",
-						Type:  "function",
-						Function: tooltrans.OpenAIToolCallFunction{
-							Name: "Glob",
-						},
-					}},
-				},
-			}},
-		},
-		{
-			Choices: []tooltrans.OpenAIStreamChoice{{
-				Delta: tooltrans.OpenAIStreamDelta{
-					ToolCalls: []tooltrans.OpenAIToolCall{{
-						Index: 0,
-						ID:    "call_1",
-						Type:  "function",
-						Function: tooltrans.OpenAIToolCallFunction{
-							Arguments: "{",
-						},
-					}},
-				},
-			}},
-		},
-		{
-			Choices: []tooltrans.OpenAIStreamChoice{{
-				Delta: tooltrans.OpenAIStreamDelta{
-					ToolCalls: []tooltrans.OpenAIToolCall{{
-						Index: 0,
-						ID:    "call_1",
-						Type:  "function",
-						Function: tooltrans.OpenAIToolCallFunction{
-							Arguments: "}",
-						},
-					}},
-				},
-			}},
-		},
-	}
-	escalate, reason := codexShouldEscalateDirect(req, chunks, codexRunResult{FinishReason: "tool_calls"})
-	if !escalate {
-		t.Fatalf("expected escalation")
-	}
-	if reason != "write_intent_empty_tool_arguments" {
-		t.Fatalf("reason=%q", reason)
 	}
 }
 
@@ -1211,14 +1181,14 @@ func TestParseCodexSSEMapsNativeApplyPatchToCursorApplyPatch(t *testing.T) {
 		t.Fatalf("finish_reason=%q", res.FinishReason)
 	}
 	calls := collectToolCalls(got)
-	if len(calls) != 2 {
-		t.Fatalf("tool call chunks=%d want 2: %#v", len(calls), calls)
+	if len(calls) != 3 {
+		t.Fatalf("tool call chunks=%d want 3: %#v", len(calls), calls)
 	}
 	if calls[0].Function.Name != "ApplyPatch" {
 		t.Fatalf("tool name=%q want ApplyPatch", calls[0].Function.Name)
 	}
-	if calls[1].Function.Arguments != patch {
-		t.Fatalf("patch args=%q want %q", calls[1].Function.Arguments, patch)
+	if gotPatch := calls[1].Function.Arguments + calls[2].Function.Arguments; gotPatch != patch {
+		t.Fatalf("patch args=%q want %q", gotPatch, patch)
 	}
 }
 
@@ -1333,4 +1303,69 @@ func codexInputContentText(item codexInputItem) string {
 func codexItemTypeString(item codexInputItem) string {
 	v, _ := item["type"].(string)
 	return v
+}
+
+func TestBuildCodexRequestParityMatrixPreservesAliasIntent(t *testing.T) {
+	cases := []struct {
+		name          string
+		model         ResolvedModel
+		metadata      []byte
+		maxCompletion *int
+		wantModel     string
+		wantTier      string
+		wantMax       int
+	}{
+		{
+			name:      "normalized_alias_preserves_upstream_model",
+			model:     ResolvedModel{Alias: "clyde-gpt-5.4", ClaudeModel: "gpt-5.4"},
+			wantModel: "gpt-5.4",
+		},
+		{
+			name:      "tiered_alias_preserves_upstream_model",
+			model:     ResolvedModel{Alias: "clyde-gpt-5.4-1m-high", ClaudeModel: "gpt-5.4"},
+			wantModel: "gpt-5.4",
+		},
+		{
+			name:      "spark_alias_preserves_spark_slug",
+			model:     ResolvedModel{Alias: "clyde-gpt-5.3-codex-spark", ClaudeModel: "gpt-5.3-codex-spark"},
+			wantModel: "gpt-5.3-codex-spark",
+		},
+		{
+			name:      "service_tier_and_max_completion_passthrough",
+			model:     ResolvedModel{Alias: "clyde-gpt-5.4", ClaudeModel: "gpt-5.4"},
+			metadata:  mustRaw(`{"service_tier":"fast"}`),
+			wantModel: "gpt-5.4",
+			wantTier:  "priority",
+			wantMax:   4096,
+			maxCompletion: func() *int {
+				v := 4096
+				return &v
+			}(),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := ChatRequest{
+				Metadata:       tc.metadata,
+				MaxComplTokens: tc.maxCompletion,
+				Messages: []ChatMessage{{
+					Role:    "user",
+					Content: json.RawMessage(`"hello"`),
+				}},
+			}
+			out := buildCodexRequest(req, tc.model, "")
+			if out.Model != tc.wantModel {
+				t.Fatalf("model=%q want %q", out.Model, tc.wantModel)
+			}
+			if tc.wantTier != "" && out.ServiceTier != tc.wantTier {
+				t.Fatalf("service_tier=%q want %q", out.ServiceTier, tc.wantTier)
+			}
+			if tc.wantMax != 0 {
+				if out.MaxCompletion == nil || *out.MaxCompletion != tc.wantMax {
+					t.Fatalf("max_completion_tokens=%v want %d", out.MaxCompletion, tc.wantMax)
+				}
+			}
+		})
+	}
 }

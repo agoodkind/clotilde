@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"strings"
 
+	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
+	"goodkind.io/clyde/internal/adapter/finishreason"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
@@ -26,8 +28,20 @@ type RunResult struct {
 	DerivedCacheCreationTokens int
 }
 
+func NewRunResult(finishReason string) RunResult {
+	return RunResult{FinishReason: finishreason.FromCodex(finishReason)}
+}
+
+func (r *RunResult) SetFinishReason(finishReason string) {
+	r.FinishReason = finishreason.FromCodex(finishReason)
+}
+
 type completedResponse struct {
 	Response struct {
+		Status            string `json:"status"`
+		IncompleteDetails struct {
+			Reason string `json:"reason"`
+		} `json:"incomplete_details"`
 		Usage struct {
 			InputTokens        int `json:"input_tokens"`
 			OutputTokens       int `json:"output_tokens"`
@@ -55,45 +69,8 @@ type toolCallState struct {
 	Input             strings.Builder
 }
 
-var toolNameAliases = map[string]string{
-	"Shell":            "shell",
-	"Glob":             "glob",
-	"rg":               "rg",
-	"AwaitShell":       "await_shell",
-	"ReadFile":         "read_file",
-	"Delete":           "delete_file",
-	"ApplyPatch":       "apply_patch",
-	"EditNotebook":     "edit_notebook",
-	"TodoWrite":        "todo_write",
-	"ReadLints":        "read_lints",
-	"SemanticSearch":   "semantic_search",
-	"WebSearch":        "web_search",
-	"WebFetch":         "web_fetch",
-	"GenerateImage":    "generate_image",
-	"AskQuestion":      "ask_question",
-	"Subagent":         "spawn_agent",
-	"FetchMcpResource": "fetch_mcp_resource",
-	"SwitchMode":       "switch_mode",
-	"CallMcpTool":      "call_mcp_tool",
-}
-
-var toolNameReverseAliases = func() map[string]string {
-	out := make(map[string]string, len(toolNameAliases))
-	for orig, alias := range toolNameAliases {
-		out[alias] = orig
-	}
-	return out
-}()
-
 func InboundToolName(name string) string {
-	name = strings.TrimSpace(name)
-	if name == "shell_command" {
-		return "Shell"
-	}
-	if orig := toolNameReverseAliases[name]; orig != "" {
-		return orig
-	}
-	return name
+	return adaptercursor.InboundCodexToolName(name)
 }
 
 func SanitizeForUpstreamCache(text string) string {
@@ -191,7 +168,7 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 
 	var eventName string
 	var dataLines []string
-	out := RunResult{FinishReason: "stop"}
+	out := NewRunResult("stop")
 	toolCallsByItemID := make(map[string]*toolCallState)
 	nextToolIndex := 0
 	emitToolCall := func(state *toolCallState, fn tooltrans.OpenAIToolCallFunction) error {
@@ -313,7 +290,7 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 					if state.Name == "" && name != "" {
 						state.Name = InboundToolName(name)
 					}
-					out.FinishReason = "tool_calls"
+					out.SetFinishReason("tool_calls")
 					if eventNameLocal == "response.output_item.done" && state.NativeName == "shell_command" {
 						if args == "" {
 							args = state.Arguments.String()
@@ -347,7 +324,7 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 							return out, err
 						}
 					}
-					out.FinishReason = "tool_calls"
+					out.SetFinishReason("tool_calls")
 					if args, ok := ShellArgsFromLocalShellItem(item); ok && !state.ArgumentsEmitted {
 						if err := emitToolCall(state, tooltrans.OpenAIToolCallFunction{Arguments: args}); err != nil {
 							return out, err
@@ -374,7 +351,7 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 							return out, err
 						}
 					}
-					out.FinishReason = "tool_calls"
+					out.SetFinishReason("tool_calls")
 					input := rawString(item, "input")
 					if input == "" {
 						input = state.Input.String()
@@ -401,7 +378,7 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 				state := toolCallsByItemID[itemID]
 				if state != nil && delta != "" {
 					state.ArgumentDeltaSeen = true
-					out.FinishReason = "tool_calls"
+					out.SetFinishReason("tool_calls")
 					if state.NativeName == "shell_command" {
 						state.Arguments.WriteString(delta)
 						continue
@@ -425,7 +402,12 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 				}
 				if delta != "" {
 					state.Input.WriteString(delta)
-					out.FinishReason = "tool_calls"
+					state.ArgumentDeltaSeen = true
+					out.SetFinishReason("tool_calls")
+					if err := emitToolCall(state, tooltrans.OpenAIToolCallFunction{Arguments: delta}); err != nil {
+						return out, err
+					}
+					state.ArgumentsEmitted = true
 				}
 				continue
 			}
@@ -458,11 +440,15 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 				b, _ := json.Marshal(raw)
 				if err := json.Unmarshal(b, &c); err == nil {
 					out.Usage = mapUsage(c)
+					if out.FinishReason != "tool_calls" {
+						out.SetFinishReason(finishreason.FromCodexResponse(c.Response.Status, c.Response.IncompleteDetails.Reason))
+					}
 				}
 				out.ReasoningSignaled = reasoningTokens(raw) > 0
 				if err := EmitRendered(renderer, tooltrans.Event{Kind: tooltrans.EventReasoningFinished}, emit, nil); err != nil {
 					return out, err
 				}
+				renderer.Flush()
 				state := renderer.State()
 				out.ReasoningSignaled = out.ReasoningSignaled || state.ReasoningSignaled
 				out.ReasoningVisible = state.ReasoningVisible
@@ -470,6 +456,7 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 			}
 			if eventNameLocal == "response.failed" {
 				_ = EmitRendered(renderer, tooltrans.Event{Kind: tooltrans.EventReasoningFinished}, emit, nil)
+				renderer.Flush()
 				msg := "codex response failed"
 				if e, ok := raw["error"].(map[string]any); ok {
 					if m, ok := e["message"].(string); ok && m != "" {
@@ -489,8 +476,10 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 		}
 	}
 	if err := sc.Err(); err != nil {
+		renderer.Flush()
 		return out, err
 	}
+	renderer.Flush()
 	state := renderer.State()
 	out.ReasoningSignaled = out.ReasoningSignaled || state.ReasoningSignaled
 	out.ReasoningVisible = state.ReasoningVisible

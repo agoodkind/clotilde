@@ -1,7 +1,9 @@
 package codex
 
 import (
+	"bufio"
 	"context"
+	"io"
 	"log/slog"
 	"strings"
 
@@ -191,4 +193,9 @@ func toolName(item map[string]any) string {
 		return typ
 	}
 	return "tool"
+}
+
+func ParseTransportStream(body io.Reader, requestID, alias string, log *slog.Logger, emit func(tooltrans.OpenAIStreamChunk) error) (RunResult, error) {
+	renderer := tooltrans.NewEventRenderer(requestID, alias, "codex", log)
+	return ParseSSE(bufio.NewReader(body), renderer, emit)
 }

@@ -3,6 +3,7 @@ package adapter
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -46,6 +47,7 @@ type rawChatLogEvent struct {
 	BodyBytes     int
 	BodySummary   *BodySummary
 	BodyRaw       string
+	BodyB64       string
 	BodyTruncated bool
 }
 
@@ -64,10 +66,20 @@ func (attrs rawChatLogEvent) asAttrs() []slog.Attr {
 	if attrs.BodyRaw != "" {
 		out = append(out, slog.String("body", attrs.BodyRaw))
 	}
+	if attrs.BodyB64 != "" {
+		out = append(out, slog.String("body_b64", attrs.BodyB64))
+	}
 	if attrs.BodyTruncated {
 		out = append(out, slog.Bool("body_truncated", true))
 	}
 	return out
+}
+
+func encodeBodyB64(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(body)
 }
 
 // systemFingerprint is the value the adapter reports in the OpenAI
@@ -206,6 +218,21 @@ func (s *Server) codexBaseURL() string {
 		return defaultCodexBaseURL
 	}
 	return u
+}
+
+func (s *Server) codexWebsocketEnabled() bool {
+	return s.cfg.Codex.WebsocketEnabled
+}
+
+func (s *Server) codexWebsocketURL() string {
+	base := strings.TrimSpace(s.codexBaseURL())
+	if strings.HasPrefix(base, "https://") {
+		return "wss://" + strings.TrimPrefix(base, "https://")
+	}
+	if strings.HasPrefix(base, "http://") {
+		return "ws://" + strings.TrimPrefix(base, "http://")
+	}
+	return base
 }
 
 func (s *Server) codexAppServerPath() string {

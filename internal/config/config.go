@@ -226,6 +226,10 @@ type AdapterCodex struct {
 	// BaseURL is the direct backend endpoint.
 	// Defaults to https://chatgpt.com/backend-api/codex/responses.
 	BaseURL string `json:"baseUrl,omitempty" toml:"base_url,omitempty"`
+	// WebsocketEnabled enables the experimental direct websocket
+	// transport for the Responses API. Default is false until the
+	// parity path is proven; HTTP SSE remains the safe default.
+	WebsocketEnabled bool `json:"websocketEnabled,omitempty" toml:"websocket_enabled,omitempty"`
 	// AuthFile points at Codex auth state. Defaults to ~/.codex/auth.json.
 	AuthFile string `json:"authFile,omitempty" toml:"auth_file,omitempty"`
 	// ModelPrefixes are alias prefixes routed to codex when no explicit

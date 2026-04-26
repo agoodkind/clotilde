@@ -13,7 +13,7 @@ func TestSummarizeChatBody(t *testing.T) {
 		"messages": [
 			{"role":"system","content":"` + strings.Repeat("x", 2400) + `"},
 			{"role":"user","content":"alpha"},
-			{"role":"assistant","tool_calls":[{"id":"tool-call-1","type":"function","function":{"name":"weather","arguments":"{\"city\":\"NYC\"}"}}]},
+			{"role":"assistant","tool_calls":[{"id":"tool-call-1","type":"function","function":{"name":"weather","arguments":"{\"city\":\"NYC\",\"path\":\"/tmp/weather.json\"}"}}]},
 			{"role":"assistant","content":"beta"},
 			{"role":"user","content":[{"type":"text","text":"gamma"}]},
 			{"role":"assistant","content":"delta"},
@@ -58,6 +58,21 @@ func TestSummarizeChatBody(t *testing.T) {
 	}
 	if summary.Messages[2].ToolCallID != "tool-call-1" {
 		t.Fatalf("ToolCallID = %q", summary.Messages[2].ToolCallID)
+	}
+	if got := summary.Messages[2].ToolCallIDs; len(got) != 1 || got[0] != "tool-call-1" {
+		t.Fatalf("ToolCallIDs = %v", got)
+	}
+	if got := summary.Messages[2].ToolCallNames; len(got) != 1 || got[0] != "weather" {
+		t.Fatalf("ToolCallNames = %v", got)
+	}
+	if got := strings.Join(summary.Messages[2].ToolCallArgKeys, ","); got != "city,path" {
+		t.Fatalf("ToolCallArgKeys = %q", got)
+	}
+	if got := summary.Messages[2].ToolCallPaths; len(got) != 1 || got[0] != "/tmp/weather.json" {
+		t.Fatalf("ToolCallPaths = %v", got)
+	}
+	if summary.Messages[2].ToolCallArgChars == 0 {
+		t.Fatalf("ToolCallArgChars = %d", summary.Messages[2].ToolCallArgChars)
 	}
 	if summary.ToolCount != 3 {
 		t.Fatalf("ToolCount = %d", summary.ToolCount)

@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"time"
 
-	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
@@ -36,10 +36,6 @@ func (s *Server) RunCodexAppFallback(ctx context.Context, req adapteropenai.Chat
 	return s.runCodexAppFallback(ctx, req, reqID, emit)
 }
 
-func (s *Server) ShouldEscalateDirect(req adapteropenai.ChatRequest, chunks []tooltrans.OpenAIStreamChunk, res any) (bool, string) {
-	return codexShouldEscalateDirect(req, chunks, res.(codexRunResult))
-}
-
 func (s *Server) EmitRequestStarted(ctx context.Context, model adaptermodel.ResolvedModel, route, reqID, modelID string, stream bool) {
 	s.emitRequestStarted(ctx, model, route, reqID, modelID, stream)
 }
@@ -58,7 +54,7 @@ func (s *Server) StreamChunkFromTooltrans(ch tooltrans.OpenAIStreamChunk) adapte
 
 func (s *Server) MergeChunks(reqID, alias string, chunks []tooltrans.OpenAIStreamChunk, res any) any {
 	typed := res.(codexRunResult)
-	return mergeOAuthStreamChunks(reqID, alias, chunks, typed.Usage, typed.FinishReason, JSONResponseSpec{}, "")
+	return adaptercodex.MergeChunks(reqID, alias, systemFingerprint, chunks, typed)
 }
 
 func (s *Server) WriteJSON(w http.ResponseWriter, status int, v any) {

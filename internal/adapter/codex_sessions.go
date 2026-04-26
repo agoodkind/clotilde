@@ -62,10 +62,10 @@ func (t *codexAppTransport) runTurn(ctx context.Context, requestID string, model
 			"text": sanitizeForUpstreamCache(prompt),
 		}},
 	}); err != nil {
-		return codexRunResult{FinishReason: "stop"}, "", err
+		return adaptercodex.NewRunResult("stop"), "", err
 	}
 
-	out := codexRunResult{FinishReason: "stop"}
+	out := adaptercodex.NewRunResult("stop")
 	var assistantText strings.Builder
 	renderer := tooltrans.NewEventRenderer(requestID, model, "codex", slog.Default())
 	for {
@@ -206,7 +206,7 @@ func (t *codexAppTransport) runTurn(ctx context.Context, requestID string, model
 						CachedInputTokens     int `json:"cachedInputTokens"`
 						OutputTokens          int `json:"outputTokens"`
 						ReasoningOutputTokens int `json:"reasoningOutputTokens"`
-			} `json:"last"`
+					} `json:"last"`
 				} `json:"tokenUsage"`
 			}
 			_ = json.Unmarshal(msg.Params, &p)
@@ -248,7 +248,7 @@ func codexManagedSummary(req ChatRequest) string {
 }
 
 func (s *Server) codexCursorContext(req ChatRequest) adaptercursor.Context {
-	return adaptercursor.FromRequest(req)
+	return adaptercursor.TranslateRequest(req).Context()
 }
 
 func (s *Server) runCodexManaged(
@@ -290,9 +290,13 @@ func (rt codexManagedRuntime) NormalizeAssistantAnchor(text string) string {
 
 func (rt codexManagedRuntime) ManagedSummary(req ChatRequest) string { return codexManagedSummary(req) }
 
-func (rt codexManagedRuntime) EffectiveAppEffort(req ChatRequest) any { return effectiveCodexAppEffort(req) }
+func (rt codexManagedRuntime) EffectiveAppEffort(req ChatRequest) any {
+	return effectiveCodexAppEffort(req)
+}
 
-func (rt codexManagedRuntime) EffectiveAppSummary(req ChatRequest) any { return effectiveCodexAppSummary(req) }
+func (rt codexManagedRuntime) EffectiveAppSummary(req ChatRequest) any {
+	return effectiveCodexAppSummary(req)
+}
 
 func (rt codexManagedRuntime) RunManagedTurn(
 	ctx context.Context,

@@ -3,11 +3,13 @@ package openai
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 )
 
 const (
 	chatBodySummaryMessageLimit = 3
 	maxContentChars             = 2048
+	maxToolCallSummaryItems     = 4
 )
 
 type BodySummary struct {
@@ -27,11 +29,17 @@ type BodySummary struct {
 }
 
 type MsgSummary struct {
-	Role          string `json:"role"`
-	ContentChars  int    `json:"content_chars"`
-	HasToolCalls  bool   `json:"has_tool_calls,omitempty"`
-	ToolCallCount int    `json:"tool_call_count,omitempty"`
-	ToolCallID    string `json:"tool_call_id,omitempty"`
+	Role             string   `json:"role"`
+	ContentChars     int      `json:"content_chars"`
+	Name             string   `json:"name,omitempty"`
+	ToolCallID       string   `json:"tool_call_id,omitempty"`
+	HasToolCalls     bool     `json:"has_tool_calls,omitempty"`
+	ToolCallCount    int      `json:"tool_call_count,omitempty"`
+	ToolCallIDs      []string `json:"tool_call_ids,omitempty"`
+	ToolCallNames    []string `json:"tool_call_names,omitempty"`
+	ToolCallArgChars int      `json:"tool_call_arg_chars,omitempty"`
+	ToolCallArgKeys  []string `json:"tool_call_arg_keys,omitempty"`
+	ToolCallPaths    []string `json:"tool_call_paths,omitempty"`
 }
 
 type ToolSummary struct {
@@ -105,13 +113,62 @@ func summarizeMessage(msg ChatMessage) MsgSummary {
 	if len(content) > maxContentChars {
 		content = content[:maxContentChars]
 	}
-	summary := MsgSummary{Role: msg.Role, ContentChars: len(content)}
+	summary := MsgSummary{
+		Role:         msg.Role,
+		ContentChars: len(content),
+		Name:         msg.Name,
+		ToolCallID:   msg.ToolCallID,
+	}
 	if len(msg.ToolCalls) > 0 {
 		summary.HasToolCalls = true
 		summary.ToolCallCount = len(msg.ToolCalls)
-		summary.ToolCallID = msg.ToolCalls[0].ID
+		for _, tc := range msg.ToolCalls {
+			if summary.ToolCallID == "" {
+				summary.ToolCallID = tc.ID
+			}
+			appendUniqueString(&summary.ToolCallIDs, tc.ID, maxToolCallSummaryItems)
+			appendUniqueString(&summary.ToolCallNames, tc.Function.Name, maxToolCallSummaryItems)
+			summary.ToolCallArgChars += len(tc.Function.Arguments)
+			summarizeToolCallArguments(tc.Function.Arguments, &summary)
+		}
 	}
 	return summary
+}
+
+func summarizeToolCallArguments(raw string, summary *MsgSummary) {
+	var args map[string]any
+	if err := json.Unmarshal([]byte(raw), &args); err != nil {
+		return
+	}
+	keys := make([]string, 0, len(args))
+	for key := range args {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		appendUniqueString(&summary.ToolCallArgKeys, key, maxToolCallSummaryItems)
+		switch key {
+		case "path", "file", "filepath", "target_file", "target_directory", "cwd", "workdir", "working_directory":
+			if value, ok := args[key].(string); ok {
+				appendUniqueString(&summary.ToolCallPaths, value, maxToolCallSummaryItems)
+			}
+		}
+	}
+}
+
+func appendUniqueString(values *[]string, value string, limit int) {
+	if limit <= 0 || len(*values) >= limit {
+		return
+	}
+	if value == "" {
+		return
+	}
+	for _, existing := range *values {
+		if existing == value {
+			return
+		}
+	}
+	*values = append(*values, value)
 }
 
 func min(a, b int) int {
@@ -120,4 +177,3 @@ func min(a, b int) int {
 	}
 	return b
 }
-

@@ -113,15 +113,15 @@ type Function struct {
 }
 
 type ChatMessage struct {
-	Role             string                `json:"role"`
-	Content          json.RawMessage       `json:"content,omitempty"`
-	Name             string                `json:"name,omitempty"`
-	ToolCalls        []ToolCall            `json:"tool_calls,omitempty"`
-	ToolCallID       string                `json:"tool_call_id,omitempty"`
-	Reasoning        string                `json:"reasoning,omitempty"`
-	ReasoningContent string                `json:"reasoning_content,omitempty"`
-	Refusal          string                `json:"refusal,omitempty"`
-	Annotations      []MessageAnnotation   `json:"annotations,omitempty"`
+	Role             string              `json:"role"`
+	Content          json.RawMessage     `json:"content,omitempty"`
+	Name             string              `json:"name,omitempty"`
+	ToolCalls        []ToolCall          `json:"tool_calls,omitempty"`
+	ToolCallID       string              `json:"tool_call_id,omitempty"`
+	Reasoning        string              `json:"reasoning,omitempty"`
+	ReasoningContent string              `json:"reasoning_content,omitempty"`
+	Refusal          string              `json:"refusal,omitempty"`
+	Annotations      []MessageAnnotation `json:"annotations,omitempty"`
 }
 
 type MessageAnnotation struct {
@@ -147,16 +147,16 @@ type ToolCallFunction struct {
 }
 
 type ContentPart struct {
-	Type     string         `json:"type"`
-	Text     string         `json:"text,omitempty"`
-	ImageURL *ImageURLPart  `json:"image_url,omitempty"`
-	Audio    *AudioInputRef `json:"input_audio,omitempty"`
-	Refusal  string         `json:"refusal,omitempty"`
-	ToolUseID string        `json:"tool_use_id,omitempty"`
-	Content  json.RawMessage `json:"content,omitempty"`
-	ID       string         `json:"id,omitempty"`
-	Name     string         `json:"name,omitempty"`
-	Input    json.RawMessage `json:"input,omitempty"`
+	Type      string          `json:"type"`
+	Text      string          `json:"text,omitempty"`
+	ImageURL  *ImageURLPart   `json:"image_url,omitempty"`
+	Audio     *AudioInputRef  `json:"input_audio,omitempty"`
+	Refusal   string          `json:"refusal,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Content   json.RawMessage `json:"content,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
 }
 
 type ImageURLPart struct {
@@ -234,10 +234,15 @@ type StreamDelta struct {
 }
 
 type Usage struct {
-	PromptTokens        int                 `json:"prompt_tokens"`
-	CompletionTokens    int                 `json:"completion_tokens"`
-	TotalTokens         int                 `json:"total_tokens"`
+	PromptTokens        int                  `json:"prompt_tokens"`
+	CompletionTokens    int                  `json:"completion_tokens"`
+	TotalTokens         int                  `json:"total_tokens"`
 	PromptTokensDetails *PromptTokensDetails `json:"prompt_tokens_details,omitempty"`
+	InputTokens         int                  `json:"input_tokens,omitempty"`
+	OutputTokens        int                  `json:"output_tokens,omitempty"`
+	CacheReadTokens     int                  `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens    int                  `json:"cache_write_tokens,omitempty"`
+	MaxTokens           int                  `json:"max_tokens,omitempty"`
 }
 
 type PromptTokensDetails struct {
@@ -257,15 +262,25 @@ type ModelsResponse struct {
 }
 
 type ModelEntry struct {
-	ID            string   `json:"id"`
-	Object        string   `json:"object"`
-	OwnedBy       string   `json:"owned_by"`
-	Context       int      `json:"context_window,omitempty"`
-	ContextLength int      `json:"context_length,omitempty"`
-	MaxModelLen   int      `json:"max_model_len,omitempty"`
-	Efforts       []string `json:"supported_efforts,omitempty"`
-	Backend       string   `json:"backend,omitempty"`
-	ClaudeModel   string   `json:"claude_model,omitempty"`
+	ID                               string   `json:"id"`
+	Object                           string   `json:"object"`
+	OwnedBy                          string   `json:"owned_by"`
+	Context                          int      `json:"context,omitempty"`
+	ContextWindow                    int      `json:"context_window,omitempty"`
+	ContextLength                    int      `json:"context_length,omitempty"`
+	MaxContextLength                 int      `json:"max_context_length,omitempty"`
+	MaxContextTokens                 int      `json:"max_context_tokens,omitempty"`
+	MaxModelLen                      int      `json:"max_model_len,omitempty"`
+	MaxTokens                        int      `json:"max_tokens,omitempty"`
+	InputTokenLimit                  int      `json:"input_token_limit,omitempty"`
+	MaxInputTokens                   int      `json:"max_input_tokens,omitempty"`
+	ContextTokenLimit                int      `json:"context_token_limit,omitempty"`
+	ContextTokenLimitCamel           int      `json:"contextTokenLimit,omitempty"`
+	ContextTokenLimitForMaxMode      int      `json:"context_token_limit_for_max_mode,omitempty"`
+	ContextTokenLimitForMaxModeCamel int      `json:"contextTokenLimitForMaxMode,omitempty"`
+	Efforts                          []string `json:"supported_efforts,omitempty"`
+	Backend                          string   `json:"backend,omitempty"`
+	ClaudeModel                      string   `json:"claude_model,omitempty"`
 }
 
 type ErrorResponse struct {
