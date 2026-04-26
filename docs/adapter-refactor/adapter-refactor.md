@@ -233,8 +233,10 @@ Observed Codex internals and wire behavior:
   - `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/codex/backend.go`
   - `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/codex/managed_runtime.go`
   - `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/codex/app_transport.go`
-- Best test and spec reference:
-  `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/codex_handler_test.go`
+- Best test and spec references:
+  - `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/codex/request_builder_test.go`
+  - `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/codex/parser_test.go`
+  - `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/codex/transport_ws_test.go`
 
 Observed Cursor internals and request conventions:
 
@@ -310,7 +312,7 @@ Shortest "start here" list for future work:
 4. `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/oauth_handler.go`
 5. `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/anthropic/backend/wire_helpers.go`
 6. `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/cursor/request.go`
-7. `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/codex_handler_test.go`
+7. `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/codex/request_builder_test.go`
 8. `/Users/agoodkind/Sites/clyde-dev/clyde/internal/adapter/openai_tool_decode_test.go`
 
 ### Current diagram
@@ -1077,7 +1079,7 @@ Related files already in Codex package:
 
 Planned changes:
 
-1. Move `buildCodexRequest(...)` and related helper cluster under the Codex
+1. Move `BuildRequest(...)` and related helper clusters under the Codex
    package.
 2. Move Cursor-specific tool naming and client-contract translation out of
    Codex request-shaping code and into `internal/adapter/cursor/...` where
@@ -1100,7 +1102,7 @@ package.
 
 Current ownership leaks:
 
-- `parseCodexSSE(...)` wrapper exposure from root
+- Codex stream parser exposure through backend package entrypoints
 - root-owned tool-call assembly helpers in `internal/adapter/codex_handler.go`
 - root-owned response merge through `mergeOAuthStreamChunks(...)`
 - root-owned direct degradation heuristics coupled to stream chunk details
@@ -1254,7 +1256,8 @@ Make package ownership obvious from the test layout.
 Current notable tests:
 
 - `internal/adapter/oauth_handler_test.go`
-- `internal/adapter/codex_handler_test.go`
+- `internal/adapter/codex/request_builder_test.go`
+- `internal/adapter/codex/parser_test.go`
 - `internal/adapter/server_streaming_test.go`
 - `internal/adapter/server_fallback_test.go`
 - `internal/adapter/refactor_regression_test.go`
@@ -2213,10 +2216,9 @@ anthropic-ratelimit-unified-overage-status: rejected` path and
 
 1. [done] Moved live Codex request construction behind the Codex-owned
    `BuildRequest(...)` entrypoint in
-   `internal/adapter/codex/request_builder.go`. The remaining
-   root-side `buildCodexRequest` in
-   `internal/adapter/codex_handler.go` is now a compatibility wrapper
-   for older root tests, not the live transport path.
+   `internal/adapter/codex/request_builder.go`. The old root-side
+   `buildCodexRequest` compatibility wrapper has been removed after
+   relocating the tests that inspected Codex wire shape.
 2. [done] Moved Codex prompt and instruction assembly into the Codex
    package. `request_builder.go` owns developer/user context insertion,
    environment context, and Cursor prompt-context application, while
@@ -2235,22 +2237,20 @@ anthropic-ratelimit-unified-overage-status: rejected` path and
    dispatch now builds live direct requests through it.
 6. [partial] Live root calls now delegate into Codex backend entrypoints,
    but `codex_handler.go` and `codex_bridge.go` intentionally remain as
-   compatibility/facade layers. Delete them only in Phase 11 after tests
-   and dispatcher seams have moved.
-7. [partial] Some parser coverage has moved to
-   `internal/adapter/codex/parser_test.go`, and backend-local tests now
-   cover transport, telemetry, capabilities, app fallback, and
-   escalation. Remaining request-builder/parser assertions still live in
-   `internal/adapter/codex_handler_test.go`; move those under
-   `internal/adapter/codex/` during Phase 10.
+   Server facade layers. Delete them only in Phase 11 after dispatcher
+   seams are verified.
+7. [done] Moved request-builder and parser assertions into
+   `internal/adapter/codex/request_builder_test.go` and
+   `internal/adapter/codex/parser_test.go`; deleted the historical root
+   `internal/adapter/codex_handler_test.go` file.
 
 ### Phase 6 todos: extract Codex response and stream handling
 
 1. [done] Moved Codex SSE parsing and tool-call reconstruction into
    `internal/adapter/codex/protocol.go`, with
    `ParseTransportStream(...)` in `internal/adapter/codex/events.go`
-   as the transport-facing entrypoint. The root `parseCodexSSE` helper
-   is now only a compatibility wrapper.
+   as the transport-facing entrypoint. The old root `parseCodexSSE`
+   compatibility helper has been removed after parser test relocation.
 2. [done] Moved final Codex response assembly into
    `internal/adapter/codex/respond.go` via `MergeChunks(...)`; Codex no
    longer relies on the Anthropic-oriented `mergeOAuthStreamChunks` path
@@ -2264,10 +2264,10 @@ anthropic-ratelimit-unified-overage-status: rejected` path and
 4. [deferred] Drop `codex_bridge.go` during Phase 11, not as part of
    stream extraction. The bridge is currently the narrow Server facade
    that satisfies the Codex backend `Dispatcher` interface.
-5. [partial] Tool-call parser tests now exist in
-   `internal/adapter/codex/parser_test.go`, but duplicate or older
-   assertions remain in `internal/adapter/codex_handler_test.go`. Move
-   the remaining root tests during Phase 10.
+5. [done] Tool-call parser tests now exist in
+   `internal/adapter/codex/parser_test.go`; the older root parser
+   assertions were either relocated or superseded by backend-local
+   coverage.
 
 ### Codex app parity workstream todos
 
@@ -2351,8 +2351,8 @@ workstream above. The concrete execution order is:
    `ServiceTierFromMetadata` owns the current request-surface
    `service_tier` mapping (`fast -> priority`, `flex` preserved,
    invalid metadata ignored). `internal/adapter/codex_handler.go`
-   now delegates to those Codex-local helpers instead of inlining the
-   logic in `buildCodexRequest`. Lock-in tests:
+   now delegates to those Codex-local helpers through `BuildRequest`
+   instead of inlining the policy. Lock-in tests:
    `TestBuildOutputControlsPassesThroughMaxCompletionTokens`,
    `TestServiceTierFromMetadataMapsFastToPriority`,
    `TestServiceTierFromMetadataPreservesFlex`, and
@@ -2531,9 +2531,10 @@ workstream above. The concrete execution order is:
 1. [todo] Move Anthropic-related tests in
    `internal/adapter/oauth_handler_test.go` and related files into
    `internal/adapter/anthropic/backend/`.
-2. [todo] Move Codex-related tests in
+2. [done 2026-04-26] Moved Codex-related tests from
    `internal/adapter/codex_handler_test.go` into
-   `internal/adapter/codex/`.
+   `internal/adapter/codex/request_builder_test.go` and related Codex
+   package tests, then deleted the root test file.
 3. [todo] Keep root adapter tests focused on routing, auth, request
    logging, backend selection, and OpenAI surface behavior.
 4. [todo] Move shared rendering and runtime tests under
@@ -2616,10 +2617,11 @@ workstream above. The concrete execution order is:
   reconstruction lives in `internal/adapter/codex/protocol.go`; and the
   dead root helper block in `codex_handler.go` (>500 lines of inline
   request shaping, parser helpers, write-intent logic) is gone. The
-  root `codex_handler.go` and `codex_bridge.go` still intentionally
-  exist as compatibility/facade layers, and some old tests still live in
-  `codex_handler_test.go`. Codex finish-reason normalization is now
-  closed through the shared `finishreason` helper.
+  historical root `codex_handler_test.go` has also been deleted; Codex
+  request and parser coverage now lives under `internal/adapter/codex/`.
+  The root `codex_handler.go` and `codex_bridge.go` still intentionally
+  exist as Server facade layers. Codex finish-reason normalization is
+  now closed through the shared `finishreason` helper.
 - Phases 4 (backend-owned Anthropic fallback escalation), 8 (further
   `tooltrans` shrinkage), 9 (event-renderer normalization at the
   output boundary), 10 (test relocation under the backend packages),
@@ -2695,7 +2697,7 @@ entries, and orders the real work by dependency and debugging value.
    building, prompt assembly, native-tool shaping, parser extraction,
    transport parsing, and collect response assembly as done; it keeps
    only the real residuals: Cursor-vocabulary audit, compatibility
-   wrapper deletion, and remaining root test relocation.
+   wrapper deletion, and root test relocation.
 2. [done 2026-04-26] Reconciled the plan-level folded-in workstream
    bullets. They now act as active workstream summaries instead of
    duplicate TODOs, with detailed remaining work tracked in the phase
@@ -2783,7 +2785,8 @@ entries, and orders the real work by dependency and debugging value.
 
 1. Move Anthropic tests from root adapter files into
    `internal/adapter/anthropic/backend/`.
-2. Move Codex tests from `internal/adapter/codex_handler_test.go` into
+2. [done 2026-04-26] Move Codex tests from
+   `internal/adapter/codex_handler_test.go` into
    `internal/adapter/codex/` after the stale Phase 5/6 checklist has
    been reconciled.
 3. Keep root adapter tests focused only on routing, auth, request
@@ -2800,8 +2803,9 @@ entries, and orders the real work by dependency and debugging value.
 2. Delete `internal/adapter/codex_bridge.go` only after Codex Phase 6/7
    are verified against the reconciled checklist.
 3. Delete remaining root helpers in `internal/adapter/oauth_handler.go`
-   and `internal/adapter/codex_handler.go` that exist only as backend
-   delegations.
+   and any future `internal/adapter/codex_handler.go` helpers that exist
+   only as backend delegations. The old Codex request/parser
+   compatibility helpers have been removed.
 4. Delete `internal/adapter/server_response.go` Anthropic response merge
    helpers if Phase 3 fully owns the response path.
 5. Remove stale generic fallback assumptions in root dispatch once

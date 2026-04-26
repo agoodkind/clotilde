@@ -8,10 +8,8 @@ import (
 	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
-// Phase 10 relocation: these tests previously lived in
-// internal/adapter/codex_handler_test.go alongside the now-deleted
-// root-side codex helper block. They are pure ParseSSE coverage and
-// belong next to the parser implementation.
+// Phase 10 relocation: these tests live next to the parser implementation
+// because they assert backend-local ParseSSE behavior.
 
 func TestParseSSERetainsReasoningSignalWithoutVisibleText(t *testing.T) {
 	stream := strings.NewReader(strings.Join([]string{

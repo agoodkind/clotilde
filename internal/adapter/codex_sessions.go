@@ -27,10 +27,6 @@ func normalizeCodexAssistantAnchor(text string) string {
 	return adaptercodex.NormalizeAssistantAnchor(text, sanitizeForUpstreamCache)
 }
 
-func deriveCodexCacheCreationTokens(previousCachedInputTokens, currentCachedInputTokens int) int {
-	return adaptercodex.DeriveCacheCreationTokens(previousCachedInputTokens, currentCachedInputTokens)
-}
-
 func buildCodexManagedPromptPlan(messages []ChatMessage) codexManagedPromptPlan {
 	return adaptercodex.BuildManagedPromptPlan(messages, BuildPrompt, FlattenContent, sanitizeForUpstreamCache)
 }
@@ -211,7 +207,7 @@ func (t *codexAppTransport) runTurn(ctx context.Context, requestID string, model
 			}
 			_ = json.Unmarshal(msg.Params, &p)
 			currentCached := p.TokenUsage.Last.CachedInputTokens
-			derivedCacheCreate := deriveCodexCacheCreationTokens(t.CachedInputTokens(), currentCached)
+			derivedCacheCreate := adaptercodex.DeriveCacheCreationTokens(t.CachedInputTokens(), currentCached)
 			logAttrs := []slog.Attr{slog.Int("prompt_tokens", p.TokenUsage.Last.InputTokens), slog.Int("completion_tokens", p.TokenUsage.Last.OutputTokens), slog.Int("cached_input_tokens", currentCached), slog.Int("derived_cache_creation_tokens", derivedCacheCreate), slog.Int("reasoning_output_tokens", p.TokenUsage.Last.ReasoningOutputTokens), slog.Bool("native_cache_creation_metric_available", false)}
 			adaptercodex.LogToolingEvent(nil, ctx, requestID, msg.Method, logAttrs...)
 			out.Usage = Usage{PromptTokens: p.TokenUsage.Last.InputTokens, CompletionTokens: p.TokenUsage.Last.OutputTokens, TotalTokens: p.TokenUsage.Last.TotalTokens}
@@ -241,7 +237,7 @@ func (t *codexAppTransport) runTurn(ctx context.Context, requestID string, model
 }
 
 func codexManagedSummary(req ChatRequest) string {
-	if r := effectiveCodexReasoning(req, ""); r != nil && r.Summary != "" {
+	if r := adaptercodex.EffectiveReasoning(req, ""); r != nil && r.Summary != "" {
 		return r.Summary
 	}
 	return ""
@@ -291,11 +287,11 @@ func (rt codexManagedRuntime) NormalizeAssistantAnchor(text string) string {
 func (rt codexManagedRuntime) ManagedSummary(req ChatRequest) string { return codexManagedSummary(req) }
 
 func (rt codexManagedRuntime) EffectiveAppEffort(req ChatRequest) any {
-	return effectiveCodexAppEffort(req)
+	return adaptercodex.EffectiveAppEffort(req)
 }
 
 func (rt codexManagedRuntime) EffectiveAppSummary(req ChatRequest) any {
-	return effectiveCodexAppSummary(req)
+	return adaptercodex.EffectiveAppSummary(req)
 }
 
 func (rt codexManagedRuntime) RunManagedTurn(

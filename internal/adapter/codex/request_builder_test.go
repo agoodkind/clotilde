@@ -1,4 +1,4 @@
-package adapter
+package codex
 
 import (
 	"encoding/json"
@@ -7,9 +7,55 @@ import (
 	"testing"
 	"time"
 
-	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
+	adaptermodel "goodkind.io/clyde/internal/adapter/model"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
+
+type ChatRequest = adapteropenai.ChatRequest
+type ChatMessage = adapteropenai.ChatMessage
+type Tool = adapteropenai.Tool
+type ToolFunctionSchema = adapteropenai.ToolFunctionSchema
+type ToolCall = adapteropenai.ToolCall
+type ToolCallFunction = adapteropenai.ToolCallFunction
+type ResolvedModel = adaptermodel.ResolvedModel
+type codexInputItem = map[string]any
+
+const (
+	EffortMedium = adaptermodel.EffortMedium
+	EffortHigh   = adaptermodel.EffortHigh
+)
+
+func mustRaw(s string) []byte {
+	return []byte(s)
+}
+
+func buildManagedPromptPlanForTest(messages []ChatMessage) ManagedPromptPlan {
+	return BuildManagedPromptPlan(messages, buildPromptForTest, adapteropenai.FlattenContent, SanitizeForUpstreamCache)
+}
+
+func buildPromptForTest(messages []ChatMessage) (system, prompt string) {
+	var sys []string
+	var body []string
+	for _, m := range messages {
+		text := adapteropenai.FlattenContent(m.Content)
+		switch strings.ToLower(m.Role) {
+		case "system", "developer":
+			if text != "" {
+				sys = append(sys, text)
+			}
+		case "user":
+			body = append(body, "user: "+text)
+		case "assistant":
+			body = append(body, "assistant: "+text)
+		case "tool":
+			body = append(body, "tool: "+text)
+		default:
+			body = append(body, m.Role+": "+text)
+		}
+	}
+	return strings.Join(sys, "\n\n"), strings.Join(body, "\n\n")
+}
 
 func TestBuildCodexRequestIncludesReasoningEffort(t *testing.T) {
 	req := ChatRequest{
@@ -20,7 +66,7 @@ func TestBuildCodexRequestIncludesReasoningEffort(t *testing.T) {
 	}
 	model := ResolvedModel{Alias: "gpt-5.4"}
 
-	out := buildCodexRequest(req, model, EffortMedium)
+	out := BuildRequest(req, model, EffortMedium)
 	if out.Reasoning == nil {
 		t.Fatalf("expected reasoning stanza")
 	}
@@ -41,7 +87,7 @@ func TestBuildCodexRequestUsesNormalizedUpstreamModel(t *testing.T) {
 		ClaudeModel: "gpt-5.4",
 	}
 
-	out := buildCodexRequest(req, model, "")
+	out := BuildRequest(req, model, "")
 	if out.Model != "gpt-5.4" {
 		t.Fatalf("model=%q want gpt-5.4", out.Model)
 	}
@@ -59,7 +105,7 @@ func TestBuildCodexRequestUsesSparkModelSlug(t *testing.T) {
 		ClaudeModel: "gpt-5.3-codex-spark",
 	}
 
-	out := buildCodexRequest(req, model, "")
+	out := BuildRequest(req, model, "")
 	if out.Model != "gpt-5.3-codex-spark" {
 		t.Fatalf("model=%q want gpt-5.3-codex-spark", out.Model)
 	}
@@ -77,7 +123,7 @@ func TestBuildCodexRequestUsesTieredAliasUpstreamModel(t *testing.T) {
 		ClaudeModel: "gpt-5.4",
 	}
 
-	out := buildCodexRequest(req, model, EffortHigh)
+	out := BuildRequest(req, model, EffortHigh)
 	if out.Model != "gpt-5.4" {
 		t.Fatalf("model=%q want gpt-5.4", out.Model)
 	}
@@ -96,7 +142,7 @@ func TestBuildCodexRequestFallsBackToRequestReasoningEffort(t *testing.T) {
 	}
 	model := ResolvedModel{Alias: "gpt-5.4"}
 
-	out := buildCodexRequest(req, model, "")
+	out := BuildRequest(req, model, "")
 	if out.Reasoning == nil || out.Reasoning.Effort != EffortHigh {
 		t.Fatalf("reasoning fallback failed: %+v", out.Reasoning)
 	}
@@ -112,7 +158,7 @@ func TestBuildCodexRequestSkipsInvalidReasoningEffort(t *testing.T) {
 	}
 	model := ResolvedModel{Alias: "gpt-5.4"}
 
-	out := buildCodexRequest(req, model, "")
+	out := BuildRequest(req, model, "")
 	if out.Reasoning != nil {
 		t.Fatalf("expected no reasoning stanza for invalid effort, got %+v", out.Reasoning)
 	}
@@ -121,7 +167,7 @@ func TestBuildCodexRequestSkipsInvalidReasoningEffort(t *testing.T) {
 func TestBuildCodexRequestUsesResponsesReasoningFields(t *testing.T) {
 	req := ChatRequest{
 		Include: []string{"reasoning.encrypted_content"},
-		Reasoning: &Reasoning{
+		Reasoning: &adapteropenai.Reasoning{
 			Effort:  "medium",
 			Summary: "auto",
 		},
@@ -132,7 +178,7 @@ func TestBuildCodexRequestUsesResponsesReasoningFields(t *testing.T) {
 	}
 	model := ResolvedModel{Alias: "gpt-5.4"}
 
-	out := buildCodexRequest(req, model, "")
+	out := BuildRequest(req, model, "")
 	if out.Reasoning == nil {
 		t.Fatalf("expected reasoning stanza")
 	}
@@ -156,7 +202,7 @@ func TestBuildCodexRequestPassesThroughMaxCompletionTokens(t *testing.T) {
 			Content: json.RawMessage(`"hello"`),
 		}},
 	}
-	out := buildCodexRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
 	if out.MaxCompletion == nil {
 		t.Fatalf("expected max_completion_tokens passthrough")
 	}
@@ -184,7 +230,7 @@ func TestBuildCodexRequestMapsFastServiceTierToPriority(t *testing.T) {
 			Content: json.RawMessage(`"hello"`),
 		}},
 	}
-	out := buildCodexRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
 	if out.ServiceTier != "priority" {
 		t.Fatalf("service_tier=%q want priority", out.ServiceTier)
 	}
@@ -209,7 +255,7 @@ func TestBuildCodexRequestPreservesFlexServiceTier(t *testing.T) {
 			Content: json.RawMessage(`"hello"`),
 		}},
 	}
-	out := buildCodexRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
 	if out.ServiceTier != "flex" {
 		t.Fatalf("service_tier=%q want flex", out.ServiceTier)
 	}
@@ -227,16 +273,16 @@ func TestBuildCodexRequestPreservesFlexServiceTier(t *testing.T) {
 }
 
 func TestBuildCodexRequestReplaysAssistantTurnsAsOutputText(t *testing.T) {
-	oldNow := codexNow
-	oldGetwd := codexGetwd
-	oldShell := codexShellName
-	codexNow = func() time.Time { return time.Date(2026, 4, 25, 9, 0, 0, 0, time.FixedZone("PDT", -7*3600)) }
-	codexGetwd = func() (string, error) { return "/repo", nil }
-	codexShellName = func() string { return "zsh" }
+	oldNow := NowFunc
+	oldGetwd := GetwdFn
+	oldShell := ShellNameFn
+	NowFunc = func() time.Time { return time.Date(2026, 4, 25, 9, 0, 0, 0, time.FixedZone("PDT", -7*3600)) }
+	GetwdFn = func() (string, error) { return "/repo", nil }
+	ShellNameFn = func() string { return "zsh" }
 	defer func() {
-		codexNow = oldNow
-		codexGetwd = oldGetwd
-		codexShellName = oldShell
+		NowFunc = oldNow
+		GetwdFn = oldGetwd
+		ShellNameFn = oldShell
 	}()
 
 	req := ChatRequest{
@@ -253,7 +299,7 @@ func TestBuildCodexRequestReplaysAssistantTurnsAsOutputText(t *testing.T) {
 	}
 	model := ResolvedModel{Alias: "gpt-5.4"}
 
-	out := buildCodexRequest(req, model, "")
+	out := BuildRequest(req, model, "")
 	foundOutput := false
 	foundPermissions := false
 	foundEnvironment := false
@@ -279,16 +325,16 @@ func TestBuildCodexRequestReplaysAssistantTurnsAsOutputText(t *testing.T) {
 }
 
 func TestBuildCodexRequestInjectsContextBeforeFinalUserTurn(t *testing.T) {
-	oldNow := codexNow
-	oldGetwd := codexGetwd
-	oldShell := codexShellName
-	codexNow = func() time.Time { return time.Date(2026, 4, 25, 9, 0, 0, 0, time.FixedZone("PDT", -7*3600)) }
-	codexGetwd = func() (string, error) { return "/repo", nil }
-	codexShellName = func() string { return "zsh" }
+	oldNow := NowFunc
+	oldGetwd := GetwdFn
+	oldShell := ShellNameFn
+	NowFunc = func() time.Time { return time.Date(2026, 4, 25, 9, 0, 0, 0, time.FixedZone("PDT", -7*3600)) }
+	GetwdFn = func() (string, error) { return "/repo", nil }
+	ShellNameFn = func() string { return "zsh" }
 	defer func() {
-		codexNow = oldNow
-		codexGetwd = oldGetwd
-		codexShellName = oldShell
+		NowFunc = oldNow
+		GetwdFn = oldGetwd
+		ShellNameFn = oldShell
 	}()
 
 	req := ChatRequest{
@@ -300,7 +346,7 @@ func TestBuildCodexRequestInjectsContextBeforeFinalUserTurn(t *testing.T) {
 		},
 	}
 
-	out := buildCodexRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
 	if got, _ := out.Input[0]["role"].(string); got != "user" {
 		t.Fatalf("role[0]=%q want user", got)
 	}
@@ -330,7 +376,7 @@ func TestBuildCodexRequestUsesCatalogBaseInstructions(t *testing.T) {
 	req := ChatRequest{
 		Messages: []ChatMessage{{Role: "user", Content: mustRaw(`"hello"`)}},
 	}
-	out := buildCodexRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
 	if !strings.Contains(out.Instructions, "Agent Mode") {
 		t.Fatalf("instructions missing agent mode prefix")
 	}
@@ -349,7 +395,7 @@ func TestBuildCodexRequestUsesPlanModeInstructionPrefix(t *testing.T) {
 		}},
 		Messages: []ChatMessage{{Role: "user", Content: mustRaw(`"draft the plan"`)}},
 	}
-	out := buildCodexRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
 	if !strings.Contains(out.Instructions, "Plan Mode") {
 		t.Fatalf("instructions missing plan mode prefix: %q", out.Instructions)
 	}
@@ -376,7 +422,7 @@ func TestBuildCodexRequestIncludesToolsAndParallelToolCalls(t *testing.T) {
 		}},
 	}
 
-	out := buildCodexRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
 	if len(out.Tools) != 1 {
 		t.Fatalf("tools len=%d want 1", len(out.Tools))
 	}
@@ -411,7 +457,7 @@ func TestBuildCodexRequestMapsCursorToolNamesToCodexAliases(t *testing.T) {
 		}},
 	}
 
-	out := buildCodexRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
 	tool, ok := out.Tools[0].(map[string]any)
 	if !ok {
 		t.Fatalf("tool type=%T", out.Tools[0])
@@ -434,7 +480,7 @@ func TestBuildCodexRequestUsesNativeCodexToolsForShellAndApplyPatch(t *testing.T
 		}},
 	}
 
-	out := buildCodexRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
 	var sawShellCommand, sawApplyPatch, sawReadFile bool
 	for _, raw := range out.Tools {
 		tool, _ := raw.(map[string]any)
@@ -478,7 +524,7 @@ func TestBuildCodexRequestPreservesCursorProductToolsForWriteIntent(t *testing.T
 		}},
 	}
 
-	out := buildCodexRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
 	var names []string
 	for _, raw := range out.Tools {
 		tool, _ := raw.(map[string]any)
@@ -506,7 +552,7 @@ func TestBuildCodexRequestStillPrunesUnknownToolsForWriteIntent(t *testing.T) {
 		}},
 	}
 
-	out := buildCodexRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
 	var names []string
 	for _, raw := range out.Tools {
 		tool, _ := raw.(map[string]any)
@@ -552,7 +598,7 @@ func TestBuildCodexRequestReplaysNativeShellAndApplyPatchHistory(t *testing.T) {
 		},
 	}
 
-	out := buildCodexRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
 	var sawShellCall, sawShellOutput, sawPatchCall, sawPatchOutput bool
 	for _, item := range out.Input {
 		switch codexItemTypeString(item) {
@@ -612,7 +658,7 @@ func TestBuildCodexRequestSerializesAssistantToolCallsAndToolOutputs(t *testing.
 		},
 	}
 
-	out := buildCodexRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
 	var sawCall, sawOutput bool
 	for _, item := range out.Input {
 		switch codexItemTypeString(item) {
@@ -655,7 +701,7 @@ func TestBuildCodexRequestPreservesResponsesInputToolHistory(t *testing.T) {
 		},
 	}
 
-	out := buildCodexRequest(req, ResolvedModel{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"}, "")
 	var sawDeveloper, sawGlobCall, sawGlobOutput, sawShellCommand, sawShellOutput bool
 	for _, item := range out.Input {
 		switch codexItemTypeString(item) {
@@ -699,7 +745,7 @@ func TestBuildCodexRequestPreservesResponsesInputToolHistory(t *testing.T) {
 
 func TestBuildCodexRequestAddsEncryptedReasoningIncludeAutomatically(t *testing.T) {
 	req := ChatRequest{
-		Reasoning: &Reasoning{
+		Reasoning: &adapteropenai.Reasoning{
 			Effort: "medium",
 		},
 		Messages: []ChatMessage{{
@@ -709,7 +755,7 @@ func TestBuildCodexRequestAddsEncryptedReasoningIncludeAutomatically(t *testing.
 	}
 	model := ResolvedModel{Alias: "gpt-5.4"}
 
-	out := buildCodexRequest(req, model, "")
+	out := BuildRequest(req, model, "")
 	if len(out.Include) != 1 || out.Include[0] != "reasoning.encrypted_content" {
 		t.Fatalf("include=%v", out.Include)
 	}
@@ -725,26 +771,26 @@ func TestBuildCodexRequestUsesStablePromptCacheKeyFromMetadata(t *testing.T) {
 	}
 	model := ResolvedModel{Alias: "clyde-gpt-5.4"}
 
-	out := buildCodexRequest(req, model, "")
+	out := BuildRequest(req, model, "")
 	if out.PromptCache != "meta:thread-123" {
 		t.Fatalf("prompt_cache_key=%q want %q", out.PromptCache, "meta:thread-123")
 	}
 }
 
 func TestBuildCodexRequestFromCapturedWriteReplay(t *testing.T) {
-	oldNow := codexNow
-	oldGetwd := codexGetwd
-	oldShell := codexShellName
-	codexNow = func() time.Time { return time.Date(2026, 4, 25, 9, 0, 0, 0, time.FixedZone("PDT", -7*3600)) }
-	codexGetwd = func() (string, error) { return "/Users/agoodkind/Sites/clyde-dev/clyde", nil }
-	codexShellName = func() string { return "zsh" }
+	oldNow := NowFunc
+	oldGetwd := GetwdFn
+	oldShell := ShellNameFn
+	NowFunc = func() time.Time { return time.Date(2026, 4, 25, 9, 0, 0, 0, time.FixedZone("PDT", -7*3600)) }
+	GetwdFn = func() (string, error) { return "/Users/agoodkind/Sites/clyde-dev/clyde", nil }
+	ShellNameFn = func() string { return "zsh" }
 	defer func() {
-		codexNow = oldNow
-		codexGetwd = oldGetwd
-		codexShellName = oldShell
+		NowFunc = oldNow
+		GetwdFn = oldGetwd
+		ShellNameFn = oldShell
 	}()
 
-	raw, err := os.ReadFile("testdata/codex_write_answer_request.json")
+	raw, err := os.ReadFile("../testdata/codex_write_answer_request.json")
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
@@ -752,7 +798,7 @@ func TestBuildCodexRequestFromCapturedWriteReplay(t *testing.T) {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		t.Fatalf("unmarshal fixture: %v", err)
 	}
-	out := buildCodexRequest(req, ResolvedModel{Alias: "clyde-gpt-5.4", ClaudeModel: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedModel{Alias: "clyde-gpt-5.4", ClaudeModel: "gpt-5.4"}, "")
 	if len(out.Tools) == 0 {
 		t.Fatalf("expected tools")
 	}
@@ -786,14 +832,14 @@ func TestBuildCodexRequestPrefersCursorConversationPromptCacheKey(t *testing.T) 
 	}
 	model := ResolvedModel{Alias: "clyde-gpt-5.4"}
 
-	out := buildCodexRequest(req, model, "")
+	out := BuildRequest(req, model, "")
 	if out.PromptCache != "cursor:conv-123" {
 		t.Fatalf("prompt_cache_key=%q want %q", out.PromptCache, "cursor:conv-123")
 	}
 }
 
 func TestCodexClientMetadataIncludesInstallationAndWindowIDs(t *testing.T) {
-	got := codexClientMetadata("acct-123", "cursor:conv-123:0")
+	got := ClientMetadata("acct-123", "cursor:conv-123:0")
 	if got["x-codex-installation-id"] != "acct-123" {
 		t.Fatalf("installation id=%q", got["x-codex-installation-id"])
 	}
@@ -803,7 +849,7 @@ func TestCodexClientMetadataIncludesInstallationAndWindowIDs(t *testing.T) {
 }
 
 func TestBuildCodexManagedPromptPlanUsesAssistantAnchorForIncrementalPrompt(t *testing.T) {
-	plan := buildCodexManagedPromptPlan([]ChatMessage{
+	plan := buildManagedPromptPlanForTest([]ChatMessage{
 		{Role: "system", Content: mustRaw(`"sys"`)},
 		{Role: "user", Content: mustRaw(`"first user"`)},
 		{Role: "assistant", Content: mustRaw(`"first answer"`)},
@@ -825,7 +871,7 @@ func TestBuildCodexManagedPromptPlanUsesAssistantAnchorForIncrementalPrompt(t *t
 
 func TestBuildCodexManagedPromptPlanStripsThinkingEnvelopeFromAssistantAnchor(t *testing.T) {
 	assistant := mustRaw(`"<!--clyde-thinking-->\n> **💭 Thinking**\n> \n\n<!--/clyde-thinking-->\n\nFinal answer.\n"`)
-	plan := buildCodexManagedPromptPlan([]ChatMessage{
+	plan := buildManagedPromptPlanForTest([]ChatMessage{
 		{Role: "user", Content: mustRaw(`"question"`)},
 		{Role: "assistant", Content: assistant},
 		{Role: "user", Content: mustRaw(`"follow up"`)},
@@ -844,7 +890,7 @@ func TestCodexLifecycleEventSummarizesFileChange(t *testing.T) {
 			map[string]any{},
 		},
 	}
-	got, ok := adaptercodex.LifecycleEvent(item, true)
+	got, ok := LifecycleEvent(item, true)
 	if !ok {
 		t.Fatalf("expected lifecycle event")
 	}
@@ -857,7 +903,7 @@ func TestCodexLifecycleEventSummarizesFileChange(t *testing.T) {
 }
 
 func TestCodexPlanEventFormatsSteps(t *testing.T) {
-	got, ok := adaptercodex.PlanEvent("Clarifying tool usage", []map[string]string{
+	got, ok := PlanEvent("Clarifying tool usage", []map[string]string{
 		{"step": "inspect payloads", "status": "completed"},
 		{"step": "render tool output", "status": "inProgress"},
 	})
@@ -873,14 +919,14 @@ func TestCodexPlanEventFormatsSteps(t *testing.T) {
 }
 
 func TestDeriveCodexCacheCreationTokens(t *testing.T) {
-	if got := deriveCodexCacheCreationTokens(0, 4096); got != 4096 {
-		t.Fatalf("deriveCodexCacheCreationTokens first turn=%d want 4096", got)
+	if got := DeriveCacheCreationTokens(0, 4096); got != 4096 {
+		t.Fatalf("DeriveCacheCreationTokens first turn=%d want 4096", got)
 	}
-	if got := deriveCodexCacheCreationTokens(4096, 6144); got != 2048 {
-		t.Fatalf("deriveCodexCacheCreationTokens growth=%d want 2048", got)
+	if got := DeriveCacheCreationTokens(4096, 6144); got != 2048 {
+		t.Fatalf("DeriveCacheCreationTokens growth=%d want 2048", got)
 	}
-	if got := deriveCodexCacheCreationTokens(6144, 2048); got != 0 {
-		t.Fatalf("deriveCodexCacheCreationTokens shrink=%d want 0", got)
+	if got := DeriveCacheCreationTokens(6144, 2048); got != 0 {
+		t.Fatalf("DeriveCacheCreationTokens shrink=%d want 0", got)
 	}
 }
 
@@ -895,7 +941,7 @@ func TestParseCodexSSERetainsReasoningSignalWithoutVisibleText(t *testing.T) {
 	}, "\n") + "\n")
 	got, res, err := collectCodexSSEForTest(stream)
 	if err != nil {
-		t.Fatalf("parseCodexSSE: %v", err)
+		t.Fatalf("ParseSSE: %v", err)
 	}
 	if !res.ReasoningSignaled {
 		t.Fatalf("expected reasoning signal")
@@ -922,12 +968,12 @@ func TestParseCodexSSEEmitsToolCallDeltas(t *testing.T) {
 	}, "\n") + "\n")
 	r := tooltrans.NewEventRenderer("req", "alias", "codex", nil)
 	var got []tooltrans.OpenAIStreamChunk
-	res, err := parseCodexSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
+	res, err := ParseSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
 		got = append(got, ch)
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("parseCodexSSE: %v", err)
+		t.Fatalf("ParseSSE: %v", err)
 	}
 	if res.FinishReason != "tool_calls" {
 		t.Fatalf("finish_reason=%q want tool_calls", res.FinishReason)
@@ -964,12 +1010,12 @@ func TestParseCodexSSEEmitsToolArgumentsFromDoneWhenNoDeltaArrives(t *testing.T)
 	}, "\n") + "\n")
 	r := tooltrans.NewEventRenderer("req", "alias", "codex", nil)
 	var got []tooltrans.OpenAIStreamChunk
-	res, err := parseCodexSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
+	res, err := ParseSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
 		got = append(got, ch)
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("parseCodexSSE: %v", err)
+		t.Fatalf("ParseSSE: %v", err)
 	}
 	if res.FinishReason != "tool_calls" {
 		t.Fatalf("finish_reason=%q want tool_calls", res.FinishReason)
@@ -1003,12 +1049,12 @@ func TestParseCodexSSEDoesNotDuplicateToolArgumentsOnDoneAfterDelta(t *testing.T
 	}, "\n") + "\n")
 	r := tooltrans.NewEventRenderer("req", "alias", "codex", nil)
 	var got []tooltrans.OpenAIStreamChunk
-	_, err := parseCodexSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
+	_, err := ParseSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
 		got = append(got, ch)
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("parseCodexSSE: %v", err)
+		t.Fatalf("ParseSSE: %v", err)
 	}
 	var args []string
 	for _, ch := range got {
@@ -1043,12 +1089,12 @@ func TestParseCodexSSEMapsToolAliasesBackToCursorNames(t *testing.T) {
 	}, "\n") + "\n")
 	r := tooltrans.NewEventRenderer("req", "alias", "codex", nil)
 	var got []tooltrans.OpenAIStreamChunk
-	_, err := parseCodexSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
+	_, err := ParseSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
 		got = append(got, ch)
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("parseCodexSSE: %v", err)
+		t.Fatalf("ParseSSE: %v", err)
 	}
 	var names []string
 	for _, ch := range got {
@@ -1077,12 +1123,12 @@ func TestParseCodexSSEMapsNativeLocalShellToCursorShell(t *testing.T) {
 	}, "\n") + "\n")
 	r := tooltrans.NewEventRenderer("req", "alias", "codex", nil)
 	var got []tooltrans.OpenAIStreamChunk
-	res, err := parseCodexSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
+	res, err := ParseSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
 		got = append(got, ch)
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("parseCodexSSE: %v", err)
+		t.Fatalf("ParseSSE: %v", err)
 	}
 	if res.FinishReason != "tool_calls" {
 		t.Fatalf("finish_reason=%q", res.FinishReason)
@@ -1123,12 +1169,12 @@ func TestParseCodexSSEMapsShellCommandToCursorShell(t *testing.T) {
 	}, "\n") + "\n")
 	r := tooltrans.NewEventRenderer("req", "alias", "codex", nil)
 	var got []tooltrans.OpenAIStreamChunk
-	res, err := parseCodexSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
+	res, err := ParseSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
 		got = append(got, ch)
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("parseCodexSSE: %v", err)
+		t.Fatalf("ParseSSE: %v", err)
 	}
 	if res.FinishReason != "tool_calls" {
 		t.Fatalf("finish_reason=%q", res.FinishReason)
@@ -1170,12 +1216,12 @@ func TestParseCodexSSEMapsNativeApplyPatchToCursorApplyPatch(t *testing.T) {
 	}, "\n") + "\n")
 	r := tooltrans.NewEventRenderer("req", "alias", "codex", nil)
 	var got []tooltrans.OpenAIStreamChunk
-	res, err := parseCodexSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
+	res, err := ParseSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
 		got = append(got, ch)
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("parseCodexSSE: %v", err)
+		t.Fatalf("ParseSSE: %v", err)
 	}
 	if res.FinishReason != "tool_calls" {
 		t.Fatalf("finish_reason=%q", res.FinishReason)
@@ -1209,7 +1255,7 @@ func TestParseCodexSSESeparatesSummaryFromReasoningBody(t *testing.T) {
 	}, "\n") + "\n")
 	got, _, err := collectCodexSSEForTest(stream)
 	if err != nil {
-		t.Fatalf("parseCodexSSE: %v", err)
+		t.Fatalf("ParseSSE: %v", err)
 	}
 	out := got
 	if !strings.Contains(out, "Exploring pet-color constraints\n> \n> I am checking combinations.") {
@@ -1257,10 +1303,10 @@ func TestCodexRendererEmitsSyntheticThinkingPlaceholderWhenSignaledWithoutVisibl
 	}
 }
 
-func collectCodexSSEForTest(stream *strings.Reader) (string, codexRunResult, error) {
+func collectCodexSSEForTest(stream *strings.Reader) (string, RunResult, error) {
 	r := tooltrans.NewEventRenderer("req", "alias", "codex", nil)
 	var got strings.Builder
-	res, err := parseCodexSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
+	res, err := ParseSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
 		if len(ch.Choices) > 0 {
 			got.WriteString(ch.Choices[0].Delta.Content)
 		}
@@ -1285,19 +1331,21 @@ func codexIntPtr(v int) *int {
 }
 
 func codexInputContentType(item codexInputItem) string {
-	content, _ := item["content"].([]codexInputContent)
+	content, _ := item["content"].([]map[string]any)
 	if len(content) == 0 {
 		return ""
 	}
-	return content[0].Type
+	v, _ := content[0]["type"].(string)
+	return v
 }
 
 func codexInputContentText(item codexInputItem) string {
-	content, _ := item["content"].([]codexInputContent)
+	content, _ := item["content"].([]map[string]any)
 	if len(content) == 0 {
 		return ""
 	}
-	return content[0].Text
+	v, _ := content[0]["text"].(string)
+	return v
 }
 
 func codexItemTypeString(item codexInputItem) string {
@@ -1354,7 +1402,7 @@ func TestBuildCodexRequestParityMatrixPreservesAliasIntent(t *testing.T) {
 					Content: json.RawMessage(`"hello"`),
 				}},
 			}
-			out := buildCodexRequest(req, tc.model, "")
+			out := BuildRequest(req, tc.model, "")
 			if out.Model != tc.wantModel {
 				t.Fatalf("model=%q want %q", out.Model, tc.wantModel)
 			}
