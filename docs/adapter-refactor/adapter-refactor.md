@@ -1118,8 +1118,14 @@ Current state:
   subprocess driver, runtime config resolution, request construction,
   OpenAI message flattening, tool mapping, tool choice parsing, and
   deterministic fallback session IDs.
+- `internal/adapter/anthropic/fallback/` also owns fallback result to
+  OpenAI response mapping, fallback stream plan construction, usage mapping,
+  fallback tool-call conversion, live stream-event conversion, and fallback
+  path labels.
 - Actual fallback response orchestration still goes through root-owned
-  `internal/adapter/fallback_handler.go`.
+  `internal/adapter/fallback_handler.go`, but the root now consumes
+  provider-owned response builders instead of assembling fallback response
+  shape inline.
 
 Planned split:
 
@@ -2348,10 +2354,14 @@ anthropic-ratelimit-unified-overage-status: rejected` path and
    `internal/adapter/anthropic/fallback/`: OpenAI message flattening, tool
    mapping, tool choice parsing, and deterministic fallback session IDs are
    now package-owned.
-4. [todo] Update logging so fallback transitions name the Anthropic
+4. [done 2026-04-26] Move fallback response mapping into
+   `internal/adapter/anthropic/fallback/`: result-to-chat-completion
+   rendering, stream replay chunks, live event chunks, usage conversion,
+   tool-call conversion, and path labels are now package-owned.
+5. [todo] Update logging so fallback transitions name the Anthropic
    classifier outcome that triggered them, not just the generic
    escalation reason.
-5. [todo] Add backend-local tests for fallback escalation, replacing
+6. [todo] Add backend-local tests for fallback escalation, replacing
    any tests that only run through the full server facade.
 
 ### Phase 5 todos: extract Codex request shaping
@@ -2946,9 +2956,10 @@ entries, and orders the real work by dependency and debugging value.
    OpenAI-compatible error envelope.
 7. [done 2026-04-26] The explicit configured CLI fallback driver is now an
    Anthropic-owned package at `internal/adapter/anthropic/fallback/`, and
-   fallback request construction now lives in that package as well. Current
-   remaining work is moving or deleting the root OpenAI response/orchestration
-   helpers in `internal/adapter/fallback_handler.go`.
+   fallback request plus response mapping now live in that package as well.
+   Current remaining work is moving the fallback execution orchestration in
+   `internal/adapter/fallback_handler.go` behind an Anthropic-owned runner
+   interface.
 
 ### P3: shared stream/output architecture
 

@@ -1258,3 +1258,39 @@ Next large batch:
   Anthropic-owned fallback runner that returns normalized runtime
   results/events, while root keeps only OpenAI HTTP writing and dependency
   injection.
+
+## 2026-04-26 fallback response mapping checkpoint
+
+Follow-up to request construction. This slice moved fallback response shape
+conversion into the Anthropic fallback package while leaving HTTP writing in
+root for now.
+
+What changed:
+
+- `internal/adapter/anthropic/fallback/response_builder.go`: added
+  package-owned final response construction for fallback collect results.
+- `internal/adapter/anthropic/fallback/response_builder.go`: added stream
+  plan construction for buffered tool runs, live stream-event chunk
+  conversion for unbuffered text/reasoning, fallback usage conversion,
+  fallback tool-call conversion, and fallback path labels.
+- `internal/adapter/fallback_handler.go`: root fallback collection now calls
+  `fallback.BuildFinalResponse(...)`; root streaming now calls
+  `fallback.BuildLiveStreamChunk(...)`, `fallback.BuildStreamPlan(...)`,
+  `fallback.ShouldBufferTools(...)`, and `fallback.PathLabel(...)`.
+- `internal/adapter/anthropic/fallback/response_builder_test.go`: added
+  package-local coverage for collect response rendering, refusal handling,
+  buffered tool-call stream replay, unbuffered stream behavior, live event
+  mapping, buffer selection, and path labels.
+
+Verification:
+
+- `go test ./internal/adapter/anthropic/fallback -count=1` passed.
+- `go test ./internal/adapter/...` passed.
+
+Next large batch:
+
+- Introduce an Anthropic-owned fallback runner boundary. It should own the
+  collect/stream execution sequence and return normalized final responses or
+  stream chunks plus logging metadata. Root should keep only semaphore
+  acquisition, HTTP/SSE writing, and request-event logging until those can
+  move behind a smaller dispatcher interface.

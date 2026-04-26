@@ -7,11 +7,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"goodkind.io/clyde/internal/adapter/anthropic/fallback"
-	"goodkind.io/clyde/internal/adapter/finishreason"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 )
 
@@ -273,43 +271,35 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 		}
 		return nil
 	}
-	finalText := result.Text
-	if jsonSpec.Mode != "" && result.Refusal == "" {
-		coerced := CoerceJSON(result.Text)
-		if LooksLikeJSON(coerced) {
-			finalText = coerced
+	var coerce fallback.TextCoercer
+	if jsonSpec.Mode != "" {
+		coerce = func(text string) (string, bool) {
+			coerced := CoerceJSON(text)
+			return coerced, LooksLikeJSON(coerced)
 		}
 	}
-	usage := Usage{
-		PromptTokens:     result.Usage.PromptTokens,
-		CompletionTokens: result.Usage.CompletionTokens,
-		TotalTokens:      result.Usage.TotalTokens,
-	}
-	if result.Usage.CacheReadInputTokens > 0 {
-		usage.PromptTokensDetails = &PromptTokensDetails{CachedTokens: result.Usage.CacheReadInputTokens}
-	}
-	msg := adapterruntime.BuildAssistantMessage(adapterruntime.AssistantMessageParts{
-		Text:             finalText,
-		ReasoningContent: result.ReasoningContent,
-		Refusal:          result.Refusal,
-		ToolCalls:        fallbackOpenAIToolCalls(result.ToolCalls, reqID),
+	final := fallback.BuildFinalResponse(fallback.FinalResponseInput{
+		Request:           req,
+		Result:            result,
+		RequestID:         reqID,
+		ModelAlias:        model.Alias,
+		SystemFingerprint: systemFingerprint,
+		CoerceText:        coerce,
 	})
-	fr := finishreason.FromAnthropicNonStream(result.Stop)
-	resp := adapterruntime.BuildChatCompletion(reqID, model.Alias, systemFingerprint, msg, fr, usage)
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusOK, final.Response)
 	s.logCacheUsage(ctx, "fallback", reqID, model.Alias,
 		result.Usage.PromptTokens, result.Usage.CacheCreationInputTokens, result.Usage.CacheReadInputTokens)
 	adapterruntime.LogCompleted(s.log, ctx, adapterruntime.CompletedAttrs{
 		Backend:             "fallback",
 		Provider:            providerName(model, "fallback"),
-		Path:                fallbackPathLabel(req),
+		Path:                fallback.PathLabel(req),
 		SessionID:           req.SessionID,
 		RequestID:           reqID,
 		Alias:               model.Alias,
 		ModelID:             req.Model,
-		FinishReason:        fr,
-		TokensIn:            usage.PromptTokens,
-		TokensOut:           usage.CompletionTokens,
+		FinishReason:        final.FinishReason,
+		TokensIn:            final.Usage.PromptTokens,
+		TokensOut:           final.Usage.CompletionTokens,
 		CacheReadTokens:     result.Usage.CacheReadInputTokens,
 		CacheCreationTokens: result.Usage.CacheCreationInputTokens,
 		CacheTTL:            s.cfg.ClientIdentity.PromptCacheTTL,
@@ -319,8 +309,8 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 	breakdown := adapterruntime.EstimateCost(adapterruntime.CostInputs{
 		ModelID:             req.Model,
 		TTL:                 s.cfg.ClientIdentity.PromptCacheTTL,
-		InputTokens:         usage.PromptTokens,
-		OutputTokens:        usage.CompletionTokens,
+		InputTokens:         final.Usage.PromptTokens,
+		OutputTokens:        final.Usage.CompletionTokens,
 		CacheCreationTokens: result.Usage.CacheCreationInputTokens,
 		CacheReadTokens:     result.Usage.CacheReadInputTokens,
 	})
@@ -332,50 +322,15 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 		Alias:               model.Alias,
 		ModelID:             req.Model,
 		Stream:              false,
-		FinishReason:        fr,
-		TokensIn:            usage.PromptTokens,
-		TokensOut:           usage.CompletionTokens,
+		FinishReason:        final.FinishReason,
+		TokensIn:            final.Usage.PromptTokens,
+		TokensOut:           final.Usage.CompletionTokens,
 		CacheReadTokens:     result.Usage.CacheReadInputTokens,
 		CacheCreationTokens: result.Usage.CacheCreationInputTokens,
 		CostMicrocents:      breakdown.TotalMicrocents,
 		DurationMs:          time.Since(started).Milliseconds(),
 	})
 	return nil
-}
-
-// fallbackPathLabel picks the dispatch tag for log events based on
-// whether the request rides the synthesized-transcript resume
-// pathway. Used by the cost aggregator to compare cache efficiency
-// across legs.
-func fallbackPathLabel(req fallback.Request) string {
-	if req.Resume {
-		return "fallback_resume"
-	}
-	return "fallback_prompt"
-}
-
-func fallbackOpenAIToolCalls(calls []fallback.ToolCall, reqID string, indexOffset ...int) []adapterruntime.ToolCall {
-	if len(calls) == 0 {
-		return nil
-	}
-	offset := 0
-	if len(indexOffset) > 0 {
-		offset = indexOffset[0]
-	}
-	out := make([]adapterruntime.ToolCall, len(calls))
-	for i, tc := range calls {
-		index := i + offset
-		out[i] = adapterruntime.ToolCall{
-			Index: index,
-			ID:    fallback.EnsureToolCallID(tc.ID, reqID, index),
-			Type:  "function",
-			Function: adapterruntime.ToolCallFunction{
-				Name:      tc.Name,
-				Arguments: tc.Arguments,
-			},
-		}
-	}
-	return out
 }
 
 // streamFallback streams stream-json from the CLI. When tools are
@@ -414,28 +369,19 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 		return sw.EmitStreamChunk(systemFingerprint, chunk)
 	}
 
-	bufferedTools := len(req.Tools) > 0 && strings.ToLower(strings.TrimSpace(req.ToolChoice)) != "none"
+	bufferedTools := fallback.ShouldBufferTools(req)
 	var sr fallback.StreamResult
 	var streamErr error
 	if bufferedTools {
 		sr, streamErr = s.fb.Stream(r.Context(), req, func(fallback.StreamEvent) error { return nil })
 	} else {
 		sr, streamErr = s.fb.Stream(r.Context(), req, func(ev fallback.StreamEvent) error {
-			delta := StreamDelta{}
-			switch ev.Kind {
-			case "text":
-				delta.Content = ev.Text
-			case "reasoning":
-				delta.Reasoning = ev.Text
-				delta.ReasoningContent = ev.Text
-			default:
+			chunk, ok := fallback.BuildLiveStreamChunk(reqID, model.Alias, created, ev, firstDelta)
+			if !ok {
 				return nil
 			}
-			if firstDelta {
-				delta.Role = "assistant"
-				firstDelta = false
-			}
-			return adapterruntime.EmitDeltaChunk(emit, reqID, model.Alias, created, delta)
+			firstDelta = false
+			return emit(chunk)
 		})
 	}
 	if streamErr != nil {
@@ -462,51 +408,21 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 		})
 	}
 
-	finalFinish := finishreason.FromAnthropicNonStream(sr.Stop)
+	plan := fallback.BuildStreamPlan(fallback.StreamPlanInput{
+		Request:     req,
+		Result:      sr,
+		RequestID:   reqID,
+		ModelAlias:  model.Alias,
+		Created:     created,
+		BufferedRun: bufferedTools,
+	})
+	for _, chunk := range plan.Chunks {
+		_ = emit(chunk)
+	}
+	_ = adapterruntime.EmitFinishChunk(emit, reqID, model.Alias, created, plan.FinishReason)
 
-	if bufferedTools {
-		if len(sr.ToolCalls) > 0 {
-			if rc := strings.TrimSpace(sr.ReasoningContent); rc != "" {
-				_ = adapterruntime.EmitDeltaChunk(emit, reqID, model.Alias, created, StreamDelta{
-					Role:             "assistant",
-					Reasoning:        rc,
-					ReasoningContent: rc,
-				})
-			} else {
-				_ = adapterruntime.EmitDeltaChunk(emit, reqID, model.Alias, created, StreamDelta{Role: "assistant"})
-			}
-			for i, tc := range sr.ToolCalls {
-				_ = adapterruntime.EmitDeltaChunk(emit, reqID, model.Alias, created, StreamDelta{
-					ToolCalls: fallbackOpenAIToolCalls([]fallback.ToolCall{tc}, reqID, i),
-				})
-			}
-			finalFinish = "tool_calls"
-		} else {
-			d := StreamDelta{Role: "assistant", Content: sr.Text}
-			if rc := strings.TrimSpace(sr.ReasoningContent); rc != "" {
-				d.Reasoning = rc
-				d.ReasoningContent = rc
-			}
-			_ = adapterruntime.EmitDeltaChunk(emit, reqID, model.Alias, created, d)
-			finalFinish = finishreason.FromAnthropicNonStream(sr.Stop)
-		}
-	} else if strings.EqualFold(sr.Stop, "refusal") {
-		finalFinish = finishreason.FromAnthropicNonStream(sr.Stop)
-	} else {
-		finalFinish = finishreason.FromAnthropicNonStream(sr.Stop)
-	}
-	_ = adapterruntime.EmitFinishChunk(emit, reqID, model.Alias, created, finalFinish)
-
-	finalUsage := Usage{
-		PromptTokens:     sr.Usage.PromptTokens,
-		CompletionTokens: sr.Usage.CompletionTokens,
-		TotalTokens:      sr.Usage.TotalTokens,
-	}
-	if sr.Usage.CacheReadInputTokens > 0 {
-		finalUsage.PromptTokensDetails = &PromptTokensDetails{CachedTokens: sr.Usage.CacheReadInputTokens}
-	}
 	if includeUsage {
-		_ = adapterruntime.EmitUsageChunk(emit, reqID, model.Alias, created, finalUsage)
+		_ = adapterruntime.EmitUsageChunk(emit, reqID, model.Alias, created, plan.Usage)
 	}
 	_ = sw.WriteStreamDone()
 	s.logCacheUsage(r.Context(), "fallback", reqID, model.Alias,
@@ -514,14 +430,14 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 	adapterruntime.LogCompleted(s.log, r.Context(), adapterruntime.CompletedAttrs{
 		Backend:             "fallback",
 		Provider:            providerName(model, "fallback"),
-		Path:                fallbackPathLabel(req),
+		Path:                fallback.PathLabel(req),
 		SessionID:           req.SessionID,
 		RequestID:           reqID,
 		Alias:               model.Alias,
 		ModelID:             req.Model,
-		FinishReason:        finalFinish,
-		TokensIn:            finalUsage.PromptTokens,
-		TokensOut:           finalUsage.CompletionTokens,
+		FinishReason:        plan.FinishReason,
+		TokensIn:            plan.Usage.PromptTokens,
+		TokensOut:           plan.Usage.CompletionTokens,
 		CacheReadTokens:     sr.Usage.CacheReadInputTokens,
 		CacheCreationTokens: sr.Usage.CacheCreationInputTokens,
 		CacheTTL:            s.cfg.ClientIdentity.PromptCacheTTL,
@@ -532,8 +448,8 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 		breakdown := adapterruntime.EstimateCost(adapterruntime.CostInputs{
 			ModelID:             req.Model,
 			TTL:                 s.cfg.ClientIdentity.PromptCacheTTL,
-			InputTokens:         finalUsage.PromptTokens,
-			OutputTokens:        finalUsage.CompletionTokens,
+			InputTokens:         plan.Usage.PromptTokens,
+			OutputTokens:        plan.Usage.CompletionTokens,
 			CacheCreationTokens: sr.Usage.CacheCreationInputTokens,
 			CacheReadTokens:     sr.Usage.CacheReadInputTokens,
 		})
@@ -545,9 +461,9 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 			Alias:               model.Alias,
 			ModelID:             req.Model,
 			Stream:              true,
-			FinishReason:        finalFinish,
-			TokensIn:            finalUsage.PromptTokens,
-			TokensOut:           finalUsage.CompletionTokens,
+			FinishReason:        plan.FinishReason,
+			TokensIn:            plan.Usage.PromptTokens,
+			TokensOut:           plan.Usage.CompletionTokens,
 			CacheReadTokens:     sr.Usage.CacheReadInputTokens,
 			CacheCreationTokens: sr.Usage.CacheCreationInputTokens,
 			CostMicrocents:      breakdown.TotalMicrocents,
