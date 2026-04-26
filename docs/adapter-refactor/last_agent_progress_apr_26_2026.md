@@ -1294,3 +1294,38 @@ Next large batch:
   stream chunks plus logging metadata. Root should keep only semaphore
   acquisition, HTTP/SSE writing, and request-event logging until those can
   move behind a smaller dispatcher interface.
+
+## 2026-04-26 fallback runner checkpoint
+
+Follow-up to response mapping. This larger slice moved fallback execution
+wrappers and transcript-resume mechanics into the Anthropic fallback package.
+
+What changed:
+
+- `internal/adapter/anthropic/fallback/runner.go`: added `CollectOpenAI(...)`
+  and `StreamOpenAI(...)` methods on the fallback client. The package now owns
+  collect execution plus final OpenAI response construction, and stream
+  execution plus live chunk emission or buffered replay planning.
+- `internal/adapter/anthropic/fallback/transcript_resume.go`: moved Claude
+  transcript synthesis, `CLAUDE_CONFIG_HOME` resolution, prior-turn selection,
+  transcript writing, and request mutation for `--resume` into the fallback
+  package.
+- `internal/adapter/fallback_handler.go`: removed root-owned transcript file
+  synthesis and direct fallback `Collect`/`Stream` sequencing. Root now calls
+  `fallback.PrepareTranscriptResume(...)`, `s.fb.CollectOpenAI(...)`, and
+  `s.fb.StreamOpenAI(...)`.
+- `internal/adapter/anthropic/fallback/runner_test.go`: added package-local
+  coverage for collect wrapping, plain live streaming, buffered tool-call
+  streaming, and transcript-resume request mutation.
+
+Verification:
+
+- `go test ./internal/adapter/anthropic/fallback -count=1` passed.
+- `go test ./internal/adapter/...` passed.
+
+Next large batch:
+
+- Move fallback HTTP/SSE writing and request-event logging behind an Anthropic
+  backend dispatcher boundary. At that point root fallback handling should be
+  reduced to validation, semaphore acquisition, and delegation, with backend
+  tests covering the behavior without the full server facade.

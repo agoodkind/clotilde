@@ -5,76 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
 	"time"
 
 	"goodkind.io/clyde/internal/adapter/anthropic/fallback"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 )
-
-// writeFallbackTranscript materializes a synthesized Claude Code
-// transcript on disk so the subsequent `claude -p --resume` call can
-// read conversation history from the JSONL rather than reprocessing
-// a flattened positional prompt. Writes under
-// ~/.claude/projects/<sanitize(workspaceDir)>/<session-id>.jsonl.
-//
-// Only prior turns are serialized (msgs[:-1] effectively), because the
-// last user message rides in as the positional prompt on spawn. When
-// the message set is shorter than one turn, writing is skipped and
-// the caller stays on the direct --session-id prompt path.
-func (s *Server) writeFallbackTranscript(ctx context.Context, workspaceDir, sessionID string, msgs []fallback.Message) error {
-	// Ensure the cwd exists so claude -p does not fail at spawn with
-	// a missing directory. The mkdir is idempotent.
-	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
-		return fmt.Errorf("mkdir workspace: %w", err)
-	}
-	// Find the final user message so we can exclude it from the
-	// transcript (it becomes the positional prompt).
-	lastUser := -1
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == "user" {
-			lastUser = i
-			break
-		}
-	}
-	if lastUser <= 0 {
-		// No prior history to materialize; the handler stays on
-		// the direct --session-id prompt path.
-		return fmt.Errorf("no prior turns to synthesize")
-	}
-	priorMsgs := msgs[:lastUser]
-	lines, err := fallback.SynthesizeTranscript(priorMsgs, sessionID, workspaceDir, time.Now())
-	if err != nil {
-		return fmt.Errorf("synthesize: %w", err)
-	}
-	claudeHome := claudeConfigHome()
-	path := fallback.TranscriptPath(claudeHome, workspaceDir, sessionID)
-	if err := fallback.WriteTranscript(path, lines); err != nil {
-		return fmt.Errorf("write: %w", err)
-	}
-	s.log.LogAttrs(ctx, slog.LevelDebug, "fallback.transcript.written",
-		slog.String("session_id", sessionID),
-		slog.String("path", path),
-		slog.Int("lines", len(lines)),
-		slog.Int("prior_turns", lastUser),
-	)
-	return nil
-}
-
-// claudeConfigHome resolves $CLAUDE_CONFIG_HOME, falling back to
-// ~/.claude. Matches the resolution in
-// src/utils/sessionStorage.ts:202-204.
-func claudeConfigHome() string {
-	if v := os.Getenv("CLAUDE_CONFIG_HOME"); v != "" {
-		return v
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ".claude"
-	}
-	return filepath.Join(home, ".claude")
-}
 
 // handleFallback fulfils a chat completion via the local `claude`
 // CLI in `-p --output-format stream-json` mode. It is the third
@@ -193,31 +128,25 @@ func (s *Server) handleFallback(w http.ResponseWriter, r *http.Request, req Chat
 		fbReq.System = system
 	}
 
-	msgs := fbReq.Messages
-	sessionID := fbReq.SessionID
-	// Phase 3: synthesize a Claude Code transcript on disk so the CLI
-	// --resumes it instead of re-flattening history every turn. Opt-in
-	// via [adapter.fallback].transcript_synthesis_enabled. When on,
-	// the write lands under a dedicated workspace dir (never mingles
-	// with real workspaces or clyde sessions) and we pass --resume so
-	// Claude's own prompt caching pipeline fires on every turn.
-	if s.cfg.Fallback.TranscriptSynthesisEnabled && len(msgs) > 0 && sessionID != "" {
+	if s.cfg.Fallback.TranscriptSynthesisEnabled {
 		workspaceDir := s.cfg.Fallback.ResolveTranscriptWorkspaceDir(model.Alias)
-		if workspaceDir != "" {
-			if err := s.writeFallbackTranscript(r.Context(), workspaceDir, sessionID, msgs); err != nil {
+		resume := fallback.PrepareTranscriptResume(&fbReq, fallback.TranscriptResumeConfig{
+			WorkspaceDir: workspaceDir,
+		})
+		if resume.Attempted {
+			if resume.Err != nil {
 				s.log.LogAttrs(r.Context(), slog.LevelWarn, "fallback.transcript.write_failed",
 					slog.String("request_id", reqID),
-					slog.String("session_id", sessionID),
-					slog.String("workspace_dir", workspaceDir),
-					slog.Any("err", err),
+					slog.String("session_id", resume.SessionID),
+					slog.String("workspace_dir", resume.WorkspaceDir),
+					slog.Any("err", resume.Err),
 				)
-			} else {
-				fbReq.Resume = true
-				fbReq.WorkspaceDir = workspaceDir
+			} else if resume.Resumed {
 				s.log.LogAttrs(r.Context(), slog.LevelDebug, "fallback.transcript.resumed",
 					slog.String("request_id", reqID),
-					slog.String("session_id", sessionID),
-					slog.Int("prior_turns", len(msgs)-1),
+					slog.String("session_id", resume.SessionID),
+					slog.String("path", resume.Path),
+					slog.Int("prior_turns", resume.PriorTurns),
 				)
 			}
 		}
@@ -234,7 +163,19 @@ func (s *Server) handleFallback(w http.ResponseWriter, r *http.Request, req Chat
 
 func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req fallback.Request, model ResolvedModel, reqID string, started time.Time, jsonSpec JSONResponseSpec, escalate bool) error {
 	s.emitRequestStarted(ctx, model, "fallback", reqID, req.Model, false)
-	result, err := s.fb.Collect(ctx, req)
+	var coerce fallback.TextCoercer
+	if jsonSpec.Mode != "" {
+		coerce = func(text string) (string, bool) {
+			coerced := CoerceJSON(text)
+			return coerced, LooksLikeJSON(coerced)
+		}
+	}
+	run, err := s.fb.CollectOpenAI(ctx, req, fallback.CollectOpenAIInput{
+		RequestID:         reqID,
+		ModelAlias:        model.Alias,
+		SystemFingerprint: systemFingerprint,
+		CoerceText:        coerce,
+	})
 	if err != nil {
 		adapterruntime.LogFailed(s.log, ctx, adapterruntime.FailedAttrs{
 			Backend:    "fallback",
@@ -271,21 +212,8 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 		}
 		return nil
 	}
-	var coerce fallback.TextCoercer
-	if jsonSpec.Mode != "" {
-		coerce = func(text string) (string, bool) {
-			coerced := CoerceJSON(text)
-			return coerced, LooksLikeJSON(coerced)
-		}
-	}
-	final := fallback.BuildFinalResponse(fallback.FinalResponseInput{
-		Request:           req,
-		Result:            result,
-		RequestID:         reqID,
-		ModelAlias:        model.Alias,
-		SystemFingerprint: systemFingerprint,
-		CoerceText:        coerce,
-	})
+	result := run.Raw
+	final := run.Final
 	writeJSON(w, http.StatusOK, final.Response)
 	s.logCacheUsage(ctx, "fallback", reqID, model.Alias,
 		result.Usage.PromptTokens, result.Usage.CacheCreationInputTokens, result.Usage.CacheReadInputTokens)
@@ -363,27 +291,16 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 	s.emitRequestStreamOpened(r.Context(), model, "fallback", reqID, req.Model, true)
 
 	created := time.Now().Unix()
-	firstDelta := true
 
 	emit := func(chunk StreamChunk) error {
 		return sw.EmitStreamChunk(systemFingerprint, chunk)
 	}
 
-	bufferedTools := fallback.ShouldBufferTools(req)
-	var sr fallback.StreamResult
-	var streamErr error
-	if bufferedTools {
-		sr, streamErr = s.fb.Stream(r.Context(), req, func(fallback.StreamEvent) error { return nil })
-	} else {
-		sr, streamErr = s.fb.Stream(r.Context(), req, func(ev fallback.StreamEvent) error {
-			chunk, ok := fallback.BuildLiveStreamChunk(reqID, model.Alias, created, ev, firstDelta)
-			if !ok {
-				return nil
-			}
-			firstDelta = false
-			return emit(chunk)
-		})
-	}
+	run, streamErr := s.fb.StreamOpenAI(r.Context(), req, fallback.StreamOpenAIInput{
+		RequestID:  reqID,
+		ModelAlias: model.Alias,
+		Created:    created,
+	}, emit)
 	if streamErr != nil {
 		s.log.LogAttrs(r.Context(), slog.LevelWarn, "adapter.chat.stream_error",
 			slog.String("backend", "fallback"),
@@ -408,17 +325,8 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 		})
 	}
 
-	plan := fallback.BuildStreamPlan(fallback.StreamPlanInput{
-		Request:     req,
-		Result:      sr,
-		RequestID:   reqID,
-		ModelAlias:  model.Alias,
-		Created:     created,
-		BufferedRun: bufferedTools,
-	})
-	for _, chunk := range plan.Chunks {
-		_ = emit(chunk)
-	}
+	sr := run.Raw
+	plan := run.Plan
 	_ = adapterruntime.EmitFinishChunk(emit, reqID, model.Alias, created, plan.FinishReason)
 
 	if includeUsage {
