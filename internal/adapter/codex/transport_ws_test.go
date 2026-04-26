@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gorilla/websocket"
@@ -63,6 +64,7 @@ func TestResponseCreateRequestFromHTTPUsesResponseCreateShape(t *testing.T) {
 
 func TestWithWarmupGenerateFalseSetsGenerateFlag(t *testing.T) {
 	ws := WithWarmupGenerateFalse(ResponseCreateWsRequest{Type: "response.create"})
+	ws.Tools = []any{}
 	if ws.Generate == nil || *ws.Generate {
 		t.Fatalf("generate=%v want false", ws.Generate)
 	}
@@ -76,6 +78,9 @@ func TestWithWarmupGenerateFalseSetsGenerateFlag(t *testing.T) {
 	}
 	if got, ok := payload["generate"].(bool); !ok || got {
 		t.Fatalf("serialized generate=%v want false", payload["generate"])
+	}
+	if tools, ok := payload["tools"].([]any); !ok || len(tools) != 0 {
+		t.Fatalf("serialized tools=%v want empty array", payload["tools"])
 	}
 }
 
@@ -102,6 +107,18 @@ func TestWithPreviousResponseIDOverridesInputIncrementally(t *testing.T) {
 	}
 	if got, _ := payload["previous_response_id"].(string); got != "resp-123" {
 		t.Fatalf("serialized previous_response_id=%q want resp-123", got)
+	}
+
+	ws = WithPreviousResponseID(base, "resp-123", []map[string]any{})
+	encoded, err = MarshalResponseCreateWsRequest(ws)
+	if err != nil {
+		t.Fatalf("marshal websocket request with empty input: %v", err)
+	}
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("unmarshal empty-input payload: %v", err)
+	}
+	if input, ok := payload["input"].([]any); !ok || len(input) != 0 {
+		t.Fatalf("serialized input=%v want empty array", payload["input"])
 	}
 }
 
@@ -224,6 +241,205 @@ func TestRunWebsocketTransportParsesTextAndCompletion(t *testing.T) {
 	}
 	if got := content.String(); got != "hello world" {
 		t.Fatalf("content=%q want hello world", got)
+	}
+}
+
+func TestRunWebsocketTransportPrewarmsAndReusesConnection(t *testing.T) {
+	t.Parallel()
+
+	upgrader := websocket.Upgrader{}
+	var handshakes atomic.Int32
+	requestsCh := make(chan []map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handshakes.Add(1)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade: %v", err)
+		}
+		defer conn.Close()
+
+		var requests []map[string]any
+		for idx := 0; idx < 2; idx++ {
+			_, requestBody, err := conn.ReadMessage()
+			if err != nil {
+				t.Fatalf("read request %d: %v", idx, err)
+			}
+			var request map[string]any
+			if err := json.Unmarshal(requestBody, &request); err != nil {
+				t.Fatalf("unmarshal request %d: %v", idx, err)
+			}
+			requests = append(requests, request)
+			events := []map[string]any{
+				{"type": "response.created", "response": map[string]any{"id": "warm-1"}},
+				{"type": "response.completed", "response": map[string]any{"id": "warm-1", "usage": map[string]any{"input_tokens": 1, "output_tokens": 0, "total_tokens": 1, "input_tokens_details": map[string]any{"cached_tokens": 0}, "output_tokens_details": map[string]any{"reasoning_tokens": 0}}}},
+			}
+			if idx == 1 {
+				events = []map[string]any{
+					{"type": "response.created", "response": map[string]any{"id": "resp-1"}},
+					{"type": "response.output_text.delta", "delta": "done"},
+					{"type": "response.completed", "response": map[string]any{"id": "resp-1", "usage": map[string]any{"input_tokens": 10, "output_tokens": 1, "total_tokens": 11, "input_tokens_details": map[string]any{"cached_tokens": 0}, "output_tokens_details": map[string]any{"reasoning_tokens": 0}}}},
+				}
+			}
+			for _, event := range events {
+				payload, err := json.Marshal(event)
+				if err != nil {
+					t.Fatalf("marshal event: %v", err)
+				}
+				if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+					t.Fatalf("write event: %v", err)
+				}
+			}
+		}
+		requestsCh <- requests
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	var chunks []tooltrans.OpenAIStreamChunk
+	result, err := RunWebsocketTransport(context.Background(), WebsocketTransportConfig{
+		URL:            wsURL,
+		Token:          "test-token",
+		RequestID:      "req-ws",
+		Alias:          "gpt-5.4",
+		ConversationID: "cursor:conv-123",
+		TurnState:      NewTurnState(),
+		Prewarm:        true,
+	}, ResponseCreateWsRequest{
+		Type:  "response.create",
+		Model: "gpt-5.4",
+		Input: []map[string]any{{"type": "message", "role": "user", "content": "hello"}},
+		Tools: []any{map[string]any{"type": "function", "name": "read_file"}},
+	}, func(ch tooltrans.OpenAIStreamChunk) error {
+		chunks = append(chunks, ch)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunWebsocketTransport: %v", err)
+	}
+	if result.ResponseID != "resp-1" {
+		t.Fatalf("response_id=%q want resp-1", result.ResponseID)
+	}
+	if handshakes.Load() != 1 {
+		t.Fatalf("handshakes=%d want 1", handshakes.Load())
+	}
+	requests := <-requestsCh
+	if len(requests) != 2 {
+		t.Fatalf("requests len=%d want 2", len(requests))
+	}
+	if got, ok := requests[0]["generate"].(bool); !ok || got {
+		t.Fatalf("warmup generate=%v want false", requests[0]["generate"])
+	}
+	if tools, ok := requests[0]["tools"].([]any); !ok || len(tools) != 0 {
+		t.Fatalf("warmup tools=%v want empty array", requests[0]["tools"])
+	}
+	if got, _ := requests[1]["previous_response_id"].(string); got != "warm-1" {
+		t.Fatalf("follow-up previous_response_id=%q want warm-1", got)
+	}
+	if input, ok := requests[1]["input"].([]any); !ok || len(input) != 0 {
+		t.Fatalf("follow-up input=%v want empty array", requests[1]["input"])
+	}
+	var content strings.Builder
+	for _, ch := range chunks {
+		if len(ch.Choices) > 0 {
+			content.WriteString(ch.Choices[0].Delta.Content)
+		}
+	}
+	if got := content.String(); got != "done" {
+		t.Fatalf("content=%q want done", got)
+	}
+}
+
+func TestRunWebsocketTransportReconnectsAfterPrewarmFailure(t *testing.T) {
+	t.Parallel()
+
+	upgrader := websocket.Upgrader{}
+	var handshakes atomic.Int32
+	requestsCh := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connNumber := handshakes.Add(1)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade: %v", err)
+		}
+		defer conn.Close()
+
+		_, requestBody, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("read request: %v", err)
+		}
+		var request map[string]any
+		if err := json.Unmarshal(requestBody, &request); err != nil {
+			t.Fatalf("unmarshal request: %v", err)
+		}
+		if connNumber == 1 {
+			payload, err := json.Marshal(map[string]any{
+				"type":  "response.failed",
+				"error": map[string]any{"message": "warmup failed"},
+			})
+			if err != nil {
+				t.Fatalf("marshal failure: %v", err)
+			}
+			if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+				t.Fatalf("write failure: %v", err)
+			}
+			return
+		}
+		requestsCh <- request
+		for _, event := range []map[string]any{
+			{"type": "response.created", "response": map[string]any{"id": "resp-1"}},
+			{"type": "response.output_text.delta", "delta": "recovered"},
+			{"type": "response.completed", "response": map[string]any{"id": "resp-1", "usage": map[string]any{"input_tokens": 10, "output_tokens": 1, "total_tokens": 11, "input_tokens_details": map[string]any{"cached_tokens": 0}, "output_tokens_details": map[string]any{"reasoning_tokens": 0}}}},
+		} {
+			payload, err := json.Marshal(event)
+			if err != nil {
+				t.Fatalf("marshal event: %v", err)
+			}
+			if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+				t.Fatalf("write event: %v", err)
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	var chunks []tooltrans.OpenAIStreamChunk
+	result, err := RunWebsocketTransport(context.Background(), WebsocketTransportConfig{
+		URL:            wsURL,
+		Token:          "test-token",
+		RequestID:      "req-ws",
+		Alias:          "gpt-5.4",
+		ConversationID: "cursor:conv-123",
+		TurnState:      NewTurnState(),
+		Prewarm:        true,
+	}, ResponseCreateWsRequest{
+		Type:  "response.create",
+		Model: "gpt-5.4",
+		Input: []map[string]any{{"type": "message", "role": "user", "content": "hello"}},
+	}, func(ch tooltrans.OpenAIStreamChunk) error {
+		chunks = append(chunks, ch)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunWebsocketTransport: %v", err)
+	}
+	if result.ResponseID != "resp-1" {
+		t.Fatalf("response_id=%q want resp-1", result.ResponseID)
+	}
+	if handshakes.Load() != 2 {
+		t.Fatalf("handshakes=%d want 2", handshakes.Load())
+	}
+	request := <-requestsCh
+	if _, ok := request["previous_response_id"]; ok {
+		t.Fatalf("generated request after failed prewarm should not use previous_response_id: %v", request)
+	}
+	var content strings.Builder
+	for _, ch := range chunks {
+		if len(ch.Choices) > 0 {
+			content.WriteString(ch.Choices[0].Delta.Content)
+		}
+	}
+	if got := content.String(); got != "recovered" {
+		t.Fatalf("content=%q want recovered", got)
 	}
 }
 

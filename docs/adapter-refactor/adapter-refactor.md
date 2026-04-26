@@ -1516,14 +1516,15 @@ how to realize that intent on the provider path.
        direct websocket continuation state; do not mix Codex app
        session continuation with Responses `previous_response_id`.
    - Prewarm policy:
-     - Implement `generate=false` websocket prewarm as a best-effort
-       turn setup step before the first generated request when websocket
-       is enabled.
-     - Wait for the warmup `response.completed` before using its
-       `response.id` for the next request, matching the Rust client.
-     - Treat prewarm failure as a websocket transport miss, not as a
-       user-visible model failure unless the generated request also
-       fails.
+     - Clyde now implements `generate=false` websocket prewarm as a
+       best-effort turn setup step before a generated request that does
+       not already have `previous_response_id`.
+     - The generated request reuses the same websocket connection, sends
+       the warmup `response.id` as `previous_response_id`, and sends
+       `input: []`, matching the Rust client request shape.
+     - Prewarm failure closes that connection, redials websocket, and
+       attempts the generated request without surfacing the warmup
+       failure unless the generated request also fails.
    - Logging requirements:
      - Extend `adapter.codex.transport.prepared` or add a sibling event
        with `continuation_attempted`, `continuation_used`,
@@ -2335,9 +2336,10 @@ workstream above. The concrete execution order is:
    assistant anchor when no server baseline exists, server-output-item
    baseline reuse, baseline mismatch misses, config/model mismatch,
    explicit invalidation, websocket response id capture, and parser
-   output-item capture. Remaining work before full Rust
-   `ModelClientSession` parity: add reconnect/prewarm semantics and
-   validate live Cursor turns.
+   output-item capture, websocket prewarm connection reuse, and retry
+   after prewarm failure. Remaining work before full Rust
+   `ModelClientSession` parity: validate live Cursor turns and finish
+   richer reconnect/session-source behavior.
 5. [partial] Added websocket header and turn-state parity. Clyde now
    builds websocket headers with the conversation id as
    `x-client-request-id`, emits `session_id`, `x-codex-window-id`,
@@ -2660,7 +2662,7 @@ workstream above. The concrete execution order is:
   capability-reporting, telemetry, and initial websocket
   response-thread continuation plus websocket header/turn-state slices,
   but the remaining work still includes live output-item baseline
-  validation, turn metadata/session-source lineage, reconnect/prewarm behavior,
+  validation, turn metadata/session-source lineage, richer reconnect behavior,
   response/text-control parity, transport-specific context measurement,
   app/RPC versus direct transport characterization, and long-running
   tool-turn behavior. With websocket enabled, eligible repeated turns
@@ -2738,13 +2740,14 @@ entries, and orders the real work by dependency and debugging value.
    fingerprints, slices incremental input, sets `previous_response_id`,
    captures server-output-item baselines, invalidates on
    mismatch/failure/fallback, and logs deterministic reuse or miss
-   reasons. Remaining parity work is reconnect/prewarm semantics and
-   live Cursor validation.
+   reasons, prewarms first websocket requests, and redials after
+   prewarm failure. Remaining parity work is richer reconnect behavior
+   and live Cursor validation.
 3. [partial] Codex turn-state/header parity now covers websocket beta
    headers, conversation identity, `session_id`, installation/window
    identity, request-scoped `x-codex-turn-state` capture, and telemetry.
    Remaining parity work: turn metadata, session-source/parent-thread
-   headers, reconnect behavior, and prewarm semantics.
+   headers, richer reconnect behavior, and live provider validation.
 4. Validate Codex response/text controls end to end: `service_tier`,
    `max_completion_tokens`, text/verbosity controls, output budget, and
    long-running turn behavior under real Cursor/Clyde requests.

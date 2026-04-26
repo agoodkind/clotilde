@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/websocket"
 	"goodkind.io/clyde/internal/adapter/tooltrans"
@@ -69,7 +70,26 @@ func WithPreviousResponseID(req ResponseCreateWsRequest, previousResponseID stri
 }
 
 func MarshalResponseCreateWsRequest(req ResponseCreateWsRequest) ([]byte, error) {
-	return json.Marshal(req)
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	forceEmptyInput := req.PreviousResponseID != "" && req.Input != nil && len(req.Input) == 0
+	forceEmptyTools := req.Generate != nil && !*req.Generate && req.Tools != nil && len(req.Tools) == 0
+	if !forceEmptyInput && !forceEmptyTools {
+		return raw, nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, err
+	}
+	if forceEmptyInput {
+		payload["input"] = []map[string]any{}
+	}
+	if forceEmptyTools {
+		payload["tools"] = []any{}
+	}
+	return json.Marshal(payload)
 }
 
 type WebsocketTransportConfig struct {
@@ -80,6 +100,7 @@ type WebsocketTransportConfig struct {
 	Alias          string
 	ConversationID string
 	TurnState      *TurnState
+	Prewarm        bool
 }
 
 func websocketMessageToSyntheticSSE(message []byte) ([]byte, error) {
@@ -130,12 +151,28 @@ func streamWebsocketAsSyntheticSSE(conn *websocket.Conn) io.Reader {
 	return pr
 }
 
-func RunWebsocketTransport(
-	ctx context.Context,
+func writeAndParseWebsocketRequest(
+	conn *websocket.Conn,
 	cfg WebsocketTransportConfig,
 	payload ResponseCreateWsRequest,
 	emit func(tooltrans.OpenAIStreamChunk) error,
 ) (RunResult, error) {
+	raw, err := MarshalResponseCreateWsRequest(payload)
+	if err != nil {
+		return NewRunResult("stop"), err
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, raw); err != nil {
+		return NewRunResult("stop"), err
+	}
+	synthetic := streamWebsocketAsSyntheticSSE(conn)
+	result, err := ParseTransportStream(synthetic, cfg.RequestID, cfg.Alias, nil, emit)
+	if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+		return result, nil
+	}
+	return result, err
+}
+
+func dialResponsesWebsocket(ctx context.Context, cfg WebsocketTransportConfig) (*websocket.Conn, *http.Response, error) {
 	dialer := websocket.Dialer{}
 	header := BuildResponsesWebsocketHeaders(ResponsesWebsocketHeaderConfig{
 		RequestID:      cfg.RequestID,
@@ -144,26 +181,38 @@ func RunWebsocketTransport(
 		InstallationID: cfg.AccountID,
 		TurnState:      cfg.TurnState,
 	})
-
 	conn, resp, err := dialer.DialContext(ctx, cfg.URL, header)
 	if resp != nil && cfg.TurnState != nil {
 		cfg.TurnState.CaptureFromHeaders(resp.Header)
 	}
+	return conn, resp, err
+}
+
+func logWebsocketPrepared(ctx context.Context, cfg WebsocketTransportConfig, payload ResponseCreateWsRequest, telemetry TransportTelemetry) {
+	telemetry.RequestID = cfg.RequestID
+	telemetry.Alias = cfg.Alias
+	telemetry.UpstreamModel = payload.Model
+	telemetry.Transport = "responses_websocket"
+	telemetry.ServiceTier = payload.ServiceTier
+	telemetry.MaxCompletion = payload.MaxCompletion
+	telemetry.PromptCacheKey = payload.PromptCacheKey
+	telemetry.ClientMetadata = map[string]string(payload.ClientMetadata)
+	telemetry.InputCount = len(payload.Input)
+	telemetry.ToolCount = len(payload.Tools)
+	telemetry.PreviousResponseID = payload.PreviousResponseID
+	telemetry.TurnStatePresent = cfg.TurnState.Value() != ""
+	LogTransportPrepared(ctx, nil, telemetry)
+}
+
+func RunWebsocketTransport(
+	ctx context.Context,
+	cfg WebsocketTransportConfig,
+	payload ResponseCreateWsRequest,
+	emit func(tooltrans.OpenAIStreamChunk) error,
+) (RunResult, error) {
+	conn, resp, err := dialResponsesWebsocket(ctx, cfg)
 	if resp != nil && resp.StatusCode == http.StatusUpgradeRequired {
-		LogTransportPrepared(ctx, nil, TransportTelemetry{
-			RequestID:        cfg.RequestID,
-			Alias:            cfg.Alias,
-			UpstreamModel:    payload.Model,
-			Transport:        "responses_websocket",
-			ServiceTier:      payload.ServiceTier,
-			MaxCompletion:    payload.MaxCompletion,
-			PromptCacheKey:   payload.PromptCacheKey,
-			ClientMetadata:   map[string]string(payload.ClientMetadata),
-			InputCount:       len(payload.Input),
-			ToolCount:        len(payload.Tools),
-			FallbackToHTTP:   true,
-			TurnStatePresent: cfg.TurnState.Value() != "",
-		})
+		logWebsocketPrepared(ctx, cfg, payload, TransportTelemetry{FallbackToHTTP: true})
 		return NewRunResult("stop"), ErrWebsocketFallbackToHTTP
 	}
 	if err != nil {
@@ -171,34 +220,43 @@ func RunWebsocketTransport(
 	}
 	defer conn.Close()
 
-	LogTransportPrepared(ctx, nil, TransportTelemetry{
-		RequestID:          cfg.RequestID,
-		Alias:              cfg.Alias,
-		UpstreamModel:      payload.Model,
-		Transport:          "responses_websocket",
-		ServiceTier:        payload.ServiceTier,
-		MaxCompletion:      payload.MaxCompletion,
-		PromptCacheKey:     payload.PromptCacheKey,
-		ClientMetadata:     map[string]string(payload.ClientMetadata),
-		InputCount:         len(payload.Input),
-		ToolCount:          len(payload.Tools),
-		WebsocketWarmup:    payload.Generate != nil && !*payload.Generate,
-		PreviousResponseID: payload.PreviousResponseID,
-		TurnStatePresent:   cfg.TurnState.Value() != "",
+	prewarmUsed := false
+	prewarmFailed := false
+	connectionReused := false
+	if cfg.Prewarm && strings.TrimSpace(payload.PreviousResponseID) == "" {
+		warmup := WithWarmupGenerateFalse(payload)
+		warmup.Tools = []any{}
+		logWebsocketPrepared(ctx, cfg, warmup, TransportTelemetry{WebsocketWarmup: true})
+		warmupResult, warmupErr := writeAndParseWebsocketRequest(conn, cfg, warmup, func(tooltrans.OpenAIStreamChunk) error {
+			return nil
+		})
+		if warmupErr == nil && strings.TrimSpace(warmupResult.ResponseID) != "" {
+			payload = WithPreviousResponseID(payload, warmupResult.ResponseID, []map[string]any{})
+			prewarmUsed = true
+			connectionReused = true
+		} else {
+			prewarmFailed = true
+			_ = conn.Close()
+			conn, resp, err = dialResponsesWebsocket(ctx, cfg)
+			if resp != nil && resp.StatusCode == http.StatusUpgradeRequired {
+				logWebsocketPrepared(ctx, cfg, payload, TransportTelemetry{
+					FallbackToHTTP:         true,
+					WebsocketPrewarmFailed: prewarmFailed,
+				})
+				return NewRunResult("stop"), ErrWebsocketFallbackToHTTP
+			}
+			if err != nil {
+				return NewRunResult("stop"), err
+			}
+			defer conn.Close()
+		}
+	}
+
+	logWebsocketPrepared(ctx, cfg, payload, TransportTelemetry{
+		WebsocketPrewarmUsed:     prewarmUsed,
+		WebsocketPrewarmFailed:   prewarmFailed,
+		WebsocketConnectionReuse: connectionReused,
 	})
 
-	raw, err := MarshalResponseCreateWsRequest(payload)
-	if err != nil {
-		return NewRunResult("stop"), err
-	}
-	if err := conn.WriteMessage(websocket.TextMessage, raw); err != nil {
-		return NewRunResult("stop"), err
-	}
-
-	synthetic := streamWebsocketAsSyntheticSSE(conn)
-	result, err := ParseTransportStream(synthetic, cfg.RequestID, cfg.Alias, nil, emit)
-	if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-		return result, nil
-	}
-	return result, err
+	return writeAndParseWebsocketRequest(conn, cfg, payload, emit)
 }

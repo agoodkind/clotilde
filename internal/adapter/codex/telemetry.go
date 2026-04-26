@@ -6,24 +6,27 @@ import (
 )
 
 type TransportTelemetry struct {
-	RequestID          string
-	Alias              string
-	UpstreamModel      string
-	Transport          string
-	ServiceTier        string
-	MaxCompletion      *int
-	PromptCacheKey     string
-	ClientMetadata     map[string]string
-	InputCount         int
-	ToolCount          int
-	NativeShellCount   int
-	NativeCustomCount  int
-	FunctionToolCount  int
-	WebsocketWarmup    bool
-	PreviousResponseID string
-	TurnStatePresent   bool
-	FallbackToHTTP     bool
-	ContextWindowError bool
+	RequestID                string
+	Alias                    string
+	UpstreamModel            string
+	Transport                string
+	ServiceTier              string
+	MaxCompletion            *int
+	PromptCacheKey           string
+	ClientMetadata           map[string]string
+	InputCount               int
+	ToolCount                int
+	NativeShellCount         int
+	NativeCustomCount        int
+	FunctionToolCount        int
+	WebsocketWarmup          bool
+	WebsocketPrewarmUsed     bool
+	WebsocketPrewarmFailed   bool
+	WebsocketConnectionReuse bool
+	PreviousResponseID       string
+	TurnStatePresent         bool
+	FallbackToHTTP           bool
+	ContextWindowError       bool
 }
 
 type ContinuationTelemetry struct {
@@ -59,6 +62,9 @@ func LogTransportPrepared(ctx context.Context, log *slog.Logger, telemetry Trans
 		"native_custom_count", telemetry.NativeCustomCount,
 		"function_tool_count", telemetry.FunctionToolCount,
 		"websocket_warmup", telemetry.WebsocketWarmup,
+		"websocket_prewarm_used", telemetry.WebsocketPrewarmUsed,
+		"websocket_prewarm_failed", telemetry.WebsocketPrewarmFailed,
+		"websocket_connection_reused", telemetry.WebsocketConnectionReuse,
 		"has_previous_response_id", telemetry.PreviousResponseID != "",
 		"has_turn_state", telemetry.TurnStatePresent,
 		"fallback_to_http", telemetry.FallbackToHTTP,

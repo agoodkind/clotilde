@@ -93,6 +93,7 @@ func (s *Server) runCodexDirect(
 			Alias:          model.Alias,
 			ConversationID: strings.TrimSpace(transportPayload.PromptCache),
 			TurnState:      turnState,
+			Prewarm:        strings.TrimSpace(wsReq.PreviousResponseID) == "",
 		}, wsReq, emit)
 		if wsErr == nil {
 			if s.codexContinue != nil {
