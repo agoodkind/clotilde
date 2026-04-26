@@ -574,7 +574,7 @@ func codexAliasContext(alias string) int {
 	key := normalizeCodexModelAlias(alias)
 	original := strings.ToLower(strings.TrimSpace(alias))
 	if strings.HasSuffix(original, "-1m") || strings.Contains(original, "-1m-") {
-		if strings.EqualFold(key, "gpt-5.4") {
+		if strings.EqualFold(key, "gpt-5.4") || strings.EqualFold(key, "gpt-5.5") {
 			return 1000000
 		}
 	}

@@ -339,6 +339,23 @@ func TestResolveRoutesClydeCodexAliases(t *testing.T) {
 		t.Fatalf("effort = %q want high", effort)
 	}
 
+	m, effort, err = r.Resolve("clyde-gpt-5.5-1m-medium", "")
+	if err != nil {
+		t.Fatalf("Resolve clyde-gpt-5.5-1m-medium: %v", err)
+	}
+	if m.Backend != BackendCodex {
+		t.Fatalf("backend = %q want %q", m.Backend, BackendCodex)
+	}
+	if m.ClaudeModel != "gpt-5.5" {
+		t.Fatalf("ClaudeModel = %q want gpt-5.5", m.ClaudeModel)
+	}
+	if m.Context != 1000000 {
+		t.Fatalf("Context = %d want 1000000", m.Context)
+	}
+	if effort != "medium" {
+		t.Fatalf("effort = %q want medium", effort)
+	}
+
 }
 
 func TestResolveDoesNotRouteCodexWhenDisabled(t *testing.T) {
@@ -361,14 +378,14 @@ func TestResolveDoesNotRouteClydeOpusAliasesToCodex(t *testing.T) {
 	r, err := NewRegistry(config.AdapterConfig{
 		DefaultModel: "clyde-opus-4-7",
 		ClientIdentity: config.AdapterClientIdentity{
-			BetaHeader:               "beta",
-			UserAgent:                "ua",
-			SystemPromptPrefix:       "prefix",
-			StainlessPackageVersion:  "1",
-			StainlessRuntime:         "go",
-			StainlessRuntimeVersion:  "1",
-			CCVersion:                "1",
-			CCEntrypoint:             "entry",
+			BetaHeader:              "beta",
+			UserAgent:               "ua",
+			SystemPromptPrefix:      "prefix",
+			StainlessPackageVersion: "1",
+			StainlessRuntime:        "go",
+			StainlessRuntimeVersion: "1",
+			CCVersion:               "1",
+			CCEntrypoint:            "entry",
 		},
 		Families: map[string]config.AdapterFamily{
 			"opus-4-7": {
@@ -409,14 +426,14 @@ func TestResolveModelRoutingMatrix(t *testing.T) {
 	}
 
 	cases := []struct {
-		alias             string
-		reqEffort         string
-		wantBackend       string
-		wantModel         string
-		wantContext       int
-		wantEffort        string
-		wantThinking      string
-		wantSupportsTools bool
+		alias              string
+		reqEffort          string
+		wantBackend        string
+		wantModel          string
+		wantContext        int
+		wantEffort         string
+		wantThinking       string
+		wantSupportsTools  bool
 		wantSupportsVision bool
 	}{
 		{
@@ -460,56 +477,63 @@ func TestResolveModelRoutingMatrix(t *testing.T) {
 			wantSupportsVision: true,
 		},
 		{
-			alias:        "gpt-5.4",
-			wantBackend:  BackendCodex,
-			wantModel:    "gpt-5.4",
+			alias:       "gpt-5.4",
+			wantBackend: BackendCodex,
+			wantModel:   "gpt-5.4",
 		},
 		{
-			alias:        "clyde-gpt-5.4",
-			wantBackend:  BackendCodex,
-			wantModel:    "gpt-5.4",
+			alias:       "clyde-gpt-5.4",
+			wantBackend: BackendCodex,
+			wantModel:   "gpt-5.4",
 		},
 		{
-			alias:        "clyde-gpt-5.4-1m-high",
-			wantBackend:  BackendCodex,
-			wantModel:    "gpt-5.4",
-			wantContext:  1000000,
-			wantEffort:   EffortHigh,
+			alias:       "clyde-gpt-5.4-1m-high",
+			wantBackend: BackendCodex,
+			wantModel:   "gpt-5.4",
+			wantContext: 1000000,
+			wantEffort:  EffortHigh,
 		},
 		{
-			alias:        "clyde-gpt-5.5-medium",
-			wantBackend:  BackendCodex,
-			wantModel:    "gpt-5.5",
-			wantEffort:   EffortMedium,
+			alias:       "clyde-gpt-5.5-medium",
+			wantBackend: BackendCodex,
+			wantModel:   "gpt-5.5",
+			wantEffort:  EffortMedium,
 		},
 		{
-			alias:        "clyde-gpt-5.4-mini-low",
-			wantBackend:  BackendCodex,
-			wantModel:    "gpt-5.4-mini",
-			wantEffort:   EffortLow,
+			alias:       "clyde-gpt-5.5-1m-xhigh",
+			wantBackend: BackendCodex,
+			wantModel:   "gpt-5.5",
+			wantContext: 1000000,
+			wantEffort:  "xhigh",
 		},
 		{
-			alias:        "clyde-gpt-5.3-codex-high",
-			wantBackend:  BackendCodex,
-			wantModel:    "gpt-5.3-codex",
-			wantEffort:   EffortHigh,
+			alias:       "clyde-gpt-5.4-mini-low",
+			wantBackend: BackendCodex,
+			wantModel:   "gpt-5.4-mini",
+			wantEffort:  EffortLow,
 		},
 		{
-			alias:        "clyde-gpt-5.3-codex-spark-xhigh",
-			wantBackend:  BackendCodex,
-			wantModel:    "gpt-5.3-codex-spark",
-			wantEffort:   "xhigh",
+			alias:       "clyde-gpt-5.3-codex-high",
+			wantBackend: BackendCodex,
+			wantModel:   "gpt-5.3-codex",
+			wantEffort:  EffortHigh,
 		},
 		{
-			alias:        "clyde-gpt-5.2",
-			wantBackend:  BackendCodex,
-			wantModel:    "gpt-5.2",
+			alias:       "clyde-gpt-5.3-codex-spark-xhigh",
+			wantBackend: BackendCodex,
+			wantModel:   "gpt-5.3-codex-spark",
+			wantEffort:  "xhigh",
 		},
 		{
-			alias:        "clyde-o3-high",
-			wantBackend:  BackendCodex,
-			wantModel:    "o3",
-			wantEffort:   EffortHigh,
+			alias:       "clyde-gpt-5.2",
+			wantBackend: BackendCodex,
+			wantModel:   "gpt-5.2",
+		},
+		{
+			alias:       "clyde-o3-high",
+			wantBackend: BackendCodex,
+			wantModel:   "o3",
+			wantEffort:  EffortHigh,
 		},
 	}
 
