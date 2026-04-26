@@ -105,6 +105,26 @@ func TestApplyCacheBreakpointsCanEnableCacheReferenceOnPriorToolResults(t *testi
 	}
 }
 
+func TestApplyCacheBreakpointsSkipsNewestToolResultWhenCacheReferenceEnabled(t *testing.T) {
+	msgs := []anthropic.Message{
+		{Role: "assistant", Content: []anthropic.ContentBlock{{Type: "text", Text: "call tool"}}},
+		{Role: "user", Content: []anthropic.ContentBlock{
+			{Type: "tool_result", ToolUseID: "toolu_latest", Content: "latest result"},
+			{Type: "text", Text: "follow-up"},
+		}},
+	}
+	stats := applyCacheBreakpoints(msgs, nil, true)
+	if msgs[1].Content[0].CacheReference != "" {
+		t.Fatalf("newest tool_result cache_reference = %q want empty", msgs[1].Content[0].CacheReference)
+	}
+	if msgs[1].Content[1].CacheControl == nil {
+		t.Fatalf("latest user tail text should carry cache marker")
+	}
+	if stats.ToolResultCandidates != 0 || stats.ToolResultApplied != 0 {
+		t.Fatalf("unexpected tool_result stats: %+v", stats)
+	}
+}
+
 func TestToAnthropicAPIRequestSerializesCacheControl(t *testing.T) {
 	tr := tooltrans.AnthRequest{
 		System: "sys",

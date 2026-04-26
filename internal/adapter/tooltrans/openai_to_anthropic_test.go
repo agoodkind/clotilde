@@ -206,6 +206,52 @@ func TestTranslateRequestAssistantWithToolCalls(t *testing.T) {
 	}
 }
 
+func TestTranslateRequestAssistantWithMultipleToolCallsPreservesOrder(t *testing.T) {
+	t.Parallel()
+	req := OpenAIRequest{
+		Model: "x",
+		Messages: []OpenAIMessage{{
+			Role:    "assistant",
+			Content: json.RawMessage(`"working"`),
+			ToolCalls: []OpenAIToolCall{
+				{
+					ID:   "call_1",
+					Type: "function",
+					Function: OpenAIToolCallFunction{
+						Name:      "get_weather",
+						Arguments: `{"loc":"NY"}`,
+					},
+				},
+				{
+					ID:   "call_2",
+					Type: "function",
+					Function: OpenAIToolCallFunction{
+						Name:      "write_file",
+						Arguments: `{"path":"out.md"}`,
+					},
+				},
+			},
+		}},
+	}
+	out, err := TranslateRequest(req, "", 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := out.Messages[0]
+	if len(msg.Content) != 3 {
+		t.Fatalf("content len = %d want 3 (%+v)", len(msg.Content), msg.Content)
+	}
+	if msg.Content[0].Type != "text" || msg.Content[0].Text != "working" {
+		t.Fatalf("first block = %+v", msg.Content[0])
+	}
+	if msg.Content[1].Type != "tool_use" || msg.Content[1].Name != "get_weather" || string(msg.Content[1].Input) != `{"loc":"NY"}` {
+		t.Fatalf("second block = %+v", msg.Content[1])
+	}
+	if msg.Content[2].Type != "tool_use" || msg.Content[2].Name != "write_file" || string(msg.Content[2].Input) != `{"path":"out.md"}` {
+		t.Fatalf("third block = %+v", msg.Content[2])
+	}
+}
+
 func TestTranslateRequestToolRoleMessage(t *testing.T) {
 	t.Parallel()
 	req := OpenAIRequest{

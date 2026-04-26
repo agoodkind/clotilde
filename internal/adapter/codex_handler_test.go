@@ -980,6 +980,42 @@ func TestParseCodexSSEEmitsToolCallDeltas(t *testing.T) {
 	}
 }
 
+func TestParseCodexSSEEmitsToolArgumentsFromDoneWhenNoDeltaArrives(t *testing.T) {
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.output_item.added",
+		`data: {"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"read_file","arguments":""}}`,
+		"",
+		"event: response.output_item.done",
+		`data: {"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"read_file","arguments":"{\"path\":\"out.md\"}"}}`,
+		"",
+		"event: response.completed",
+		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}},"sequence_number":10}`,
+		"",
+	}, "\n") + "\n")
+	r := tooltrans.NewEventRenderer("req", "alias", "codex", nil)
+	var got []tooltrans.OpenAIStreamChunk
+	res, err := parseCodexSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
+		got = append(got, ch)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("parseCodexSSE: %v", err)
+	}
+	if res.FinishReason != "tool_calls" {
+		t.Fatalf("finish_reason=%q want tool_calls", res.FinishReason)
+	}
+	calls := collectToolCalls(got)
+	if len(calls) != 2 {
+		t.Fatalf("tool call chunks=%d want 2: %#v", len(calls), calls)
+	}
+	if calls[0].Function.Name != "ReadFile" {
+		t.Fatalf("tool name=%q want ReadFile", calls[0].Function.Name)
+	}
+	if calls[1].Function.Arguments != `{"path":"out.md"}` {
+		t.Fatalf("args=%q want full JSON", calls[1].Function.Arguments)
+	}
+}
+
 func TestParseCodexSSEDoesNotDuplicateToolArgumentsOnDoneAfterDelta(t *testing.T) {
 	stream := strings.NewReader(strings.Join([]string{
 		"event: response.output_item.added",
