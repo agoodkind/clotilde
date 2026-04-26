@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -139,6 +140,29 @@ func TestHandleChatLogsRawBody(t *testing.T) {
 	if _, hasSummary := rawEvt["body_summary"]; !hasSummary {
 		t.Fatalf("raw mode should include body_summary")
 	}
+	bodyB64, ok := rawEvt["body_b64"].(string)
+	if !ok {
+		t.Fatalf("raw mode should include body_b64")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(bodyB64)
+	if err != nil {
+		t.Fatalf("decode body_b64: %v", err)
+	}
+	var decodedBody map[string]any
+	if err := json.Unmarshal(decoded, &decodedBody); err != nil {
+		t.Fatalf("unmarshal decoded body_b64: %v", err)
+	}
+	messages, ok := decodedBody["messages"].([]any)
+	if !ok || len(messages) != 1 {
+		t.Fatalf("decoded messages shape = %#v", decodedBody["messages"])
+	}
+	msg, ok := messages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("decoded message shape = %T", messages[0])
+	}
+	if got := msg["content"].(string); len(got) != 2048 {
+		t.Fatalf("decoded body_b64 content length = %d; want 2048", len(got))
+	}
 }
 
 func TestHandleChatLogsOffModeSkipsEvent(t *testing.T) {
@@ -186,6 +210,49 @@ func TestHandleChatAcceptsResponsesInputShape(t *testing.T) {
 	}
 }
 
+func TestHandleChatLogsCursorModelNormalization(t *testing.T) {
+	t.Parallel()
+	srv, buf := newLoggingServer(t, config.LoggingConfig{
+		Body: config.LoggingBody{
+			Mode: "off",
+		},
+	})
+
+	body := map[string]any{
+		"model": "clyde-gpt-5.4-1m-medium",
+		"tools": []map[string]any{
+			{
+				"type": "function",
+				"function": map[string]any{
+					"name": "Subagent",
+				},
+			},
+		},
+		"messages": []map[string]string{{"role": "user", "content": "ping"}},
+	}
+	postChatToServer(t, srv, body)
+
+	evt := findLogEvent(t, buf, "adapter.chat.received")
+	if evt == nil {
+		t.Fatalf("expected adapter.chat.received event")
+	}
+	if evt["alias"] != "clyde-gpt-5.4-1m" {
+		t.Fatalf("alias=%v want clyde-gpt-5.4-1m", evt["alias"])
+	}
+	if evt["cursor_raw_model"] != "clyde-gpt-5.4-1m-medium" {
+		t.Fatalf("cursor_raw_model=%v", evt["cursor_raw_model"])
+	}
+	if evt["cursor_normalized_model"] != "clyde-gpt-5.4-1m" {
+		t.Fatalf("cursor_normalized_model=%v", evt["cursor_normalized_model"])
+	}
+	if evt["cursor_request_path"] != "foreground" {
+		t.Fatalf("cursor_request_path=%v", evt["cursor_request_path"])
+	}
+	if evt["cursor_can_spawn_agent"] != true {
+		t.Fatalf("cursor_can_spawn_agent=%v", evt["cursor_can_spawn_agent"])
+	}
+}
+
 func newLoggingServer(t *testing.T, logging config.LoggingConfig) (*Server, *bytes.Buffer) {
 	t.Helper()
 	cfg := baseConfig()
@@ -217,6 +284,10 @@ func postChatToServer(t *testing.T, srv *Server, body map[string]any) {
 }
 
 func findRawLogEvent(t *testing.T, logBuffer *bytes.Buffer) map[string]any {
+	return findLogEvent(t, logBuffer, "adapter.chat.raw")
+}
+
+func findLogEvent(t *testing.T, logBuffer *bytes.Buffer, message string) map[string]any {
 	t.Helper()
 	lines := strings.Split(strings.TrimSpace(logBuffer.String()), "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -228,7 +299,7 @@ func findRawLogEvent(t *testing.T, logBuffer *bytes.Buffer) map[string]any {
 		if err := json.Unmarshal([]byte(line), &evt); err != nil {
 			continue
 		}
-		if evt["msg"] == "adapter.chat.raw" {
+		if evt["msg"] == message {
 			return evt
 		}
 	}

@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
+	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	"goodkind.io/clyde/internal/bridge"
 	compactengine "goodkind.io/clyde/internal/compact"
 	"goodkind.io/clyde/internal/config"
@@ -542,6 +543,7 @@ func (s *Server) AcquireSession(ctx context.Context, req *clydev1.AcquireSession
 		s.log.LogAttrs(ctx, slog.LevelInfo, "re-acquired session with preserved settings",
 			slog.String("wrapper_id", req.WrapperId),
 			slog.String("model", model),
+			slog.String("cursor_normalized_model", adaptercursor.NormalizeModelAlias(model)),
 			slog.String("effort", effortLevel),
 		)
 	} else {
@@ -574,6 +576,7 @@ func (s *Server) AcquireSession(ctx context.Context, req *clydev1.AcquireSession
 		slog.String("wrapper_id", req.WrapperId),
 		slog.String("session", req.SessionName),
 		slog.String("model", model),
+		slog.String("cursor_normalized_model", adaptercursor.NormalizeModelAlias(model)),
 		slog.String("settings_file", settingsFile),
 		slog.String("claude_bin", realClaude),
 		slog.Int("active_sessions", len(s.sessions)),
@@ -678,6 +681,7 @@ func (s *Server) writeSettingsJSON(wrapperID, model, effortLevel string) (string
 	globalModel, _ := s.globalSettings["model"].(string)
 	s.mu.RUnlock()
 
+	model = adaptercursor.NormalizeModelAlias(model)
 	if model != "" {
 		globalCopy["model"] = model
 	}
@@ -690,6 +694,7 @@ func (s *Server) writeSettingsJSON(wrapperID, model, effortLevel string) (string
 		slog.String("wrapper_id", wrapperID),
 		slog.String("global_model", globalModel),
 		slog.String("session_model", model),
+		slog.String("cursor_normalized_session_model", adaptercursor.NormalizeModelAlias(model)),
 		slog.String("session_effort", effortLevel),
 		slog.String("effective_model", effectiveModel),
 		slog.Int("settings_keys", len(globalCopy)),
@@ -764,6 +769,7 @@ func (s *Server) readSessionSettings(wrapperID string) (model, effortLevel strin
 		return "", ""
 	}
 	model, _ = settings["model"].(string)
+	model = adaptercursor.NormalizeModelAlias(model)
 	effortLevel, _ = settings["effortLevel"].(string)
 	return model, effortLevel
 }
@@ -846,11 +852,13 @@ func (s *Server) resolveSessionSettings(sessionName string) (model, effortLevel 
 	s.mu.RUnlock()
 
 	model = globalModel
+	model = adaptercursor.NormalizeModelAlias(model)
 	effortLevel = globalEffort
 
 	if sessionName == "" {
 		s.log.LogAttrs(context.Background(), slog.LevelDebug, "no session name, using global settings",
 			slog.String("model", model),
+			slog.String("cursor_normalized_model", adaptercursor.NormalizeModelAlias(model)),
 			slog.String("effort", effortLevel),
 		)
 		return model, effortLevel
@@ -860,7 +868,7 @@ func (s *Server) resolveSessionSettings(sessionName string) (model, effortLevel 
 	sessSettings := loadClydeSessionSettings(sessionName)
 	if sessSettings != nil {
 		if sessSettings.Model != "" {
-			model = sessSettings.Model
+			model = adaptercursor.NormalizeModelAlias(sessSettings.Model)
 		}
 		if sessSettings.EffortLevel != "" {
 			effortLevel = sessSettings.EffortLevel
@@ -868,12 +876,14 @@ func (s *Server) resolveSessionSettings(sessionName string) (model, effortLevel 
 		s.log.LogAttrs(context.Background(), slog.LevelDebug, "resolved session settings",
 			slog.String("session", sessionName),
 			slog.String("model", model),
+			slog.String("cursor_normalized_model", adaptercursor.NormalizeModelAlias(model)),
 			slog.String("effort", effortLevel),
 		)
 	} else {
 		s.log.LogAttrs(context.Background(), slog.LevelDebug, "no clyde session settings, using global",
 			slog.String("session", sessionName),
 			slog.String("model", model),
+			slog.String("cursor_normalized_model", adaptercursor.NormalizeModelAlias(model)),
 			slog.String("effort", effortLevel),
 		)
 	}
@@ -1130,7 +1140,7 @@ func (s *Server) sessionSummary(store *session.FileStore, sess *session.Session)
 		}
 	}
 	if model == "-" && settings != nil && settings.Model != "" {
-		model = settings.Model
+		model = adaptercursor.NormalizeModelAlias(settings.Model)
 	}
 	stats := inspectStatsFor(sess.Metadata.TranscriptPath)
 	size := int64(0)
@@ -1194,7 +1204,7 @@ func (s *Server) sessionDetail(store *session.FileStore, sess *session.Session) 
 	}
 	if model == "-" {
 		if settings, _ := store.LoadSettings(sess.Name); settings != nil && settings.Model != "" {
-			model = settings.Model
+			model = adaptercursor.NormalizeModelAlias(settings.Model)
 		}
 	}
 	stats := inspectStatsFor(sess.Metadata.TranscriptPath)
@@ -1288,7 +1298,7 @@ func (s *Server) UpdateSessionSettings(ctx context.Context, req *clydev1.UpdateS
 	}
 	if req.Settings != nil {
 		if applyMask("model") {
-			current.Model = req.Settings.Model
+			current.Model = adaptercursor.NormalizeModelAlias(req.Settings.Model)
 		}
 		if applyMask("effort_level") {
 			current.EffortLevel = req.Settings.EffortLevel
@@ -1308,6 +1318,7 @@ func (s *Server) UpdateSessionSettings(ctx context.Context, req *clydev1.UpdateS
 		slog.String("session", req.Name),
 		slog.Bool("remote_control", current.RemoteControl),
 		slog.String("model", current.Model),
+		slog.String("cursor_normalized_model", adaptercursor.NormalizeModelAlias(current.Model)),
 		slog.String("effort", current.EffortLevel),
 	)
 	return &clydev1.UpdateSessionSettingsResponse{}, nil

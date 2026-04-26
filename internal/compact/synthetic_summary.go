@@ -53,7 +53,7 @@ func parseSyntheticSummary(e Entry) (*syntheticSummary, bool) {
 
 	summary, err := parseSyntheticSummaryBlocks(blocks)
 	if err != nil {
-		slog.Warn("compact.synthetic_summary.parse_failed",
+		slog.Debug("compact.synthetic_summary.parse_failed",
 			"component", "compact",
 			"subcomponent", "synthetic_summary",
 			"entry_line", e.LineIndex,

@@ -6,6 +6,8 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/notify"
@@ -75,10 +77,10 @@ func autoAdoptSession(
 	sess := session.NewSession(name, hookData.SessionID)
 	sess.Metadata.TranscriptPath = hookData.TranscriptPath
 
-	if wd, err := deps.getwd(); err == nil {
+	if wd, err := launchWorkDir(deps); err == nil {
 		sess.Metadata.WorkDir = wd
-	}
-	if root, err := deps.findProjectRoot(); err == nil {
+		sess.Metadata.WorkspaceRoot = wd
+	} else if root, err := deps.findProjectRoot(); err == nil {
 		sess.Metadata.WorkspaceRoot = root
 	}
 
@@ -133,6 +135,16 @@ func autoAdoptSession(
 		"session_id", hookData.SessionID,
 		"display_title", sess.Metadata.DisplayTitle,
 	)
+}
+
+func launchWorkDir(deps sessionStartDeps) (string, error) {
+	if cwd := strings.TrimSpace(os.Getenv("CLYDE_LAUNCH_CWD")); cwd != "" {
+		if abs, err := filepath.Abs(cwd); err == nil {
+			return abs, nil
+		}
+		return cwd, nil
+	}
+	return deps.getwd()
 }
 
 func handleCompact(

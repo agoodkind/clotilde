@@ -747,7 +747,7 @@ func ForwardToClaudeThenDashboard(args []string) int {
 	if !shouldOpenDashboardAfterPassthrough(args) {
 		return ForwardToClaude(args)
 	}
-	env := os.Environ()
+	env := withEnvValue(os.Environ(), "CLYDE_LAUNCH_CWD", currentWorkingDirectory())
 	if os.Getenv("CLYDE_SESSION_NAME") == "" {
 		store, serr := session.NewGlobalFileStore()
 		if serr == nil {
@@ -771,6 +771,29 @@ func shouldOpenDashboardAfterPassthrough(args []string) bool {
 		return false
 	}
 	return isatty.IsTerminal(os.Stdin.Fd()) && isatty.IsTerminal(os.Stdout.Fd())
+}
+
+func currentWorkingDirectory() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(wd)
+}
+
+func withEnvValue(env []string, key, value string) []string {
+	if key == "" || value == "" {
+		return env
+	}
+	prefix := key + "="
+	out := append([]string(nil), env...)
+	for i, item := range out {
+		if strings.HasPrefix(item, prefix) {
+			out[i] = prefix + value
+			return out
+		}
+	}
+	return append(out, prefix+value)
 }
 
 // nextChatSessionName returns a new registry-safe chat-* name that does not
@@ -813,7 +836,10 @@ func startNewSessionInDir(basedir string, store session.Store, dashboardFallback
 	}
 	sessionID := util.GenerateUUID()
 
-	env := map[string]string{"CLYDE_SESSION_NAME": name}
+	env := map[string]string{
+		"CLYDE_SESSION_NAME": name,
+		"CLYDE_LAUNCH_CWD":   workDir,
+	}
 	_, _ = fmt.Fprintf(os.Stdout, "Starting new session %q in %s\n\n", name, workDir)
 	slog.Info("session.new.started",
 		"component", "cli",

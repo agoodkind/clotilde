@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	"goodkind.io/clyde/internal/session"
 )
 
@@ -34,7 +35,7 @@ func ResolveModelForCounting(store session.Store, sess *session.Session, fallbac
 	if store != nil && sess != nil && strings.TrimSpace(sess.Name) != "" {
 		settings, err := store.LoadSettings(sess.Name)
 		if err == nil && settings != nil && strings.TrimSpace(settings.Model) != "" {
-			settingsModel := strings.TrimSpace(settings.Model)
+			settingsModel := adaptercursor.NormalizeModelAlias(strings.TrimSpace(settings.Model))
 			slog.Debug("compact.runtime.model_resolved",
 				"component", "compact",
 				"subcomponent", "runtime",

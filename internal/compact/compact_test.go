@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"goodkind.io/clyde/internal/session"
 )
 
 // writeTranscript dumps lines (already JSON, no newline) into a temp
@@ -569,5 +571,29 @@ func TestRunPlan_TargetAlreadyMet(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
 		t.Errorf("count_tokens calls = %d, want 1", got)
+	}
+}
+
+func TestResolveModelForCountingNormalizesSettingsModel(t *testing.T) {
+	store := session.NewFileStore(t.TempDir())
+	sess := session.NewSession("chat-compact", "uuid-compact")
+	if err := store.Create(sess); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.SaveSettings("chat-compact", &session.Settings{
+		Model: "clyde-gpt-5.4-1m-medium",
+	}); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+
+	modelForCount, modelForRender, source := ResolveModelForCounting(store, sess, "")
+	if modelForCount != "clyde-gpt-5.4-1m" {
+		t.Fatalf("modelForCount=%q want %q", modelForCount, "clyde-gpt-5.4-1m")
+	}
+	if modelForRender != "clyde-gpt-5.4-1m" {
+		t.Fatalf("modelForRender=%q want %q", modelForRender, "clyde-gpt-5.4-1m")
+	}
+	if source != "settings" {
+		t.Fatalf("source=%q want %q", source, "settings")
 	}
 }

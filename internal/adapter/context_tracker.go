@@ -80,17 +80,21 @@ func shouldResetTrackedContext(prev contextUsageState, raw Usage) bool {
 }
 
 func requestContextTrackerKey(req ChatRequest, modelAlias string) string {
-	if cursor := adaptercursor.FromRequest(req); cursor.StrongConversationKey() != "" {
+	return requestContextTrackerKeyFromCursor(adaptercursor.TranslateRequest(req), modelAlias)
+}
+
+func requestContextTrackerKeyFromCursor(req adaptercursor.Request, modelAlias string) string {
+	if cursor := req.Context(); cursor.StrongConversationKey() != "" {
 		return cursor.StrongConversationKey()
 	}
 	if v := strings.TrimSpace(req.User); v != "" {
 		return "user:" + v
 	}
-	if v := metadataString(req.Metadata, "conversation_id", "conversationId", "composerId", "composer_id", "thread_id", "threadId", "chat_id", "chatId"); v != "" {
+	if v := metadataString(req.OpenAI.Metadata, "conversation_id", "conversationId", "composerId", "composer_id", "thread_id", "threadId", "chat_id", "chatId"); v != "" {
 		return "meta:" + v
 	}
 	firstUser := ""
-	for _, msg := range req.Messages {
+	for _, msg := range req.OpenAI.Messages {
 		if strings.EqualFold(strings.TrimSpace(msg.Role), "user") {
 			firstUser = strings.TrimSpace(FlattenContent(msg.Content))
 			if firstUser != "" {

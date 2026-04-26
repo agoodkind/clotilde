@@ -12,9 +12,9 @@ import (
 	"time"
 
 	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
-	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/gklog"
 )
 
@@ -50,19 +50,39 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	entries := s.registry.List()
 	resp := ModelsResponse{Object: "list"}
 	for _, m := range entries {
-		resp.Data = append(resp.Data, ModelEntry{
-			ID:            m.Alias,
-			Object:        "model",
-			OwnedBy:       "clyde",
-			Context:       m.Context,
-			ContextLength: m.Context,
-			MaxModelLen:   m.Context,
-			Efforts:       m.Efforts,
-			Backend:       m.Backend,
-			ClaudeModel:   m.ClaudeModel,
-		})
+		entry := modelEntryFromResolved(m)
+		if m.Backend == BackendCodex {
+			entry = adaptercodex.ApplyCapabilityReport(entry, adaptercodex.CapabilityReportForModel(m, adaptercodex.CapabilityMode{
+				WebsocketEnabled: s.codexWebsocketEnabled(),
+			}))
+		}
+		resp.Data = append(resp.Data, entry)
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func modelEntryFromResolved(m ResolvedModel) ModelEntry {
+	return ModelEntry{
+		ID:                               m.Alias,
+		Object:                           "model",
+		OwnedBy:                          "clyde",
+		Context:                          m.Context,
+		ContextWindow:                    m.Context,
+		ContextLength:                    m.Context,
+		MaxContextLength:                 m.Context,
+		MaxContextTokens:                 m.Context,
+		MaxModelLen:                      m.Context,
+		MaxTokens:                        m.Context,
+		InputTokenLimit:                  m.Context,
+		MaxInputTokens:                   m.Context,
+		ContextTokenLimit:                m.Context,
+		ContextTokenLimitCamel:           m.Context,
+		ContextTokenLimitForMaxMode:      m.Context,
+		ContextTokenLimitForMaxModeCamel: m.Context,
+		Efforts:                          m.Efforts,
+		Backend:                          m.Backend,
+		ClaudeModel:                      m.ClaudeModel,
+	}
 }
 
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
@@ -111,6 +131,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			rawAttrs.BodySummary = &bodySummary
 		}
 		rawAttrs.BodyRaw, rawAttrs.BodyTruncated = truncateBody(body, bodyLimit)
+		rawAttrs.BodyB64 = encodeBodyB64(body)
 	case "off", "":
 	default:
 		rawAttrs.BodyRaw, rawAttrs.BodyTruncated = truncateBody(body, bodyLimit)
@@ -151,6 +172,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if req.ReasoningEffort == "" && req.Reasoning != nil {
 		req.ReasoningEffort = strings.TrimSpace(req.Reasoning.Effort)
 	}
+	cursorReq := adaptercursor.TranslateRequest(req)
+	req.Model = cursorReq.NormalizedModel
 
 	model, effort, err := s.registry.Resolve(req.Model, req.ReasoningEffort)
 	if err != nil {
@@ -183,7 +206,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	for _, f := range req.Functions {
 		toolNames = append(toolNames, f.Name)
 	}
-	cursor := adaptercursor.FromRequest(req)
+	cursor := cursorReq.Context()
 	attrs := []slog.Attr{
 		slog.String("request_id", reqID),
 		slog.String("alias", req.Model),
@@ -199,6 +222,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if cursor.RequestID != "" {
 		attrs = append(attrs, slog.String("cursor_request_id", cursor.RequestID))
 	}
+	attrs = append(attrs, adaptercursor.BoundaryLogAttrs(cursorReq, cursorReq.OpenAI.Model, toolNames)...)
 	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.chat.received",
 		attrs...,
 	)
