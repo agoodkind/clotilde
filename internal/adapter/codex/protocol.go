@@ -26,6 +26,7 @@ type RunResult struct {
 	ReasoningSignaled          bool
 	ReasoningVisible           bool
 	DerivedCacheCreationTokens int
+	ResponseID                 string
 }
 
 func NewRunResult(finishReason string) RunResult {
@@ -38,6 +39,7 @@ func (r *RunResult) SetFinishReason(finishReason string) {
 
 type completedResponse struct {
 	Response struct {
+		ID                string `json:"id"`
 		Status            string `json:"status"`
 		IncompleteDetails struct {
 			Reason string `json:"reason"`
@@ -439,6 +441,9 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 				var c completedResponse
 				b, _ := json.Marshal(raw)
 				if err := json.Unmarshal(b, &c); err == nil {
+					if responseID := strings.TrimSpace(c.Response.ID); responseID != "" {
+						out.ResponseID = responseID
+					}
 					out.Usage = mapUsage(c)
 					if out.FinishReason != "tool_calls" {
 						out.SetFinishReason(finishreason.FromCodexResponse(c.Response.Status, c.Response.IncompleteDetails.Reason))
@@ -453,6 +458,12 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 				out.ReasoningSignaled = out.ReasoningSignaled || state.ReasoningSignaled
 				out.ReasoningVisible = state.ReasoningVisible
 				return out, nil
+			}
+			if eventNameLocal == "response.created" {
+				if response, _ := raw["response"].(map[string]any); response != nil {
+					out.ResponseID = strings.TrimSpace(mapString(response, "id"))
+				}
+				continue
 			}
 			if eventNameLocal == "response.failed" {
 				_ = EmitRendered(renderer, tooltrans.Event{Kind: tooltrans.EventReasoningFinished}, emit, nil)

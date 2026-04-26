@@ -53,6 +53,24 @@ func TestParseSSEMapsIncompleteResponseToLengthFinishReason(t *testing.T) {
 	}
 }
 
+func TestParseSSERetainsResponseIDFromCreatedEvent(t *testing.T) {
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.created",
+		`data: {"response":{"id":"resp-created"}}`,
+		"",
+		"event: response.completed",
+		`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`,
+		"",
+	}, "\n") + "\n")
+	_, res, err := collectSSE(stream)
+	if err != nil {
+		t.Fatalf("ParseSSE: %v", err)
+	}
+	if res.ResponseID != "resp-created" {
+		t.Fatalf("response_id=%q want resp-created", res.ResponseID)
+	}
+}
+
 func TestParseSSEEmitsToolCallDeltas(t *testing.T) {
 	stream := strings.NewReader(strings.Join([]string{
 		"event: response.output_item.added",

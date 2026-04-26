@@ -65,6 +65,25 @@ func (s *Server) runCodexDirect(
 	transportPayload := adaptercodex.BuildRequest(req, model, effort)
 	if s.codexWebsocketEnabled() {
 		wsReq := adaptercodex.ResponseCreateRequestFromHTTP(transportPayload)
+		fullWSReq := wsReq
+		var continuation adaptercodex.ContinuationDecision
+		if s.codexContinue != nil {
+			continuation = s.codexContinue.Prepare(fullWSReq)
+			adaptercodex.LogContinuationDecision(ctx, s.log, adaptercodex.ContinuationTelemetry{
+				RequestID:          reqID,
+				Alias:              model.Alias,
+				Transport:          "responses_websocket",
+				Key:                continuation.Key,
+				Hit:                continuation.Hit,
+				MissReason:         continuation.MissReason,
+				FingerprintMatch:   continuation.FingerprintMatch,
+				PreviousResponseID: continuation.PreviousResponseID,
+				IncrementalCount:   len(continuation.IncrementalInput),
+			})
+			if continuation.Hit {
+				wsReq = adaptercodex.WithPreviousResponseID(wsReq, continuation.PreviousResponseID, continuation.IncrementalInput)
+			}
+		}
 		res, wsErr := adaptercodex.RunWebsocketTransport(ctx, adaptercodex.WebsocketTransportConfig{
 			URL:       s.codexWebsocketURL(),
 			Token:     token,
@@ -72,7 +91,13 @@ func (s *Server) runCodexDirect(
 			Alias:     model.Alias,
 		}, wsReq, emit)
 		if wsErr == nil {
+			if s.codexContinue != nil {
+				s.codexContinue.Complete(continuation, fullWSReq, res)
+			}
 			return res, nil
+		}
+		if s.codexContinue != nil {
+			s.codexContinue.Forget(continuation.Key)
 		}
 		if !errors.Is(wsErr, adaptercodex.ErrWebsocketFallbackToHTTP) {
 			return adaptercodex.NewRunResult("stop"), wsErr

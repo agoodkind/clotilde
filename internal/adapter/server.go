@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
+	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	"goodkind.io/clyde/internal/adapter/fallback"
 	"goodkind.io/clyde/internal/adapter/oauth"
 	"goodkind.io/clyde/internal/config"
@@ -112,6 +113,7 @@ type Server struct {
 	httpClient    *http.Client
 	ctxUsage      *contextUsageTracker
 	codexSessions *codexSessionManager
+	codexContinue *adaptercodex.ContinuationStore
 }
 
 // New constructs a Server from the given adapter config. The deps
@@ -157,6 +159,7 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 		ctxUsage: newContextUsageTracker(),
 	}
 	if cfg.Codex.Enabled {
+		s.codexContinue = adaptercodex.NewContinuationStore()
 		s.codexSessions = newCodexSessionManager(log.With("subcomponent", "codex_session"), func(spec codexSessionSpec) (codexManagedTransport, error) {
 			return newCodexAppTransport(s.codexAppServerPath(), spec)
 		})

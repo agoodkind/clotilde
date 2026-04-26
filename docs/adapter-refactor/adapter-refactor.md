@@ -1347,12 +1347,13 @@ small follow-up to the websocket transport slice.
 
 Known remaining gap inventory:
 
-- Direct websocket support exists only as an initial transport slice; it
-  still needs live continuation state, measured backend behavior, and
-  proof that Cursor/Clyde requests exercise the same path as Codex.
-- `previous_response_id` reuse is not implemented as a runtime state
-  machine yet, so repeated turns still rely on prompt cache rather than
-  Codex-style response-thread continuation.
+- Direct websocket support exists as an initial transport slice; it
+  still needs measured backend behavior and proof that Cursor/Clyde
+  requests exercise the same path as Codex.
+- Initial `previous_response_id` reuse is implemented as daemon-local
+  websocket continuation state keyed by prompt/conversation identity.
+  It is still not full Codex Rust parity because Clyde does not yet
+  persist server-returned output-item baselines or turn-state headers.
 - `x-codex-turn-state`, richer turn metadata, installation/window ids,
   and session-source headers are not yet proven equivalent to the Rust
   client path.
@@ -1471,28 +1472,27 @@ how to realize that intent on the provider path.
        output items.
      - `map_response_stream(...)` captures `response.completed`
        response ids and output items for the next request.
-   - Clyde currently has the websocket wire field and serialization
-     helpers (`ResponseCreateWsRequest.PreviousResponseID` and
-     `WithPreviousResponseID`) but does not yet maintain a live
-     continuation ledger, so live logs correctly show
-     `has_previous_response_id=false`.
-   - Add a backend-owned continuation ledger under
-     `internal/adapter/codex/...`, keyed by normalized Cursor
-     conversation/window identity and scoped to websocket-capable Codex
-     transport state. The ledger must store:
-     - last full logical request fingerprint
-     - last input item sequence or stable item hashes
-     - last completed upstream `response.id`
-     - server-returned output items needed to form the next baseline
-     - model, effort, summary, service tier, tool schema hash,
-       system/instruction hash, text-control hash, and transport mode
-     - cancellation/failure state so failed turns do not poison the
-       continuation chain
+- Clyde now has the websocket wire field, serialization helpers, and a
+  daemon-local backend-owned continuation ledger in
+  `internal/adapter/codex/continuation.go`. The ledger is keyed by
+  prompt/conversation identity and stores:
+  - last full logical websocket request fingerprint
+  - last input item sequence
+  - last completed upstream `response.id`
+  - model/config fingerprint covering model, instructions, tools,
+    reasoning, include, service tier, prompt cache key, text controls,
+    client metadata, and max completion tokens
+  - failure/fallback invalidation so failed direct turns do not poison
+    the continuation chain
+- Remaining parity gap: Clyde still does not persist server-returned
+  output items as a formal baseline the way the Rust client's
+  `LastResponse.items_added` path does.
    - Reuse policy:
      - Use `previous_response_id` only on websocket transport.
-     - Use it only when non-input request fields are identical and the
-       new input is a strict extension of the previous input plus
-       server-returned output items.
+  - Use it only when non-input request fields are identical and the
+    new input is either a strict extension of the previous input or a
+    Cursor-style replay with a latest assistant anchor followed by new
+    context/user input.
      - Send only the incremental input delta when reuse is valid.
      - Fall back to full websocket request when the ledger is absent,
        stale, incomplete, or invalidated.
@@ -2317,16 +2317,19 @@ workstream above. The concrete execution order is:
    `response.create` serialization, warmup `generate=false`,
    previous-response reuse, the `426` fallback signal, and a live
    websocket text-plus-completion stream.
-4. [todo] Add runtime response-thread continuation state for direct
-   Codex websocket parity. The current code has the websocket
-   `previous_response_id` wire field and tests, but it does not yet
-   capture completed upstream response ids and server-returned output
-   items from live turns, compare full request fingerprints, slice
-   incremental input, or invalidate the chain on request/system/tool/
-   model/effort/service-tier/text-control/failure/fallback mismatch.
-   This must be Codex-owned runtime state, distinct from the existing
-   app/RPC session manager, before Clyde can claim parity with the
-   Codex Rust `ModelClientSession` continuation path.
+4. [partial] Added runtime response-thread continuation state for
+   direct Codex websocket parity. `internal/adapter/codex/protocol.go`
+   now captures completed upstream `response.id`; `continuation.go`
+   stores daemon-local continuation state keyed by prompt/conversation
+   identity; `runCodexDirect` applies `previous_response_id` plus an
+   incremental input slice on eligible websocket turns and invalidates
+   the chain on websocket failure or fallback. Tests cover first-turn
+   misses, prefix deltas, Cursor replay tails after the latest
+   assistant anchor, config/model mismatch, explicit invalidation, and
+   websocket response id capture. Remaining work before full Rust
+   `ModelClientSession` parity: capture server-returned output items,
+   compare against those items when forming the baseline, add turn-state
+   headers/reconnect semantics, and validate live Cursor turns.
 5. [done] Added `internal/adapter/codex/capabilities.go` with the
    three distinct context windows needed for Codex parity:
    advertised (`ResolvedModel.Context`), observed (active transport /
@@ -2636,13 +2639,15 @@ workstream above. The concrete execution order is:
   fallback escalation, `tooltrans` cleanup, notice delivery validation,
   and test relocation still have open work. Codex app parity is also
   not close to done yet: Clyde has useful HTTP/websocket wire,
-  capability-reporting, and telemetry slices, but the remaining work
-  still includes live response-thread continuation, turn-state/header
-  parity, response/text-control parity, transport-specific context
+  capability-reporting, telemetry, and initial websocket
+  response-thread continuation slices, but the remaining work still
+  includes turn-state/header parity, server-output-item baseline
+  validation, response/text-control parity, transport-specific context
   measurement, app/RPC versus direct transport characterization, and
-  long-running tool-turn behavior. Current live direct logs showing
-  prompt cache hits with `has_previous_response_id=false` are expected
-  until the continuation state machine lands.
+  long-running tool-turn behavior. With websocket enabled, eligible
+  repeated turns should now log continuation hits and
+  `has_previous_response_id=true`; misses should include a
+  `continuation_miss_reason`.
 
 ### Codex 1M characterization note
 
@@ -2709,12 +2714,12 @@ entries, and orders the real work by dependency and debugging value.
    single continuation bug. Track direct HTTP, direct websocket, app/RPC
    fallback, and CLI fallback as separate capability surfaces with
    separate evidence.
-2. Add Codex websocket response-thread continuation runtime state. This
-   is the highest-value remaining Codex parity gap: capture completed
-   upstream response ids and output items, compare request fingerprints,
-   slice incremental input, set `previous_response_id`, invalidate on
-   mismatch/failure/fallback, and log deterministic reuse or miss
-   reasons.
+2. [partial] Codex websocket response-thread continuation runtime state
+   now captures completed upstream response ids, compares request
+   fingerprints, slices incremental input, sets `previous_response_id`,
+   invalidates on mismatch/failure/fallback, and logs deterministic
+   reuse or miss reasons. Remaining parity work is server-output-item
+   baseline capture/comparison plus turn-state and reconnect semantics.
 3. Validate Codex turn-state/header parity against the Rust client:
    `x-codex-turn-state`, turn metadata, installation/window identity,
    session source, websocket beta headers, reconnect behavior, and
