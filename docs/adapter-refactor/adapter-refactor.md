@@ -1114,7 +1114,11 @@ Current state:
 
 - `internal/adapter/anthropic/backend/backend.go` already owns escalation
   decisions at the dispatcher level.
-- Actual fallback execution still goes through root-owned
+- `internal/adapter/anthropic/fallback/` owns the `claude -p`
+  subprocess driver, runtime config resolution, request construction,
+  OpenAI message flattening, tool mapping, tool choice parsing, and
+  deterministic fallback session IDs.
+- Actual fallback response orchestration still goes through root-owned
   `internal/adapter/fallback_handler.go`.
 
 Planned split:
@@ -1124,7 +1128,7 @@ Planned split:
 2. Keep subprocess primitives in `internal/adapter/anthropic/fallback/`.
    They are Anthropic-provider behavior unless a future non-Anthropic
    backend proves it needs the same `claude -p` driver.
-3. Move remaining root fallback orchestration only after the shared
+3. Move remaining root fallback response orchestration only after the shared
    OpenAI response rendering boundary is narrow enough to avoid copying
    stream/JSON assembly into the backend package.
 
@@ -2340,10 +2344,14 @@ anthropic-ratelimit-unified-overage-status: rejected` path and
 2. [done 2026-04-26] Move the explicit `claude -p` subprocess driver under
    `internal/adapter/anthropic/fallback/` and make fallback config resolution
    package-owned through `fallback.FromAdapterConfig(...)`.
-3. [todo] Update logging so fallback transitions name the Anthropic
+3. [done 2026-04-26] Move fallback request construction into
+   `internal/adapter/anthropic/fallback/`: OpenAI message flattening, tool
+   mapping, tool choice parsing, and deterministic fallback session IDs are
+   now package-owned.
+4. [todo] Update logging so fallback transitions name the Anthropic
    classifier outcome that triggered them, not just the generic
    escalation reason.
-4. [todo] Add backend-local tests for fallback escalation, replacing
+5. [todo] Add backend-local tests for fallback escalation, replacing
    any tests that only run through the full server facade.
 
 ### Phase 5 todos: extract Codex request shaping
@@ -2937,7 +2945,8 @@ entries, and orders the real work by dependency and debugging value.
    `FallbackFailureError(...)`, and calls the root only to write the final
    OpenAI-compatible error envelope.
 7. [done 2026-04-26] The explicit configured CLI fallback driver is now an
-   Anthropic-owned package at `internal/adapter/anthropic/fallback/`. Current
+   Anthropic-owned package at `internal/adapter/anthropic/fallback/`, and
+   fallback request construction now lives in that package as well. Current
    remaining work is moving or deleting the root OpenAI response/orchestration
    helpers in `internal/adapter/fallback_handler.go`.
 

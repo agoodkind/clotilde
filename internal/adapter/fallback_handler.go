@@ -2,7 +2,6 @@ package adapter
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -176,7 +175,16 @@ func (s *Server) handleFallback(w http.ResponseWriter, r *http.Request, req Chat
 		}
 	}
 
-	system, msgs := buildFallbackMessages(req.Messages)
+	fbReq := fallback.BuildRequest(fallback.RequestBuildInput{
+		Model:      model.CLIAlias,
+		ModelAlias: model.Alias,
+		Messages:   req.Messages,
+		Tools:      req.Tools,
+		Functions:  req.Functions,
+		ToolChoice: req.ToolChoice,
+		RequestID:  reqID,
+	})
+	system := fbReq.System
 	jsonSpec := ParseResponseFormat(req.ResponseFormat)
 	if instr := jsonSpec.SystemPrompt(false); instr != "" {
 		if system == "" {
@@ -184,18 +192,11 @@ func (s *Server) handleFallback(w http.ResponseWriter, r *http.Request, req Chat
 		} else {
 			system = system + "\n\n" + instr
 		}
+		fbReq.System = system
 	}
 
-	sessionID := deriveFallbackSessionID(msgs, model.Alias)
-	fbReq := fallback.Request{
-		Model:      model.CLIAlias,
-		System:     system,
-		Messages:   msgs,
-		Tools:      buildFallbackTools(req),
-		ToolChoice: parseFallbackToolChoice(req.ToolChoice),
-		RequestID:  reqID,
-		SessionID:  sessionID,
-	}
+	msgs := fbReq.Messages
+	sessionID := fbReq.SessionID
 	// Phase 3: synthesize a Claude Code transcript on disk so the CLI
 	// --resumes it instead of re-flattening history every turn. Opt-in
 	// via [adapter.fallback].transcript_synthesis_enabled. When on,
@@ -554,148 +555,6 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 		})
 	}
 	return nil
-}
-
-// buildFallbackTools maps OpenAI tools (preferred) or compatibility
-// functions into the fallback tool slice. When req.Tools is
-// non-empty, compatibility functions are ignored so definitions are not
-// double-registered.
-func buildFallbackTools(req ChatRequest) []fallback.Tool {
-	if len(req.Tools) > 0 {
-		out := make([]fallback.Tool, 0, len(req.Tools))
-		for _, t := range req.Tools {
-			if t.Function.Name == "" {
-				continue
-			}
-			out = append(out, fallback.Tool{
-				Name:        t.Function.Name,
-				Description: t.Function.Description,
-				Parameters:  t.Function.Parameters,
-			})
-		}
-		return out
-	}
-	out := make([]fallback.Tool, 0, len(req.Functions))
-	for _, f := range req.Functions {
-		if f.Name == "" {
-			continue
-		}
-		out = append(out, fallback.Tool{
-			Name:        f.Name,
-			Description: f.Description,
-			Parameters:  f.Parameters,
-		})
-	}
-	return out
-}
-
-// parseFallbackToolChoice decodes OpenAI tool_choice as either a
-// string token or a typed function selection object.
-func parseFallbackToolChoice(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return "auto"
-	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err == nil && strings.TrimSpace(s) != "" {
-		return strings.TrimSpace(s)
-	}
-	var wrapped struct {
-		Type     string `json:"type"`
-		Function struct {
-			Name string `json:"name"`
-		} `json:"function"`
-	}
-	if err := json.Unmarshal(raw, &wrapped); err == nil {
-		if wrapped.Type == "function" && strings.TrimSpace(wrapped.Function.Name) != "" {
-			return strings.TrimSpace(wrapped.Function.Name)
-		}
-	}
-	return "auto"
-}
-
-// deriveFallbackSessionID returns a UUID stable across turns of the
-// same Cursor conversation: Cursor resends the full history on every
-// request so the first user message never changes, and hashing it
-// with the model alias gives us a deterministic per-conversation
-// identifier that we pass to `claude -p` via `--session-id`. Empty
-// when the history has no user message — the caller then omits the
-// flag and Claude Code allocates its own.
-func deriveFallbackSessionID(msgs []fallback.Message, modelAlias string) string {
-	return fallback.DeriveSessionID(fallbackFirstUserText(msgs), modelAlias)
-}
-
-func fallbackFirstUserText(msgs []fallback.Message) string {
-	for _, m := range msgs {
-		if strings.EqualFold(strings.TrimSpace(m.Role), "user") {
-			return m.Content
-		}
-	}
-	return ""
-}
-
-// buildFallbackMessages converts OpenAI-shaped ChatMessages into the
-// fallback package's Message slice. Multiple system messages are
-// joined; tool/function turns are folded into the user lane the
-// same way buildAnthropicMessages does it.
-func buildFallbackMessages(in []ChatMessage) (string, []fallback.Message) {
-	var sys []string
-	var out []fallback.Message
-	for _, m := range in {
-		text := FlattenContent(m.Content)
-		role := stringsToLower(m.Role)
-		switch role {
-		case "system", "developer":
-			if text != "" {
-				sys = append(sys, text)
-			}
-		case "user", "assistant":
-			out = appendOrMergeFallback(out, role, text)
-		case "tool", "function":
-			out = appendOrMergeFallback(out, "user", "tool: "+text)
-		default:
-			out = appendOrMergeFallback(out, "user", role+": "+text)
-		}
-	}
-	return joinNonEmpty(sys, "\n\n"), out
-}
-
-func appendOrMergeFallback(msgs []fallback.Message, role, text string) []fallback.Message {
-	if text == "" {
-		return msgs
-	}
-	if n := len(msgs); n > 0 && msgs[n-1].Role == role {
-		msgs[n-1].Content = msgs[n-1].Content + "\n\n" + text
-		return msgs
-	}
-	return append(msgs, fallback.Message{Role: role, Content: text})
-}
-
-// stringsToLower is a tiny shim so the file doesn't pull in
-// `strings` purely for one call (it doesn't otherwise need it).
-func stringsToLower(s string) string {
-	b := make([]byte, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c >= 'A' && c <= 'Z' {
-			c += 'a' - 'A'
-		}
-		b[i] = c
-	}
-	return string(b)
-}
-
-func joinNonEmpty(parts []string, sep string) string {
-	out := ""
-	for i, p := range parts {
-		if p == "" {
-			continue
-		}
-		if i > 0 && out != "" {
-			out += sep
-		}
-		out += p
-	}
-	return out
 }
 
 // acquireFallback waits on the fallback's own concurrency semaphore.

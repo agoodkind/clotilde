@@ -1223,3 +1223,38 @@ Next large batch:
   Anthropic backend-owned fallback interface. Root should keep only HTTP
   response writing and dependency injection once the backend can return
   normalized final responses/events through the shared runtime helpers.
+
+## 2026-04-26 fallback request construction checkpoint
+
+Follow-up to shared response rendering. This slice moved the request-side
+fallback mapping into the Anthropic fallback package.
+
+What changed:
+
+- `internal/adapter/anthropic/fallback/request_builder.go`: added
+  package-owned construction of `fallback.Request` from the OpenAI-compatible
+  chat shape.
+- `internal/adapter/anthropic/fallback/request_builder.go`: moved OpenAI
+  message flattening, system/developer joining, tool/function turn folding,
+  tool mapping, `tool_choice` parsing, and deterministic session ID selection
+  into the fallback package.
+- `internal/adapter/fallback_handler.go`: root fallback handling now asks
+  `fallback.BuildRequest(...)` for the provider-owned request and keeps only
+  response-format prompt injection, transcript synthesis, HTTP response
+  writing, and logging.
+- `internal/adapter/anthropic/fallback/request_builder_test.go`: added
+  package-local coverage for message conversion, tool mapping, tool-choice
+  parsing, and stable session IDs.
+
+Verification:
+
+- `go test ./internal/adapter/anthropic/fallback -count=1` passed.
+- `go test ./internal/adapter/...` passed.
+
+Next large batch:
+
+- Move the remaining fallback response orchestration out of
+  `internal/adapter/fallback_handler.go`. The clean target is an
+  Anthropic-owned fallback runner that returns normalized runtime
+  results/events, while root keeps only OpenAI HTTP writing and dependency
+  injection.
