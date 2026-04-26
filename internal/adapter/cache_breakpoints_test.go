@@ -7,7 +7,6 @@ import (
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
-	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
 func TestApplyCacheBreakpointsStampsLastToolAndLastUserText(t *testing.T) {
@@ -127,14 +126,14 @@ func TestApplyCacheBreakpointsSkipsNewestToolResultWhenCacheReferenceEnabled(t *
 }
 
 func TestToAnthropicAPIRequestSerializesCacheControl(t *testing.T) {
-	tr := tooltrans.AnthRequest{
+	tr := anthropicbackend.AnthRequest{
 		System: "sys",
-		Messages: []tooltrans.AnthMessage{
-			{Role: "user", Content: []tooltrans.AnthContentBlock{{Type: "text", Text: "a"}}},
-			{Role: "assistant", Content: []tooltrans.AnthContentBlock{{Type: "text", Text: "b"}}},
-			{Role: "user", Content: []tooltrans.AnthContentBlock{{Type: "text", Text: "c"}}},
+		Messages: []anthropicbackend.AnthMessage{
+			{Role: "user", Content: []anthropicbackend.AnthContentBlock{{Type: "text", Text: "a"}}},
+			{Role: "assistant", Content: []anthropicbackend.AnthContentBlock{{Type: "text", Text: "b"}}},
+			{Role: "user", Content: []anthropicbackend.AnthContentBlock{{Type: "text", Text: "c"}}},
 		},
-		Tools: []tooltrans.AnthTool{
+		Tools: []anthropicbackend.AnthTool{
 			{Name: "t1", InputSchema: json.RawMessage(`{}`)},
 		},
 		MaxTokens: 64,
@@ -155,14 +154,14 @@ func TestToAnthropicAPIRequestSerializesCacheControl(t *testing.T) {
 }
 
 func TestToAnthropicAPIRequestOmitsCacheReferenceOnPriorToolResultByDefault(t *testing.T) {
-	tr := tooltrans.AnthRequest{
+	tr := anthropicbackend.AnthRequest{
 		System: "sys",
-		Messages: []tooltrans.AnthMessage{
-			{Role: "user", Content: []tooltrans.AnthContentBlock{
+		Messages: []anthropicbackend.AnthMessage{
+			{Role: "user", Content: []anthropicbackend.AnthContentBlock{
 				{Type: "tool_result", ToolUseID: "toolu_1", ResultContent: "result"},
 				{Type: "text", Text: "follow-up"},
 			}},
-			{Role: "assistant", Content: []tooltrans.AnthContentBlock{{Type: "text", Text: "answer"}}},
+			{Role: "assistant", Content: []anthropicbackend.AnthContentBlock{{Type: "text", Text: "answer"}}},
 		},
 		MaxTokens: 64,
 	}
@@ -178,14 +177,14 @@ func TestToAnthropicAPIRequestOmitsCacheReferenceOnPriorToolResultByDefault(t *t
 }
 
 func TestToAnthropicAPIRequestCanSerializeCacheReferenceOnPriorToolResult(t *testing.T) {
-	tr := tooltrans.AnthRequest{
+	tr := anthropicbackend.AnthRequest{
 		System: "sys",
-		Messages: []tooltrans.AnthMessage{
-			{Role: "user", Content: []tooltrans.AnthContentBlock{
+		Messages: []anthropicbackend.AnthMessage{
+			{Role: "user", Content: []anthropicbackend.AnthContentBlock{
 				{Type: "tool_result", ToolUseID: "toolu_1", ResultContent: "result"},
 				{Type: "text", Text: "follow-up"},
 			}},
-			{Role: "assistant", Content: []tooltrans.AnthContentBlock{{Type: "text", Text: "answer"}}},
+			{Role: "assistant", Content: []anthropicbackend.AnthContentBlock{{Type: "text", Text: "answer"}}},
 		},
 		MaxTokens: 64,
 	}

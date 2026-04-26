@@ -1,13 +1,33 @@
-package tooltrans
+package anthropicbackend
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
 	"regexp"
 	"strings"
+
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
+
+var (
+	// ErrAudioUnsupported is returned when a message includes an input_audio part.
+	ErrAudioUnsupported = errors.New("audio content parts are not supported by the Anthropic backend")
+
+	// ErrUnknownToolType is returned when tools[].type is set to a value other than "function".
+	ErrUnknownToolType = errors.New("tool.type must be \"function\"")
+)
+
+type OpenAIRequest = adapteropenai.ChatRequest
+type OpenAITool = adapteropenai.Tool
+type OpenAIToolFunctionSchema = adapteropenai.ToolFunctionSchema
+type OpenAIFunction = adapteropenai.Function
+type OpenAIMessage = adapteropenai.ChatMessage
+type OpenAIToolCall = adapteropenai.ToolCall
+type OpenAIToolCallFunction = adapteropenai.ToolCallFunction
+type OpenAIContentPart = adapteropenai.ContentPart
 
 var noticeSentinelRE = regexp.MustCompile(`(?s)<!--clyde-notice-->.*?<!--/clyde-notice-->\s*`)
 var activitySentinelRE = regexp.MustCompile(`(?s)<!--clyde-activity-->.*?<!--/clyde-activity-->\s*`)
@@ -92,8 +112,8 @@ func TranslateRequest(req OpenAIRequest, systemPrefix string, maxTokens int) (An
 		choiceType = toolChoice.Type
 		choiceName = toolChoice.Name
 	}
-	slog.Info("tooltrans.translated",
-		"subcomponent", "tooltrans",
+	slog.Info("adapter.anthropic.request.translated",
+		"subcomponent", "anthropic",
 		"model", req.Model,
 		"system_len", len(systemStr),
 		"message_count", len(out),
@@ -185,8 +205,8 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 				ToolUseID:     p.ToolUseID,
 				ResultContent: result,
 			})
-			slog.Debug("tooltrans.tool_result.translated",
-				"subcomponent", "tooltrans",
+			slog.Debug("adapter.anthropic.tool_result.translated",
+				"subcomponent", "anthropic",
 				"msg_idx", msgIdx,
 				"part_idx", partIdx,
 				"tool_use_id", p.ToolUseID,
@@ -194,8 +214,8 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 				"carrier", "user_part",
 			)
 		default:
-			slog.Warn("tooltrans.user_part.unknown_type",
-				"subcomponent", "tooltrans",
+			slog.Warn("adapter.anthropic.user_part.unknown_type",
+				"subcomponent", "anthropic",
 				"msg_idx", msgIdx,
 				"part_idx", partIdx,
 				"part_type", p.Type,
@@ -321,8 +341,8 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage) ([]AnthConten
 				Name:  p.Name,
 				Input: input,
 			})
-			slog.Debug("tooltrans.tool_use.translated",
-				"subcomponent", "tooltrans",
+			slog.Debug("adapter.anthropic.tool_use.translated",
+				"subcomponent", "anthropic",
 				"msg_idx", msgIdx,
 				"part_idx", partIdx,
 				"tool_use_id", p.ID,
@@ -333,8 +353,8 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage) ([]AnthConten
 		case "thinking":
 			continue
 		default:
-			slog.Warn("tooltrans.assistant_part.unknown_type",
-				"subcomponent", "tooltrans",
+			slog.Warn("adapter.anthropic.assistant_part.unknown_type",
+				"subcomponent", "anthropic",
 				"msg_idx", msgIdx,
 				"part_idx", partIdx,
 				"part_type", p.Type,

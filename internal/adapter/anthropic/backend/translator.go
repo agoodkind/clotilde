@@ -6,7 +6,7 @@ import (
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
-	"goodkind.io/clyde/internal/adapter/tooltrans"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
 type StreamClient interface {
@@ -19,9 +19,9 @@ func RunTranslatorStream(
 	anthReq anthropic.Request,
 	model adaptermodel.ResolvedModel,
 	reqID string,
-	emit func(tooltrans.OpenAIStreamChunk) error,
+	emit func(adapteropenai.StreamChunk) error,
 ) (anthropic.Usage, string, string, error) {
-	tr := tooltrans.NewStreamTranslator(reqID, model.Alias)
+	tr := NewStreamTranslator(reqID, model.Alias)
 	msgStartPayload, err := json.Marshal(struct {
 		Message struct {
 			Usage struct {

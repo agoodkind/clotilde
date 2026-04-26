@@ -1,4 +1,4 @@
-package tooltrans
+package anthropicbackend
 
 import (
 	"encoding/json"
@@ -7,7 +7,26 @@ import (
 	"strings"
 
 	"goodkind.io/clyde/internal/adapter/finishreason"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
+
+type OpenAIStreamChunk = adapteropenai.StreamChunk
+type OpenAIStreamChoice = adapteropenai.StreamChoice
+type OpenAIStreamDelta = adapteropenai.StreamDelta
+type OpenAIUsage = adapteropenai.Usage
+type EventRenderer = adapterrender.EventRenderer
+type Event = adapterrender.Event
+
+const (
+	EventAssistantTextDelta = adapterrender.EventAssistantTextDelta
+	EventReasoningSignaled  = adapterrender.EventReasoningSignaled
+	EventReasoningDelta     = adapterrender.EventReasoningDelta
+	EventReasoningFinished  = adapterrender.EventReasoningFinished
+	EventToolCallDelta      = adapterrender.EventToolCallDelta
+)
+
+var NewEventRenderer = adapterrender.NewEventRenderer
 
 // StreamTranslator converts Anthropic SSE events into OpenAI streaming chunks.
 type StreamTranslator struct {

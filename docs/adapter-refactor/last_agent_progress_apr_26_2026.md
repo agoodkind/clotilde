@@ -1523,3 +1523,45 @@ Next large batch:
 - Phase 8: shrink `internal/adapter/tooltrans/` by moving Anthropic-shaped
   translation out of shared compatibility code and leaving only genuinely
   shared event/wire aliases.
+
+## 2026-04-26 Phase 8 tooltrans shrink checkpoint
+
+Follow-up to the Codex Phase 7 checkpoint. This slice moved the Anthropic
+request and stream translator implementation out of `tooltrans` and into the
+Anthropic backend package.
+
+What changed:
+
+- `internal/adapter/anthropic/backend/mapper_impl.go`: now owns
+  `TranslateRequest(...)`, OpenAI-to-Anthropic message/content/tool mapping,
+  image URL conversion, Anthropic mapper errors, and mapper logging.
+- `internal/adapter/anthropic/backend/types.go`: now owns Anthropic translated
+  request types and Anthropic SSE helper types that used to live in
+  `tooltrans/types.go`.
+- `internal/adapter/anthropic/backend/normalize.go`: now owns the content
+  normalization helpers used by the Anthropic mapper.
+- `internal/adapter/anthropic/backend/stream_translator.go`: now owns
+  `StreamTranslator`, `NewStreamTranslator(...)`, and Anthropic SSE event to
+  OpenAI chunk translation. `RunTranslatorStream(...)` calls this directly.
+- `internal/adapter/tooltrans/`: now contains only `doc.go`, render aliases,
+  OpenAI wire aliases, inline-thinking aliases, cross-backend sentinel cleanup,
+  and the sentinel strip tests.
+- `internal/adapter/cache_breakpoints_test.go` and backend mapper/translator
+  tests now reference Anthropic backend-owned types and errors.
+- `docs/adapter-refactor/adapter-refactor.md`: marked the Anthropic
+  implementation transplant portion of Phase 8 complete and left the remaining
+  alias cleanup to Phase 9 output normalization.
+
+Verification:
+
+- `go test ./internal/adapter/anthropic/backend ./internal/adapter/tooltrans ./internal/adapter -run 'Test'` passed.
+- `go test ./internal/adapter/...` passed.
+- `make build` passed.
+- `dist/clyde daemon reload` passed with `active_sessions=1`, `new_pid=77847`.
+
+Next large batch:
+
+- Phase 9: normalize output around one internal event model by moving callers
+  away from `tooltrans` render/OpenAI aliases toward `internal/adapter/render`
+  and `internal/adapter/openai`, then make backend stream parsing emit the
+  normalized event model directly.

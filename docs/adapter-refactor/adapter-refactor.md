@@ -2697,37 +2697,32 @@ workstream above. The concrete execution order is:
    and the duplicate Anthropic-focused `tooltrans` test files
    (`openai_to_anthropic_test.go`, `stream_test.go`,
    `anthropic_to_openai_test.go`) are gone. The remaining `tooltrans`
-   Go files now fall into two groups:
-   - still Anthropic-owned implementation or compatibility candidates:
-     `openai_to_anthropic.go`, `stream.go`
-   - still plausibly shared or alias-only for now:
-     `event_renderer.go`, `types_openai_local.go`, `errors.go`,
-     `normalize.go`, `thinking_inline.go`, `types.go`
-2. [partial] The live Anthropic request translation boundary is now
-   backend-owned at the call site (`oauth_handler.go` ->
-   `anthropicbackend.TranslateRequest(...)`), and backend-local mapper
-   tests now carry the former `tooltrans/openai_to_anthropic_test.go`
-   coverage. The implementation still delegates through
-   `tooltrans.TranslateRequest(...)` internally, so the ownership seam
-   is in place but the final implementation transplant is not done yet.
-3. [partial] The live Anthropic stream translation boundary is now
-   backend-owned at the call site (`translator.go`), and backend-local
-   translator tests now carry the former shared-package stream test
-   coverage. The implementation still delegates through
-   `tooltrans.NewStreamTranslator(...)`, so the seam is in place but the
-   final implementation transplant is not done yet.
-4. [todo] Move backend-specific reasoning/thinking formatting rules
-   into their owning backends.
-5. [todo] Keep only the small shared compatibility types and aliasing
-   shims in `internal/adapter/tooltrans/`. Add a docstring describing
-   what is allowed to live here.
-6. [todo] Update imports across the adapter so callers point at the
-   new locations rather than `tooltrans`.
+   Go files now only cover shared docs, OpenAI aliases, render aliases,
+   inline-thinking aliases, cross-backend sentinel cleanup, and sentinel tests.
+2. [done 2026-04-26] Moved Anthropic request translation implementation out of
+   `tooltrans` and into `internal/adapter/anthropic/backend/mapper_impl.go`.
+   The backend now owns `TranslateRequest(...)`, Anthropic-specific mapper
+   errors, OpenAI-to-Anthropic message/content/tool conversion, and mapper
+   logging.
+3. [done 2026-04-26] Moved Anthropic translated request and Anthropic SSE helper
+   types out of `tooltrans/types.go` and into
+   `internal/adapter/anthropic/backend/types.go`.
+4. [done 2026-04-26] Moved Anthropic stream translation implementation out of
+   `tooltrans` and into `internal/adapter/anthropic/backend/stream_translator.go`.
+   `RunTranslatorStream(...)` now calls the backend-owned translator directly.
+5. [done 2026-04-26] Moved Anthropic content normalization helpers into
+   `internal/adapter/anthropic/backend/normalize.go`.
+6. [done 2026-04-26] Kept only the small shared compatibility surface in
+   `internal/adapter/tooltrans/` and added `doc.go` to describe what is
+   allowed to live there.
 7. [done] Deleted the duplicate Anthropic-focused `tooltrans` test files
    once backend-local coverage replaced them:
    `internal/adapter/tooltrans/openai_to_anthropic_test.go`,
    `internal/adapter/tooltrans/stream_test.go`, and
    `internal/adapter/tooltrans/anthropic_to_openai_test.go`.
+8. [todo] Continue shrinking `tooltrans` during Phase 9 by replacing OpenAI
+   stream alias use with `internal/adapter/openai` and render alias use with
+   `internal/adapter/render` where doing so does not create import cycles.
 
 ### Phase 9 todos: normalize output around one event model
 

@@ -7,7 +7,6 @@ import (
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
-	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
 type CacheBreakpointStats struct {
@@ -15,7 +14,7 @@ type CacheBreakpointStats struct {
 	ToolResultApplied    int
 }
 
-func ToAPIRequest(tr tooltrans.AnthRequest, claudeModel string, emitToolResultCacheReference bool) (anthropic.Request, CacheBreakpointStats) {
+func ToAPIRequest(tr AnthRequest, claudeModel string, emitToolResultCacheReference bool) (anthropic.Request, CacheBreakpointStats) {
 	msgs := make([]anthropic.Message, 0, len(tr.Messages))
 	for _, m := range tr.Messages {
 		blocks := make([]anthropic.ContentBlock, 0, len(m.Content))
