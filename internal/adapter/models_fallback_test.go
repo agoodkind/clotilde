@@ -131,6 +131,7 @@ func modelMatrixConfig() config.AdapterConfig {
 	}
 	cfg.Codex.Enabled = true
 	cfg.Codex.ModelPrefixes = []string{"gpt-", "o"}
+	cfg.Codex.NativeModelRouting = "codex"
 	return cfg
 }
 
@@ -232,6 +233,7 @@ func TestNewRegistryFallbackRejectsUnknownFamilyInAllowedFamilies(t *testing.T) 
 func TestResolveRoutesCodexModelPrefixes(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Codex.Enabled = true
+	cfg.Codex.NativeModelRouting = "codex"
 	r, err := NewRegistry(cfg)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
@@ -254,28 +256,13 @@ func TestResolveRoutesCodexModelPrefixes(t *testing.T) {
 func TestResolveRoutesClydeCodexAliases(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Codex.Enabled = true
+	cfg.Codex.NativeModelRouting = "codex"
 	r, err := NewRegistry(cfg)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-	m, effort, err := r.Resolve("clyde-gpt-5.4", "")
-	if err != nil {
-		t.Fatalf("Resolve clyde-gpt: %v", err)
-	}
-	if m.Backend != BackendCodex {
-		t.Fatalf("backend = %q want %q", m.Backend, BackendCodex)
-	}
-	if m.Alias != "clyde-gpt-5.4" {
-		t.Fatalf("alias = %q want clyde-gpt-5.4", m.Alias)
-	}
-	if m.ClaudeModel != "gpt-5.4" {
-		t.Fatalf("ClaudeModel = %q want gpt-5.4", m.ClaudeModel)
-	}
-	if effort != "" {
-		t.Fatalf("effort = %q want empty", effort)
-	}
 
-	m, _, err = r.Resolve("clyde-codex-gpt-5.4", "")
+	m, _, err := r.Resolve("clyde-codex-gpt-5.4", "")
 	if err != nil {
 		t.Fatalf("Resolve clyde-codex-gpt: %v", err)
 	}
@@ -286,9 +273,9 @@ func TestResolveRoutesClydeCodexAliases(t *testing.T) {
 		t.Fatalf("ClaudeModel = %q want gpt-5.4", m.ClaudeModel)
 	}
 
-	m, _, err = r.Resolve("clyde-gpt-5.3-codex-spark", "")
+	m, _, err = r.Resolve("gpt-5.3-codex-spark", "")
 	if err != nil {
-		t.Fatalf("Resolve clyde-gpt-5.3-codex-spark: %v", err)
+		t.Fatalf("Resolve gpt-5.3-codex-spark: %v", err)
 	}
 	if m.Backend != BackendCodex {
 		t.Fatalf("backend = %q want %q", m.Backend, BackendCodex)
@@ -297,34 +284,9 @@ func TestResolveRoutesClydeCodexAliases(t *testing.T) {
 		t.Fatalf("ClaudeModel = %q want gpt-5.3-codex-spark", m.ClaudeModel)
 	}
 
-	m, _, err = r.Resolve("clyde-gpt-5.2", "")
+	m, effort, err := r.Resolve("gpt-5.4", "xhigh")
 	if err != nil {
-		t.Fatalf("Resolve clyde-gpt-5.2: %v", err)
-	}
-	if m.Backend != BackendCodex {
-		t.Fatalf("backend = %q want %q", m.Backend, BackendCodex)
-	}
-	if m.ClaudeModel != "gpt-5.2" {
-		t.Fatalf("ClaudeModel = %q want gpt-5.2", m.ClaudeModel)
-	}
-
-	m, effort, err = r.Resolve("clyde-gpt-5.4-xhigh", "")
-	if err != nil {
-		t.Fatalf("Resolve clyde-gpt-5.4-xhigh: %v", err)
-	}
-	if m.Backend != BackendCodex {
-		t.Fatalf("backend = %q want %q", m.Backend, BackendCodex)
-	}
-	if m.ClaudeModel != "gpt-5.4" {
-		t.Fatalf("ClaudeModel = %q want gpt-5.4", m.ClaudeModel)
-	}
-	if effort != "xhigh" {
-		t.Fatalf("effort = %q want xhigh", effort)
-	}
-
-	m, effort, err = r.Resolve("clyde-gpt-5.4-1m-high", "")
-	if err != nil {
-		t.Fatalf("Resolve clyde-gpt-5.4-1m-high: %v", err)
+		t.Fatalf("Resolve gpt-5.4 xhigh: %v", err)
 	}
 	if m.Backend != BackendCodex {
 		t.Fatalf("backend = %q want %q", m.Backend, BackendCodex)
@@ -335,13 +297,13 @@ func TestResolveRoutesClydeCodexAliases(t *testing.T) {
 	if m.Context != 1000000 {
 		t.Fatalf("Context = %d want 1000000", m.Context)
 	}
-	if effort != "high" {
-		t.Fatalf("effort = %q want high", effort)
+	if effort != "xhigh" {
+		t.Fatalf("effort = %q want xhigh", effort)
 	}
 
-	m, effort, err = r.Resolve("clyde-gpt-5.5-1m-medium", "")
+	m, effort, err = r.Resolve("gpt-5.5", "high")
 	if err != nil {
-		t.Fatalf("Resolve clyde-gpt-5.5-1m-medium: %v", err)
+		t.Fatalf("Resolve gpt-5.5 high: %v", err)
 	}
 	if m.Backend != BackendCodex {
 		t.Fatalf("backend = %q want %q", m.Backend, BackendCodex)
@@ -352,10 +314,40 @@ func TestResolveRoutesClydeCodexAliases(t *testing.T) {
 	if m.Context != 1000000 {
 		t.Fatalf("Context = %d want 1000000", m.Context)
 	}
+	if effort != "high" {
+		t.Fatalf("effort = %q want high", effort)
+	}
+
+	m, effort, err = r.Resolve("gpt-5.3-codex", "medium")
+	if err != nil {
+		t.Fatalf("Resolve gpt-5.3-codex medium: %v", err)
+	}
+	if m.Backend != BackendCodex {
+		t.Fatalf("backend = %q want %q", m.Backend, BackendCodex)
+	}
+	if m.ClaudeModel != "gpt-5.3-codex" {
+		t.Fatalf("ClaudeModel = %q want gpt-5.3-codex", m.ClaudeModel)
+	}
+	if m.Context != 272000 {
+		t.Fatalf("Context = %d want 272000", m.Context)
+	}
 	if effort != "medium" {
 		t.Fatalf("effort = %q want medium", effort)
 	}
+}
 
+func TestResolveRejectsRemovedClydeGPTAliases(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Codex.Enabled = true
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	if _, _, err := r.Resolve("clyde-gpt-5.4-1m-high", ""); err == nil {
+		t.Fatalf("expected clyde-gpt alias to be rejected")
+	} else if !strings.Contains(err.Error(), "no longer supported") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 func TestResolveDoesNotRouteCodexWhenDisabled(t *testing.T) {
@@ -480,57 +472,54 @@ func TestResolveModelRoutingMatrix(t *testing.T) {
 			alias:       "gpt-5.4",
 			wantBackend: BackendCodex,
 			wantModel:   "gpt-5.4",
-		},
-		{
-			alias:       "clyde-gpt-5.4",
-			wantBackend: BackendCodex,
-			wantModel:   "gpt-5.4",
-		},
-		{
-			alias:       "clyde-gpt-5.4-1m-high",
-			wantBackend: BackendCodex,
-			wantModel:   "gpt-5.4",
 			wantContext: 1000000,
-			wantEffort:  EffortHigh,
 		},
 		{
-			alias:       "clyde-gpt-5.5-medium",
+			alias:       "gpt-5.5",
+			reqEffort:   EffortMedium,
 			wantBackend: BackendCodex,
 			wantModel:   "gpt-5.5",
+			wantContext: 1000000,
 			wantEffort:  EffortMedium,
 		},
 		{
-			alias:       "clyde-gpt-5.5-1m-xhigh",
+			alias:       "gpt-5.5",
+			reqEffort:   EffortXHigh,
 			wantBackend: BackendCodex,
 			wantModel:   "gpt-5.5",
 			wantContext: 1000000,
-			wantEffort:  "xhigh",
+			wantEffort:  EffortXHigh,
 		},
 		{
-			alias:       "clyde-gpt-5.4-mini-low",
+			alias:       "gpt-5.4-mini",
+			reqEffort:   EffortLow,
 			wantBackend: BackendCodex,
 			wantModel:   "gpt-5.4-mini",
 			wantEffort:  EffortLow,
 		},
 		{
-			alias:       "clyde-gpt-5.3-codex-high",
+			alias:       "gpt-5.3-codex",
+			reqEffort:   EffortHigh,
 			wantBackend: BackendCodex,
 			wantModel:   "gpt-5.3-codex",
+			wantContext: 272000,
 			wantEffort:  EffortHigh,
 		},
 		{
-			alias:       "clyde-gpt-5.3-codex-spark-xhigh",
+			alias:       "gpt-5.3-codex-spark",
+			reqEffort:   EffortXHigh,
 			wantBackend: BackendCodex,
 			wantModel:   "gpt-5.3-codex-spark",
-			wantEffort:  "xhigh",
+			wantContext: 272000,
+			wantEffort:  EffortXHigh,
 		},
 		{
-			alias:       "clyde-gpt-5.2",
+			alias:       "gpt-5.2",
 			wantBackend: BackendCodex,
 			wantModel:   "gpt-5.2",
 		},
 		{
-			alias:       "clyde-o3-high",
+			alias:       "o3-high",
 			wantBackend: BackendCodex,
 			wantModel:   "o3",
 			wantEffort:  EffortHigh,

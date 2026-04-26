@@ -136,7 +136,7 @@ func EffectiveReasoning(req adapteropenai.ChatRequest, effort string) *Reasoning
 	}
 	var out Reasoning
 	switch effort {
-	case "low", "medium", "high":
+	case "low", "medium", "high", "xhigh":
 		out.Effort = effort
 	}
 	if req.Reasoning != nil {

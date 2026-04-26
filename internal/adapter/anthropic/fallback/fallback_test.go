@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	adapterconfig "goodkind.io/clyde/internal/config"
 )
 
 // fakeClaudeScript is a minimal shell script that emits valid
@@ -95,6 +97,35 @@ func TestEnsureScratchDirRejectsEmpty(t *testing.T) {
 	}
 	if _, err := EnsureScratchDir("/tmp", ""); err == nil {
 		t.Fatalf("want error for empty subdir")
+	}
+}
+
+func TestFromAdapterConfigResolvesBinaryAndScratch(t *testing.T) {
+	bin := writeFakeBinary(t, fakeClaudeScript)
+	base := t.TempDir()
+	cfg, err := FromAdapterConfig(adapterconfig.AdapterFallback{
+		Timeout:         "2s",
+		ScratchSubdir:   "anthropic-fallback",
+		SuppressHookEnv: true,
+	}, func() (string, error) {
+		return bin, nil
+	}, func() string {
+		return base
+	})
+	if err != nil {
+		t.Fatalf("FromAdapterConfig: %v", err)
+	}
+	if cfg.Binary != bin {
+		t.Fatalf("Binary = %q want %q", cfg.Binary, bin)
+	}
+	if cfg.Timeout != 2*time.Second {
+		t.Fatalf("Timeout = %s want 2s", cfg.Timeout)
+	}
+	if cfg.ScratchDir != filepath.Join(base, "anthropic-fallback") {
+		t.Fatalf("ScratchDir = %q", cfg.ScratchDir)
+	}
+	if !cfg.SuppressHookEnv {
+		t.Fatalf("SuppressHookEnv = false")
 	}
 }
 
@@ -325,8 +356,7 @@ func TestNewDoesNotPanicOnPartialConfig(t *testing.T) {
 }
 
 // sanity: Validate's error messages are stable enough that callers
-// can substring-match them. This pins the prefix that
-// buildFallbackConfig wraps.
+// can substring-match them.
 func TestValidateMentionsField(t *testing.T) {
 	err := Config{}.Validate()
 	if err == nil {

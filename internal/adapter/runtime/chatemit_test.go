@@ -54,6 +54,70 @@ func TestEmitFinishChunk(t *testing.T) {
 	}
 }
 
+func TestBuildAssistantMessageWithToolCallsUsesNullContent(t *testing.T) {
+	t.Parallel()
+	msg := BuildAssistantMessage(AssistantMessageParts{
+		ToolCalls: []ToolCall{{
+			ID:   "call_1",
+			Type: "function",
+			Function: ToolCallFunction{
+				Name:      "Read",
+				Arguments: `{"path":"README.md"}`,
+			},
+		}},
+	})
+	if string(msg.Content) != "null" {
+		t.Fatalf("content = %s want null", msg.Content)
+	}
+	if len(msg.ToolCalls) != 1 || msg.ToolCalls[0].Function.Name != "Read" {
+		t.Fatalf("tool calls = %+v", msg.ToolCalls)
+	}
+}
+
+func TestBuildAssistantMessageWithTextQuotesJSON(t *testing.T) {
+	t.Parallel()
+	msg := BuildAssistantMessage(AssistantMessageParts{Text: "hello\nworld"})
+	var text string
+	if err := json.Unmarshal(msg.Content, &text); err != nil {
+		t.Fatalf("unmarshal content: %v", err)
+	}
+	if text != "hello\nworld" {
+		t.Fatalf("text = %q", text)
+	}
+}
+
+func TestBuildChatCompletion(t *testing.T) {
+	t.Parallel()
+	resp := BuildChatCompletion(
+		"req-1",
+		"alias",
+		"fp",
+		BuildAssistantMessage(AssistantMessageParts{Text: "ok"}),
+		"stop",
+		Usage{PromptTokens: 1, CompletionTokens: 2, TotalTokens: 3},
+	)
+	if resp.ID != "req-1" || resp.Model != "alias" || resp.SystemFingerprint != "fp" {
+		t.Fatalf("unexpected response header: %+v", resp)
+	}
+	if len(resp.Choices) != 1 || resp.Choices[0].FinishReason != "stop" {
+		t.Fatalf("unexpected choices: %+v", resp.Choices)
+	}
+	if resp.Usage == nil || resp.Usage.TotalTokens != 3 {
+		t.Fatalf("unexpected usage: %+v", resp.Usage)
+	}
+}
+
+func TestBuildDeltaChunk(t *testing.T) {
+	t.Parallel()
+	chunk := BuildDeltaChunk("req-1", "alias", 123, StreamDelta{Role: "assistant", Content: "hi"})
+	if chunk.ID != "req-1" || chunk.Model != "alias" || chunk.Created != 123 {
+		t.Fatalf("unexpected chunk header: %+v", chunk)
+	}
+	if len(chunk.Choices) != 1 || chunk.Choices[0].Delta.Content != "hi" {
+		t.Fatalf("unexpected choices: %+v", chunk.Choices)
+	}
+}
+
 func TestNoticeForResponseHeadersSuccess(t *testing.T) {
 	t.Parallel()
 	resp := ChatResponse{

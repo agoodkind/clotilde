@@ -18,7 +18,7 @@ func NormalizeModelAlias(rawModel string) string {
 	model := strings.TrimSpace(rawModel)
 	lower := strings.ToLower(model)
 
-	if strings.HasPrefix(lower, "clyde-gpt-") || strings.HasPrefix(lower, "clyde-codex-") {
+	if strings.HasPrefix(lower, "clyde-codex-") {
 		for _, suffix := range []string{"-low", "-medium", "-high", "-xhigh"} {
 			if strings.HasSuffix(lower, suffix) {
 				return model[:len(model)-len(suffix)]

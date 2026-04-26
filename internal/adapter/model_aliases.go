@@ -19,6 +19,7 @@ const (
 	EffortLow    = adaptermodel.EffortLow
 	EffortMedium = adaptermodel.EffortMedium
 	EffortHigh   = adaptermodel.EffortHigh
+	EffortXHigh  = adaptermodel.EffortXHigh
 	EffortMax    = adaptermodel.EffortMax
 
 	ThinkingDefault  = adaptermodel.ThinkingDefault

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
 	"goodkind.io/clyde/internal/config"
 )
 
@@ -208,24 +209,14 @@ func TestServerFallbackExplicitStreamSucceeds(t *testing.T) {
 }
 
 func TestSurfaceFallbackFailurePicksError(t *testing.T) {
-	srv := &Server{
-		cfg: config.AdapterConfig{
-			Fallback: config.AdapterFallback{
-				FailureEscalation: FallbackEscalationOAuthError,
-			},
-		},
-	}
-	w := httptest.NewRecorder()
-	srv.surfaceFallbackFailure(w, errOAuth("oauth boom"), errOAuth("fb boom"), FallbackEscalationOAuthError)
-	if !strings.Contains(w.Body.String(), "oauth boom") {
-		t.Fatalf("expected oauth_error surfaced; body = %s", w.Body.String())
+	_, code, msg := anthropicbackend.FallbackFailureError(FallbackEscalationOAuthError, errOAuth("oauth boom"), errOAuth("fb boom"))
+	if code != "upstream_error" || !strings.Contains(msg, "oauth boom") {
+		t.Fatalf("expected oauth_error surfaced; code=%q msg=%q", code, msg)
 	}
 
-	srv.cfg.Fallback.FailureEscalation = FallbackEscalationFallbackError
-	w = httptest.NewRecorder()
-	srv.surfaceFallbackFailure(w, errOAuth("oauth boom"), errOAuth("fb boom"), FallbackEscalationFallbackError)
-	if !strings.Contains(w.Body.String(), "fb boom") {
-		t.Fatalf("expected fallback_error surfaced; body = %s", w.Body.String())
+	_, code, msg = anthropicbackend.FallbackFailureError(FallbackEscalationFallbackError, errOAuth("oauth boom"), errOAuth("fb boom"))
+	if code != "fallback_error" || !strings.Contains(msg, "fb boom") {
+		t.Fatalf("expected fallback_error surfaced; code=%q msg=%q", code, msg)
 	}
 }
 

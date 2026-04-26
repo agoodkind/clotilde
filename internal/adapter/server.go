@@ -19,8 +19,8 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
+	"goodkind.io/clyde/internal/adapter/anthropic/fallback"
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
-	"goodkind.io/clyde/internal/adapter/fallback"
 	"goodkind.io/clyde/internal/adapter/oauth"
 	"goodkind.io/clyde/internal/config"
 )
@@ -32,7 +32,7 @@ const DefaultPort = 11434
 
 // DefaultHost is the loopback bind. The adapter never binds a public
 // interface unless the user explicitly sets AdapterConfig.Host.
-const DefaultHost = "127.0.0.1"
+const DefaultHost = "[::1]"
 
 // DefaultMaxConcurrent caps the number of in flight claude
 // subprocesses when the config omits a value.
@@ -184,7 +184,7 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 		)
 	}
 	if cfg.Fallback.Enabled {
-		fbCfg, err := buildFallbackConfig(cfg.Fallback, deps)
+		fbCfg, err := fallback.FromAdapterConfig(cfg.Fallback, deps.ResolveClaude, deps.ScratchDir)
 		if err != nil {
 			return nil, fmt.Errorf("adapter: fallback wiring: %w", err)
 		}
@@ -295,50 +295,6 @@ func (s *Server) readCodexAccountID() string {
 		return ""
 	}
 	return strings.TrimSpace(doc.Tokens.AccountID)
-}
-
-// buildFallbackConfig resolves runtime values from the user's
-// AdapterFallback stanza: the binary path (via deps.ResolveClaude
-// when Binary is empty), the parsed timeout, and the scratch
-// directory beneath deps.ScratchDir. Failures here abort daemon
-// startup the same way an invalid registry does.
-func buildFallbackConfig(fb config.AdapterFallback, deps Deps) (fallback.Config, error) {
-	bin := fb.Binary
-	if bin == "" {
-		if deps.ResolveClaude == nil {
-			return fallback.Config{}, fmt.Errorf("adapter: fallback.binary empty and deps.ResolveClaude not wired")
-		}
-		resolved, err := deps.ResolveClaude()
-		if err != nil {
-			return fallback.Config{}, fmt.Errorf("resolve claude binary: %w", err)
-		}
-		bin = resolved
-	}
-	d, err := time.ParseDuration(fb.Timeout)
-	if err != nil {
-		return fallback.Config{}, fmt.Errorf("parse timeout %q: %w", fb.Timeout, err)
-	}
-	base := ""
-	if deps.ScratchDir != nil {
-		base = deps.ScratchDir()
-	}
-	if base == "" {
-		return fallback.Config{}, fmt.Errorf("adapter: deps.ScratchDir returned empty path; required for fallback")
-	}
-	scratch, err := fallback.EnsureScratchDir(base, fb.ScratchSubdir)
-	if err != nil {
-		return fallback.Config{}, err
-	}
-	cfg := fallback.Config{
-		Binary:          bin,
-		Timeout:         d,
-		ScratchDir:      scratch,
-		SuppressHookEnv: fb.SuppressHookEnv,
-	}
-	if err := cfg.Validate(); err != nil {
-		return fallback.Config{}, fmt.Errorf("adapter: %w", err)
-	}
-	return cfg, nil
 }
 
 // Addr returns the host:port the adapter will bind when Start is

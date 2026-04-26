@@ -198,8 +198,8 @@ func buildArgs(r Request) []string {
 }
 
 // renderPromptForRequest returns the positional prompt for the CLI
-// invocation. In the legacy path (r.Resume==false) we flatten the
-// whole history into the prompt. In the resume path the history
+// invocation. In the direct prompt path (r.Resume==false), we flatten
+// the whole history into the prompt. In the resume path the history
 // lives in the transcript file on disk, so we pass only the latest
 // user message and let Claude continue from there.
 func renderPromptForRequest(r Request) string {

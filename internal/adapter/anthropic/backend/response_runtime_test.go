@@ -124,10 +124,10 @@ func (w *fakeResponseSSEWriter) HasCommittedHeaders() bool {
 }
 
 type fakeResponseDispatcher struct {
-	log         *slog.Logger
-	sseWriter   *fakeResponseSSEWriter
-	runStream   func(context.Context, anthropic.Request, adaptermodel.ResolvedModel, string, func(tooltrans.OpenAIStreamChunk) error) (anthropic.Usage, string, string, error)
-	actionables int
+	log          *slog.Logger
+	sseWriter    *fakeResponseSSEWriter
+	streamEvents func(context.Context, anthropic.Request, anthropic.EventSink) (anthropic.Usage, string, error)
+	actionables  int
 }
 
 func (d *fakeResponseDispatcher) Log() *slog.Logger {
@@ -148,6 +148,17 @@ func (d *fakeResponseDispatcher) NewAnthropicSSEWriter(http.ResponseWriter) (Res
 		d.sseWriter = &fakeResponseSSEWriter{}
 	}
 	return d.sseWriter, nil
+}
+
+func (d *fakeResponseDispatcher) AnthropicStreamClient() StreamClient {
+	return d
+}
+
+func (d *fakeResponseDispatcher) StreamEvents(ctx context.Context, req anthropic.Request, sink anthropic.EventSink) (anthropic.Usage, string, error) {
+	if d.streamEvents != nil {
+		return d.streamEvents(ctx, req, sink)
+	}
+	return anthropic.Usage{}, "", nil
 }
 
 func (d *fakeResponseDispatcher) SystemFingerprint() string {
@@ -183,19 +194,6 @@ func (d *fakeResponseDispatcher) StreamChunkHasVisibleContent(chunk adapteropena
 	return false
 }
 
-func (d *fakeResponseDispatcher) RunOAuthTranslatorStream(
-	ctx context.Context,
-	req anthropic.Request,
-	model adaptermodel.ResolvedModel,
-	reqID string,
-	emit func(tooltrans.OpenAIStreamChunk) error,
-) (anthropic.Usage, string, string, error) {
-	if d.runStream != nil {
-		return d.runStream(ctx, req, model, reqID, emit)
-	}
-	return anthropic.Usage{}, "", "", nil
-}
-
 func (d *fakeResponseDispatcher) TrackAnthropicContextUsage(string, adapteropenai.Usage) TrackedUsage {
 	return TrackedUsage{}
 }
@@ -217,7 +215,15 @@ func (d *fakeResponseDispatcher) CacheTTL() string {
 	return ""
 }
 
-func (d *fakeResponseDispatcher) UnclaimNotice(*anthropic.Notice) {
+func (d *fakeResponseDispatcher) NoticesEnabled() bool {
+	return true
+}
+
+func (d *fakeResponseDispatcher) ClaimNotice(string, time.Time) bool {
+	return true
+}
+
+func (d *fakeResponseDispatcher) UnclaimNotice(string, time.Time) {
 }
 
 // TestStreamResponse200OverageRejectedEmitsNoticeNotError locks in the
@@ -229,30 +235,8 @@ func TestStreamResponse200OverageRejectedEmitsNoticeNotError(t *testing.T) {
 	t.Parallel()
 
 	dispatcher := &fakeResponseDispatcher{}
-	req := anthropic.Request{
-		Model: "claude-opus-4-7",
-		OnHeaders: func(h http.Header) {
-			notice, err := adapterruntime.NoticeForStreamHeaders(
-				"req-200",
-				"clyde-opus",
-				h,
-				true,
-				func(chunk tooltrans.OpenAIStreamChunk) error {
-					writer, err := dispatcher.NewAnthropicSSEWriter(httptest.NewRecorder())
-					if err != nil {
-						return err
-					}
-					return writer.EmitStreamChunk("fp-test", dispatcher.StreamChunkFromTooltrans(chunk))
-				},
-				func(kind string, resetsAt time.Time) bool { return true },
-				func(kind string, resetsAt time.Time) {},
-			)
-			if notice != nil || err != nil {
-				t.Fatalf("NoticeForStreamHeaders returned notice=%v err=%v; want nil,nil after successful emit", notice, err)
-			}
-		},
-	}
-	dispatcher.runStream = func(_ context.Context, req anthropic.Request, _ adaptermodel.ResolvedModel, _ string, emit func(tooltrans.OpenAIStreamChunk) error) (anthropic.Usage, string, string, error) {
+	req := anthropic.Request{Model: "claude-opus-4-7"}
+	dispatcher.streamEvents = func(_ context.Context, req anthropic.Request, sink anthropic.EventSink) (anthropic.Usage, string, error) {
 		if req.OnHeaders != nil {
 			h := http.Header{}
 			h.Set("anthropic-ratelimit-unified-status", "allowed")
@@ -260,22 +244,17 @@ func TestStreamResponse200OverageRejectedEmitsNoticeNotError(t *testing.T) {
 			h.Set("anthropic-ratelimit-unified-overage-disabled-reason", "org_level_disabled_until")
 			req.OnHeaders(h)
 		}
-		if err := emit(tooltrans.OpenAIStreamChunk{
-			ID:      "req-200",
-			Object:  "chat.completion.chunk",
-			Created: time.Now().Unix(),
-			Model:   "clyde-opus",
-			Choices: []tooltrans.OpenAIStreamChoice{{
-				Index: 0,
-				Delta: tooltrans.OpenAIStreamDelta{
-					Role:    "assistant",
-					Content: "hello from upstream",
-				},
-			}},
+		if err := sink(anthropic.StreamEvent{
+			Kind:       "text",
+			Text:       "hello from upstream",
+			BlockIndex: 0,
 		}); err != nil {
-			return anthropic.Usage{}, "", "", err
+			return anthropic.Usage{}, "", err
 		}
-		return anthropic.Usage{InputTokens: 11, OutputTokens: 7}, "", "stop", nil
+		if err := sink(anthropic.StreamEvent{Kind: "stop", StopReason: "end_turn"}); err != nil {
+			return anthropic.Usage{}, "", err
+		}
+		return anthropic.Usage{InputTokens: 11, OutputTokens: 7}, "end_turn", nil
 	}
 
 	err := StreamResponse(
@@ -289,7 +268,6 @@ func TestStreamResponse200OverageRejectedEmitsNoticeNotError(t *testing.T) {
 		false,
 		false,
 		"",
-		nil,
 	)
 	if err != nil {
 		t.Fatalf("StreamResponse returned err: %v", err)
@@ -326,8 +304,8 @@ func TestStreamResponseTransportFailureEmitsNativeErrorEnvelope(t *testing.T) {
 	t.Parallel()
 
 	dispatcher := &fakeResponseDispatcher{
-		runStream: func(_ context.Context, _ anthropic.Request, _ adaptermodel.ResolvedModel, _ string, _ func(tooltrans.OpenAIStreamChunk) error) (anthropic.Usage, string, string, error) {
-			return anthropic.Usage{}, "", "", &anthropic.UpstreamError{
+		streamEvents: func(_ context.Context, _ anthropic.Request, _ anthropic.EventSink) (anthropic.Usage, string, error) {
+			return anthropic.Usage{}, "", &anthropic.UpstreamError{
 				Classification: anthropic.Classify(nil, io.ErrUnexpectedEOF),
 				Message:        "post /v1/messages: unexpected EOF",
 				Cause:          io.ErrUnexpectedEOF,
@@ -346,7 +324,6 @@ func TestStreamResponseTransportFailureEmitsNativeErrorEnvelope(t *testing.T) {
 		false,
 		false,
 		"",
-		nil,
 	)
 	if err != nil {
 		t.Fatalf("StreamResponse returned err: %v", err)

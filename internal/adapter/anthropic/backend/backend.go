@@ -21,12 +21,11 @@ type FallbackConfig struct {
 }
 
 type Dispatcher interface {
+	ResponseDispatcher
 	AnthropicConfigured() bool
 	AcquirePrimary(any) error
 	ReleasePrimary()
 	BuildAnthropicWire(adapteropenai.ChatRequest, adaptermodel.ResolvedModel, string, any, string) (anthropic.Request, error)
-	StreamOAuth(http.ResponseWriter, *http.Request, anthropic.Request, adaptermodel.ResolvedModel, string, time.Time, bool, bool, string) error
-	CollectOAuth(http.ResponseWriter, any, anthropic.Request, adaptermodel.ResolvedModel, string, time.Time, any, bool, string) error
 	ParseResponseFormat(any) any
 	RequestContextTrackerKey(adapteropenai.ChatRequest, string) string
 	WriteError(http.ResponseWriter, int, string, string)
@@ -34,8 +33,6 @@ type Dispatcher interface {
 	HandleFallback(http.ResponseWriter, *http.Request, adapteropenai.ChatRequest, adaptermodel.ResolvedModel, string, bool) error
 	ForwardShunt(http.ResponseWriter, *http.Request, adaptermodel.ResolvedModel, string, []byte)
 	HasShunt(name string) bool
-	SurfaceFallbackFailure(http.ResponseWriter, error, error, string)
-	Log() *slog.Logger
 }
 
 func Handle(d Dispatcher, w http.ResponseWriter, r *http.Request, req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort, reqID string, escalate bool) error {
@@ -96,9 +93,9 @@ func Handle(d Dispatcher, w http.ResponseWriter, r *http.Request, req adapterope
 	started := time.Now()
 	if req.Stream {
 		_ = req.StreamOptions
-		return d.StreamOAuth(w, r, anthReq, model, reqID, started, escalate, true, trackerKey)
+		return StreamResponse(d, w, r, anthReq, model, reqID, started, escalate, true, trackerKey)
 	}
-	return d.CollectOAuth(w, r.Context(), anthReq, model, reqID, started, jsonSpec, escalate, trackerKey)
+	return CollectResponse(d, w, r.Context(), anthReq, model, reqID, started, jsonSpec, escalate, trackerKey)
 }
 
 func Dispatch(d Dispatcher, cfg FallbackConfig, w http.ResponseWriter, r *http.Request, req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort, reqID string, body []byte) {
@@ -131,7 +128,7 @@ func Dispatch(d Dispatcher, cfg FallbackConfig, w http.ResponseWriter, r *http.R
 				slog.String("request_id", reqID),
 				slog.String("shunt", cfg.ForwardToShuntName),
 			)
-			d.SurfaceFallbackFailure(w, anthErr, fmt.Errorf("forward_to_shunt %q not configured (base_url empty)", cfg.ForwardToShuntName), cfg.FailureEscalation)
+			writeFallbackFailure(d, w, anthErr, fmt.Errorf("forward_to_shunt %q not configured (base_url empty)", cfg.ForwardToShuntName), cfg.FailureEscalation)
 			return
 		}
 		d.ForwardShunt(w, r, model, cfg.ForwardToShuntName, body)
@@ -142,7 +139,28 @@ func Dispatch(d Dispatcher, cfg FallbackConfig, w http.ResponseWriter, r *http.R
 	if fbErr == nil {
 		return
 	}
-	d.SurfaceFallbackFailure(w, anthErr, fbErr, cfg.FailureEscalation)
+	writeFallbackFailure(d, w, anthErr, fbErr, cfg.FailureEscalation)
+}
+
+func writeFallbackFailure(d Dispatcher, w http.ResponseWriter, anthErr, fbErr error, failureEscalation string) {
+	status, code, msg := FallbackFailureError(failureEscalation, anthErr, fbErr)
+	d.WriteError(w, status, code, msg)
+}
+
+func FallbackFailureError(failureEscalation string, anthErr, fbErr error) (status int, code, msg string) {
+	switch failureEscalation {
+	case adaptermodel.FallbackEscalationOAuthError:
+		return http.StatusBadGateway, "upstream_error", errorString(anthErr)
+	default:
+		return http.StatusBadGateway, "fallback_error", errorString(fbErr)
+	}
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // escalationClassification names the Anthropic classifier outcome for

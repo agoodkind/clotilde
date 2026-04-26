@@ -63,13 +63,15 @@ Concrete Cursor-specific behaviors already present:
   describe `Agent Mode` and `Plan Mode`.
 - Cursor prompt content injects MCP conventions such as schema-first tool use,
   `CallMcpTool`, and `FetchMcpResource`.
-- Cursor UI and catalog state can use raw model slugs such as
-  `clyde-gpt-5.4-1m-medium`, while the live adapter request path already
-  normalizes the same conversation to `clyde-gpt-5.4-1m`.
+- Cursor UI and catalog state can use native provider-facing model identity
+  such as `gpt-5.4` plus separate UI state for context window and reasoning
+  effort. Observed native Cursor GPT traffic does not send a separate `1m`
+  model suffix in the request body.
 - Background, resume, and subagent flows are therefore part of the Cursor
   integration boundary, because they can diverge from the foreground submit
-  normalization path and fail with `AI Model Not Found` on raw Cursor catalog
-  slugs.
+  routing path and fail with `AI Model Not Found` or an opaque streaming error
+  when provider identity, context window, or effort state is reconstructed
+  differently.
 - The adapter already treats `x-cursor-*` headers as sensitive.
 - The adapter already contains Cursor-specific reasoning/rendering behavior
   because Cursor does not consume OpenAI reasoning fields the same way some
@@ -103,11 +105,13 @@ Wire/schema details to preserve:
   and `Plan Mode`.
 - Cursor MCP-related prompt content injects conventions around schema-first
   tool use, `CallMcpTool`, and `FetchMcpResource`.
-- Cursor can select raw catalog model ids that must be normalized to Clyde
-  adapter aliases before backend routing.
+- Cursor can select native provider model ids and carry context-window or
+  effort state outside the `model` string. Clyde must preserve the raw Cursor
+  model id and route through a declarative provider classifier instead of
+  inventing backend preference from a custom flat alias.
 - Foreground submit, background task launch, background task resume, subagent
-  launch, and subagent resume must all use the same Cursor-owned normalization
-  path for model identity.
+  launch, and subagent resume must all use the same provider-classification
+  inputs for model identity, context window, effort, and max-mode state.
 
 Enumerated Cursor tool inventory observed in non-plan requests:
 
@@ -156,11 +160,13 @@ Architectural implication:
   and backend-local naming/contracts.
 - The Cursor layer should own correct plan-mode instruction injection, because
   the current Codex adapter behavior is already known to be wrong here.
-- The Cursor layer should own raw Cursor model slug normalization and preserve
-  parity between foreground submit and background or subagent resume paths.
-- Cursor boundary logging should record the raw model id, normalized model
-  alias, request path kind, raw tool names, and any derived mode/tool state so
-  future Cursor contract mismatches can be debugged without backend-local logs.
+- The Cursor layer should preserve raw Cursor model identity and request state,
+  then hand those fields to the shared provider resolver without encoding
+  backend preference into custom flat aliases.
+- Cursor boundary logging should record the raw model id, classified provider
+  family, selected backend route, context-window state, effort state,
+  request-path kind, raw tool names, and any derived mode/tool state so future
+  Cursor contract mismatches can be debugged without backend-local logs.
 - Backend packages should consume translated tool semantics where possible,
   rather than depending directly on Cursor product names.
 
@@ -179,18 +185,21 @@ The refactor should stay grounded in observed live traffic, current adapter
 implementation, and local research trees rather than relying only on the target
 architecture.
 
-Observed Cursor model-slug mismatch to preserve as a first-class refactor input:
+Observed Cursor model/routing mismatch to preserve as a first-class refactor
+input:
 
-- Cursor renderer and catalog state can use raw model slugs such as
-  `clyde-gpt-5.4-1m-medium`.
-- The live Clyde adapter request path for the same conversation already
-  normalizes to `clyde-gpt-5.4-1m`.
+- Cursor native GPT selection can render as `GPT-5.4 1M High` while the request
+  body carries `model: "gpt-5.4"` plus reasoning state such as
+  `reasoning.effort: "high"`.
+- Earlier Clyde-specific `clyde-gpt-*` flat aliases are a migration hazard, not
+  the target architecture. They should not be the primary Codex/GPT routing
+  mechanism once native Cursor model identity is supported.
 - Live requests do expose a real `Subagent` tool, so subagent failures in this
   class are not evidence of a missing ingress tool. They are evidence of Cursor
   contract or state mismatch.
 - Architecturally, this is a Cursor product-integration issue rather than a
-  Codex backend issue, and it should not be fixed by teaching shared backend
-  dispatch or backend-local packages about raw Cursor catalog slugs.
+  Codex backend issue, and it should not be fixed by teaching backend-local
+  packages about Cursor catalog or UI naming.
 
 Live observed requests:
 
@@ -398,8 +407,9 @@ Where ownership still leaks:
   reasoning policy, tool alias mapping, tool spec generation, direct transport,
   and SSE parsing wrappers.
 - `internal/adapter/fallback_handler.go` is still root-owned and is used as
-  the fallback execution leg for Anthropic escalation, even though the
-  escalation policy is conceptually backend behavior.
+  the OpenAI response/orchestration leg for Anthropic fallback execution, even
+  though the subprocess driver now lives under
+  `internal/adapter/anthropic/fallback/`.
 - `internal/adapter/tooltrans/` still mixes truly shared compatibility helpers
   with Anthropic-specific translation behavior.
 
@@ -440,7 +450,8 @@ flowchart TD
         prompt contract
         instruction prefix"]
         CursorModels["models.go
-        raw model normalization
+        request identity
+        provider resolver inputs
         request path classification
         boundary logging"]
     end
@@ -615,8 +626,9 @@ Diagram legend:
   planned websocket and capability deliverables from the Codex app
   parity workstream.
 - `Daemon` and `Compact` are shown as additional consumers of the Cursor
-  model normalization contract; they are not part of the request
-  dispatch path but they share the same normalization rule.
+  request-identity and provider-resolver inputs; they are not part of the
+  request dispatch path but they must preserve the same model/context/effort
+  state when resuming or reconstructing requests.
 
 ### Root adapter
 
@@ -624,7 +636,7 @@ Keep only these responsibilities in `internal/adapter/`:
 
 - HTTP route registration and auth.
 - OpenAI request decode.
-- Model resolution and backend selection.
+- Model classification and declarative backend selection.
 - Request ID creation and lifecycle logging.
 - Calling a backend contract.
 - Writing OpenAI-compatible responses using shared output helpers.
@@ -669,6 +681,8 @@ It should not own:
 
 - HTTP routing or auth.
 - Backend selection.
+- Provider-family classification, except for preserving raw Cursor metadata
+  needed by the resolver.
 - Anthropic or Codex wire mapping.
 - Shared OpenAI response rendering.
 - Generic OpenAI compatibility helpers that are not Cursor-specific.
@@ -693,6 +707,82 @@ Likely call flow:
    product contract.
 3. Root resolves model and backend using that translated request.
 4. Backends consume Cursor-derived context only where it is actually relevant.
+
+### Provider routing target architecture
+
+Model routing should be declarative and provider-classified, not an implicit
+preference for any one backend. The resolver should classify the model family
+first, then choose the configured implementation for that provider. The
+OpenAI-compatible passthrough is an explicit escape hatch for models that are
+not handled by a first-class provider path, or for deployments that intentionally
+configure native GPT/Codex names to a shunt.
+
+```mermaid
+flowchart TD
+    A["Cursor / OpenAI-compatible request"] --> B["Adapter ingress"]
+    B --> C["Decode request<br/>model, reasoning, tools, metadata"]
+    C --> D{"Exact configured model<br/>[adapter.models]?"}
+
+    D -- yes --> E["Use declared backend"]
+    D -- no --> F["Provider classifier"]
+
+    F --> G{"Model family?"}
+
+    G -- "Claude<br/>clyde-opus / clyde-sonnet / clyde-haiku" --> H["Claude provider"]
+    H --> H1["Primary: Anthropic direct OAuth"]
+    H --> H2["Fallback: Claude CLI<br/>if configured"]
+
+    G -- "GPT / Codex<br/>gpt-* / codex-* / o*" --> I["GPT/Codex provider"]
+    I --> I1["Primary: Codex direct backend<br/>websocket / HTTP"]
+    I --> I2["Fallback: Codex CLI / app server<br/>deprioritized, configurable"]
+
+    G -- "Other / no configured provider" --> J{"OpenAI-compatible<br/>passthrough enabled?"}
+    J -- yes --> K["OpenAI-compatible shunt<br/>local LLM / configured upstream"]
+    J -- no --> L["model_not_found<br/>native Cursor error shape"]
+
+    E --> M["Backend execution"]
+    H1 --> M
+    H2 --> M
+    I1 --> M
+    I2 --> M
+    K --> M
+
+    M --> N["Normalized stream / response"]
+    N --> O["OpenAI-compatible SSE / JSON"]
+    O --> P["Cursor UI"]
+```
+
+Required semantics:
+
+- Exact `[adapter.models.<alias>]` declarations win before provider
+  classification. This is the admin override for unusual deployments.
+- Claude-family aliases route to the Claude provider. That provider chooses
+  direct Anthropic OAuth versus Claude CLI fallback from backend-owned config.
+- Native GPT/Codex-looking names (`gpt-*`, `codex-*`, `o*`) route to the
+  GPT/Codex provider only when that provider is configured. Inside that
+  provider, direct Codex websocket/HTTP is the primary path and Codex CLI/app
+  fallback is a second, lower-priority path.
+- OpenAI-compatible passthrough is declarative and configurable. It should not
+  be a silent default that hides provider-classification bugs.
+- When no exact declaration, provider path, or explicit passthrough applies,
+  the adapter must return a model-not-found error in the native Cursor error
+  shape, not a normal assistant message and not a silent fallback to the
+  default Claude model. For OpenAI-compatible JSON and SSE this should use the
+  existing `ErrorResponse{Error: ErrorBody{...}}` envelope with a stable
+  model-resolution error type/code/param, so Cursor renders the same provider
+  error UI it uses for native model lookup failures.
+
+Configuration shape to implement:
+
+- A first-class provider routing policy, separate from shunt definitions:
+  - Claude provider enabled / disabled and fallback policy.
+  - GPT/Codex provider enabled / disabled and direct-vs-CLI fallback policy.
+  - OpenAI-compatible passthrough enabled / disabled with the target shunt.
+- `fallback_shunt` should not remain the only way to express local-LLM
+  passthrough, because generic fallback and first-class provider routing have
+  different debugging semantics.
+- Local development should be able to set native GPT/Codex routing to "off"
+  so model-resolution failures surface deterministically while testing.
 
 ### Anthropic backend
 
@@ -841,12 +931,14 @@ Planned changes:
    workspace extraction are derived once and reused consistently.
 2. Introduce a first-class Cursor product-translation boundary so plan mode,
    mode switching, tool vocabulary, and MCP conventions have an explicit home.
-3. Introduce a Cursor request normalization contract so raw Cursor model ids are
-   normalized once and reused consistently across foreground submit,
+3. Introduce a Cursor request identity contract so raw Cursor model ids,
+   context-window state, effort state, max-mode state, and request-path kind are
+   captured once and reused consistently across foreground submit,
    background-task launch, background-task resume, subagent launch, and
    subagent resume or follow-up paths.
-4. Add Cursor boundary logging for raw model id, normalized model alias,
-   request-path kind, raw tool names, and any derived mode or tool state.
+4. Add Cursor boundary logging for raw model id, classified provider family,
+   selected backend route, context-window state, effort state, request-path
+   kind, raw tool names, and any derived mode or tool state.
 5. Replace `any`-heavy bridge methods with explicit root-owned adapter
    interfaces where practical.
 6. Consolidate the current bridge wrappers so `server_dispatch.go` stops
@@ -1029,17 +1121,19 @@ Planned split:
 
 1. Move Anthropic fallback decision logic entirely under
    `internal/adapter/anthropic/backend/`.
-2. Keep shared subprocess primitives in `internal/adapter/fallback/` only if
-   they are backend-neutral.
-3. Introduce `internal/adapter/anthropic/fallback/` only if Anthropic fallback
-   logic grows enough to justify it.
+2. Keep subprocess primitives in `internal/adapter/anthropic/fallback/`.
+   They are Anthropic-provider behavior unless a future non-Anthropic
+   backend proves it needs the same `claude -p` driver.
+3. Move remaining root fallback orchestration only after the shared
+   OpenAI response rendering boundary is narrow enough to avoid copying
+   stream/JSON assembly into the backend package.
 
 Files involved:
 
 - `internal/adapter/anthropic/backend/backend.go`
 - `internal/adapter/anthropic_bridge.go`
 - `internal/adapter/fallback_handler.go`
-- `internal/adapter/fallback/...`
+- `internal/adapter/anthropic/fallback/...`
 
 Exit criteria:
 
@@ -1782,6 +1876,16 @@ Target ownership:
 - If the backend path actually failed, emit the proper OpenAI/client error
   shape so Cursor renders its standard error UI rather than showing
   assistant-shaped text in the transcript.
+- Model-resolution failures are part of this contract. If the resolver cannot
+  find a declared model, configured provider path, or enabled passthrough, the
+  adapter should return a native Cursor-rendered model-not-found error. It
+  should not stream an assistant message that says the model was not found,
+  and it should not silently run the request through the default model.
+- The concrete wire contract should be the adapter's existing OpenAI-compatible
+  `{"error":{"message":...,"type":...,"code":...,"param":"model"}}` envelope,
+  including SSE error frames through `EmitStreamError` when the failure happens
+  after streaming headers would otherwise be used. This should surface in
+  Cursor as a provider error dialog, not as transcript content.
 
 ### Concrete refactor addition
 
@@ -1971,30 +2075,40 @@ Current execution checklist for the Cursor-layer extraction:
    `internal/adapter/cursor/mode.go`.
 5. [done] Add Cursor-owned instruction-prefix handling for agent mode and
    plan mode in the Codex request path.
-6. [done] Introduce `internal/adapter/cursor/models.go` for raw Cursor model
-   slug normalization and parity rules.
-7. [done] Add Cursor boundary logging for raw model id, normalized model
-   alias, request-path kind, raw tool names, and derived mode or tool
-   state.
-8. [done] Route foreground submit through the Cursor model normalization
-   contract before backend resolution.
-9. [in progress] Normalize every request path that derives or reuses a
-   model id through the same Cursor contract. Foreground ingress in
-   `internal/adapter/server_dispatch.go`, daemon session settings
-   read/write/update plus summary/detail in `internal/daemon/server.go`,
-   and compact runtime settings fallback in `internal/compact/runtime.go`
-   are already converted to `adaptercursor.NormalizeModelAlias(...)`.
-   The remaining work is now a narrower verification sweep for any
-   request emitters outside those paths, especially future background or
-   subagent-resume surfaces that might reconstruct a model from stored
-   task or session state.
-10. [done] Add current-behavior lock-in tests for the observed mismatch
-    class: `clyde-gpt-5.4-1m-medium` or similar raw Cursor slug in,
-    normalized alias out, and resumed/background path using the same
-    alias. Coverage now spans `internal/adapter/cursor`,
+6. [superseded] The earlier `internal/adapter/cursor/models.go` work normalized
+   raw Cursor/Clyde flat slugs such as `clyde-gpt-*`. That was useful for the
+   observed mismatch, but the target architecture is now declarative provider
+   classification from native Cursor request identity, not expanding the custom
+   flat-name system.
+7. [done] Add Cursor boundary logging for raw model id, request-path kind, raw
+   tool names, and derived mode or tool state. Update this logging during the
+   routing slice so it also records provider family, selected backend route,
+   context-window state, effort state, max-mode state, passthrough decision,
+   and model-not-found classification.
+8. [superseded] Foreground submit currently flows through the old Cursor model
+   normalization contract before backend resolution. Replace that with a shared
+   resolver contract: exact configured model, then provider-family route, then
+   optional OpenAI-compatible passthrough, then native Cursor error.
+9. [in progress] Normalize every request path that derives or reuses model
+   identity through the same Cursor/provider resolver inputs. Foreground ingress
+   in `internal/adapter/server_dispatch.go`, daemon session settings
+   read/write/update plus summary/detail in `internal/daemon/server.go`, and
+   compact runtime settings fallback in `internal/compact/runtime.go` were
+   already converted to the old `adaptercursor.NormalizeModelAlias(...)` path.
+   The remaining work is to replace that path with declarative provider
+   resolution and prove there is no request emitter that reconstructs stale
+   `clyde-gpt-*`, context-window, effort, or max-mode state from stored task,
+   session, transcript, or resume state.
+10. [superseded] Current-behavior lock-in tests for
+    `clyde-gpt-5.4-1m-medium`-style slug normalization should be rewritten as
+    routing-contract tests: native `gpt-5.4` with `reasoning.effort`, configured
+    GPT/Codex provider route, disabled-route model-not-found error, optional
+    OpenAI-compatible passthrough, and no silent fallback to Claude/default
+    model. Existing coverage spans `internal/adapter/cursor`,
     `internal/adapter/server_dispatch_logging_test.go`,
     `internal/daemon/model_normalization_test.go`, and
-    `internal/compact/compact_test.go`.
+    `internal/compact/compact_test.go`, but the assertions need to track the
+    new resolver contract.
 11. [partial] Move explicit Cursor product semantics for `Subagent`,
     `SwitchMode`, and background-task behavior out of opaque prompt text
     where practical. The 2026-04-26 Cursor-integration checkpoint split
@@ -2008,12 +2122,15 @@ Current execution checklist for the Cursor-layer extraction:
     MCP prompt-contract extraction, and live Cursor retry validation.
 12. [done] Re-run root adapter logging, model-routing, and Codex
     request-shaping tests after each Cursor contract expansion. Focused
-    suites including `Test(NormalizeModelAlias|TranslateRequestCarriesNormalizedModel|RequestPath|HandleChatLogsCursorModelNormalization)`
+    suites including the old
+    `Test(NormalizeModelAlias|TranslateRequestCarriesNormalizedModel|RequestPath|HandleChatLogsCursorModelNormalization)`
     plus
     `TestBuildCodexRequestPreservesCursorProductToolsForWriteIntent`,
     `TestBuildCodexRequestStillPrunesUnknownToolsForWriteIntent`, and
     the broader `internal/adapter/...`, `internal/daemon`, and
-    `internal/compact` test slices stayed green after each slice.
+    `internal/compact` test slices stayed green after each slice. The
+    model-related assertions should be migrated to provider resolver behavior
+    before this phase is considered final.
 
 Anthropic backend extraction progress so far:
 
@@ -2041,14 +2158,20 @@ Anthropic backend extraction progress so far:
 
 ### Phase 1 remaining todos
 
-1. [todo] Finish the narrower verification sweep for model identity. The
-   known live paths in root adapter ingress, daemon settings/session
-   readback, and compact runtime already normalize through
-   `adaptercursor.NormalizeModelAlias(...)`. What remains is to prove
-   there is no separate request emitter that reconstructs a raw Cursor
-   slug from stored task, session, transcript, or resume state before
-   issuing an adapter request.
-2. [partial] Move explicit Cursor product semantics for `Subagent`,
+1. [todo] Replace the old Cursor model-normalization path with a declarative
+   provider resolver. Required order: exact configured model, provider-family
+   classification (`Claude` versus `GPT/Codex`), configured provider backend
+   primary/fallback selection, optional OpenAI-compatible passthrough, then
+   model-not-found. The model-not-found case must return Cursor's native error
+   shape, not assistant prose and not a silent default-provider fallback.
+2. [todo] Finish the narrower verification sweep for model identity. Known live
+   paths in root adapter ingress, daemon settings/session readback, and compact
+   runtime already flow through the old normalization helper. Replace those with
+   the provider resolver and prove there is no separate request emitter that
+   reconstructs stale `clyde-gpt-*`, context-window, effort, or max-mode state
+   from stored task, session, transcript, or resume state before issuing an
+   adapter request.
+3. [partial] Move explicit Cursor product semantics for `Subagent`,
    `SwitchMode`, and background-task behavior out of opaque prompt text
    into `internal/adapter/cursor/` where practical, so the Cursor layer
    owns those concerns instead of leaving them implicit in prompts.
@@ -2058,55 +2181,62 @@ Anthropic backend extraction progress so far:
    tools survive Codex write-intent filtering. Remaining: explicit
    background/subagent/resume path metadata and MCP prompt/tool-contract
    extraction.
-3. [partial] Add focused tests for Cursor product-semantics surfacing.
+4. [partial] Add focused tests for Cursor product-semantics surfacing.
    Done so far: tests cover foreground path classification with
-   `Subagent` available, Cursor model-normalization boundary logs, and
+   `Subagent` available, old Cursor model-normalization boundary logs, and
    preservation of known Cursor product tools during Codex write-intent
-   shaping. Remaining: live-background/subagent resume tests once the
-   request shape is known.
-4. [todo] Update Cursor `doc.go` once the sweep is complete so the
+   shaping. Remaining: provider-resolver logs, native Cursor model-not-found
+   error tests, optional passthrough tests, and live-background/subagent resume
+   tests once the request shape is known.
+5. [todo] Update Cursor `doc.go` once the sweep is complete so the
    package docstring matches the final responsibilities, including
-   model normalization, request-path classification, and mode/tool
-   contract translation.
+   request identity capture, provider resolver inputs, request-path
+   classification, and mode/tool contract translation.
 
 ### Phase 2 remaining todos
 
-1. [todo] Continue extracting remaining Anthropic request shaping out of
-   `buildAnthropicWire` once Phase 3 starts moving response handling
-   into the backend. The remaining `callerSystem` shaping is currently
-   entangled with root-owned JSON response coercion; do not move it
-   alone.
-2. [todo] Once `callerSystem` is out, leave only the thin server-glue
-   pieces in `internal/adapter/oauth_handler.go`: anthropic client
-   acquisition, request id, server-config plumbing, and dispatch to
-   backend helpers.
-3. [todo] Add a backend-owned `BuildRequest(...)` helper so the root
-   adapter can call into Anthropic with one entrypoint instead of the
-   current `buildAnthropicWire` + collection of helper calls.
+1. [done 2026-04-26] Extracted Anthropic request shaping, including
+   `callerSystem` construction, billing header construction, prompt-cache
+   system block shaping, microcompact, per-context betas, effort, and thinking
+   policy into `internal/adapter/anthropic/backend/request_builder.go`.
+2. [partial] `internal/adapter/oauth_handler.go` is now thin request-builder
+   glue: it gathers Server/client config and calls backend
+   `BuildRequest(...)`. The remaining root method exists to satisfy the
+   current dispatcher facade until Phase 11 wrapper deletion.
+3. [done 2026-04-26] Added backend-owned `BuildRequest(...)` plus focused
+   backend tests for thinking behavior, JSON prompt injection without prefix
+   duplication, and fine-grained tool streaming beta selection.
 
 ### Phase 3 todos: extract Anthropic response handling
 
-1. [todo] Move `runOAuthTranslatorStream` out of root into
-   `internal/adapter/anthropic/backend/stream.go` and replace the root
-   wrapper with a direct call into the backend.
-2. [todo] Move `mergeOAuthStreamChunks` and Anthropic-specific final
-   response assembly out of `internal/adapter/server_response.go` into
-   `internal/adapter/anthropic/backend/respond.go`.
-3. [todo] Move usage mapping (`UsageFromAnthropic` + tracker rollups)
-   out of root and into the backend response path so root only sees
-   normalized OpenAI usage.
-4. [todo] Move Anthropic-specific finish-reason handling into the
-   backend response path. Shared `finishreason` should only be the
-   neutral helpers.
-5. [todo] Move stream error shaping and empty-stream handling out of
-   root bridge methods. The backend should decide whether to terminate
-   with an error, emit a notice, or continue.
-6. [todo] Remove `internal/adapter/anthropic_bridge.go` once the
-   backend response path is the only caller of the response merger.
-7. [todo] Add or relocate response-shaping tests so Anthropic
+1. [done 2026-04-26] Removed the root `runOAuthTranslatorStream` wrapper.
+   `internal/adapter/anthropic/backend/response_runtime.go` now calls
+   `RunTranslatorStream(...)` directly against a backend-owned
+   `StreamClient` supplied by the root Server facade.
+2. [done] Move `mergeOAuthStreamChunks` and Anthropic-specific final
+   response assembly out of the root adapter into
+   `internal/adapter/anthropic/backend/response_merge.go`. The old
+   `internal/adapter/server_response.go` file no longer exists.
+3. [done 2026-04-26] Move usage mapping (`UsageFromAnthropic` + tracker
+   rollups) into the backend response path. Root now only supplies the
+   tracking dependency through `TrackAnthropicContextUsage(...)`.
+4. [partial] Move Anthropic-specific finish-reason handling into the
+   backend response path. The backend now owns response assembly and uses
+   translator-derived finish reasons, but the shared `finishreason` helper
+   remains in use below the stream translator and fallback paths.
+5. [done 2026-04-26] Move stream error shaping, empty-stream handling, and
+   success-path notice header handling out of root OAuth wrappers. The
+   backend now decides whether to emit native SSE errors, assistant-shaped
+   actionable text, warnings, or empty-stream auth guidance.
+6. [deferred] Remove `internal/adapter/anthropic_bridge.go` during Phase 11
+   after Phase 2 and Phase 4 complete. It is now mostly a Server facade for
+   dependency injection rather than duplicated response logic.
+7. [partial] Add or relocate response-shaping tests so Anthropic
    request/response coverage lives under
    `internal/adapter/anthropic/backend/` instead of the root adapter
-   package.
+   package. Backend response-runtime tests now cover native error envelopes
+   and success-path notice handling; remaining root tests should be narrowed to
+   routing/fallback concerns.
 
 ### Anthropic notice and error surfacing workstream todos
 
@@ -2207,12 +2337,9 @@ anthropic-ratelimit-unified-overage-status: rejected` path and
    `internal/adapter/anthropic/backend/`. The dispatcher already
    carries `FallbackConfig`; the actual choice should land next to the
    classifier from the notice/error workstream.
-2. [todo] Decide whether shared subprocess primitives in
-   `internal/adapter/fallback/` stay generic. If the abstraction is
-   only used by Anthropic in practice, move it under
-   `internal/adapter/anthropic/fallback/`. If a Codex caller actually
-   needs the same subprocess primitives, leave the package generic and
-   document the contract.
+2. [done 2026-04-26] Move the explicit `claude -p` subprocess driver under
+   `internal/adapter/anthropic/fallback/` and make fallback config resolution
+   package-owned through `fallback.FromAdapterConfig(...)`.
 3. [todo] Update logging so fallback transitions name the Anthropic
    classifier outcome that triggered them, not just the generic
    escalation reason.
@@ -2578,8 +2705,10 @@ workstream above. The concrete execution order is:
    delegations.
 4. [todo] Delete `internal/adapter/server_response.go` Anthropic
    response merge helpers if Phase 3 fully owns the response path.
-5. [todo] Remove stale generic fallback assumptions in root dispatch
-   once Phase 4 and Phase 7 are complete.
+5. [done 2026-04-26] Remove stale generic fallback assumptions in root
+   dispatch. Unsupported backends now fail with an explicit
+   `unsupported_backend` error instead of silently spawning the generic
+   Claude runner after the Anthropic/Codex/shunt/fallback checks.
 6. [todo] Sweep for unused imports and dead types after wrapper
    deletion.
 
@@ -2602,36 +2731,44 @@ workstream above. The concrete execution order is:
 ### Current status
 
 - Phase 0 is effectively done in the plan and package docs.
-- Phase 1 is largely landed in code: Cursor translation, tool vocabulary,
-  mode and prompt contract, foreground model normalization, daemon
-  settings normalization, session summary/detail normalization, and
-  compact settings normalization are all in place. The remaining work is
-  narrower than the original item 9 wording suggested: verify there is
-  no separate background or subagent-resume request emitter that
-  bypasses `adaptercursor.NormalizeModelAlias(...)`, and move the
-  remaining Cursor product semantics out of opaque prompt text. The
+- Phase 1 is partly landed in code: Cursor translation, tool vocabulary,
+  mode and prompt contract, foreground model identity handling, daemon
+  settings model handling, session summary/detail model handling, and
+  compact settings model handling are all in place, but the model work must be
+  retargeted from old alias normalization to declarative provider resolution.
+  The remaining work is to replace `adaptercursor.NormalizeModelAlias(...)`
+  with the provider resolver, verify there is no separate background or
+  subagent-resume request emitter that reconstructs stale model/context/effort
+  state, and move the remaining Cursor product semantics out of opaque prompt
+  text. The
   2026-04-26 Cursor-integration checkpoint is deployed: request-path
   classification no longer conflates `Subagent` tool availability with
   a subagent/background request, Cursor capability booleans are logged
   explicitly, and Codex write-intent pruning preserves known Cursor
   product tools such as `Subagent`, `SwitchMode`, `CreatePlan`,
   `CallMcpTool`, and `WebSearch`.
-- Phase 2 is partially landed: pure Anthropic request mapping helpers,
-  thinking and max-token policy, billing-probe helpers, and microcompact
-  policy now live in `internal/adapter/anthropic/backend/`. The
-  remaining `buildAnthropicWire` `callerSystem` extraction is parked
-  pending a larger Server-config-passthrough refactor; the current
-  shape is stable and tested.
+- Phase 2 is mostly landed: pure Anthropic request mapping helpers,
+  thinking and max-token policy, billing-probe helpers, microcompact
+  policy, caller-system shaping, billing/system-block construction,
+  per-context beta selection, effort mapping, and the backend-owned
+  `BuildRequest(...)` entrypoint now live in
+  `internal/adapter/anthropic/backend/`. The remaining root
+  `buildAnthropicWire` method is thin facade glue that collects Server
+  config and calls the backend entrypoint.
 - Phase 3 (Anthropic response handling) has landed the core seams.
   `MergeStreamChunks` now lives in
   `internal/adapter/anthropic/backend/response_merge.go` with a neutral
-  `JSONCoercion` contract; the root `mergeOAuthStreamChunks` is a thin
-  wrapper. `EmitActionableStreamError` and `ActionableStreamErrorMessage`
+  `JSONCoercion` contract; the old root `server_response.go` merge file is
+  gone. `EmitActionableStreamError` and `ActionableStreamErrorMessage`
   moved to `internal/adapter/anthropic/backend/stream_errors.go`.
-  `response_runtime.go` now calls `MergeStreamChunks` and
-  `adapterruntime.NoticeForResponseHeaders` directly, removing
-  `MergeAnthropicStreamChunks`, `NoticeForResponseHeaders`, and
-  `EmitActionableStreamError` from the dispatcher interface.
+  `response_runtime.go` now calls `RunTranslatorStream`,
+  `MergeStreamChunks`, `adapterruntime.NoticeForResponseHeaders`, and
+  `adapterruntime.NoticeForStreamHeaders` directly, removing
+  `MergeAnthropicStreamChunks`, `NoticeForResponseHeaders`,
+  `EmitActionableStreamError`, `RunOAuthTranslatorStream`, `StreamOAuth`, and
+  `CollectOAuth` from the dispatcher interface. Root still provides
+  dependency hooks for the Anthropic stream client, SSE writer, context-usage
+  tracker, notice claim store, and logging.
 - Codex Phases 5/6/7 have landed their core extraction slices, but they
   are not fully closed. The live Codex direct transport now flows
   through `internal/adapter/codex/request_builder.go`
@@ -2674,24 +2811,25 @@ workstream above. The concrete execution order is:
 
 Current repo state after the parity slices above:
 
-- Clyde still allows Codex aliases that advertise `1_000_000` context,
-  such as `clyde-gpt-5.4-1m-high`, because the alias and registry layer
-  preserve the public model-facing catalog shape.
-- Clyde no longer reports that optimistic `1M` value blindly on the
-  `/v1/models` surface for the active HTTP Codex path. When the backend
-  is Codex and websocket is disabled, `internal/adapter/codex/capabilities.go`
-  reports an **observed** context window of `272000` for `gpt-5.4` and
-  `gpt-5.5`, and an **effective safe** operating window of `244800`
-  (90% of observed).
+- Clyde historically allowed Codex aliases that advertised `1_000_000`
+  context, such as `clyde-gpt-5.4-1m-high`. The target architecture is to stop
+  depending on those custom flat names for GPT/Codex routing and instead route
+  native Cursor/OpenAI model identity such as `gpt-5.4` through the configured
+  GPT/Codex provider path.
+- Clyde should not report optimistic `1M` values blindly on the `/v1/models`
+  surface for an active transport that has only been characterized at a smaller
+  observed limit. When the backend is Codex and websocket is disabled,
+  `internal/adapter/codex/capabilities.go` has reported an **observed** context
+  window of `272000` for `gpt-5.4` and `gpt-5.5`, and an **effective safe**
+  operating window of `244800` (90% of observed).
 - When websocket is enabled, the current implementation treats the
   **observed** window as aligned with the alias-advertised value because
   the repo does not yet have a contrary measured limit for the websocket
   path.
-- This means the remaining gap is explicit rather than implicit:
-  the public `1M` model documentation and the local alias catalog may
-  still describe `1M`-class models, but the active ChatGPT/Codex OAuth
-  backend reality is only characterized in-repo as `272k observed /
-244.8k effective safe` for the HTTP Responses path.
+- This means the remaining gap is explicit rather than implicit: native Cursor
+  UI may expose `1M` GPT selections, but Clyde must keep transport-specific
+  observed/effective limits separate from model-family identity and user-facing
+  selection labels.
 - No code in the current repo proves that the live websocket path truly
   restores full `1M` behavior; it only preserves the alias-advertised
   window until contradictory measurement exists.
@@ -2755,10 +2893,11 @@ entries, and orders the real work by dependency and debugging value.
    transport before claiming `1M` support on any active path.
 6. Characterize sustained tool-use turns, cancellations, failures,
    fallback transitions, and cache/continuation interactions for Codex.
-7. Finish the Cursor model-identity and request-path sweep. Prove there
-   is no background, subagent-resume, stored-task, transcript, or session
-   path that reconstructs a raw Cursor model slug without going through
-   `adaptercursor.NormalizeModelAlias(...)`.
+7. Finish the Cursor model-identity and request-path sweep. Replace the
+   old alias-normalization path with the provider resolver, then prove there is
+   no background, subagent-resume, stored-task, transcript, or session path that
+   reconstructs stale `clyde-gpt-*`, context-window, effort, or max-mode state
+   outside that resolver.
 8. Promote Cursor product semantics out of opaque prompts where the
    request shape is known: explicit background/subagent/resume metadata,
    MCP prompt/tool contract extraction, and live Cursor retry validation.
@@ -2769,32 +2908,38 @@ entries, and orders the real work by dependency and debugging value.
 
 ### P2: Anthropic ownership blockers
 
-1. Treat Anthropic as another substantial unfinished backend workstream,
-   not as complete because notice/error classification landed. Track
-   request construction, response assembly, stream translation,
-   fallback, warning delivery, and tests as separate closure criteria.
-2. Finish Anthropic request ownership: extract the remaining
-   `buildAnthropicWire` / `callerSystem` shaping after response handling
-   is backend-owned, leave only thin server glue in
-   `internal/adapter/oauth_handler.go`, and add a backend-owned
-   `BuildRequest(...)` entrypoint.
-3. Finish Anthropic response ownership: move `runOAuthTranslatorStream`,
-   `mergeOAuthStreamChunks`, final response assembly, usage rollups,
-   finish-reason handling, stream error shaping, and empty-stream
-   handling into `internal/adapter/anthropic/backend/`.
+1. Treat Anthropic as another unfinished backend workstream, not as complete
+   because notice/error classification and response runtime ownership landed.
+   Track request construction, fallback, warning delivery validation, and tests
+   as separate closure criteria.
+2. [mostly done 2026-04-26] Finish Anthropic request ownership:
+   `buildAnthropicWire` / `callerSystem` shaping now delegates to backend
+   `BuildRequest(...)`, and `internal/adapter/oauth_handler.go` is thin
+   Server-config glue. Remaining request work is wrapper cleanup and any test
+   relocation needed before deleting the facade.
+3. [mostly done 2026-04-26] Finish Anthropic response ownership:
+   `runOAuthTranslatorStream`, merge response assembly, usage rollups, stream
+   error shaping, empty-stream handling, and success-path notice emission now
+   live in `internal/adapter/anthropic/backend/`. Remaining response work is
+   narrower: finish-reason cleanup where it still crosses shared translator or
+   fallback code, plus live validation.
 4. Validate successful-warning notice delivery end to end. The
    classifier prevents false fatal handling, but the product surface for
    non-fatal Anthropic notices still needs live validation so warnings
    do not reappear as assistant prose or native fatal errors.
-5. Move Anthropic response-shaping tests under
-   `internal/adapter/anthropic/backend/` as each response path moves.
-6. Move Anthropic fallback escalation policy out of
-   `internal/adapter/fallback_handler.go` and root dispatch into the
-   Anthropic backend, next to the classifier that now decides upstream
-   error class.
-7. Decide whether `internal/adapter/fallback/` remains generic or moves
-   under `internal/adapter/anthropic/fallback/`; update fallback logging
-   to include the classifier outcome and add backend-local tests.
+5. Continue moving Anthropic response-shaping tests under
+   `internal/adapter/anthropic/backend/`; native error-envelope and
+   successful-warning stream tests already live there.
+6. [done 2026-04-26] Move Anthropic fallback escalation policy out of root
+   dispatch into the Anthropic backend, next to the classifier that decides
+   upstream error class. The backend now logs classifier outcome, handles
+   forward-to-shunt failure, chooses OAuth-vs-fallback surfacing through
+   `FallbackFailureError(...)`, and calls the root only to write the final
+   OpenAI-compatible error envelope.
+7. [done 2026-04-26] The explicit configured CLI fallback driver is now an
+   Anthropic-owned package at `internal/adapter/anthropic/fallback/`. Current
+   remaining work is moving or deleting the root OpenAI response/orchestration
+   helpers in `internal/adapter/fallback_handler.go`.
 
 ### P3: shared stream/output architecture
 
@@ -2824,6 +2969,9 @@ entries, and orders the real work by dependency and debugging value.
    `internal/adapter/render/` and `internal/adapter/runtime/`.
 5. Add per-phase lock-in tests where ownership boundaries land and
    remove duplicated historical coverage.
+6. [done 2026-04-26] Extract initial OpenAI response construction helpers
+   into `internal/adapter/runtime/response.go` and move fallback final
+   responses plus fallback delta chunks onto those helpers.
 
 ### P5: compatibility wrapper deletion
 
@@ -2837,9 +2985,10 @@ entries, and orders the real work by dependency and debugging value.
    compatibility helpers have been removed.
 4. Delete `internal/adapter/server_response.go` Anthropic response merge
    helpers if Phase 3 fully owns the response path.
-5. Remove stale generic fallback assumptions in root dispatch once
-   Anthropic fallback ownership and Codex direct/app/fallback policy are
-   both complete.
+5. [done 2026-04-26] Remove stale generic fallback assumptions in root
+   dispatch. Unknown or unsupported backends now return
+   `unsupported_backend`; they do not silently run through the generic
+   Claude CLI runner.
 6. Sweep unused imports and dead types after wrapper deletion.
 
 ### Dependency order

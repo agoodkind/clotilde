@@ -128,7 +128,7 @@ func (o OAuthConfig) IsEnabled() bool {
 type WebAppConfig struct {
 	// Enabled toggles the listener.
 	Enabled bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
-	// Host defaults to 127.0.0.1.
+	// Host defaults to [::1].
 	Host string `json:"host,omitempty" toml:"host,omitempty"`
 	// Port defaults to 11435.
 	Port int `json:"port,omitempty" toml:"port,omitempty"`
@@ -150,7 +150,7 @@ type AdapterConfig struct {
 	// Enabled toggles the HTTP listener. Default is false so the
 	// daemon stays headless until the user opts in.
 	Enabled bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
-	// Host defaults to 127.0.0.1 (loopback only).
+	// Host defaults to [::1] (loopback only).
 	Host string `json:"host,omitempty" toml:"host,omitempty"`
 	// Port defaults to 11434 (shared with Ollama conventions).
 	Port int `json:"port,omitempty" toml:"port,omitempty"`
@@ -233,8 +233,17 @@ type AdapterCodex struct {
 	// AuthFile points at Codex auth state. Defaults to ~/.codex/auth.json.
 	AuthFile string `json:"authFile,omitempty" toml:"auth_file,omitempty"`
 	// ModelPrefixes are alias prefixes routed to codex when no explicit
-	// model entry matches. Defaults to ["gpt-", "o"].
+	// model entry matches and native_model_routing is "codex".
+	// Defaults to ["gpt-", "o"].
 	ModelPrefixes []string `json:"modelPrefixes,omitempty" toml:"model_prefixes,omitempty"`
+	// NativeModelRouting controls how native OpenAI/Codex-looking model
+	// IDs such as gpt-* and o* are handled when they are not declared in
+	// [adapter.models]. Empty and "off" reject them as unknown models.
+	// "codex" routes through the direct Codex backend. "shunt" routes to
+	// NativeModelShunt.
+	NativeModelRouting string `json:"nativeModelRouting,omitempty" toml:"native_model_routing,omitempty"`
+	// NativeModelShunt is used when NativeModelRouting is "shunt".
+	NativeModelShunt string `json:"nativeModelShunt,omitempty" toml:"native_model_shunt,omitempty"`
 	// AppFallback enables app-server fallback when direct HTTP fails.
 	AppFallback bool `json:"appFallback,omitempty" toml:"app_fallback,omitempty"`
 	// AppServerPath is the codex binary path used for fallback.

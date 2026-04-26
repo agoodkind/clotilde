@@ -11,7 +11,6 @@ import (
 	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
-	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
 func (s *Server) AnthropicConfigured() bool {
@@ -28,14 +27,6 @@ func (s *Server) ReleasePrimary() {
 
 func (s *Server) BuildAnthropicWire(req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort string, jsonSpec any, reqID string) (anthropic.Request, error) {
 	return s.buildAnthropicWire(req, model, effort, jsonSpec.(JSONResponseSpec), reqID)
-}
-
-func (s *Server) StreamOAuth(w http.ResponseWriter, r *http.Request, req anthropic.Request, model adaptermodel.ResolvedModel, reqID string, started time.Time, escalate bool, includeUsage bool, trackerKey string) error {
-	return s.streamOAuth(w, r, req, model, reqID, started, escalate, includeUsage, trackerKey)
-}
-
-func (s *Server) CollectOAuth(w http.ResponseWriter, ctx any, req anthropic.Request, model adaptermodel.ResolvedModel, reqID string, started time.Time, jsonSpec any, escalate bool, trackerKey string) error {
-	return s.collectOAuth(w, ctx.(context.Context), req, model, reqID, started, jsonSpec.(JSONResponseSpec), escalate, trackerKey)
 }
 
 func (s *Server) ParseResponseFormat(raw any) any {
@@ -69,10 +60,6 @@ func (s *Server) ForwardShunt(w http.ResponseWriter, r *http.Request, model adap
 	s.forwardShunt(w, r, model, body)
 }
 
-func (s *Server) SurfaceFallbackFailure(w http.ResponseWriter, anthErr, fbErr error, failureEscalation string) {
-	s.surfaceFallbackFailure(w, anthErr, fbErr, failureEscalation)
-}
-
 func (s *Server) Log() *slog.Logger {
 	return s.log
 }
@@ -81,12 +68,12 @@ func (s *Server) NewAnthropicSSEWriter(w http.ResponseWriter) (anthropicbackend.
 	return newSSEWriter(w)
 }
 
-func (s *Server) StreamChunkHasVisibleContent(chunk adapteropenai.StreamChunk) bool {
-	return streamChunkHasVisibleContent(chunk)
+func (s *Server) AnthropicStreamClient() anthropicbackend.StreamClient {
+	return s.anthr
 }
 
-func (s *Server) RunOAuthTranslatorStream(ctx context.Context, req anthropic.Request, model adaptermodel.ResolvedModel, reqID string, emit func(tooltrans.OpenAIStreamChunk) error) (anthropic.Usage, string, string, error) {
-	return s.runOAuthTranslatorStream(ctx, req, model, reqID, emit)
+func (s *Server) StreamChunkHasVisibleContent(chunk adapteropenai.StreamChunk) bool {
+	return streamChunkHasVisibleContent(chunk)
 }
 
 func (s *Server) TrackAnthropicContextUsage(key string, raw adapteropenai.Usage) anthropicbackend.TrackedUsage {
@@ -117,13 +104,18 @@ func (s *Server) CacheTTL() string {
 	return s.cfg.ClientIdentity.PromptCacheTTL
 }
 
+func (s *Server) NoticesEnabled() bool {
+	return s.cfg.Notices.EnabledOrDefault()
+}
+
+func (s *Server) ClaimNotice(kind string, resetsAt time.Time) bool {
+	return Claim(kind, resetsAt)
+}
+
 func (s *Server) LogCacheUsageAnthropic(ctx context.Context, backend, reqID, alias string, u anthropic.Usage) {
 	s.logCacheUsageAnthropic(ctx, backend, reqID, alias, u)
 }
 
-func (s *Server) UnclaimNotice(notice *anthropic.Notice) {
-	if notice == nil {
-		return
-	}
-	Unclaim(notice.Kind, notice.ResetsAt)
+func (s *Server) UnclaimNotice(kind string, resetsAt time.Time) {
+	Unclaim(kind, resetsAt)
 }

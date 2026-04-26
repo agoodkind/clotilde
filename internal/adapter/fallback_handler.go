@@ -8,13 +8,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
-	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
-	"goodkind.io/clyde/internal/adapter/fallback"
+	"goodkind.io/clyde/internal/adapter/anthropic/fallback"
 	"goodkind.io/clyde/internal/adapter/finishreason"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 )
 
 // writeFallbackTranscript materializes a synthesized Claude Code
@@ -26,7 +25,7 @@ import (
 // Only prior turns are serialized (msgs[:-1] effectively), because the
 // last user message rides in as the positional prompt on spawn. When
 // the message set is shorter than one turn, writing is skipped and
-// the caller falls back to the legacy --session-id path.
+// the caller stays on the direct --session-id prompt path.
 func (s *Server) writeFallbackTranscript(ctx context.Context, workspaceDir, sessionID string, msgs []fallback.Message) error {
 	// Ensure the cwd exists so claude -p does not fail at spawn with
 	// a missing directory. The mkdir is idempotent.
@@ -43,8 +42,8 @@ func (s *Server) writeFallbackTranscript(ctx context.Context, workspaceDir, sess
 		}
 	}
 	if lastUser <= 0 {
-		// No prior history to materialize; the handler stays on the
-		// legacy --session-id path and does a fresh conversation.
+		// No prior history to materialize; the handler stays on
+		// the direct --session-id prompt path.
 		return fmt.Errorf("no prior turns to synthesize")
 	}
 	priorMsgs := msgs[:lastUser]
@@ -288,49 +287,14 @@ func (s *Server) collectFallback(w http.ResponseWriter, ctx context.Context, req
 	if result.Usage.CacheReadInputTokens > 0 {
 		usage.PromptTokensDetails = &PromptTokensDetails{CachedTokens: result.Usage.CacheReadInputTokens}
 	}
-	msg := ChatMessage{Role: "assistant"}
-	if result.ReasoningContent != "" {
-		msg.Reasoning = result.ReasoningContent
-		msg.ReasoningContent = result.ReasoningContent
-	}
-	if result.Refusal != "" {
-		msg.Refusal = result.Refusal
-		msg.Content = json.RawMessage("null")
-	} else if len(result.ToolCalls) > 0 {
-		msg.ToolCalls = make([]ToolCall, len(result.ToolCalls))
-		for i, tc := range result.ToolCalls {
-			msg.ToolCalls[i] = ToolCall{
-				Index: i,
-				ID:    fallback.EnsureToolCallID(tc.ID, reqID, i),
-				Type:  "function",
-				Function: ToolCallFunction{
-					Name:      tc.Name,
-					Arguments: tc.Arguments,
-				},
-			}
-		}
-		if finalText == "" {
-			msg.Content = json.RawMessage("null")
-		} else {
-			msg.Content = json.RawMessage(strconv.Quote(finalText))
-		}
-	} else {
-		msg.Content = json.RawMessage(strconv.Quote(finalText))
-	}
+	msg := adapterruntime.BuildAssistantMessage(adapterruntime.AssistantMessageParts{
+		Text:             finalText,
+		ReasoningContent: result.ReasoningContent,
+		Refusal:          result.Refusal,
+		ToolCalls:        fallbackOpenAIToolCalls(result.ToolCalls, reqID),
+	})
 	fr := finishreason.FromAnthropicNonStream(result.Stop)
-	resp := ChatResponse{
-		ID:                reqID,
-		Object:            "chat.completion",
-		Created:           time.Now().Unix(),
-		Model:             model.Alias,
-		SystemFingerprint: systemFingerprint,
-		Choices: []ChatChoice{{
-			Index:        0,
-			Message:      msg,
-			FinishReason: fr,
-		}},
-		Usage: &usage,
-	}
+	resp := adapterruntime.BuildChatCompletion(reqID, model.Alias, systemFingerprint, msg, fr, usage)
 	writeJSON(w, http.StatusOK, resp)
 	s.logCacheUsage(ctx, "fallback", reqID, model.Alias,
 		result.Usage.PromptTokens, result.Usage.CacheCreationInputTokens, result.Usage.CacheReadInputTokens)
@@ -386,7 +350,31 @@ func fallbackPathLabel(req fallback.Request) string {
 	if req.Resume {
 		return "fallback_resume"
 	}
-	return "fallback_flat"
+	return "fallback_prompt"
+}
+
+func fallbackOpenAIToolCalls(calls []fallback.ToolCall, reqID string, indexOffset ...int) []adapterruntime.ToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	offset := 0
+	if len(indexOffset) > 0 {
+		offset = indexOffset[0]
+	}
+	out := make([]adapterruntime.ToolCall, len(calls))
+	for i, tc := range calls {
+		index := i + offset
+		out[i] = adapterruntime.ToolCall{
+			Index: index,
+			ID:    fallback.EnsureToolCallID(tc.ID, reqID, index),
+			Type:  "function",
+			Function: adapterruntime.ToolCallFunction{
+				Name:      tc.Name,
+				Arguments: tc.Arguments,
+			},
+		}
+	}
+	return out
 }
 
 // streamFallback streams stream-json from the CLI. When tools are
@@ -446,16 +434,7 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 				delta.Role = "assistant"
 				firstDelta = false
 			}
-			return emit(StreamChunk{
-				ID:      reqID,
-				Object:  "chat.completion.chunk",
-				Created: created,
-				Model:   model.Alias,
-				Choices: []StreamChoice{{
-					Index: 0,
-					Delta: delta,
-				}},
-			})
+			return adapterruntime.EmitDeltaChunk(emit, reqID, model.Alias, created, delta)
 		})
 	}
 	if streamErr != nil {
@@ -487,53 +466,17 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 	if bufferedTools {
 		if len(sr.ToolCalls) > 0 {
 			if rc := strings.TrimSpace(sr.ReasoningContent); rc != "" {
-				_ = emit(StreamChunk{
-					ID:      reqID,
-					Object:  "chat.completion.chunk",
-					Created: created,
-					Model:   model.Alias,
-					Choices: []StreamChoice{{
-						Index: 0,
-						Delta: StreamDelta{
-							Role:             "assistant",
-							Reasoning:        rc,
-							ReasoningContent: rc,
-						},
-					}},
+				_ = adapterruntime.EmitDeltaChunk(emit, reqID, model.Alias, created, StreamDelta{
+					Role:             "assistant",
+					Reasoning:        rc,
+					ReasoningContent: rc,
 				})
 			} else {
-				_ = emit(StreamChunk{
-					ID:      reqID,
-					Object:  "chat.completion.chunk",
-					Created: created,
-					Model:   model.Alias,
-					Choices: []StreamChoice{{
-						Index: 0,
-						Delta: StreamDelta{Role: "assistant"},
-					}},
-				})
+				_ = adapterruntime.EmitDeltaChunk(emit, reqID, model.Alias, created, StreamDelta{Role: "assistant"})
 			}
 			for i, tc := range sr.ToolCalls {
-				tid := fallback.EnsureToolCallID(tc.ID, reqID, i)
-				_ = emit(StreamChunk{
-					ID:      reqID,
-					Object:  "chat.completion.chunk",
-					Created: created,
-					Model:   model.Alias,
-					Choices: []StreamChoice{{
-						Index: 0,
-						Delta: StreamDelta{
-							ToolCalls: []ToolCall{{
-								Index: i,
-								ID:    tid,
-								Type:  "function",
-								Function: ToolCallFunction{
-									Name:      tc.Name,
-									Arguments: tc.Arguments,
-								},
-							}},
-						},
-					}},
+				_ = adapterruntime.EmitDeltaChunk(emit, reqID, model.Alias, created, StreamDelta{
+					ToolCalls: fallbackOpenAIToolCalls([]fallback.ToolCall{tc}, reqID, i),
 				})
 			}
 			finalFinish = "tool_calls"
@@ -543,16 +486,7 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 				d.Reasoning = rc
 				d.ReasoningContent = rc
 			}
-			_ = emit(StreamChunk{
-				ID:      reqID,
-				Object:  "chat.completion.chunk",
-				Created: created,
-				Model:   model.Alias,
-				Choices: []StreamChoice{{
-					Index: 0,
-					Delta: d,
-				}},
-			})
+			_ = adapterruntime.EmitDeltaChunk(emit, reqID, model.Alias, created, d)
 			finalFinish = finishreason.FromAnthropicNonStream(sr.Stop)
 		}
 	} else if strings.EqualFold(sr.Stop, "refusal") {
@@ -622,9 +556,9 @@ func (s *Server) streamFallback(w http.ResponseWriter, r *http.Request, req fall
 	return nil
 }
 
-// buildFallbackTools maps OpenAI tools (preferred) or legacy
+// buildFallbackTools maps OpenAI tools (preferred) or compatibility
 // functions into the fallback tool slice. When req.Tools is
-// non-empty, legacy functions are ignored so definitions are not
+// non-empty, compatibility functions are ignored so definitions are not
 // double-registered.
 func buildFallbackTools(req ChatRequest) []fallback.Tool {
 	if len(req.Tools) > 0 {

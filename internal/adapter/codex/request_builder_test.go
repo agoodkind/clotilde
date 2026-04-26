@@ -24,6 +24,7 @@ type codexInputItem = map[string]any
 const (
 	EffortMedium = adaptermodel.EffortMedium
 	EffortHigh   = adaptermodel.EffortHigh
+	EffortXHigh  = adaptermodel.EffortXHigh
 )
 
 func mustRaw(s string) []byte {
@@ -111,7 +112,7 @@ func TestBuildCodexRequestUsesSparkModelSlug(t *testing.T) {
 	}
 }
 
-func TestBuildCodexRequestUsesTieredAliasUpstreamModel(t *testing.T) {
+func TestBuildCodexRequestUsesNativeModelAndRequestEffort(t *testing.T) {
 	req := ChatRequest{
 		Messages: []ChatMessage{{
 			Role:    "user",
@@ -119,16 +120,16 @@ func TestBuildCodexRequestUsesTieredAliasUpstreamModel(t *testing.T) {
 		}},
 	}
 	model := ResolvedModel{
-		Alias:       "clyde-gpt-5.4-xhigh",
+		Alias:       "gpt-5.4",
 		ClaudeModel: "gpt-5.4",
 	}
 
-	out := BuildRequest(req, model, EffortHigh)
+	out := BuildRequest(req, model, EffortXHigh)
 	if out.Model != "gpt-5.4" {
 		t.Fatalf("model=%q want gpt-5.4", out.Model)
 	}
-	if out.Reasoning == nil || out.Reasoning.Effort != EffortHigh {
-		t.Fatalf("reasoning = %+v want effort %q", out.Reasoning, EffortHigh)
+	if out.Reasoning == nil || out.Reasoning.Effort != EffortXHigh {
+		t.Fatalf("reasoning = %+v want effort %q", out.Reasoning, EffortXHigh)
 	}
 }
 
@@ -481,12 +482,12 @@ func TestBuildCodexRequestUsesNativeCodexToolsForShellAndApplyPatch(t *testing.T
 	}
 
 	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
-	var sawShellCommand, sawApplyPatch, sawReadFile bool
+	var sawLocalShell, sawApplyPatch, sawReadFile bool
 	for _, raw := range out.Tools {
 		tool, _ := raw.(map[string]any)
 		switch {
-		case tool["type"] == "function" && tool["name"] == "shell_command":
-			sawShellCommand = true
+		case tool["type"] == "local_shell":
+			sawLocalShell = true
 		case tool["type"] == "custom" && tool["name"] == "apply_patch":
 			sawApplyPatch = true
 			format, _ := tool["format"].(map[string]any)
@@ -502,8 +503,8 @@ func TestBuildCodexRequestUsesNativeCodexToolsForShellAndApplyPatch(t *testing.T
 			t.Fatalf("native tool was also emitted as generic function: %v", tool)
 		}
 	}
-	if !sawShellCommand || !sawApplyPatch || !sawReadFile {
-		t.Fatalf("native tools shell_command=%v apply_patch=%v read_file=%v tools=%v", sawShellCommand, sawApplyPatch, sawReadFile, out.Tools)
+	if !sawLocalShell || !sawApplyPatch || !sawReadFile {
+		t.Fatalf("native tools local_shell=%v apply_patch=%v read_file=%v tools=%v", sawLocalShell, sawApplyPatch, sawReadFile, out.Tools)
 	}
 }
 
@@ -602,18 +603,24 @@ func TestBuildCodexRequestReplaysNativeShellAndApplyPatchHistory(t *testing.T) {
 	var sawShellCall, sawShellOutput, sawPatchCall, sawPatchOutput bool
 	for _, item := range out.Input {
 		switch codexItemTypeString(item) {
+		case "local_shell_call":
+			action, _ := item["action"].(map[string]any)
+			if action["type"] != "exec" {
+				t.Fatalf("shell action=%v", action)
+			}
+			command, _ := action["command"].([]string)
+			if len(command) != 3 || command[2] != "pwd" {
+				t.Fatalf("shell command=%v", command)
+			}
+			if action["working_directory"] != "/repo" {
+				t.Fatalf("shell action=%v", action)
+			}
+			sawShellCall = true
 		case "function_call":
 			if item["name"] != "shell_command" {
 				continue
 			}
-			sawShellCall = true
-			var args map[string]any
-			if err := json.Unmarshal([]byte(item["arguments"].(string)), &args); err != nil {
-				t.Fatalf("shell args: %v", err)
-			}
-			if args["command"] != "pwd" || args["workdir"] != "/repo" {
-				t.Fatalf("shell args=%v", args)
-			}
+			t.Fatalf("shell replay used generic function call: %v", item)
 		case "function_call_output":
 			if item["call_id"] == "call_shell" {
 				sawShellOutput = true
@@ -718,17 +725,16 @@ func TestBuildCodexRequestPreservesResponsesInputToolHistory(t *testing.T) {
 				}
 			case "call_shell":
 				sawShellCommand = true
-				if item["name"] != "shell_command" {
-					t.Fatalf("shell call name=%v", item["name"])
+					t.Fatalf("shell replay used generic function call: %v", item)
 				}
-				var args map[string]any
-				if err := json.Unmarshal([]byte(item["arguments"].(string)), &args); err != nil {
-					t.Fatalf("shell args: %v", err)
+			case "local_shell_call":
+				if item["call_id"] == "call_shell" {
+					sawShellCommand = true
+					action, _ := item["action"].(map[string]any)
+					if action["working_directory"] != "/repo" {
+						t.Fatalf("shell action=%v", action)
+					}
 				}
-				if args["workdir"] != "/repo" || args["command"] != "pwd" {
-					t.Fatalf("shell args=%v", args)
-				}
-			}
 		case "function_call_output":
 			switch item["call_id"] {
 			case "call_glob":
@@ -769,7 +775,7 @@ func TestBuildCodexRequestUsesStablePromptCacheKeyFromMetadata(t *testing.T) {
 			Content: json.RawMessage(`"hello"`),
 		}},
 	}
-	model := ResolvedModel{Alias: "clyde-gpt-5.4"}
+	model := ResolvedModel{Alias: "gpt-5.4"}
 
 	out := BuildRequest(req, model, "")
 	if out.PromptCache != "meta:thread-123" {
@@ -798,7 +804,7 @@ func TestBuildCodexRequestFromCapturedWriteReplay(t *testing.T) {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		t.Fatalf("unmarshal fixture: %v", err)
 	}
-	out := BuildRequest(req, ResolvedModel{Alias: "clyde-gpt-5.4", ClaudeModel: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"}, "")
 	if len(out.Tools) == 0 {
 		t.Fatalf("expected tools")
 	}
@@ -830,7 +836,7 @@ func TestBuildCodexRequestPrefersCursorConversationPromptCacheKey(t *testing.T) 
 			Content: json.RawMessage(`"hello"`),
 		}},
 	}
-	model := ResolvedModel{Alias: "clyde-gpt-5.4"}
+	model := ResolvedModel{Alias: "gpt-5.4"}
 
 	out := BuildRequest(req, model, "")
 	if out.PromptCache != "cursor:conv-123" {
@@ -1364,24 +1370,24 @@ func TestBuildCodexRequestParityMatrixPreservesAliasIntent(t *testing.T) {
 		wantMax       int
 	}{
 		{
-			name:      "normalized_alias_preserves_upstream_model",
-			model:     ResolvedModel{Alias: "clyde-gpt-5.4", ClaudeModel: "gpt-5.4"},
-			wantModel: "gpt-5.4",
-		},
-		{
-			name:      "tiered_alias_preserves_upstream_model",
-			model:     ResolvedModel{Alias: "clyde-gpt-5.4-1m-high", ClaudeModel: "gpt-5.4"},
-			wantModel: "gpt-5.4",
-		},
-		{
-			name:      "spark_alias_preserves_spark_slug",
-			model:     ResolvedModel{Alias: "clyde-gpt-5.3-codex-spark", ClaudeModel: "gpt-5.3-codex-spark"},
-			wantModel: "gpt-5.3-codex-spark",
-		},
-		{
-			name:      "service_tier_and_max_completion_passthrough",
-			model:     ResolvedModel{Alias: "clyde-gpt-5.4", ClaudeModel: "gpt-5.4"},
-			metadata:  mustRaw(`{"service_tier":"fast"}`),
+				name:      "native_alias_preserves_upstream_model",
+				model:     ResolvedModel{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"},
+				wantModel: "gpt-5.4",
+			},
+			{
+				name:      "native_long_context_alias_preserves_upstream_model",
+				model:     ResolvedModel{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"},
+				wantModel: "gpt-5.4",
+			},
+			{
+				name:      "spark_alias_preserves_spark_slug",
+				model:     ResolvedModel{Alias: "gpt-5.3-codex-spark", ClaudeModel: "gpt-5.3-codex-spark"},
+				wantModel: "gpt-5.3-codex-spark",
+			},
+			{
+				name:      "service_tier_and_max_completion_passthrough",
+				model:     ResolvedModel{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"},
+				metadata:  mustRaw(`{"service_tier":"fast"}`),
 			wantModel: "gpt-5.4",
 			wantTier:  "priority",
 			wantMax:   4096,

@@ -79,3 +79,17 @@ func TestClassifyEscalationCauseExtractsTypedClassification(t *testing.T) {
 		})
 	}
 }
+
+func TestFallbackFailureErrorPicksEscalation(t *testing.T) {
+	t.Parallel()
+
+	_, code, msg := FallbackFailureError("oauth_error", errors.New("oauth boom"), errors.New("fallback boom"))
+	if code != "upstream_error" || msg != "oauth boom" {
+		t.Fatalf("oauth escalation = (%q, %q), want upstream_error/oauth boom", code, msg)
+	}
+
+	_, code, msg = FallbackFailureError("fallback_error", errors.New("oauth boom"), errors.New("fallback boom"))
+	if code != "fallback_error" || msg != "fallback boom" {
+		t.Fatalf("fallback escalation = (%q, %q), want fallback_error/fallback boom", code, msg)
+	}
+}

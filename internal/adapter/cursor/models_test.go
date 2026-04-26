@@ -8,12 +8,12 @@ import (
 
 func TestNormalizeModelAliasPreservesForegroundAliasParity(t *testing.T) {
 	testCases := map[string]string{
-		"clyde-gpt-5.4-1m-medium":   "clyde-gpt-5.4-1m",
-		"clyde-gpt-5.5-1m-xhigh":    "clyde-gpt-5.5-1m",
-		"clyde-codex-gpt-5.4-high":  "clyde-codex-gpt-5.4",
-		"clyde-gpt-5.4":             "clyde-gpt-5.4",
-		"gpt-5.4":                   "gpt-5.4",
-		" clyde-gpt-5.4-1m-medium ": "clyde-gpt-5.4-1m",
+		"clyde-gpt-5.4-1m-medium":  "clyde-gpt-5.4-1m-medium",
+		"clyde-gpt-5.5-1m-xhigh":   "clyde-gpt-5.5-1m-xhigh",
+		"clyde-codex-gpt-5.4-high": "clyde-codex-gpt-5.4",
+		"clyde-gpt-5.4":            "clyde-gpt-5.4",
+		"gpt-5.4":                  "gpt-5.4",
+		" clyde-gpt-5.4-1m-medium ": "clyde-gpt-5.4-1m-medium",
 	}
 
 	for rawModel, want := range testCases {
@@ -25,11 +25,11 @@ func TestNormalizeModelAliasPreservesForegroundAliasParity(t *testing.T) {
 
 func TestTranslateRequestCarriesNormalizedModel(t *testing.T) {
 	req := TranslateRequest(adapteropenai.ChatRequest{
-		Model: "clyde-gpt-5.4-1m-medium",
+		Model: "gpt-5.4",
 	})
 
-	if req.NormalizedModel != "clyde-gpt-5.4-1m" {
-		t.Fatalf("NormalizedModel=%q want %q", req.NormalizedModel, "clyde-gpt-5.4-1m")
+	if req.NormalizedModel != "gpt-5.4" {
+		t.Fatalf("NormalizedModel=%q want %q", req.NormalizedModel, "gpt-5.4")
 	}
 	if req.Mode != ModeAgent {
 		t.Fatalf("Mode=%q want %q", req.Mode, ModeAgent)

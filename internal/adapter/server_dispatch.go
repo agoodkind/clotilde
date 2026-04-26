@@ -15,7 +15,6 @@ import (
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
-	"goodkind.io/gklog"
 )
 
 // CountNormalizedTools counts tools that arrived without a `function` key
@@ -261,53 +260,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.acquire(r.Context()); err != nil {
-		writeError(w, http.StatusTooManyRequests, "rate_limited", err.Error())
-		return
-	}
-	defer s.release()
-
-	system, prompt := BuildPrompt(req.Messages)
-	jsonSpec := ParseResponseFormat(req.ResponseFormat)
-	if instr := jsonSpec.SystemPrompt(false); instr != "" {
-		if system == "" {
-			system = instr
-		} else {
-			system = system + "\n\n" + instr
-		}
-	}
-	runner := NewRunner(s.deps, model, effort, system, prompt, reqID)
-	started := time.Now()
-	s.emitRequestStarted(r.Context(), model, "", reqID, model.ClaudeModel, req.Stream)
-	spawnCtx := gklog.WithLogger(r.Context(), s.log.With("request_id", reqID))
-	stdout, cancel, err := runner.Spawn(spawnCtx)
-	if err != nil {
-		adapterruntime.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, adapterruntime.RequestEvent{
-			Stage:      adapterruntime.RequestStageFailed,
-			Provider:   providerName(model, ""),
-			Backend:    model.Backend,
-			RequestID:  reqID,
-			Alias:      model.Alias,
-			ModelID:    model.ClaudeModel,
-			Stream:     req.Stream,
-			DurationMs: time.Since(started).Milliseconds(),
-			Err:        err.Error(),
-		})
-		writeError(w, http.StatusInternalServerError, "spawn_failed", err.Error())
-		return
-	}
-	defer cancel()
-
-	if req.Stream {
-		// Streaming JSON enforcement is impractical because chunks
-		// arrive token-by-token and cannot be re-issued mid-stream.
-		// The system prompt already nudges claude toward raw JSON;
-		// pure structured-output clients (humanify, etc.) almost
-		// always use the non-streaming path.
-		s.streamChat(w, r, req, model, stdout, reqID, started)
-		return
-	}
-	s.collectChat(w, r.Context(), req, model, stdout, reqID, started, jsonSpec)
+	writeError(w, http.StatusBadRequest, "unsupported_backend",
+		"model resolved to unsupported backend "+model.Backend+"; configure anthropic, codex, shunt, or fallback explicitly")
 }
 
 func truncateBody(body []byte, maxBytes int) (string, bool) {
@@ -598,17 +552,4 @@ func (s *Server) handleLegacy(w http.ResponseWriter, r *http.Request) {
 	r.ContentLength = int64(len(body))
 	r.Header.Set("Content-Type", "application/json")
 	s.handleChat(w, r)
-}
-
-// surfaceFallbackFailure writes the error chosen by
-// FailureEscalation. Called only after both attempts have failed
-// and nothing has been written to the wire yet (the escalate=true
-// path returns before any header/byte commits).
-func (s *Server) surfaceFallbackFailure(w http.ResponseWriter, anthErr, fbErr error, failureEscalation string) {
-	switch failureEscalation {
-	case FallbackEscalationOAuthError:
-		writeError(w, http.StatusBadGateway, "upstream_error", anthErr.Error())
-	default: // FallbackEscalationFallbackError
-		writeError(w, http.StatusBadGateway, "fallback_error", fbErr.Error())
-	}
 }

@@ -35,17 +35,19 @@ type ResponseDispatcher interface {
 	EmitRequestStarted(context.Context, adaptermodel.ResolvedModel, string, string, string, bool)
 	EmitRequestStreamOpened(context.Context, adaptermodel.ResolvedModel, string, string, string, bool)
 	NewAnthropicSSEWriter(http.ResponseWriter) (ResponseSSEWriter, error)
+	AnthropicStreamClient() StreamClient
 	SystemFingerprint() string
 	StreamChunkFromTooltrans(tooltrans.OpenAIStreamChunk) adapteropenai.StreamChunk
 	StreamChunkHasVisibleContent(adapteropenai.StreamChunk) bool
-	RunOAuthTranslatorStream(context.Context, anthropic.Request, adaptermodel.ResolvedModel, string, func(tooltrans.OpenAIStreamChunk) error) (anthropic.Usage, string, string, error)
 	TrackAnthropicContextUsage(string, adapteropenai.Usage) TrackedUsage
 	JSONCoercion(any) JSONCoercion
 	WriteJSON(http.ResponseWriter, int, any)
 	LogTerminal(context.Context, adapterruntime.RequestEvent)
 	LogCacheUsageAnthropic(context.Context, string, string, string, anthropic.Usage)
 	CacheTTL() string
-	UnclaimNotice(*anthropic.Notice)
+	NoticesEnabled() bool
+	ClaimNotice(string, time.Time) bool
+	UnclaimNotice(string, time.Time)
 }
 
 func CollectResponse(
@@ -59,15 +61,22 @@ func CollectResponse(
 	jsonSpec any,
 	escalate bool,
 	trackerKey string,
-	notice **anthropic.Notice,
 ) error {
 	d.EmitRequestStarted(ctx, model, "oauth", reqID, req.Model, false)
+	var notice *anthropic.Notice
+	previousOnHeaders := req.OnHeaders
+	req.OnHeaders = func(h http.Header) {
+		if previousOnHeaders != nil {
+			previousOnHeaders(h)
+		}
+		notice = adapterruntime.EvaluateNoticeFromHeaders(h, d.NoticesEnabled(), d.ClaimNotice)
+	}
 	var buf []tooltrans.OpenAIStreamChunk
 	emit := func(ch tooltrans.OpenAIStreamChunk) error {
 		buf = append(buf, ch)
 		return nil
 	}
-	anthUsage, anthStopReason, finishReason, err := d.RunOAuthTranslatorStream(ctx, req, model, reqID, emit)
+	anthUsage, anthStopReason, finishReason, err := RunTranslatorStream(d.AnthropicStreamClient(), ctx, req, model, reqID, emit)
 	if err != nil {
 		adapterruntime.LogFailed(d.Log(), ctx, adapterruntime.FailedAttrs{
 			Backend:    "anthropic",
@@ -90,23 +99,23 @@ func CollectResponse(
 			Err:        err.Error(),
 		})
 		errMsg := err.Error()
-		if notice != nil && *notice != nil {
+		if notice != nil {
 			if escalate {
-				d.UnclaimNotice(*notice)
+				d.UnclaimNotice(notice.Kind, notice.ResetsAt)
 				d.Log().LogAttrs(ctx, slog.LevelDebug, "adapter.notice.unclaimed_on_escalate",
 					slog.String("subcomponent", "adapter"),
 					slog.String("request_id", reqID),
 					slog.String("alias", model.Alias),
-					slog.String("kind", (*notice).Kind),
+					slog.String("kind", notice.Kind),
 				)
 			} else {
-				errMsg = errMsg + " · " + (*notice).Text
+				errMsg = errMsg + " · " + notice.Text
 				d.Log().LogAttrs(ctx, slog.LevelInfo, "adapter.notice.injected_into_error",
 					slog.String("subcomponent", "adapter"),
 					slog.String("request_id", reqID),
 					slog.String("alias", model.Alias),
-					slog.String("kind", (*notice).Kind),
-					slog.String("notice_text", (*notice).Text),
+					slog.String("kind", notice.Kind),
+					slog.String("notice_text", notice.Text),
 				)
 			}
 		}
@@ -126,10 +135,8 @@ func CollectResponse(
 	tracked := d.TrackAnthropicContextUsage(trackerKey, rawUsage)
 	u := tracked.Usage
 	resp := MergeStreamChunks(reqID, model.Alias, d.SystemFingerprint(), buf, u, finishReason, d.JSONCoercion(jsonSpec), anthStopReason)
-	resp, _ = adapterruntime.NoticeForResponseHeaders(resp, derefNotice(notice), func(kind string, resetsAt time.Time) {
-		if n := derefNotice(notice); n != nil {
-			d.UnclaimNotice(n)
-		}
+	resp, _ = adapterruntime.NoticeForResponseHeaders(resp, notice, func(kind string, resetsAt time.Time) {
+		d.UnclaimNotice(kind, resetsAt)
 	}, json.Marshal)
 	d.WriteJSON(w, http.StatusOK, resp)
 	if u.PromptTokens != rawUsage.PromptTokens || u.TotalTokens != rawUsage.TotalTokens {
@@ -200,7 +207,6 @@ func StreamResponse(
 	escalate bool,
 	includeUsage bool,
 	trackerKey string,
-	noticeEmitter *func(tooltrans.OpenAIStreamChunk) error,
 ) error {
 	d.EmitRequestStarted(r.Context(), model, "oauth", reqID, req.Model, true)
 	sw, err := d.NewAnthropicSSEWriter(w)
@@ -227,12 +233,32 @@ func StreamResponse(
 		}
 		return sw.EmitStreamChunk(d.SystemFingerprint(), chunk)
 	}
-	if noticeEmitter != nil {
-		*noticeEmitter = func(ch tooltrans.OpenAIStreamChunk) error {
-			return emit(d.StreamChunkFromTooltrans(ch))
+	previousOnHeaders := req.OnHeaders
+	req.OnHeaders = func(h http.Header) {
+		if previousOnHeaders != nil {
+			previousOnHeaders(h)
+		}
+		notice, err := adapterruntime.NoticeForStreamHeaders(
+			reqID,
+			model.Alias,
+			h,
+			d.NoticesEnabled(),
+			func(chunk tooltrans.OpenAIStreamChunk) error {
+				return emit(d.StreamChunkFromTooltrans(chunk))
+			},
+			d.ClaimNotice,
+			d.UnclaimNotice,
+		)
+		if err != nil && notice != nil {
+			d.Log().LogAttrs(r.Context(), slog.LevelWarn, "adapter.notice.stream_emit_failed",
+				slog.String("request_id", reqID),
+				slog.String("alias", model.Alias),
+				slog.String("model", req.Model),
+				slog.String("kind", notice.Kind),
+			)
 		}
 	}
-	anthUsage, _, finishReason, err := d.RunOAuthTranslatorStream(r.Context(), req, model, reqID, func(ch tooltrans.OpenAIStreamChunk) error {
+	anthUsage, _, finishReason, err := RunTranslatorStream(d.AnthropicStreamClient(), r.Context(), req, model, reqID, func(ch tooltrans.OpenAIStreamChunk) error {
 		return emit(d.StreamChunkFromTooltrans(ch))
 	})
 	if err != nil {
@@ -393,13 +419,6 @@ func StreamResponse(
 		})
 	}
 	return nil
-}
-
-func derefNotice(v **anthropic.Notice) *anthropic.Notice {
-	if v == nil {
-		return nil
-	}
-	return *v
 }
 
 func usageWithContextWindow(u adapteropenai.Usage, contextWindow int) adapteropenai.Usage {

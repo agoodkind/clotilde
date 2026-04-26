@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	adapterconfig "goodkind.io/clyde/internal/config"
 )
 
 // Config is the per-Client wiring the parent passes in once at
@@ -31,8 +33,7 @@ type Config struct {
 }
 
 // Validate returns an error for any required field that is empty or
-// non-positive. The parent calls this from buildFallbackConfig so
-// the daemon refuses to start the listener with a partial config.
+// non-positive.
 func (c Config) Validate() error {
 	if c.Binary == "" {
 		return errors.New("fallback.Config.Binary is empty")
@@ -46,6 +47,54 @@ func (c Config) Validate() error {
 	return nil
 }
 
+// FromAdapterConfig resolves runtime values from the user's
+// [adapter.fallback] stanza: the binary path, parsed timeout, and
+// scratch directory. The root adapter supplies process-level hooks for
+// locating Claude and choosing the daemon scratch base, while this
+// package owns the fallback-specific config validation.
+func FromAdapterConfig(
+	fb adapterconfig.AdapterFallback,
+	resolveClaude func() (string, error),
+	scratchDir func() string,
+) (Config, error) {
+	bin := fb.Binary
+	if bin == "" {
+		if resolveClaude == nil {
+			return Config{}, fmt.Errorf("adapter: fallback.binary empty and deps.ResolveClaude not wired")
+		}
+		resolved, err := resolveClaude()
+		if err != nil {
+			return Config{}, fmt.Errorf("resolve claude binary: %w", err)
+		}
+		bin = resolved
+	}
+	d, err := time.ParseDuration(fb.Timeout)
+	if err != nil {
+		return Config{}, fmt.Errorf("parse timeout %q: %w", fb.Timeout, err)
+	}
+	base := ""
+	if scratchDir != nil {
+		base = scratchDir()
+	}
+	if base == "" {
+		return Config{}, fmt.Errorf("adapter: deps.ScratchDir returned empty path; required for fallback")
+	}
+	scratch, err := EnsureScratchDir(base, fb.ScratchSubdir)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg := Config{
+		Binary:          bin,
+		Timeout:         d,
+		ScratchDir:      scratch,
+		SuppressHookEnv: fb.SuppressHookEnv,
+	}
+	if err := cfg.Validate(); err != nil {
+		return Config{}, fmt.Errorf("adapter: %w", err)
+	}
+	return cfg, nil
+}
+
 // Client wraps a validated Config. Methods are safe to call from
 // multiple goroutines; the subprocess wiring is per-call.
 type Client struct {
@@ -53,7 +102,7 @@ type Client struct {
 }
 
 // New returns a Client. Validate must have already been called by
-// the parent during buildFallbackConfig; New does not re-validate.
+// the parent during FromAdapterConfig; New does not re-validate.
 func New(cfg Config) *Client {
 	return &Client{cfg: cfg}
 }
@@ -139,8 +188,8 @@ func exitError(waitErr error, info *SpawnInfo, parsed *ParsedError) error {
 }
 
 // EnsureScratchDir creates the cwd path beneath base for the
-// fallback subprocess. The parent calls this once during
-// buildFallbackConfig; failure aborts daemon startup.
+// fallback subprocess. FromAdapterConfig calls this once during
+// daemon startup.
 func EnsureScratchDir(base, subdir string) (string, error) {
 	if base == "" {
 		return "", errors.New("fallback.EnsureScratchDir: base is empty")

@@ -179,6 +179,6 @@ func TestBuildArgsLegacyKeepsSessionID(t *testing.T) {
 		}
 	}
 	if !has {
-		t.Fatalf("expected --session-id abc in legacy mode, got: %v", args)
+		t.Fatalf("expected --session-id abc in direct prompt mode, got: %v", args)
 	}
 }

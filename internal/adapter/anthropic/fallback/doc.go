@@ -1,7 +1,7 @@
 // Package fallback drives the local `claude` CLI in
-// `-p --output-format stream-json` mode as the third adapter
-// backend. It exists so the OpenAI adapter can either explicitly
-// route an alias through `claude -p` or escalate to it when the
+// `-p --output-format stream-json` mode for the Anthropic provider.
+// It exists so the OpenAI adapter can either explicitly route an
+// Anthropic alias through `claude -p` or escalate to it when the
 // direct-OAuth path returns an error. The package is deliberately
 // isolated from the parent `adapter` package so the registry and
 // HTTP layers stay slim and so the subprocess details (env

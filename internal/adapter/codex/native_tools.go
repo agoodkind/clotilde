@@ -90,12 +90,10 @@ func FunctionToolSpec(name, description string, parameters json.RawMessage, stri
 func ShellToolMode(modelName string) string {
 	modelName = strings.ToLower(strings.TrimSpace(modelName))
 	switch {
-	case modelName == "":
+	case strings.Contains(modelName, "shell-command"):
 		return "shell_command"
-	case strings.Contains(modelName, "local-shell"):
-		return "local_shell"
 	default:
-		return "shell_command"
+		return "local_shell"
 	}
 }
 

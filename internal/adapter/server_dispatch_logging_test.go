@@ -210,16 +210,57 @@ func TestHandleChatAcceptsResponsesInputShape(t *testing.T) {
 	}
 }
 
+func TestHandleChatRejectsUnsupportedBackendWithoutLegacyRunner(t *testing.T) {
+	t.Parallel()
+	srv, _ := newLoggingServer(t, config.LoggingConfig{
+		Body: config.LoggingBody{
+			Mode: "off",
+		},
+	})
+
+	payload, err := json.Marshal(map[string]any{
+		"model": "clyde-haiku-4-5",
+		"messages": []map[string]string{
+			{"role": "user", "content": "ping"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	srv.mux.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s", resp.Code, resp.Body.String())
+	}
+	var out ErrorResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal error response: %v body=%s", err, resp.Body.String())
+	}
+	if out.Error.Type != "unsupported_backend" {
+		t.Fatalf("error type = %q body=%s", out.Error.Type, resp.Body.String())
+	}
+}
+
 func TestHandleChatLogsCursorModelNormalization(t *testing.T) {
 	t.Parallel()
 	srv, buf := newLoggingServer(t, config.LoggingConfig{
 		Body: config.LoggingBody{
 			Mode: "off",
 		},
+	}, func(cfg *config.AdapterConfig) {
+		cfg.Codex.Enabled = true
+		cfg.Codex.NativeModelRouting = "codex"
 	})
 
 	body := map[string]any{
-		"model": "clyde-gpt-5.4-1m-medium",
+		"model": "gpt-5.4",
+		"reasoning": map[string]any{
+			"effort":  "high",
+			"summary": "auto",
+		},
 		"tools": []map[string]any{
 			{
 				"type": "function",
@@ -236,13 +277,13 @@ func TestHandleChatLogsCursorModelNormalization(t *testing.T) {
 	if evt == nil {
 		t.Fatalf("expected adapter.chat.received event")
 	}
-	if evt["alias"] != "clyde-gpt-5.4-1m" {
-		t.Fatalf("alias=%v want clyde-gpt-5.4-1m", evt["alias"])
+	if evt["alias"] != "gpt-5.4" {
+		t.Fatalf("alias=%v want gpt-5.4", evt["alias"])
 	}
-	if evt["cursor_raw_model"] != "clyde-gpt-5.4-1m-medium" {
+	if evt["cursor_raw_model"] != "gpt-5.4" {
 		t.Fatalf("cursor_raw_model=%v", evt["cursor_raw_model"])
 	}
-	if evt["cursor_normalized_model"] != "clyde-gpt-5.4-1m" {
+	if evt["cursor_normalized_model"] != "gpt-5.4" {
 		t.Fatalf("cursor_normalized_model=%v", evt["cursor_normalized_model"])
 	}
 	if evt["cursor_request_path"] != "foreground" {
@@ -253,10 +294,13 @@ func TestHandleChatLogsCursorModelNormalization(t *testing.T) {
 	}
 }
 
-func newLoggingServer(t *testing.T, logging config.LoggingConfig) (*Server, *bytes.Buffer) {
+func newLoggingServer(t *testing.T, logging config.LoggingConfig, opts ...func(*config.AdapterConfig)) (*Server, *bytes.Buffer) {
 	t.Helper()
 	cfg := baseConfig()
 	cfg.Fallback = config.AdapterFallback{Enabled: false}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 
 	logBuffer := &bytes.Buffer{}
 	srv, err := New(cfg, logging, Deps{

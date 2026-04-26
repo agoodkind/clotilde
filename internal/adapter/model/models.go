@@ -54,6 +54,7 @@ const (
 	EffortLow    = "low"
 	EffortMedium = "medium"
 	EffortHigh   = "high"
+	EffortXHigh  = "xhigh"
 	EffortMax    = "max"
 )
 
@@ -132,6 +133,8 @@ type Registry struct {
 	fallbackShnt string
 	codexEnabled bool
 	codexPrefix  []string
+	codexNativeRouting string
+	codexNativeShunt string
 }
 
 // NewRegistry builds the registry from a loaded AdapterConfig. It
@@ -237,6 +240,24 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 		fallbackShnt: strings.ToLower(cfg.FallbackShunt),
 		codexEnabled: cfg.Codex.Enabled,
 		codexPrefix:  append([]string(nil), cfg.Codex.ModelPrefixes...),
+		codexNativeRouting: strings.ToLower(strings.TrimSpace(cfg.Codex.NativeModelRouting)),
+		codexNativeShunt: strings.ToLower(strings.TrimSpace(cfg.Codex.NativeModelShunt)),
+	}
+	if r.codexNativeRouting == "" {
+		r.codexNativeRouting = "off"
+	}
+	switch r.codexNativeRouting {
+	case "off", "codex", "shunt":
+	default:
+		return nil, fmt.Errorf("adapter: [adapter.codex].native_model_routing must be one of: off, codex, shunt")
+	}
+	if r.codexNativeRouting == "shunt" {
+		if r.codexNativeShunt == "" {
+			return nil, fmt.Errorf("adapter: [adapter.codex].native_model_shunt is required when native_model_routing = \"shunt\"")
+		}
+		if _, ok := cfg.Shunts[r.codexNativeShunt]; !ok {
+			return nil, fmt.Errorf("adapter: [adapter.codex].native_model_shunt %q not found in [adapter.shunts]", r.codexNativeShunt)
+		}
 	}
 	if len(r.codexPrefix) == 0 {
 		r.codexPrefix = []string{"gpt-", "o"}
@@ -515,12 +536,22 @@ func (r *Registry) looksLikeCodexModel(alias string) bool {
 	if key == "" {
 		return false
 	}
-	if strings.HasPrefix(key, "clyde-gpt-") ||
-		strings.HasPrefix(key, "clyde-o1") ||
+	if strings.HasPrefix(key, "clyde-o1") ||
 		strings.HasPrefix(key, "clyde-o3") ||
 		strings.HasPrefix(key, "clyde-o4") ||
 		strings.HasPrefix(key, "clyde-codex-") {
 		return true
+	}
+	return r.looksLikeNativeCodexModel(alias)
+}
+
+func (r *Registry) looksLikeNativeCodexModel(alias string) bool {
+	if !r.codexEnabled {
+		return false
+	}
+	key := strings.ToLower(strings.TrimSpace(alias))
+	if key == "" || strings.HasPrefix(key, "clyde-") {
+		return false
 	}
 	for _, p := range r.codexPrefix {
 		p = strings.ToLower(strings.TrimSpace(p))
@@ -537,7 +568,7 @@ func (r *Registry) looksLikeCodexModel(alias string) bool {
 func normalizeCodexModelAlias(alias string) string {
 	key := strings.TrimSpace(alias)
 	lower := strings.ToLower(key)
-	for _, prefix := range []string{"clyde-codex-", "clyde-"} {
+	for _, prefix := range []string{"clyde-codex-"} {
 		if strings.HasPrefix(lower, prefix) {
 			key = key[len(prefix):]
 			lower = strings.ToLower(key)
@@ -573,10 +604,18 @@ func codexAliasEffort(alias string) string {
 func codexAliasContext(alias string) int {
 	key := normalizeCodexModelAlias(alias)
 	original := strings.ToLower(strings.TrimSpace(alias))
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "gpt-5.4", "gpt-5.5":
+		return 1000000
+	}
 	if strings.HasSuffix(original, "-1m") || strings.Contains(original, "-1m-") {
-		if strings.EqualFold(key, "gpt-5.4") || strings.EqualFold(key, "gpt-5.5") {
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "gpt-5.4", "gpt-5.5":
 			return 1000000
 		}
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(key)), "gpt-5.3") {
+		return 272000
 	}
 	return 0
 }
@@ -594,6 +633,42 @@ func codexAliasContext(alias string) int {
 func (r *Registry) Resolve(alias, reqEffort string) (ResolvedModel, string, error) {
 	if alias == "" {
 		alias = r.def
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(alias)), "clyde-gpt-") {
+		return ResolvedModel{}, "", fmt.Errorf(
+			"model %q is no longer supported; use Cursor's native GPT model IDs such as gpt-5.4",
+			alias,
+		)
+	}
+	if r.looksLikeNativeCodexModel(alias) {
+		switch r.codexNativeRouting {
+		case "codex":
+			effort := strings.ToLower(strings.TrimSpace(reqEffort))
+			if effort == "" {
+				effort = codexAliasEffort(alias)
+			}
+			return ResolvedModel{
+				Alias:       alias,
+				Backend:     BackendCodex,
+				ClaudeModel: normalizeCodexModelAlias(alias),
+				Context:     codexAliasContext(alias),
+			}, effort, nil
+		case "shunt":
+			if _, ok := r.shunts[r.codexNativeShunt]; ok {
+				return ResolvedModel{
+					Alias:   alias,
+					Backend: BackendShunt,
+					Shunt:   r.codexNativeShunt,
+				}, "", nil
+			}
+			return ResolvedModel{}, "", fmt.Errorf("native model shunt %q is not configured", r.codexNativeShunt)
+		default:
+			return ResolvedModel{}, "", fmt.Errorf(
+				"unknown model %q (native model routing is off; configure [adapter.models.%q] or [adapter.codex].native_model_routing)",
+				alias,
+				alias,
+			)
+		}
 	}
 	if r.looksLikeCodexModel(alias) {
 		effort := strings.ToLower(strings.TrimSpace(reqEffort))

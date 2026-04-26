@@ -52,7 +52,7 @@ type CompletedAttrs struct {
 
 	// Path tags which dispatch leg handled the request so aggregators
 	// can compare costs across backends. Known values: "oauth",
-	// "fallback_flat" (claude -p with full history in prompt),
+	// "fallback_prompt" (claude -p with full history in prompt),
 	// "fallback_resume" (claude -p --resume against synthesized
 	// transcript). Leave empty when the leg cannot be identified.
 	Path string
@@ -67,8 +67,8 @@ type CompletedAttrs struct {
 	Provider string
 }
 
-// LogCompleted emits a normalized adapter chat completion log with model_id and
-// a one-cycle legacy model key for backward compatibility.
+// LogCompleted emits a normalized adapter chat completion log with model_id
+// plus the provider-specific model key expected by existing log queries.
 func LogCompleted(log *slog.Logger, ctx context.Context, attrs CompletedAttrs) {
 	if log == nil {
 		return
