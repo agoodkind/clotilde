@@ -1124,10 +1124,13 @@ Current state:
   path labels.
 - `internal/adapter/anthropic/fallback/` now owns fallback collect/stream
   runner wrappers and synthesized transcript-resume preparation.
-- Actual fallback response orchestration still goes through root-owned
-  `internal/adapter/fallback_handler.go`, but the root now consumes
-  provider-owned runners/builders instead of executing fallback stream
-  details or assembling fallback response shape inline.
+- `internal/adapter/anthropic/backend/fallback_runtime.go` owns fallback
+  HTTP/SSE response writing, fallback request-event logging, completion
+  logging, cache logging, and terminal cost accounting through a narrow
+  dispatcher interface.
+- Root fallback handling now validates config, acquires the fallback
+  semaphore, builds the provider request, applies optional transcript-resume
+  preparation, and delegates response handling to the Anthropic backend.
 
 Planned split:
 
@@ -1139,9 +1142,9 @@ Planned split:
 3. Move remaining root fallback response orchestration only after the shared
    OpenAI response rendering boundary is narrow enough to avoid copying
    stream/JSON assembly into the backend package.
-4. Move the final HTTP/SSE writing and request-event logging boundary behind
-   a smaller dispatcher interface once the backend owns enough execution
-   state to do so without importing the root adapter package.
+4. Continue shrinking the root fallback handler by moving validation,
+   unsupported-field logging, request construction, and transcript-resume
+   policy behind the Anthropic backend dispatcher boundary.
 
 Files involved:
 
@@ -2368,12 +2371,16 @@ anthropic-ratelimit-unified-overage-status: rejected` path and
    Root now calls `CollectOpenAI(...)`, `StreamOpenAI(...)`, and
    `PrepareTranscriptResume(...)` instead of driving CLI result conversion
    or Claude transcript file synthesis itself.
-6. [todo] Move the remaining HTTP/SSE writing and request-event logging for
-   fallback behind an Anthropic backend dispatcher boundary.
-7. [todo] Update logging so fallback transitions name the Anthropic
+6. [done 2026-04-26] Move fallback HTTP/SSE writing, request-event logging,
+   cache logging, completion logging, and terminal cost accounting into
+   `internal/adapter/anthropic/backend/fallback_runtime.go`.
+7. [todo] Move root fallback validation, unsupported-field logging, request
+   construction, and transcript-resume policy behind the Anthropic backend
+   dispatcher boundary.
+8. [todo] Update logging so fallback transitions name the Anthropic
    classifier outcome that triggered them, not just the generic
    escalation reason.
-8. [todo] Add backend-local tests for fallback escalation, replacing
+9. [todo] Add backend-local tests for fallback escalation, replacing
    any tests that only run through the full server facade.
 
 ### Phase 5 todos: extract Codex request shaping
@@ -2970,9 +2977,10 @@ entries, and orders the real work by dependency and debugging value.
    Anthropic-owned package at `internal/adapter/anthropic/fallback/`, and
    fallback request plus response mapping now live in that package as well.
    Fallback collect/stream runner wrappers and transcript-resume mechanics
-   also live there now. Current remaining work is moving the fallback HTTP,
-   SSE, and request-event logging boundary behind an Anthropic-owned
-   dispatcher interface.
+   also live there now. Fallback HTTP/SSE writing and request-event logging
+   moved into `internal/adapter/anthropic/backend/fallback_runtime.go`.
+   Current remaining work is moving root fallback validation and request
+   preparation behind the Anthropic-owned dispatcher interface.
 
 ### P3: shared stream/output architecture
 

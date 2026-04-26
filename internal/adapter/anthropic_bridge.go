@@ -116,6 +116,14 @@ func (s *Server) LogCacheUsageAnthropic(ctx context.Context, backend, reqID, ali
 	s.logCacheUsageAnthropic(ctx, backend, reqID, alias, u)
 }
 
+func (s *Server) FallbackClient() anthropicbackend.FallbackClient {
+	return s.fb
+}
+
+func (s *Server) LogCacheUsageFallback(ctx context.Context, backend, reqID, alias string, promptTokens, cacheCreationTokens, cacheReadTokens int) {
+	s.logCacheUsage(ctx, backend, reqID, alias, promptTokens, cacheCreationTokens, cacheReadTokens)
+}
+
 func (s *Server) UnclaimNotice(kind string, resetsAt time.Time) {
 	Unclaim(kind, resetsAt)
 }

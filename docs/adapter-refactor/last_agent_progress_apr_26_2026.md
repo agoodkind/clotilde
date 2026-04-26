@@ -1329,3 +1329,41 @@ Next large batch:
   backend dispatcher boundary. At that point root fallback handling should be
   reduced to validation, semaphore acquisition, and delegation, with backend
   tests covering the behavior without the full server facade.
+
+## 2026-04-26 fallback response runtime checkpoint
+
+Follow-up to the runner boundary. This slice moved fallback HTTP/SSE response
+handling and request-event logging into the Anthropic backend package.
+
+What changed:
+
+- `internal/adapter/anthropic/backend/fallback_runtime.go`: added
+  `CollectFallbackResponse(...)` and `StreamFallbackResponse(...)`, plus a
+  `FallbackResponseDispatcher` boundary and a narrow fallback-client
+  interface.
+- `internal/adapter/anthropic/backend/fallback_runtime.go`: moved fallback
+  final JSON writing, SSE headers/chunks/DONE writing, failed/completed
+  terminal request events, cache-usage logging, completion logging, and
+  terminal cost accounting out of root.
+- `internal/adapter/fallback_handler.go`: removed root-owned collect/stream
+  HTTP handling and now delegates to `anthropicbackend.CollectFallbackResponse`
+  or `anthropicbackend.StreamFallbackResponse`.
+- `internal/adapter/anthropic_bridge.go`: added root bridge methods for the
+  fallback client and fallback cache-usage logging.
+- `internal/adapter/anthropic/backend/fallback_runtime_test.go`: added
+  backend-local tests for collect success, collect escalation, stream chunk
+  writing, usage chunk writing, DONE, cache logging, and terminal request
+  events.
+
+Verification:
+
+- `go test ./internal/adapter/anthropic/backend -count=1` passed.
+- `go test ./internal/adapter/...` passed.
+
+Next large batch:
+
+- Move root fallback validation, unsupported-field logging, request
+  construction, response-format prompt injection, and transcript-resume policy
+  behind an Anthropic backend dispatcher boundary. After that,
+  `internal/adapter/fallback_handler.go` should be close to a thin
+  compatibility shim or deletable bridge.
