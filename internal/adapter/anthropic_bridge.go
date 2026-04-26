@@ -9,7 +9,6 @@ import (
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
-	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	"goodkind.io/clyde/internal/adapter/tooltrans"
@@ -86,10 +85,6 @@ func (s *Server) StreamChunkHasVisibleContent(chunk adapteropenai.StreamChunk) b
 	return streamChunkHasVisibleContent(chunk)
 }
 
-func (s *Server) EmitActionableStreamError(emit func(adapteropenai.StreamChunk) error, reqID, modelAlias string, err error) error {
-	return emitActionableStreamError(emit, reqID, modelAlias, err)
-}
-
 func (s *Server) RunOAuthTranslatorStream(ctx context.Context, req anthropic.Request, model adaptermodel.ResolvedModel, reqID string, emit func(tooltrans.OpenAIStreamChunk) error) (anthropic.Usage, string, string, error) {
 	return s.runOAuthTranslatorStream(ctx, req, model, reqID, emit)
 }
@@ -104,13 +99,18 @@ func (s *Server) TrackAnthropicContextUsage(key string, raw adapteropenai.Usage)
 	}
 }
 
-func (s *Server) MergeAnthropicStreamChunks(reqID, alias string, chunks []tooltrans.OpenAIStreamChunk, usage adapteropenai.Usage, finishReason string, jsonSpec any, anthropicStopReason string) any {
-	return mergeOAuthStreamChunks(reqID, alias, chunks, Usage(usage), finishReason, jsonSpec.(JSONResponseSpec), anthropicStopReason)
-}
-
-func (s *Server) NoticeForResponseHeaders(resp any, notice *anthropic.Notice) (any, error) {
-	out, _ := adapterruntime.NoticeForResponseHeaders(resp.(ChatResponse), notice, Unclaim, json.Marshal)
-	return out, nil
+// JSONCoercion translates the root-side JSONResponseSpec passed via
+// the Dispatcher.ParseResponseFormat hook into the neutral
+// JSONCoercion contract the Anthropic merger expects.
+func (s *Server) JSONCoercion(jsonSpec any) anthropicbackend.JSONCoercion {
+	spec, ok := jsonSpec.(JSONResponseSpec)
+	if !ok || spec.Mode == "" {
+		return anthropicbackend.JSONCoercion{}
+	}
+	return anthropicbackend.JSONCoercion{
+		Coerce:   CoerceJSON,
+		Validate: LooksLikeJSON,
+	}
 }
 
 func (s *Server) CacheTTL() string {

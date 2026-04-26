@@ -58,6 +58,29 @@ func (sw *SSEWriter) WriteStreamDone() error {
 	return nil
 }
 
+// EmitStreamError writes an OpenAI-shaped native error envelope as a
+// single SSE frame: `data: {"error": {"message": ..., "type": ...,
+// "code": ...}}\n\n`. It does not write a `[DONE]` terminator;
+// callers decide whether to follow with a finish chunk and DONE or
+// terminate the stream as-is.
+//
+// Use this for upstream failures that should surface as a native
+// error to the OpenAI client (Cursor, OpenAI SDK consumers) rather
+// than as an assistant-shaped chat message.
+func (sw *SSEWriter) EmitStreamError(body ErrorBody) error {
+	sw.WriteSSEHeaders()
+	envelope := ErrorResponse{Error: body}
+	b, err := json.Marshal(envelope)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(sw.w, "data: %s\n\n", b); err != nil {
+		return err
+	}
+	sw.f.Flush()
+	return nil
+}
+
 func (sw *SSEWriter) HasCommittedHeaders() bool {
 	return sw.headersCommitted
 }

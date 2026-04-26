@@ -1,0 +1,373 @@
+package anthropicbackend
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"goodkind.io/clyde/internal/adapter/anthropic"
+	adaptermodel "goodkind.io/clyde/internal/adapter/model"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
+	"goodkind.io/clyde/internal/adapter/tooltrans"
+)
+
+// TestBuildErrorBodyForUpstreamMapsClassToType locks in the mapping
+// from *UpstreamError class/status to OpenAI ErrorBody.Type and
+// .Code so Cursor sees a structured native error rather than an
+// assistant-shaped message.
+func TestBuildErrorBodyForUpstreamMapsClassToType(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		ue       *anthropic.UpstreamError
+		wantType string
+		wantCode string
+	}{
+		{
+			name: "real_429_is_rate_limit_error",
+			ue: &anthropic.UpstreamError{
+				Classification: anthropic.Classify(&http.Response{StatusCode: http.StatusTooManyRequests, Header: http.Header{}}, nil),
+				Status:         http.StatusTooManyRequests,
+				Message:        "rate limited",
+			},
+			wantType: "rate_limit_error",
+			wantCode: "rate_limit_exceeded",
+		},
+		{
+			name: "503_retryable_is_server_error",
+			ue: &anthropic.UpstreamError{
+				Classification: anthropic.Classify(&http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{}}, nil),
+				Status:         http.StatusServiceUnavailable,
+				Message:        "unavailable",
+			},
+			wantType: "server_error",
+			wantCode: "upstream_unavailable",
+		},
+		{
+			name: "fatal_400_is_upstream_error",
+			ue: &anthropic.UpstreamError{
+				Classification: anthropic.Classify(&http.Response{StatusCode: http.StatusBadRequest, Header: http.Header{}}, nil),
+				Status:         http.StatusBadRequest,
+				Message:        "bad request",
+			},
+			wantType: "upstream_error",
+			wantCode: "upstream_failed",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildErrorBodyForUpstream(tc.ue)
+			if got.Type != tc.wantType {
+				t.Fatalf("Type = %q, want %q", got.Type, tc.wantType)
+			}
+			if got.Code != tc.wantCode {
+				t.Fatalf("Code = %q, want %q", got.Code, tc.wantCode)
+			}
+			if got.Message == "" {
+				t.Fatalf("Message must not be empty")
+			}
+			if !strings.Contains(got.Message, "anthropic") {
+				t.Fatalf("Message must include the anthropic prefix from UpstreamError.Error(); got %q", got.Message)
+			}
+		})
+	}
+}
+
+func TestBuildErrorBodyForUpstreamNilSafe(t *testing.T) {
+	got := buildErrorBodyForUpstream(nil)
+	if got.Type != "upstream_error" {
+		t.Fatalf("nil UpstreamError must yield upstream_error type; got %q", got.Type)
+	}
+	if got.Message == "" {
+		t.Fatalf("nil UpstreamError must still produce a non-empty message")
+	}
+}
+
+type fakeResponseSSEWriter struct {
+	headersCommitted bool
+	chunks           []adapteropenai.StreamChunk
+	errors           []adapteropenai.ErrorBody
+	doneCount        int
+}
+
+func (w *fakeResponseSSEWriter) WriteSSEHeaders() {
+	w.headersCommitted = true
+}
+
+func (w *fakeResponseSSEWriter) EmitStreamChunk(_ string, chunk adapteropenai.StreamChunk) error {
+	w.headersCommitted = true
+	w.chunks = append(w.chunks, chunk)
+	return nil
+}
+
+func (w *fakeResponseSSEWriter) EmitStreamError(body adapteropenai.ErrorBody) error {
+	w.headersCommitted = true
+	w.errors = append(w.errors, body)
+	return nil
+}
+
+func (w *fakeResponseSSEWriter) WriteStreamDone() error {
+	w.doneCount++
+	return nil
+}
+
+func (w *fakeResponseSSEWriter) HasCommittedHeaders() bool {
+	return w.headersCommitted
+}
+
+type fakeResponseDispatcher struct {
+	log         *slog.Logger
+	sseWriter   *fakeResponseSSEWriter
+	runStream   func(context.Context, anthropic.Request, adaptermodel.ResolvedModel, string, func(tooltrans.OpenAIStreamChunk) error) (anthropic.Usage, string, string, error)
+	actionables int
+}
+
+func (d *fakeResponseDispatcher) Log() *slog.Logger {
+	if d.log == nil {
+		d.log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	return d.log
+}
+
+func (d *fakeResponseDispatcher) EmitRequestStarted(context.Context, adaptermodel.ResolvedModel, string, string, string, bool) {
+}
+
+func (d *fakeResponseDispatcher) EmitRequestStreamOpened(context.Context, adaptermodel.ResolvedModel, string, string, string, bool) {
+}
+
+func (d *fakeResponseDispatcher) NewAnthropicSSEWriter(http.ResponseWriter) (ResponseSSEWriter, error) {
+	if d.sseWriter == nil {
+		d.sseWriter = &fakeResponseSSEWriter{}
+	}
+	return d.sseWriter, nil
+}
+
+func (d *fakeResponseDispatcher) SystemFingerprint() string {
+	return "fp-test"
+}
+
+func (d *fakeResponseDispatcher) StreamChunkFromTooltrans(chunk tooltrans.OpenAIStreamChunk) adapteropenai.StreamChunk {
+	out := adapteropenai.StreamChunk{
+		ID:      chunk.ID,
+		Object:  chunk.Object,
+		Created: chunk.Created,
+		Model:   chunk.Model,
+	}
+	for _, choice := range chunk.Choices {
+		out.Choices = append(out.Choices, adapteropenai.StreamChoice{
+			Index: choice.Index,
+			Delta: adapteropenai.StreamDelta{
+				Role:    choice.Delta.Role,
+				Content: choice.Delta.Content,
+			},
+			FinishReason: choice.FinishReason,
+		})
+	}
+	return out
+}
+
+func (d *fakeResponseDispatcher) StreamChunkHasVisibleContent(chunk adapteropenai.StreamChunk) bool {
+	for _, choice := range chunk.Choices {
+		if choice.Delta.Content != "" || choice.Delta.Role != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (d *fakeResponseDispatcher) RunOAuthTranslatorStream(
+	ctx context.Context,
+	req anthropic.Request,
+	model adaptermodel.ResolvedModel,
+	reqID string,
+	emit func(tooltrans.OpenAIStreamChunk) error,
+) (anthropic.Usage, string, string, error) {
+	if d.runStream != nil {
+		return d.runStream(ctx, req, model, reqID, emit)
+	}
+	return anthropic.Usage{}, "", "", nil
+}
+
+func (d *fakeResponseDispatcher) TrackAnthropicContextUsage(string, adapteropenai.Usage) TrackedUsage {
+	return TrackedUsage{}
+}
+
+func (d *fakeResponseDispatcher) JSONCoercion(any) JSONCoercion {
+	return JSONCoercion{}
+}
+
+func (d *fakeResponseDispatcher) WriteJSON(http.ResponseWriter, int, any) {
+}
+
+func (d *fakeResponseDispatcher) LogTerminal(context.Context, adapterruntime.RequestEvent) {
+}
+
+func (d *fakeResponseDispatcher) LogCacheUsageAnthropic(context.Context, string, string, string, anthropic.Usage) {
+}
+
+func (d *fakeResponseDispatcher) CacheTTL() string {
+	return ""
+}
+
+func (d *fakeResponseDispatcher) UnclaimNotice(*anthropic.Notice) {
+}
+
+// TestStreamResponse200OverageRejectedEmitsNoticeNotError locks in the
+// exact regression called out in the plan: a successful 200 response
+// with warning headers must stay on the success path, emit a non-fatal
+// notice chunk, and must not surface either a native error envelope or
+// the assistant-shaped actionable failure message.
+func TestStreamResponse200OverageRejectedEmitsNoticeNotError(t *testing.T) {
+	t.Parallel()
+
+	dispatcher := &fakeResponseDispatcher{}
+	req := anthropic.Request{
+		Model: "claude-opus-4-7",
+		OnHeaders: func(h http.Header) {
+			notice, err := adapterruntime.NoticeForStreamHeaders(
+				"req-200",
+				"clyde-opus",
+				h,
+				true,
+				func(chunk tooltrans.OpenAIStreamChunk) error {
+					writer, err := dispatcher.NewAnthropicSSEWriter(httptest.NewRecorder())
+					if err != nil {
+						return err
+					}
+					return writer.EmitStreamChunk("fp-test", dispatcher.StreamChunkFromTooltrans(chunk))
+				},
+				func(kind string, resetsAt time.Time) bool { return true },
+				func(kind string, resetsAt time.Time) {},
+			)
+			if notice != nil || err != nil {
+				t.Fatalf("NoticeForStreamHeaders returned notice=%v err=%v; want nil,nil after successful emit", notice, err)
+			}
+		},
+	}
+	dispatcher.runStream = func(_ context.Context, req anthropic.Request, _ adaptermodel.ResolvedModel, _ string, emit func(tooltrans.OpenAIStreamChunk) error) (anthropic.Usage, string, string, error) {
+		if req.OnHeaders != nil {
+			h := http.Header{}
+			h.Set("anthropic-ratelimit-unified-status", "allowed")
+			h.Set("anthropic-ratelimit-unified-overage-status", "rejected")
+			h.Set("anthropic-ratelimit-unified-overage-disabled-reason", "org_level_disabled_until")
+			req.OnHeaders(h)
+		}
+		if err := emit(tooltrans.OpenAIStreamChunk{
+			ID:      "req-200",
+			Object:  "chat.completion.chunk",
+			Created: time.Now().Unix(),
+			Model:   "clyde-opus",
+			Choices: []tooltrans.OpenAIStreamChoice{{
+				Index: 0,
+				Delta: tooltrans.OpenAIStreamDelta{
+					Role:    "assistant",
+					Content: "hello from upstream",
+				},
+			}},
+		}); err != nil {
+			return anthropic.Usage{}, "", "", err
+		}
+		return anthropic.Usage{InputTokens: 11, OutputTokens: 7}, "", "stop", nil
+	}
+
+	err := StreamResponse(
+		dispatcher,
+		httptest.NewRecorder(),
+		httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil),
+		req,
+		adaptermodel.ResolvedModel{Alias: "clyde-opus", Backend: "anthropic", ClaudeModel: "claude-opus-4-7"},
+		"req-200",
+		time.Now(),
+		false,
+		false,
+		"",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("StreamResponse returned err: %v", err)
+	}
+	if dispatcher.actionables != 0 {
+		t.Fatalf("successful 200 warning path must not emit actionable failure prose; got %d actionable calls", dispatcher.actionables)
+	}
+	if dispatcher.sseWriter == nil {
+		t.Fatal("expected SSE writer to be created")
+	}
+	if len(dispatcher.sseWriter.errors) != 0 {
+		t.Fatalf("successful 200 warning path must not emit native error envelope; got %d", len(dispatcher.sseWriter.errors))
+	}
+	if len(dispatcher.sseWriter.chunks) == 0 {
+		t.Fatal("expected stream chunks to be emitted")
+	}
+	encoded, err := json.Marshal(dispatcher.sseWriter.chunks)
+	if err != nil {
+		t.Fatalf("marshal emitted chunks: %v", err)
+	}
+	body := string(encoded)
+	if !strings.Contains(body, "hello from upstream") {
+		t.Fatalf("expected assistant content chunk, got %s", body)
+	}
+	if strings.Contains(body, "Clyde adapter hit an upstream rate limit") {
+		t.Fatalf("successful 200 warning path must not emit false rate-limit prose: %s", body)
+	}
+}
+
+// TestStreamResponseTransportFailureEmitsNativeErrorEnvelope locks in
+// the streaming native-error path: a typed retryable transport failure
+// must emit a native OpenAI error frame, not an assistant chunk.
+func TestStreamResponseTransportFailureEmitsNativeErrorEnvelope(t *testing.T) {
+	t.Parallel()
+
+	dispatcher := &fakeResponseDispatcher{
+		runStream: func(_ context.Context, _ anthropic.Request, _ adaptermodel.ResolvedModel, _ string, _ func(tooltrans.OpenAIStreamChunk) error) (anthropic.Usage, string, string, error) {
+			return anthropic.Usage{}, "", "", &anthropic.UpstreamError{
+				Classification: anthropic.Classify(nil, io.ErrUnexpectedEOF),
+				Message:        "post /v1/messages: unexpected EOF",
+				Cause:          io.ErrUnexpectedEOF,
+			}
+		},
+	}
+
+	err := StreamResponse(
+		dispatcher,
+		httptest.NewRecorder(),
+		httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil),
+		anthropic.Request{Model: "claude-opus-4-7"},
+		adaptermodel.ResolvedModel{Alias: "clyde-opus", Backend: "anthropic", ClaudeModel: "claude-opus-4-7"},
+		"req-eof",
+		time.Now(),
+		false,
+		false,
+		"",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("StreamResponse returned err: %v", err)
+	}
+	if dispatcher.actionables != 0 {
+		t.Fatalf("typed upstream transport failure must not use actionable assistant prose; got %d actionable calls", dispatcher.actionables)
+	}
+	if dispatcher.sseWriter == nil {
+		t.Fatal("expected SSE writer to be created")
+	}
+	if len(dispatcher.sseWriter.errors) != 1 {
+		t.Fatalf("expected exactly 1 native error envelope, got %d", len(dispatcher.sseWriter.errors))
+	}
+	got := dispatcher.sseWriter.errors[0]
+	if got.Type != "server_error" {
+		t.Fatalf("error type = %q, want server_error", got.Type)
+	}
+	if got.Code != "upstream_unavailable" {
+		t.Fatalf("error code = %q, want upstream_unavailable", got.Code)
+	}
+	if !strings.Contains(got.Message, "unexpected EOF") {
+		t.Fatalf("error message = %q, want transport failure detail", got.Message)
+	}
+}

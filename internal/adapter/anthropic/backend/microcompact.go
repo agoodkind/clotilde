@@ -1,4 +1,4 @@
-package adapter
+package anthropicbackend
 
 import (
 	"log/slog"
@@ -6,24 +6,23 @@ import (
 	"goodkind.io/clyde/internal/adapter/anthropic"
 )
 
-// microcompactClearedMessage is the sentinel text we write into aged
-// tool_result bodies. Must match Claude Code's TIME_BASED_MC_CLEARED_MESSAGE
-// (src/services/compact/microCompact.ts:36) so the server treats the
-// prompt identically to what the CLI would send.
-const microcompactClearedMessage = "[Old tool result content cleared]"
+// MicrocompactClearedMessage is the sentinel text we write into aged
+// tool_result bodies. Must match Claude Code's
+// TIME_BASED_MC_CLEARED_MESSAGE so the server treats the prompt
+// identically to what the CLI would send.
+const MicrocompactClearedMessage = "[Old tool result content cleared]"
 
-// defaultMicrocompactKeepRecent mirrors Claude's GrowthBook default for
+// DefaultMicrocompactKeepRecent mirrors Claude's GrowthBook default for
 // time-based MC. Older compactable tool_results are cleared; newer ones
 // stay verbatim.
-const defaultMicrocompactKeepRecent = 15
+const DefaultMicrocompactKeepRecent = 15
 
-// compactableTools is the set of tool names whose outputs are large and
-// expensive to keep around. Matches Claude's COMPACTABLE_TOOLS set in
-// microCompact.ts:41. Tool names vary by client (Cursor emits its own
-// canonical names for file / shell / search operations); we match on
-// common spellings rather than Claude Code's internal constants so
-// non-Claude-Code clients benefit too. Membership is checked
-// case-sensitive against the exact string the client sent.
+// compactableTools is the set of tool names whose outputs are large
+// and expensive to keep around. Matches Claude's COMPACTABLE_TOOLS
+// set in microCompact.ts. Tool names vary by client (Cursor emits
+// its own canonical names for file/shell/search operations); we
+// match on common spellings rather than internal constants so
+// non-Claude-Code clients benefit too. Membership is case-sensitive.
 var compactableTools = map[string]bool{
 	// Claude Code canonical names
 	"Read":      true,
@@ -47,20 +46,21 @@ var compactableTools = map[string]bool{
 	"fetch":            true,
 }
 
-// applyMicrocompact rewrites aged tool_result bodies to the cleared
+// ApplyMicrocompact rewrites aged tool_result bodies to the cleared
 // placeholder so the transcript carries less data across turns. The
 // most recent keepRecent compactable tool_use IDs are preserved
-// verbatim; older ones have their paired tool_result content replaced.
+// verbatim; older ones have their paired tool_result content
+// replaced.
 //
 // Operates in place on msgs. Returns the number of tool_results that
 // were cleared and a rough estimate of the bytes saved for logging.
 // Idempotent: when a tool_result already carries the sentinel text,
 // the walk skips it and reports no additional clearing.
 //
-// keepRecent <= 0 is normalized to defaultMicrocompactKeepRecent.
-func applyMicrocompact(msgs []anthropic.Message, keepRecent int) (cleared int, bytesSaved int) {
+// keepRecent <= 0 is normalized to DefaultMicrocompactKeepRecent.
+func ApplyMicrocompact(msgs []anthropic.Message, keepRecent int) (cleared int, bytesSaved int) {
 	if keepRecent <= 0 {
-		keepRecent = defaultMicrocompactKeepRecent
+		keepRecent = DefaultMicrocompactKeepRecent
 	}
 	ids := collectCompactableToolIDs(msgs)
 	if len(ids) <= keepRecent {
@@ -83,11 +83,11 @@ func applyMicrocompact(msgs []anthropic.Message, keepRecent int) (cleared int, b
 			if !clearSet[b.ToolUseID] {
 				continue
 			}
-			if b.Content == microcompactClearedMessage {
+			if b.Content == MicrocompactClearedMessage {
 				continue
 			}
 			bytesSaved += len(b.Content)
-			b.Content = microcompactClearedMessage
+			b.Content = MicrocompactClearedMessage
 			cleared++
 		}
 	}
@@ -96,7 +96,6 @@ func applyMicrocompact(msgs []anthropic.Message, keepRecent int) (cleared int, b
 
 // collectCompactableToolIDs walks assistant messages in order and
 // returns every tool_use id whose tool name is in compactableTools.
-// Mirrors collectCompactableToolIds in microCompact.ts:226.
 func collectCompactableToolIDs(msgs []anthropic.Message) []string {
 	var out []string
 	for _, m := range msgs {
@@ -119,10 +118,10 @@ func collectCompactableToolIDs(msgs []anthropic.Message) []string {
 	return out
 }
 
-// logMicrocompact emits a one-shot event when microcompact clears at
+// LogMicrocompact emits a one-shot event when microcompact clears at
 // least one tool_result. Quiet no-op otherwise so the normal fast
 // path does not clutter the log.
-func logMicrocompact(log *slog.Logger, reqID, alias string, cleared, bytesSaved, keepRecent int) {
+func LogMicrocompact(log *slog.Logger, reqID, alias string, cleared, bytesSaved, keepRecent int) {
 	if log == nil || cleared == 0 {
 		return
 	}

@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
-	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 )
 
 type FallbackConfig struct {
@@ -114,10 +114,14 @@ func Dispatch(d Dispatcher, cfg FallbackConfig, w http.ResponseWriter, r *http.R
 		return
 	}
 
+	classification := classifyEscalationCause(anthErr)
 	d.Log().LogAttrs(r.Context(), slog.LevelWarn, "adapter.fallback.escalating",
 		slog.String("request_id", reqID),
 		slog.String("alias", model.Alias),
 		slog.String("anthropic_err", anthErr.Error()),
+		slog.String("anthropic_class", classification.class),
+		slog.Int("anthropic_status", classification.status),
+		slog.Bool("anthropic_retryable", classification.retryable),
 		slog.Bool("forward_to_shunt", cfg.ForwardToShunt),
 	)
 
@@ -139,4 +143,29 @@ func Dispatch(d Dispatcher, cfg FallbackConfig, w http.ResponseWriter, r *http.R
 		return
 	}
 	d.SurfaceFallbackFailure(w, anthErr, fbErr, cfg.FailureEscalation)
+}
+
+// escalationClassification names the Anthropic classifier outcome for
+// the failure that triggered the fallback. The fields are flat
+// strings/ints so they can land on a single slog event without forcing
+// the dispatcher to reach into the typed Anthropic error.
+type escalationClassification struct {
+	class     string
+	status    int
+	retryable bool
+}
+
+func classifyEscalationCause(err error) escalationClassification {
+	if err == nil {
+		return escalationClassification{class: "untyped"}
+	}
+	ue, ok := anthropic.AsUpstreamError(err)
+	if !ok {
+		return escalationClassification{class: "untyped"}
+	}
+	return escalationClassification{
+		class:     ue.Classification.Class.String(),
+		status:    ue.Status,
+		retryable: ue.Retryable(),
+	}
 }

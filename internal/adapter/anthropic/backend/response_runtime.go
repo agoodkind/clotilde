@@ -2,15 +2,16 @@ package anthropicbackend
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
-	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
@@ -24,6 +25,7 @@ type TrackedUsage struct {
 type ResponseSSEWriter interface {
 	WriteSSEHeaders()
 	EmitStreamChunk(string, adapteropenai.StreamChunk) error
+	EmitStreamError(adapteropenai.ErrorBody) error
 	WriteStreamDone() error
 	HasCommittedHeaders() bool
 }
@@ -36,11 +38,9 @@ type ResponseDispatcher interface {
 	SystemFingerprint() string
 	StreamChunkFromTooltrans(tooltrans.OpenAIStreamChunk) adapteropenai.StreamChunk
 	StreamChunkHasVisibleContent(adapteropenai.StreamChunk) bool
-	EmitActionableStreamError(func(adapteropenai.StreamChunk) error, string, string, error) error
 	RunOAuthTranslatorStream(context.Context, anthropic.Request, adaptermodel.ResolvedModel, string, func(tooltrans.OpenAIStreamChunk) error) (anthropic.Usage, string, string, error)
 	TrackAnthropicContextUsage(string, adapteropenai.Usage) TrackedUsage
-	MergeAnthropicStreamChunks(string, string, []tooltrans.OpenAIStreamChunk, adapteropenai.Usage, string, any, string) any
-	NoticeForResponseHeaders(any, *anthropic.Notice) (any, error)
+	JSONCoercion(any) JSONCoercion
 	WriteJSON(http.ResponseWriter, int, any)
 	LogTerminal(context.Context, adapterruntime.RequestEvent)
 	LogCacheUsageAnthropic(context.Context, string, string, string, anthropic.Usage)
@@ -122,11 +122,15 @@ func CollectResponse(
 			errMsg,
 		)
 	}
-	rawUsage := UsageFromAnthropic(anthUsage)
+	rawUsage := usageWithContextWindow(UsageFromAnthropic(anthUsage), model.Context)
 	tracked := d.TrackAnthropicContextUsage(trackerKey, rawUsage)
 	u := tracked.Usage
-	resp := d.MergeAnthropicStreamChunks(reqID, model.Alias, buf, u, finishReason, jsonSpec, anthStopReason)
-	resp, _ = d.NoticeForResponseHeaders(resp, derefNotice(notice))
+	resp := MergeStreamChunks(reqID, model.Alias, d.SystemFingerprint(), buf, u, finishReason, d.JSONCoercion(jsonSpec), anthStopReason)
+	resp, _ = adapterruntime.NoticeForResponseHeaders(resp, derefNotice(notice), func(kind string, resetsAt time.Time) {
+		if n := derefNotice(notice); n != nil {
+			d.UnclaimNotice(n)
+		}
+	}, json.Marshal)
 	d.WriteJSON(w, http.StatusOK, resp)
 	if u.PromptTokens != rawUsage.PromptTokens || u.TotalTokens != rawUsage.TotalTokens {
 		d.Log().LogAttrs(ctx, slog.LevelInfo, "adapter.context_usage.tracked",
@@ -243,7 +247,18 @@ func StreamResponse(
 			return err
 		}
 		if !emittedContent {
-			_ = d.EmitActionableStreamError(emit, reqID, model.Alias, err)
+			// When the upstream surfaces a typed
+			// *anthropic.UpstreamError, emit a native OpenAI error
+			// envelope (data: {"error":{...}}) so Cursor and other
+			// OpenAI clients see a structured error rather than an
+			// assistant-shaped chat message. Untyped errors (e.g.
+			// claude-fallback subprocess failures) keep the previous
+			// actionable assistant text path.
+			if ue, ok := anthropic.AsUpstreamError(err); ok {
+				_ = sw.EmitStreamError(buildErrorBodyForUpstream(ue))
+			} else {
+				_ = EmitActionableStreamError(emit, reqID, model.Alias, err)
+			}
 			finishReason = "stop"
 		}
 		d.LogTerminal(r.Context(), adapterruntime.RequestEvent{
@@ -282,16 +297,20 @@ func StreamResponse(
 		})
 		finishReason = "stop"
 	}
-	_ = sw.EmitStreamChunk(d.SystemFingerprint(), adapteropenai.StreamChunk{
+	rawFinalUsage := usageWithContextWindow(UsageFromAnthropic(anthUsage), model.Context)
+	tracked := d.TrackAnthropicContextUsage(trackerKey, rawFinalUsage)
+	finalUsage := tracked.Usage
+	finishChunk := adapteropenai.StreamChunk{
 		ID:      reqID,
 		Object:  "chat.completion.chunk",
 		Created: time.Now().Unix(),
 		Model:   model.Alias,
 		Choices: []adapteropenai.StreamChoice{{Index: 0, Delta: adapteropenai.StreamDelta{}, FinishReason: stringPtr(finishReason)}},
-	})
-	rawFinalUsage := UsageFromAnthropic(anthUsage)
-	tracked := d.TrackAnthropicContextUsage(trackerKey, rawFinalUsage)
-	finalUsage := tracked.Usage
+	}
+	if includeUsage {
+		finishChunk.Usage = &finalUsage
+	}
+	_ = sw.EmitStreamChunk(d.SystemFingerprint(), finishChunk)
 	if err == nil && emittedContent && finalUsage.PromptTokens == 0 && finalUsage.CompletionTokens == 0 {
 		d.Log().LogAttrs(r.Context(), slog.LevelWarn, "adapter.anthropic.usage_missing",
 			slog.String("backend", "anthropic"),
@@ -383,4 +402,42 @@ func derefNotice(v **anthropic.Notice) *anthropic.Notice {
 	return *v
 }
 
+func usageWithContextWindow(u adapteropenai.Usage, contextWindow int) adapteropenai.Usage {
+	if contextWindow > 0 {
+		u.MaxTokens = contextWindow
+	}
+	return u
+}
+
 func stringPtr(v string) *string { return &v }
+
+// buildErrorBodyForUpstream maps a typed Anthropic *UpstreamError into
+// the OpenAI ErrorBody shape used by both the SSE native error frame
+// and the JSON error envelope.
+//
+// Type and code are derived from the four-class classification:
+//   - retryable + 429 -> rate_limit_error
+//   - retryable + 5xx -> server_error
+//   - retryable + transport -> server_error (no upstream status)
+//   - fatal -> upstream_error
+//
+// Message preserves the human-readable upstream text so users still
+// see the friendly rate-limit body when one was available.
+func buildErrorBodyForUpstream(ue *anthropic.UpstreamError) adapteropenai.ErrorBody {
+	if ue == nil {
+		return adapteropenai.ErrorBody{Type: "upstream_error", Message: "anthropic upstream error"}
+	}
+	body := adapteropenai.ErrorBody{Message: ue.Error()}
+	switch {
+	case ue.Class() == anthropic.ResponseClassRetryableError && ue.Status == 429:
+		body.Type = "rate_limit_error"
+		body.Code = "rate_limit_exceeded"
+	case ue.Class() == anthropic.ResponseClassRetryableError:
+		body.Type = "server_error"
+		body.Code = "upstream_unavailable"
+	default:
+		body.Type = "upstream_error"
+		body.Code = "upstream_failed"
+	}
+	return body
+}

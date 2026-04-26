@@ -1,18 +1,18 @@
 package adapter
 
 import (
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
-	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
+	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 )
 
 var errSSENoFlusher = adapteropenai.ErrSSENoFlusher
+
 type sseWriter = adapteropenai.SSEWriter
 
 func newSSEWriter(w http.ResponseWriter) (*sseWriter, error) { return adapteropenai.NewSSEWriter(w) }
@@ -99,30 +99,14 @@ func streamChunkHasVisibleContent(chunk StreamChunk) bool {
 	return false
 }
 
+// emitActionableStreamError forwards to the Anthropic-backend owned
+// helper. The legacy local function existed because the actionable
+// message branches on `*anthropic.UpstreamError`, which is Anthropic
+// vocabulary; Phase 3 moved that ownership into the backend package.
 func emitActionableStreamError(emit func(StreamChunk) error, reqID, modelAlias string, err error) error {
-	return emit(StreamChunk{
-		ID:      reqID,
-		Object:  "chat.completion.chunk",
-		Created: time.Now().Unix(),
-		Model:   modelAlias,
-		Choices: []StreamChoice{{
-			Index: 0,
-			Delta: StreamDelta{
-				Role:    "assistant",
-				Content: actionableStreamErrorMessage(err),
-			},
-		}},
-	})
+	return anthropicbackend.EmitActionableStreamError(emit, reqID, modelAlias, err)
 }
 
 func actionableStreamErrorMessage(err error) string {
-	msg := strings.ToLower(strings.TrimSpace(fmt.Sprint(err)))
-	switch {
-	case strings.Contains(msg, "oauth"), strings.Contains(msg, "login"), strings.Contains(msg, "unauthorized"), strings.Contains(msg, "forbidden"), strings.Contains(msg, "401"):
-		return "Clyde adapter upstream auth failed. Re-authenticate Claude with `claude /login`, then retry."
-	case strings.Contains(msg, "rate limit"), strings.Contains(msg, "429"):
-		return "Clyde adapter hit an upstream rate limit. Wait a moment and retry."
-	default:
-		return "Clyde adapter request failed upstream. Check ~/.local/state/clyde/clyde.jsonl, then retry."
-	}
+	return anthropicbackend.ActionableStreamErrorMessage(err)
 }

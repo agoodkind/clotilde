@@ -2,10 +2,8 @@ package adapter
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -14,6 +12,8 @@ import (
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
+
+const fineGrainedToolStreamingBeta = "fine-grained-tool-streaming-2025-05-14"
 
 // handleOAuth fulfils a chat completion using the direct HTTP
 // anthropic.Client (Bearer token from the oauth manager). Streaming
@@ -33,19 +33,8 @@ func (s *Server) handleOAuth(w http.ResponseWriter, r *http.Request, req ChatReq
 // via tooltrans, then applies thinking and effort knobs that are not part of
 // the OpenAI wire shape.
 func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort string, jsonSpec JSONResponseSpec, reqID string) (anthropic.Request, error) {
-	raw, err := json.Marshal(req)
-	if err != nil {
-		return anthropic.Request{}, err
-	}
-	var oaReq tooltrans.OpenAIRequest
-	if err := json.Unmarshal(raw, &oaReq); err != nil {
-		return anthropic.Request{}, err
-	}
-	maxTok := anthropicbackend.MaxTokens(req.MaxTokens)
-	if model.MaxOutputTokens > 0 && maxTok > model.MaxOutputTokens {
-		maxTok = model.MaxOutputTokens
-	}
-	tr, err := tooltrans.TranslateRequest(oaReq, s.anthr.SystemPromptPrefix(), maxTok)
+	maxTok := anthropicbackend.ResolveMaxTokens(req.MaxTokens, model)
+	tr, err := anthropicbackend.TranslateRequest(req, s.anthr.SystemPromptPrefix(), maxTok)
 	if err != nil {
 		return anthropic.Request{}, err
 	}
@@ -75,7 +64,7 @@ func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort
 	entry := s.anthr.CCEntrypoint()
 	billingHeader := anthropic.BuildAttributionHeader(cliVersion, entry)
 	// CLYDE_PROBE_BILLING mutates the billing line for debugging.
-	billingHeader = mutateBillingForProbe(billingHeader, cliVersion, entry)
+	billingHeader = anthropicbackend.MutateBillingForProbe(billingHeader, cliVersion, entry)
 
 	cachingEnabled := true
 	if v := s.cfg.ClientIdentity.PromptCachingEnabled; v != nil {
@@ -90,11 +79,11 @@ func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort
 	if scope != "" && scope != "global" && scope != "org" {
 		scope = ""
 	}
-	sysBlocks := buildSystemBlocks(billingHeader, prefix, callerSystem, ttl, scope, cachingEnabled)
+	sysBlocks := anthropicbackend.BuildSystemBlocks(billingHeader, prefix, callerSystem, ttl, scope, cachingEnabled)
 
 	emitToolResultCacheReference := s.cfg.OAuth.ToolResultCacheReferenceEnabled
 	strippedModel := anthropicbackend.StripContextSuffix(model.ClaudeModel)
-	out, cacheStats := toAnthropicAPIRequest(tr, strippedModel, emitToolResultCacheReference)
+	out, cacheStats := anthropicbackend.ToAPIRequest(tr, strippedModel, emitToolResultCacheReference)
 	if cacheStats.ToolResultCandidates > 0 {
 		level := slog.LevelInfo
 		if emitToolResultCacheReference {
@@ -126,134 +115,19 @@ func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort
 		microEnabled = *v
 	}
 	if microEnabled {
-		cleared, bytes := applyMicrocompact(out.Messages, s.cfg.ClientIdentity.MicrocompactKeepRecent)
-		logMicrocompact(s.log, "", model.Alias, cleared, bytes, s.cfg.ClientIdentity.MicrocompactKeepRecent)
+		cleared, bytes := anthropicbackend.ApplyMicrocompact(out.Messages, s.cfg.ClientIdentity.MicrocompactKeepRecent)
+		anthropicbackend.LogMicrocompact(s.log, "", model.Alias, cleared, bytes, s.cfg.ClientIdentity.MicrocompactKeepRecent)
 	}
 	// Per-model anthropic-beta extras from configured suffix map.
-	out.ExtraBetas = derivePerRequestBetas(model, s.cfg.ClientIdentity.PerContextBetas)
+	out.ExtraBetas = anthropicbackend.DerivePerRequestBetas(model, s.cfg.ClientIdentity.PerContextBetas)
+	if req.Stream && len(out.Tools) > 0 {
+		out.ExtraBetas = append(out.ExtraBetas, fineGrainedToolStreamingBeta)
+	}
 	if effort != "" && len(model.Efforts) > 0 {
 		out.OutputConfig = &anthropic.OutputConfig{Effort: effort}
 	}
-	switch anthropicbackend.EffectiveThinkingMode(model, strippedModel) {
-	case ThinkingAdaptive:
-		out.Thinking = &anthropic.Thinking{
-			Type:    "adaptive",
-			Display: "summarized",
-		}
-	case ThinkingEnabled:
-		// Mirror the canonical Claude Code CLI formula. See
-		// claude-code-source-code-full/src/services/api/claude.ts:1617-1628
-		// and src/utils/context.ts:219 (getMaxThinkingTokensForModel
-		// returns upperLimit - 1). The CLI sends max_tokens equal to
-		// the model's full output cap and budget_tokens equal to
-		// max_tokens - 1, letting the model self-limit thinking.
-		//
-		// When MaxOutputTokens is populated in the registry (the
-		// common case, set per family in the toml) we override the
-		// caller's max_tokens so the model has real room to both
-		// think and answer. The OpenAI response still reports the
-		// true completion_tokens from Anthropic, so the caller's UI
-		// sees the honest post-turn cost.
-		//
-		// When MaxOutputTokens is zero (misconfigured family) we
-		// fall back to the caller's max_tokens and derive the
-		// budget from it, floored at Anthropic's documented 1024
-		// minimum for thinking. This stays data-driven and never
-		// hardcodes a model identifier.
-		cap := model.MaxOutputTokens
-		if cap <= 0 {
-			cap = out.MaxTokens
-		}
-		if cap < 1025 {
-			// Anthropic thinking requires budget_tokens >= 1024 and
-			// max_tokens > budget_tokens. Promote both to the
-			// smallest pair that satisfies both constraints.
-			cap = 1025
-		}
-		out.MaxTokens = cap
-		out.Thinking = &anthropic.Thinking{
-			Type:         "enabled",
-			BudgetTokens: cap - 1,
-			Display:      "summarized",
-		}
-	case ThinkingDisabled:
-		out.Thinking = &anthropic.Thinking{Type: "disabled"}
-	}
+	anthropicbackend.ApplyThinkingConfig(&out, model, strippedModel)
 	return out, nil
-}
-
-func toAnthropicAPIRequest(tr tooltrans.AnthRequest, claudeModel string, emitToolResultCacheReference bool) (anthropic.Request, cacheBreakpointStats) {
-	msgs := make([]anthropic.Message, 0, len(tr.Messages))
-	for _, m := range tr.Messages {
-		blocks := make([]anthropic.ContentBlock, 0, len(m.Content))
-		for _, b := range m.Content {
-			var src *anthropic.ImageSource
-			if b.Source != nil {
-				src = &anthropic.ImageSource{
-					Type:      b.Source.Type,
-					MediaType: b.Source.MediaType,
-					Data:      b.Source.Data,
-					URL:       b.Source.URL,
-				}
-			}
-			blocks = append(blocks, anthropic.ContentBlock{
-				Type:      b.Type,
-				Text:      b.Text,
-				ID:        b.ID,
-				Name:      b.Name,
-				Input:     b.Input,
-				ToolUseID: b.ToolUseID,
-				Content:   b.ResultContent,
-				Source:    src,
-			})
-		}
-		msgs = append(msgs, anthropic.Message{Role: m.Role, Content: blocks})
-	}
-	tools := make([]anthropic.Tool, 0, len(tr.Tools))
-	for _, t := range tr.Tools {
-		tools = append(tools, anthropic.Tool{
-			Name:        t.Name,
-			Description: t.Description,
-			InputSchema: t.InputSchema,
-		})
-	}
-	req, stats := anthropicbackend.ToAPIRequest(tr, claudeModel, emitToolResultCacheReference)
-	return req, cacheBreakpointStats(stats)
-}
-
-// buildSystemBlocks assembles the typed system-prompt array with
-// cache_control markers matching what the live CLI sends. Order:
-//
-//	0: billing attribution line (no cache_control; the cch component
-//	   varies per request so it cannot share a cache key with
-//	   subsequent turns).
-//	1: CLI system prompt prefix (ephemeral 1h; stable across all
-//	   requests for the session lifetime).
-//	2: caller-supplied system text plus any JSON-mode instruction
-//	   (ephemeral 1h; stable while the client reuses the same system).
-//
-// Empty inputs are skipped so the wire never carries zero-length
-// blocks. When cachingEnabled is false all markers are omitted and
-// the blocks ship plain; the array form still communicates the three
-// logical segments to the server, which accepts either shape.
-func buildSystemBlocks(billing, prefix, callerSystem, ttl, scope string, cachingEnabled bool) []anthropic.SystemBlock {
-	return anthropicbackend.BuildSystemBlocks(billing, prefix, callerSystem, ttl, scope, cachingEnabled)
-}
-
-type cacheBreakpointStats = anthropicbackend.CacheBreakpointStats
-
-// applyCacheBreakpoints stamps the message-level cache_control marker matching
-// the live Claude CLI. tool_result.cache_reference is separately gated because
-// the direct Anthropic OAuth /v1/messages tool-followup path rejected it in
-// production, while official Claude CLI MITM captures on successful tool turns
-// did not include it. Keep the knob for controlled upstream experiments rather
-// than assuming every Claude transport accepts the cached-MC shape.
-func applyCacheBreakpoints(msgs []anthropic.Message, tools []anthropic.Tool, emitToolResultCacheReference bool) cacheBreakpointStats {
-	return anthropicbackend.ApplyCacheBreakpoints(msgs, tools, emitToolResultCacheReference)
-}
-
-func cacheableMessageBoundaryBlock(role, blockType string) bool {
-	return anthropicbackend.CacheableMessageBoundaryBlock(role, blockType)
 }
 
 // runOAuthTranslatorStream drives tooltrans.StreamTranslator from decoded
@@ -275,28 +149,6 @@ func (s *Server) collectOAuth(w http.ResponseWriter, ctx context.Context, req an
 		notice = adapterruntime.EvaluateNoticeFromHeaders(h, s.cfg.Notices.EnabledOrDefault(), Claim)
 	}
 	return anthropicbackend.CollectResponse(s, w, ctx, req, model, reqID, started, jsonSpec, escalate, trackerKey, &notice)
-}
-
-// usageFromAnthropic converts an upstream usage block into the OpenAI
-// shape. Cache-read tokens surface in prompt_tokens_details.cached_tokens
-// so OpenAI clients that display the breakdown see cache efficiency;
-// cache-creation tokens have no OpenAI-canonical field and are only
-// reported via slog.
-// usageFromAnthropic converts an upstream usage block into the
-// OpenAI response shape. OpenAI's convention is that prompt_tokens
-// represents the total input sent (including cached and
-// cache-created tokens), and prompt_tokens_details.cached_tokens is
-// a subset-of breakdown. Anthropic's native shape splits them:
-// input_tokens is only the uncached portion, and cache_read /
-// cache_creation are separate counters. Clients like Cursor compute
-// "context used" from prompt_tokens + completion_tokens, so if we
-// only forward Anthropic's input_tokens the UI undercounts by tens
-// of thousands of tokens the moment caching kicks in. Sum the three
-// Anthropic counters into a single OpenAI prompt_tokens to match
-// what Cursor expects; prompt_tokens_details.cached_tokens still
-// exposes the cache-read breakdown for tools that know to read it.
-func usageFromAnthropic(a anthropic.Usage) Usage {
-	return Usage(anthropicbackend.UsageFromAnthropic(a))
 }
 
 // logCacheUsage emits a dedicated adapter.cache.usage slog event when
@@ -362,95 +214,4 @@ func (s *Server) streamOAuth(w http.ResponseWriter, r *http.Request, req anthrop
 		}
 	}
 	return anthropicbackend.StreamResponse(s, w, r, req, model, reqID, started, escalate, includeUsage, trackerKey, &emitTool)
-}
-
-// mutateBillingForProbe applies CLYDE_PROBE_BILLING for debugging.
-// canonical includes cc_version, cc_entrypoint, and cch. Returns ""
-// to omit the line entirely.
-func mutateBillingForProbe(canonical, cliVersion, ccEntrypoint string) string {
-	mode := strings.TrimSpace(os.Getenv("CLYDE_PROBE_BILLING"))
-	if mode == "" {
-		return canonical
-	}
-	const prefix = "x-anthropic-billing-header: "
-	switch mode {
-	case "omit":
-		return ""
-	case "wrong_fp":
-		return prefix + "cc_version=" + cliVersion + ".zzz; cc_entrypoint=" + ccEntrypoint + "; cch=00000;"
-	case "omit_fp":
-		return prefix + "cc_version=" + cliVersion + "; cc_entrypoint=" + ccEntrypoint + "; cch=00000;"
-	case "bad_entrypoint":
-		fp := extractFingerprint(canonical)
-		cchVal := extractBillingCCH(canonical)
-		if cchVal == "" {
-			cchVal = "00000"
-		}
-		return prefix + "cc_version=" + cliVersion + "." + fp + "; cc_entrypoint=garbage; cch=" + cchVal + ";"
-	case "omit_entrypoint":
-		fp := extractFingerprint(canonical)
-		cchVal := extractBillingCCH(canonical)
-		if cchVal == "" {
-			cchVal = "00000"
-		}
-		return prefix + "cc_version=" + cliVersion + "." + fp + "; cch=" + cchVal + ";"
-	case "cch_zero":
-		return replaceBillingCCH(canonical, "00000")
-	case "cch_z":
-		return replaceBillingCCH(canonical, "ZZZZZ")
-	case "cch_long":
-		return replaceBillingCCH(canonical, strings.Repeat("a", 32))
-	default:
-		// Unknown mode: ship canonical so a typo doesn't silently
-		// drop the bucket signal.
-		return canonical
-	}
-}
-
-// replaceBillingCCH swaps the value after `cch=` up to the next `;`.
-func replaceBillingCCH(line, newVal string) string {
-	const marker = "cch="
-	before, after, ok := strings.Cut(line, marker)
-	if !ok {
-		return line + " cch=" + newVal + ";"
-	}
-	_, tail, ok2 := strings.Cut(after, ";")
-	if !ok2 {
-		return before + marker + newVal
-	}
-	return before + marker + newVal + ";" + tail
-}
-
-// extractBillingCCH returns the cch hex token or "" if absent.
-func extractBillingCCH(line string) string {
-	const marker = "cch="
-	_, after, ok := strings.Cut(line, marker)
-	if !ok {
-		return ""
-	}
-	val, _, _ := strings.Cut(after, ";")
-	return val
-}
-
-// extractFingerprint returns the 3-char fp suffix from a canonical
-// billing line. Tolerates absence by returning "".
-func extractFingerprint(line string) string {
-	const verPrefix = "cc_version="
-	_, rest, ok := strings.Cut(line, verPrefix)
-	if !ok {
-		return ""
-	}
-	verPart, _, ok2 := strings.Cut(rest, ";")
-	if !ok2 {
-		return ""
-	}
-	dot := strings.LastIndexByte(verPart, '.')
-	if dot < 0 {
-		return ""
-	}
-	return verPart[dot+1:]
-}
-
-func derivePerRequestBetas(model ResolvedModel, perCtx map[string]string) []string {
-	return anthropicbackend.DerivePerRequestBetas(model, perCtx)
 }

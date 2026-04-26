@@ -1,8 +1,23 @@
-// Package tooltrans translates OpenAI chat completions wire JSON to Anthropic /v1/messages
-// shapes and maps Anthropic non-stream and SSE payloads back to OpenAI completion JSON.
-// Local OpenAI structs live in types_openai_local.go so callers avoid importing adapter and
-// cycles; integration in adapter/oauth_handler.go can shim adapter.ChatRequest to
-// OpenAIRequest in a few lines. Anthropic-shaped structs used by this package are below.
+// Package tooltrans is the shared compatibility layer for OpenAI/Anthropic
+// wire translation. After the Phase 8 split, the canonical Anthropic
+// translation entrypoints live in internal/adapter/anthropic/backend
+// (`TranslateRequest`, `RunTranslatorStream`); this package owns three
+// kinds of content:
+//
+//  1. Wire-shape structs that both backends and the shared event
+//     renderer reference (Anthropic /v1/messages translation types and
+//     SSE event payloads).
+//
+//  2. The shared streaming `EventRenderer` and `Event` model that any
+//     backend can emit into. Backend-specific reasoning/thinking
+//     formatting rules should remain in the owning backend package.
+//
+//  3. Aliases for the OpenAI wire types from internal/adapter/openai so
+//     internal/adapter/anthropic/backend can reference them without an
+//     import cycle through the root adapter package.
+//
+// New backend-specific behavior should land in the backend package, not
+// here. New shared cross-backend types are welcome.
 package tooltrans
 
 import (

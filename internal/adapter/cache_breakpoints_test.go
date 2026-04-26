@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
+	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
 	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
@@ -22,7 +23,7 @@ func TestApplyCacheBreakpointsStampsLastToolAndLastUserText(t *testing.T) {
 		{Name: "first_tool"},
 		{Name: "second_tool"},
 	}
-	applyCacheBreakpoints(msgs, tools, false)
+	anthropicbackend.ApplyCacheBreakpoints(msgs, tools, false)
 
 	if tools[0].CacheControl != nil {
 		t.Fatalf("non-last tool marked")
@@ -50,7 +51,7 @@ func TestApplyCacheBreakpointsStampsAssistantTailAndSkipsThinkingTail(t *testing
 		}},
 	}
 	tools := []anthropic.Tool{{Name: "only_tool"}}
-	applyCacheBreakpoints(msgs, tools, false)
+	anthropicbackend.ApplyCacheBreakpoints(msgs, tools, false)
 
 	if tools[0].CacheControl == nil {
 		t.Fatalf("tool marker should apply even on single-message calls")
@@ -64,8 +65,8 @@ func TestApplyCacheBreakpointsStampsAssistantTailAndSkipsThinkingTail(t *testing
 }
 
 func TestApplyCacheBreakpointsNoToolsOrMessagesIsNoop(t *testing.T) {
-	applyCacheBreakpoints(nil, nil, false)
-	applyCacheBreakpoints([]anthropic.Message{}, []anthropic.Tool{}, false)
+	anthropicbackend.ApplyCacheBreakpoints(nil, nil, false)
+	anthropicbackend.ApplyCacheBreakpoints([]anthropic.Message{}, []anthropic.Tool{}, false)
 }
 
 func TestApplyCacheBreakpointsLeavesPriorToolResultsPlainByDefault(t *testing.T) {
@@ -76,7 +77,7 @@ func TestApplyCacheBreakpointsLeavesPriorToolResultsPlainByDefault(t *testing.T)
 		}},
 		{Role: "assistant", Content: []anthropic.ContentBlock{{Type: "text", Text: "assistant turn"}}},
 	}
-	stats := applyCacheBreakpoints(msgs, nil, false)
+	stats := anthropicbackend.ApplyCacheBreakpoints(msgs, nil, false)
 	if msgs[0].Content[0].CacheReference != "" {
 		t.Fatalf("tool_result cache_reference = %q want empty by default", msgs[0].Content[0].CacheReference)
 	}
@@ -96,7 +97,7 @@ func TestApplyCacheBreakpointsCanEnableCacheReferenceOnPriorToolResults(t *testi
 		}},
 		{Role: "assistant", Content: []anthropic.ContentBlock{{Type: "text", Text: "assistant turn"}}},
 	}
-	stats := applyCacheBreakpoints(msgs, nil, true)
+	stats := anthropicbackend.ApplyCacheBreakpoints(msgs, nil, true)
 	if msgs[0].Content[0].CacheReference != "toolu_1" {
 		t.Fatalf("tool_result cache_reference = %q want toolu_1", msgs[0].Content[0].CacheReference)
 	}
@@ -113,7 +114,7 @@ func TestApplyCacheBreakpointsSkipsNewestToolResultWhenCacheReferenceEnabled(t *
 			{Type: "text", Text: "follow-up"},
 		}},
 	}
-	stats := applyCacheBreakpoints(msgs, nil, true)
+	stats := anthropicbackend.ApplyCacheBreakpoints(msgs, nil, true)
 	if msgs[1].Content[0].CacheReference != "" {
 		t.Fatalf("newest tool_result cache_reference = %q want empty", msgs[1].Content[0].CacheReference)
 	}
@@ -138,7 +139,7 @@ func TestToAnthropicAPIRequestSerializesCacheControl(t *testing.T) {
 		},
 		MaxTokens: 64,
 	}
-	req, _ := toAnthropicAPIRequest(tr, "claude-model", false)
+	req, _ := anthropicbackend.ToAPIRequest(tr, "claude-model", false)
 	raw, err := json.Marshal(req)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -165,7 +166,7 @@ func TestToAnthropicAPIRequestOmitsCacheReferenceOnPriorToolResultByDefault(t *t
 		},
 		MaxTokens: 64,
 	}
-	req, _ := toAnthropicAPIRequest(tr, "claude-model", false)
+	req, _ := anthropicbackend.ToAPIRequest(tr, "claude-model", false)
 	raw, err := json.Marshal(req)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -188,7 +189,7 @@ func TestToAnthropicAPIRequestCanSerializeCacheReferenceOnPriorToolResult(t *tes
 		},
 		MaxTokens: 64,
 	}
-	req, stats := toAnthropicAPIRequest(tr, "claude-model", true)
+	req, stats := anthropicbackend.ToAPIRequest(tr, "claude-model", true)
 	raw, err := json.Marshal(req)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -209,7 +210,7 @@ func TestUsageFromAnthropicMapsCacheRead(t *testing.T) {
 		CacheCreationInputTokens: 800,
 		CacheReadInputTokens:     4000,
 	}
-	u := usageFromAnthropic(in)
+	u := anthropicbackend.UsageFromAnthropic(in)
 	// prompt_tokens must include the cached + cache-creation portions
 	// to match OpenAI semantics: 120 uncached + 800 written + 4000 read.
 	if u.PromptTokens != 4920 || u.CompletionTokens != 30 || u.TotalTokens != 4950 {
@@ -221,14 +222,14 @@ func TestUsageFromAnthropicMapsCacheRead(t *testing.T) {
 }
 
 func TestUsageFromAnthropicOmitsDetailsWhenNoCache(t *testing.T) {
-	u := usageFromAnthropic(anthropic.Usage{InputTokens: 10, OutputTokens: 2})
+	u := anthropicbackend.UsageFromAnthropic(anthropic.Usage{InputTokens: 10, OutputTokens: 2})
 	if u.PromptTokensDetails != nil {
 		t.Fatalf("PromptTokensDetails should be nil when no cache read: %+v", u.PromptTokensDetails)
 	}
 }
 
 func TestBuildSystemBlocksEnabledStampsPrefixAndCaller(t *testing.T) {
-	blocks := buildSystemBlocks("x-anthropic-billing-header: v=1", "cli-prefix", "caller sys text", "", "", true)
+	blocks := anthropicbackend.BuildSystemBlocks("x-anthropic-billing-header: v=1", "cli-prefix", "caller sys text", "", "", true)
 	if len(blocks) != 3 {
 		t.Fatalf("want 3 blocks, got %d: %+v", len(blocks), blocks)
 	}
@@ -247,7 +248,7 @@ func TestBuildSystemBlocksEnabledStampsPrefixAndCaller(t *testing.T) {
 }
 
 func TestBuildSystemBlocksStampsScopeOnPrefixOnly(t *testing.T) {
-	blocks := buildSystemBlocks("billing", "prefix", "caller", "", "global", true)
+	blocks := anthropicbackend.BuildSystemBlocks("billing", "prefix", "caller", "", "global", true)
 	if len(blocks) != 3 {
 		t.Fatalf("want 3 blocks, got %d", len(blocks))
 	}
@@ -260,7 +261,7 @@ func TestBuildSystemBlocksStampsScopeOnPrefixOnly(t *testing.T) {
 }
 
 func TestBuildSystemBlocksHonorsExplicit1hTTL(t *testing.T) {
-	blocks := buildSystemBlocks("billing", "prefix", "caller", "1h", "", true)
+	blocks := anthropicbackend.BuildSystemBlocks("billing", "prefix", "caller", "1h", "", true)
 	for i, b := range blocks[1:] {
 		if b.CacheControl == nil || b.CacheControl.TTL != "1h" {
 			t.Fatalf("block %d missing 1h TTL: %+v", i+1, b.CacheControl)
@@ -269,7 +270,7 @@ func TestBuildSystemBlocksHonorsExplicit1hTTL(t *testing.T) {
 }
 
 func TestBuildSystemBlocksSkipsEmptyInputs(t *testing.T) {
-	blocks := buildSystemBlocks("", "cli-prefix", "", "", "", true)
+	blocks := anthropicbackend.BuildSystemBlocks("", "cli-prefix", "", "", "", true)
 	if len(blocks) != 1 {
 		t.Fatalf("want 1 block, got %d: %+v", len(blocks), blocks)
 	}
@@ -279,7 +280,7 @@ func TestBuildSystemBlocksSkipsEmptyInputs(t *testing.T) {
 }
 
 func TestBuildSystemBlocksDisabledStripsMarkers(t *testing.T) {
-	blocks := buildSystemBlocks("billing", "prefix", "caller", "", "", false)
+	blocks := anthropicbackend.BuildSystemBlocks("billing", "prefix", "caller", "", "", false)
 	for i, b := range blocks {
 		if b.CacheControl != nil {
 			t.Fatalf("block %d carried cache_control when caching disabled: %+v", i, b)

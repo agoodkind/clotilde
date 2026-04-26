@@ -256,6 +256,10 @@ func UsageFromAnthropic(a anthropic.Usage) adapteropenai.Usage {
 		PromptTokens:     totalInput,
 		CompletionTokens: a.OutputTokens,
 		TotalTokens:      totalInput + a.OutputTokens,
+		InputTokens:      totalInput,
+		OutputTokens:     a.OutputTokens,
+		CacheReadTokens:  a.CacheReadInputTokens,
+		CacheWriteTokens: a.CacheCreationInputTokens,
 	}
 	if a.CacheReadInputTokens > 0 {
 		u.PromptTokensDetails = &adapteropenai.PromptTokensDetails{CachedTokens: a.CacheReadInputTokens}

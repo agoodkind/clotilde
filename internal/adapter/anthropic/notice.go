@@ -25,7 +25,15 @@ type Notice struct {
 
 // EvaluateNotice inspects unified Anthropic rate-limit headers from a successful
 // messages response and returns one synthetic notice, or nil when no notice applies.
+//
+// The classifier in classify.go owns the "is there any warning at
+// all?" gate; EvaluateNotice short-circuits on
+// ResponseClassSuccessNoWarning so the per-claim formatting logic
+// only runs when at least one warning flag is set.
 func EvaluateNotice(h http.Header, now time.Time) *Notice {
+	if ClassifyHeaders(h, http.StatusOK).Class == ResponseClassSuccessNoWarning {
+		return nil
+	}
 	status := strings.ToLower(strings.TrimSpace(h.Get("anthropic-ratelimit-unified-status")))
 	overageStatus := strings.ToLower(strings.TrimSpace(h.Get("anthropic-ratelimit-unified-overage-status")))
 	repClaim := strings.ToLower(strings.TrimSpace(h.Get("anthropic-ratelimit-unified-representative-claim")))

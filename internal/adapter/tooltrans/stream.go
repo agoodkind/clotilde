@@ -198,6 +198,7 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 				Choices: []OpenAIStreamChoice{{Index: 0, Delta: OpenAIStreamDelta{Refusal: t.visibleText.String()}}},
 			})
 		}
+		t.renderer.Flush()
 		return extra, true, reason, u, nil
 
 	case "ping":
@@ -216,6 +217,7 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 		if msg == "" {
 			msg = "anthropic stream error"
 		}
+		t.renderer.Flush()
 		return nil, false, "", nil, fmt.Errorf("%s", msg)
 
 	default:

@@ -189,11 +189,102 @@ func TestStreamEvents_429InvokesOnHeaders(t *testing.T) {
 	if !strings.Contains(err.Error(), "anthropic 429") {
 		t.Fatalf("err = %q; want anthropic 429 prefix", err.Error())
 	}
+	// The 429 error must surface as a typed UpstreamError so downstream
+	// callers can route on the classification rather than re-parsing the
+	// error string.
+	ue, ok := AsUpstreamError(err)
+	if !ok {
+		t.Fatalf("err must be *UpstreamError; got %T (%v)", err, err)
+	}
+	if ue.Class() != ResponseClassRetryableError {
+		t.Fatalf("UpstreamError.Class() = %s; want retryable", ue.Class())
+	}
+	if !ue.Retryable() {
+		t.Fatalf("UpstreamError.Retryable() must be true on 429")
+	}
+	if ue.Status != http.StatusTooManyRequests {
+		t.Fatalf("UpstreamError.Status = %d; want %d", ue.Status, http.StatusTooManyRequests)
+	}
 	if observed == nil {
 		t.Fatalf("OnHeaders was not invoked on 429 response")
 	}
 	if got := observed.Get("anthropic-ratelimit-unified-status"); got != "rejected" {
 		t.Fatalf("OnHeaders received status=%q; want rejected", got)
+	}
+}
+
+func TestDoUsesIdentityEncodingForStreams(t *testing.T) {
+	t.Parallel()
+
+	var streamEncoding string
+	var streamSeen bool
+	var nonStreamEncoding string
+	var nonStreamSeen bool
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Stream bool `json:"stream"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if payload.Stream {
+			streamSeen = true
+			streamEncoding = r.Header.Get("Accept-Encoding")
+			w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		} else {
+			nonStreamSeen = true
+			nonStreamEncoding = r.Header.Get("Accept-Encoding")
+			w.Header().Set("Content-Type", "application/json")
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	cli := &Client{
+		http:  srv.Client(),
+		oauth: &staticToken{},
+		cfg: Config{
+			MessagesURL:           srv.URL + "/v1/messages",
+			OAuthAnthropicVersion: "2023-06-01",
+			BetaHeader:            "REDACTED-OAUTH-BETA",
+			UserAgent:             "anthropic-test/0",
+			CCVersion:             "1.0.0",
+			CCEntrypoint:          "test",
+		},
+	}
+	req := Request{
+		Model:     "claude-test",
+		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
+		MaxTokens: 10,
+	}
+
+	streamReq := req
+	streamReq.Stream = true
+	resp, err := cli.do(context.Background(), streamReq)
+	if err != nil {
+		t.Fatalf("stream do: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	nonStreamReq := req
+	nonStreamReq.Stream = false
+	resp, err = cli.do(context.Background(), nonStreamReq)
+	if err != nil {
+		t.Fatalf("non-stream do: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	if !streamSeen || !nonStreamSeen {
+		t.Fatalf("server did not see both requests: stream=%v non_stream=%v", streamSeen, nonStreamSeen)
+	}
+	if streamEncoding != "identity" {
+		t.Fatalf("stream Accept-Encoding = %q; want identity", streamEncoding)
+	}
+	if nonStreamEncoding != "gzip, deflate, br, zstd" {
+		t.Fatalf("non-stream Accept-Encoding = %q; want compressed encodings", nonStreamEncoding)
 	}
 }
 

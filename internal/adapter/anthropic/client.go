@@ -150,7 +150,15 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	httpReq.Header.Set("anthropic-version", c.cfg.OAuthAnthropicVersion)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
-	httpReq.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
+	if req.Stream {
+		// Keep SSE uncompressed. Compressed streaming responses can
+		// coalesce small tool argument deltas inside the upstream
+		// compressor/decompressor even when our downstream SSE writer
+		// flushes every chunk.
+		httpReq.Header.Set("Accept-Encoding", "identity")
+	} else {
+		httpReq.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
+	}
 
 	// CLYDE_PROBE_DROP is a comma-separated list of header names to
 	// omit below for debugging. Empty means send the full configured set.
@@ -233,7 +241,11 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 			DurationMs:   time.Since(postStarted).Milliseconds(),
 			Err:          err.Error(),
 		})
-		return nil, fmt.Errorf("post /v1/messages: %w", err)
+		return nil, &UpstreamError{
+			Classification: Classify(nil, err),
+			Message:        fmt.Sprintf("post /v1/messages: %v", err),
+			Cause:          err,
+		}
 	}
 
 	base := responseEvent{
@@ -273,13 +285,21 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		// Prefer a friendly message built from the unified rate-limit
 		// headers; fall back to the headerless "extra usage required"
 		// entitlement message; fall back to the raw body otherwise.
-		if friendly := FormatRateLimitMessage(resp.Header); friendly != "" {
-			return nil, fmt.Errorf("anthropic 429: %s", friendly)
+		class := Classify(resp, nil)
+		message := ""
+		switch {
+		case FormatRateLimitMessage(resp.Header) != "":
+			message = FormatRateLimitMessage(resp.Header)
+		case strings.Contains(string(errBody), "Extra usage is required for long context"):
+			message = "Extra usage is required for 1M context · enable extra usage at claude.ai/settings/usage, or switch to a standard-context model"
+		default:
+			message = truncate(string(errBody), 600)
 		}
-		if strings.Contains(string(errBody), "Extra usage is required for long context") {
-			return nil, fmt.Errorf("anthropic 429: Extra usage is required for 1M context · enable extra usage at claude.ai/settings/usage, or switch to a standard-context model")
+		return nil, &UpstreamError{
+			Classification: class,
+			Status:         resp.StatusCode,
+			Message:        message,
 		}
-		return nil, fmt.Errorf("anthropic %s: %s", resp.Status, truncate(string(errBody), 600))
 	}
 	if resp.StatusCode != http.StatusOK {
 		errBody := readDecodedBody(resp)
@@ -288,7 +308,11 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		ev.BodyB64 = base64.StdEncoding.EncodeToString(errBody)
 		ev.BodyBytes = len(errBody)
 		logResponse(slog.LevelError, "anthropic.messages.upstream_error", ev)
-		return nil, fmt.Errorf("anthropic %s: %s", resp.Status, truncate(string(errBody), 600))
+		return nil, &UpstreamError{
+			Classification: Classify(resp, nil),
+			Status:         resp.StatusCode,
+			Message:        truncate(string(errBody), 600),
+		}
 	}
 	logResponse(slog.LevelInfo, "anthropic.messages.connected", base)
 	if req.OnHeaders != nil {
