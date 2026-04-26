@@ -3,6 +3,7 @@ package adapter
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -46,7 +47,7 @@ func (s *Server) HandleOAuth(w http.ResponseWriter, r *http.Request, req adapter
 }
 
 func (s *Server) HandleFallback(w http.ResponseWriter, r *http.Request, req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, reqID string, escalate bool) error {
-	return s.handleFallback(w, r, req, model, reqID, escalate)
+	return anthropicbackend.HandleFallback(s, w, r, req, model, reqID, escalate)
 }
 
 func (s *Server) HasShunt(name string) bool {
@@ -121,11 +122,21 @@ func (s *Server) FallbackClient() anthropicbackend.FallbackClient {
 }
 
 func (s *Server) AcquireFallback(ctx context.Context) error {
-	return s.acquireFallback(ctx)
+	select {
+	case s.fbSem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(30 * time.Second):
+		return fmt.Errorf("timed out waiting for fallback concurrency slot")
+	}
 }
 
 func (s *Server) ReleaseFallback() {
-	s.releaseFallback()
+	select {
+	case <-s.fbSem:
+	default:
+	}
 }
 
 func (s *Server) FallbackJSONSystemPrompt(jsonSpec any) string {

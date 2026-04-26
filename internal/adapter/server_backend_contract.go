@@ -56,7 +56,7 @@ func (s *Server) dispatchResolvedChat(
 	case BackendFallback:
 		// Explicit-mode dispatch: alias is bound to the fallback backend
 		// directly, so no OAuth attempt is made first.
-		_ = s.handleFallback(w, r, req, model, reqID, false)
+		_ = s.HandleFallback(w, r, req, model, reqID, false)
 		return
 	case BackendAnthropic:
 		anthropicbackend.Dispatch(s, anthropicbackend.FallbackConfig{

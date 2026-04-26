@@ -1406,3 +1406,38 @@ Next large batch:
   `anthropicbackend.HandleFallback(...)` directly, then remove
   `internal/adapter/fallback_handler.go` or leave only shared semaphore code
   in a better-named file.
+
+## 2026-04-26 fallback shim removal checkpoint
+
+Follow-up to the fallback entrypoint checkpoint. This slice removed the root
+fallback compatibility file and wired the real chat path through the newer root
+backend contract boundary.
+
+What changed:
+
+- `internal/adapter/server_dispatch.go`: replaced the inline backend override
+  and backend dispatch switch with `applyBackendOverride(...)` and
+  `dispatchResolvedChat(...)`.
+- `internal/adapter/server_backend_contract.go`: explicit fallback dispatch
+  now calls `Server.HandleFallback(...)` instead of the deleted
+  `handleFallback(...)` shim.
+- `internal/adapter/anthropic_bridge.go`: `HandleFallback(...)` now calls
+  `anthropicbackend.HandleFallback(...)` directly; fallback semaphore
+  acquire/release lives on the bridge as narrow root state access.
+- `internal/adapter/fallback_handler.go`: deleted.
+- `docs/adapter-refactor/adapter-refactor.md`: updated the Phase 4 ownership
+  notes, current diagram, and todo status to reflect that fallback execution is
+  backend-owned and the shim is gone.
+
+Verification:
+
+- `go test ./internal/adapter/...` passed.
+- `make build` passed.
+- `dist/clyde daemon reload` passed with `active_sessions=1`, `new_pid=9178`.
+
+Next large batch:
+
+- Continue shrinking the root bridge surface by moving any remaining
+  backend-specific request/response wrappers into backend-local packages, with
+  the Codex request/response wrapper cleanup as the likely next high-impact
+  chunk.

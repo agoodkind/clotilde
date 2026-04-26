@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
@@ -180,22 +179,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if override := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Clyde-Backend"))); override != "" {
-		original := string(model.Backend)
-		switch override {
-		case BackendAnthropic, BackendFallback, BackendShunt, BackendCodex:
-			model.Backend = override
-		default:
-			writeError(w, http.StatusBadRequest, "invalid_backend_override",
-				"X-Clyde-Backend must be one of: anthropic, fallback, shunt, codex")
-			return
-		}
-		s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.backend.overridden",
-			slog.String("request_id", reqID),
-			slog.String("alias", req.Model),
-			slog.String("from", original),
-			slog.String("to", override),
-		)
+	var ok bool
+	model, ok = s.applyBackendOverride(w, r, req, model, reqID)
+	if !ok {
+		return
 	}
 
 	toolNames := make([]string, 0, len(req.Tools)+len(req.Functions))
@@ -231,37 +218,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if model.Backend == BackendShunt {
-		s.forwardShunt(w, r, model, body)
-		return
-	}
-
-	if model.Backend == BackendFallback {
-		// Explicit-mode dispatch: alias is bound to the fallback
-		// backend directly, no OAuth attempt is made.
-		_ = s.handleFallback(w, r, req, model, reqID, false)
-		return
-	}
-
-	if model.Backend == BackendAnthropic {
-		anthropicbackend.Dispatch(s, anthropicbackend.FallbackConfig{
-			Enabled:            s.cfg.Fallback.Enabled,
-			Trigger:            s.cfg.Fallback.Trigger,
-			ForwardToShunt:     s.cfg.Fallback.ForwardToShunt.Enabled,
-			ForwardToShuntName: s.cfg.Fallback.ForwardToShunt.Shunt,
-			FailureEscalation:  s.cfg.Fallback.FailureEscalation,
-		}, w, r, req, model, effort, reqID, body)
-		return
-	}
-	if model.Backend == BackendCodex {
-		if err := adaptercodex.Dispatch(s, w, r, req, model, effort, reqID); err != nil {
-			writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
-		}
-		return
-	}
-
-	writeError(w, http.StatusBadRequest, "unsupported_backend",
-		"model resolved to unsupported backend "+model.Backend+"; configure anthropic, codex, shunt, or fallback explicitly")
+	s.dispatchResolvedChat(w, r, req, model, effort, reqID, body)
 }
 
 func truncateBody(body []byte, maxBytes int) (string, bool) {

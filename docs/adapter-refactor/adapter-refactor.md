@@ -333,7 +333,6 @@ flowchart TD
     ServerDispatch[server_dispatch.go]
     OAuthHandler[oauth_handler.go]
     CodexHandler[codex_handler.go]
-    FallbackHandler[fallback_handler.go]
     ServerResponse[server_response.go]
     Tooltrans[tooltrans]
     AnthBackend["anthropic/backend"]
@@ -351,7 +350,6 @@ flowchart TD
     RootAdapter --> ServerDispatch
     ServerDispatch --> OAuthHandler
     ServerDispatch --> CodexHandler
-    ServerDispatch --> FallbackHandler
     ServerDispatch --> AnthBackend
     ServerDispatch --> CodexBackend
 
@@ -360,11 +358,11 @@ flowchart TD
     OAuthHandler --> ServerResponse
     CodexHandler --> Tooltrans
     CodexHandler --> ServerResponse
-    FallbackHandler --> FallbackPkg
     ServerResponse --> OpenAIShared
 
     Tooltrans --> Render
     AnthBackend --> AnthropicAPI
+    AnthBackend --> FallbackPkg
     AnthBackend --> Render
     AnthBackend --> Runtime
     CodexBackend --> CodexAPI
@@ -406,10 +404,10 @@ Where ownership still leaks:
 - `internal/adapter/codex_handler.go` still owns Codex request shaping,
   reasoning policy, tool alias mapping, tool spec generation, direct transport,
   and SSE parsing wrappers.
-- `internal/adapter/fallback_handler.go` is still root-owned and is used as
-  the OpenAI response/orchestration leg for Anthropic fallback execution, even
-  though the subprocess driver now lives under
-  `internal/adapter/anthropic/fallback/`.
+- `internal/adapter/anthropic/backend/fallback_runtime.go` now owns the
+  Anthropic fallback entrypoint. The root package still exposes narrow bridge
+  methods for semaphore/config access, but `internal/adapter/fallback_handler.go`
+  has been deleted.
 - `internal/adapter/tooltrans/` still mixes truly shared compatibility helpers
   with Anthropic-specific translation behavior.
 
@@ -1131,8 +1129,11 @@ Current state:
 - `internal/adapter/anthropic/backend/fallback_runtime.go` also owns fallback
   validation, unsupported-field logging, request construction,
   response-format prompt injection, and transcript-resume policy.
-- Root fallback handling now delegates to the Anthropic backend entrypoint.
-  The remaining root-owned fallback code is the semaphore implementation.
+- Root dispatch now calls the backend contract boundary; explicit fallback
+  dispatch reaches `anthropicbackend.HandleFallback(...)` through the same root
+  bridge method used by OAuth fallback escalation.
+- The remaining root-owned fallback mechanics are narrow `Server` bridge
+  methods for semaphore acquisition/release and adapter config lookup.
 
 Planned split:
 
@@ -1141,17 +1142,14 @@ Planned split:
 2. Keep subprocess primitives in `internal/adapter/anthropic/fallback/`.
    They are Anthropic-provider behavior unless a future non-Anthropic
    backend proves it needs the same `claude -p` driver.
-3. Move remaining root fallback response orchestration only after the shared
-   OpenAI response rendering boundary is narrow enough to avoid copying
-   stream/JSON assembly into the backend package.
-4. Decide whether to keep the root compatibility shim or route fallback
-   dispatch directly through the Anthropic backend entrypoint.
+3. Continue shrinking the root bridge methods so fallback concurrency and
+   config access are explicit backend dependencies rather than root helper
+   behavior.
 
 Files involved:
 
 - `internal/adapter/anthropic/backend/backend.go`
 - `internal/adapter/anthropic_bridge.go`
-- `internal/adapter/fallback_handler.go`
 - `internal/adapter/anthropic/fallback/...`
 
 Exit criteria:
@@ -1813,10 +1811,9 @@ Keep these separate from the notice/error fix:
   `mergeOAuthStreamChunks`, usage rollups, finish-reason handling, stream
   error shaping, and empty-stream behavior are not all owned by
   `internal/adapter/anthropic/backend/...` yet.
-- Fallback escalation still crosses root-owned
-  `internal/adapter/fallback_handler.go`; the Anthropic backend does not
-  fully own the fallback decision, fallback transport contract, logging, or
-  backend-local tests.
+- Fallback execution is now backend-owned, but the root `Server` still exposes
+  bridge methods for fallback semaphore/config access and fallback escalation
+  still needs more backend-local tests.
 - `tooltrans` still contains Anthropic-shaped implementation details and
   should not remain a hidden Anthropic backend package.
 - Notice classification now exists, but the final product surface for
@@ -2038,8 +2035,9 @@ Specific high-risk areas to isolate:
 - Cursor model-slug normalization and resume parity across foreground,
   background, and subagent flows
 - Root response assembly in `internal/adapter/server_response.go`
-- Fallback escalation behavior in `internal/adapter/anthropic/backend/backend.go`
-  and `internal/adapter/fallback_handler.go`
+- Fallback escalation behavior in
+  `internal/adapter/anthropic/backend/backend.go` and backend-local fallback
+  runtime tests
 
 ## Execution strategy
 
@@ -2351,11 +2349,9 @@ anthropic-ratelimit-unified-overage-status: rejected` path and
 
 ### Phase 4 todos: backend-owned Anthropic fallback
 
-1. [todo] Move escalation decision logic out of
-   `internal/adapter/fallback_handler.go` and root dispatch into
-   `internal/adapter/anthropic/backend/`. The dispatcher already
-   carries `FallbackConfig`; the actual choice should land next to the
-   classifier from the notice/error workstream.
+1. [done 2026-04-26] Move escalation decision logic out of root dispatch and
+   into `internal/adapter/anthropic/backend/`. `Dispatch(...)` owns the
+   OAuth-to-fallback choice and the root package only passes `FallbackConfig`.
 2. [done 2026-04-26] Move the explicit `claude -p` subprocess driver under
    `internal/adapter/anthropic/fallback/` and make fallback config resolution
    package-owned through `fallback.FromAdapterConfig(...)`.
@@ -2378,9 +2374,9 @@ anthropic-ratelimit-unified-overage-status: rejected` path and
 7. [done 2026-04-26] Move root fallback validation, unsupported-field
    logging, request construction, response-format prompt injection, and
    transcript-resume policy behind the Anthropic backend dispatcher boundary.
-8. [todo] Decide whether `internal/adapter/fallback_handler.go` should remain
-   as a tiny compatibility shim or be deleted by routing explicit fallback
-   dispatch directly through `anthropicbackend.HandleFallback(...)`.
+8. [done 2026-04-26] Delete `internal/adapter/fallback_handler.go`, route
+   explicit fallback through `Server.HandleFallback(...)`, and make that bridge
+   call `anthropicbackend.HandleFallback(...)` directly.
 9. [todo] Update logging so fallback transitions name the Anthropic
    classifier outcome that triggered them, not just the generic
    escalation reason.
@@ -2985,8 +2981,9 @@ entries, and orders the real work by dependency and debugging value.
    moved into `internal/adapter/anthropic/backend/fallback_runtime.go`.
    Fallback validation, request preparation, JSON prompt injection, and
    transcript-resume policy are now behind the Anthropic-owned dispatcher
-   interface as well. Current remaining work is deciding whether to keep or
-   delete the tiny root compatibility shim.
+   interface as well. The root fallback compatibility shim has been deleted;
+   remaining work is shrinking the bridge methods and expanding backend-local
+   escalation coverage.
 
 ### P3: shared stream/output architecture
 
