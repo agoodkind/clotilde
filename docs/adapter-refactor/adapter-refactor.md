@@ -2561,19 +2561,19 @@ workstream above. The concrete execution order is:
 
 ### Plan-level workstreams just folded in
 
-- [todo] Codex app parity workstream: initial response-length,
+- [active] Codex app parity workstream: initial response-length,
   transport-wire, capability-reporting, and telemetry slices exist, but
   parity remains a long-running workstream. Do not treat Codex MAX /
   ChatGPT Pro behavior as implemented until live websocket
   continuation, turn-state/header parity, text-control parity,
   context-window measurement, and long-running turn characterization are
   all complete.
-- [todo] Anthropic backend workstream: notice/error classification is
-  mostly landed, but broader Anthropic parity is still open. Remaining
-  work includes backend-owned request construction, response assembly,
-  stream translation, usage/finish handling, fallback escalation,
-  notice delivery validation, `tooltrans` shrinkage, and test
-  relocation.
+- [active] Anthropic backend workstream: notice/error classification has
+  landed, but broader Anthropic parity remains open. Remaining work is
+  tracked in the phase TODOs below: backend-owned request construction,
+  response assembly, stream translation, usage/finish handling,
+  fallback escalation, notice delivery validation, `tooltrans`
+  shrinkage, and test relocation.
 
 ### Current status
 
@@ -2696,13 +2696,10 @@ entries, and orders the real work by dependency and debugging value.
    transport parsing, and collect response assembly as done; it keeps
    only the real residuals: Cursor-vocabulary audit, compatibility
    wrapper deletion, and remaining root test relocation.
-2. Reconcile the plan-level folded-in workstream bullets. The Anthropic
-   notice/error-surfacing checklist is mostly done in its own section,
-   but the broader Anthropic backend workstream is not done; keep the
-   plan-level TODO focused on the remaining ownership and parity gaps
-   rather than redoing the classifier slice. The Codex folded-in bullet
-   should stay broad enough to capture the long remaining parity
-   workstream, not just websocket continuation.
+2. [done 2026-04-26] Reconciled the plan-level folded-in workstream
+   bullets. They now act as active workstream summaries instead of
+   duplicate TODOs, with detailed remaining work tracked in the phase
+   and priority queues.
 
 ### P1: live correctness and parity blockers
 
