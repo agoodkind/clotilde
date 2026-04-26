@@ -3,7 +3,6 @@ package adapter
 import (
 	"context"
 	"net/http"
-	"time"
 
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
@@ -11,14 +10,6 @@ import (
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
-
-func (s *Server) StreamCodex(w http.ResponseWriter, r *http.Request, req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort, reqID string, started time.Time) error {
-	return adaptercodex.Stream(s, w, r, req, model, effort, reqID, started)
-}
-
-func (s *Server) CollectCodex(w http.ResponseWriter, r *http.Request, req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort, reqID string, started time.Time) error {
-	return adaptercodex.Collect(s, w, r, req, model, effort, reqID, started)
-}
 
 func (s *Server) AppFallbackEnabled() bool {
 	return s.cfg.Codex.AppFallback

@@ -3,7 +3,6 @@ package adapter
 import (
 	"context"
 	"errors"
-	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -33,23 +32,14 @@ func init() {
 	adaptercodex.ShellNameFn = func() string { return codexShellName() }
 }
 
-func sanitizeForUpstreamCache(text string) string { return adaptercodex.SanitizeForUpstreamCache(text) }
-
-func codexMapString(m map[string]any, key string) string {
-	if m == nil {
-		return ""
-	}
-	v, _ := m[key].(string)
-	return strings.TrimSpace(v)
+func sanitizeForUpstreamCache(text string) string {
+	return adaptercodex.SanitizeForUpstreamCache(text)
 }
 
-func codexItemType(item map[string]any) string   { return codexMapString(item, "type") }
-func codexItemStatus(item map[string]any) string { return codexMapString(item, "status") }
-
-// runCodexDirect builds the Codex transport request through the
-// backend-local `adaptercodex.BuildRequest` entrypoint, then dispatches
-// it through the websocket-or-HTTP selector that the Codex package
-// owns. The root facade keeps only auth/account plumbing.
+// runCodexDirect builds the Codex transport request through the backend-local
+// `adaptercodex.BuildRequest` entrypoint, then dispatches it through the
+// websocket-or-HTTP selector that the Codex package owns. The root facade keeps
+// only auth/account plumbing.
 func (s *Server) runCodexDirect(
 	ctx context.Context,
 	req ChatRequest,
@@ -116,25 +106,4 @@ func (s *Server) runCodexDirect(
 		Alias:          model.Alias,
 		ConversationID: strings.TrimSpace(transportPayload.PromptCache),
 	}, transportPayload, emit)
-}
-
-func (s *Server) collectCodex(w http.ResponseWriter, r *http.Request, req ChatRequest, model ResolvedModel, effort, reqID string, started time.Time) error {
-	return adaptercodex.Collect(s, w, r, req, model, effort, reqID, started)
-}
-
-func (s *Server) streamCodex(w http.ResponseWriter, r *http.Request, req ChatRequest, model ResolvedModel, effort, reqID string, started time.Time) error {
-	return adaptercodex.Stream(s, w, r, req, model, effort, reqID, started)
-}
-
-func (s *Server) dispatchCodex(w http.ResponseWriter, r *http.Request, req ChatRequest, model ResolvedModel, effort, reqID string) {
-	started := time.Now()
-	if req.Stream {
-		if err := s.streamCodex(w, r, req, model, effort, reqID, started); err != nil {
-			writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
-		}
-		return
-	}
-	if err := s.collectCodex(w, r, req, model, effort, reqID, started); err != nil {
-		writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
-	}
 }

@@ -2,7 +2,7 @@ package codex
 
 import (
 	"context"
-		"log/slog"
+	"log/slog"
 	"net/http"
 	"time"
 

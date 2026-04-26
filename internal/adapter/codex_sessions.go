@@ -27,6 +27,17 @@ func normalizeCodexAssistantAnchor(text string) string {
 	return adaptercodex.NormalizeAssistantAnchor(text, sanitizeForUpstreamCache)
 }
 
+func codexMapString(m map[string]any, key string) string {
+	if m == nil {
+		return ""
+	}
+	v, _ := m[key].(string)
+	return strings.TrimSpace(v)
+}
+
+func codexItemType(item map[string]any) string   { return codexMapString(item, "type") }
+func codexItemStatus(item map[string]any) string { return codexMapString(item, "status") }
+
 func buildCodexManagedPromptPlan(messages []ChatMessage) codexManagedPromptPlan {
 	return adaptercodex.BuildManagedPromptPlan(messages, BuildPrompt, FlattenContent, sanitizeForUpstreamCache)
 }

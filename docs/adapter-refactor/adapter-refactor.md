@@ -332,7 +332,8 @@ flowchart TD
     RootAdapter["internal/adapter/root"]
     ServerDispatch[server_dispatch.go]
     OAuthHandler[oauth_handler.go]
-    CodexHandler[codex_handler.go]
+    CodexRuntime[codex_runtime.go]
+    CodexBridge[codex_bridge.go]
     ServerResponse[server_response.go]
     Tooltrans[tooltrans]
     AnthBackend["anthropic/backend"]
@@ -349,15 +350,17 @@ flowchart TD
     OpenAIClient --> RootAdapter
     RootAdapter --> ServerDispatch
     ServerDispatch --> OAuthHandler
-    ServerDispatch --> CodexHandler
     ServerDispatch --> AnthBackend
     ServerDispatch --> CodexBackend
+    RootAdapter --> CodexRuntime
+    RootAdapter --> CodexBridge
 
     OAuthHandler --> Tooltrans
     OAuthHandler --> AnthBackend
     OAuthHandler --> ServerResponse
-    CodexHandler --> Tooltrans
-    CodexHandler --> ServerResponse
+    CodexBridge --> Tooltrans
+    CodexBridge --> ServerResponse
+    CodexRuntime --> CodexBackend
     ServerResponse --> OpenAIShared
 
     Tooltrans --> Render
@@ -400,10 +403,14 @@ Where ownership still leaks:
   OpenAI responses from accumulated chunks in the root package.
 - Cursor-specific translation is still implicit rather than first-class:
   `server_dispatch.go`, `context_tracker.go`, `codex_sessions.go`, and
-  `codex_handler.go` each derive parts of Cursor context separately.
-- `internal/adapter/codex_handler.go` still owns Codex request shaping,
-  reasoning policy, tool alias mapping, tool spec generation, direct transport,
-  and SSE parsing wrappers.
+  Codex session/runtime bridge code each derive parts of Cursor context
+  separately.
+- `internal/adapter/codex_handler.go` has been deleted. Codex request
+  shaping, response merging, parser tests, and transport request construction
+  now live under `internal/adapter/codex/`; the remaining root Codex files are
+  `codex_runtime.go`, `codex_bridge.go`, `codex_sessions.go`, and
+  `codex_app_fallback.go`, which still provide Server-owned auth/session/app
+  transport plumbing.
 - `internal/adapter/anthropic/backend/fallback_runtime.go` now owns the
   Anthropic fallback entrypoint. The root package still exposes narrow bridge
   methods for semaphore/config access, but `internal/adapter/fallback_handler.go`
@@ -1163,18 +1170,22 @@ Exit criteria:
 
 Primary objective:
 
-Move Codex request shaping out of `internal/adapter/codex_handler.go` and into
-the Codex package itself.
+Move Codex request shaping out of root-owned files and into the Codex package
+itself.
 
-Current ownership leaks in `internal/adapter/codex_handler.go`:
+Current state:
 
-- prompt and instruction assembly
-- developer/environment context injection
-- tool alias mapping that is really Cursor product vocabulary
-- native tool shaping
-- prompt cache key logic
-- reasoning/effort mapping
-- request input normalization from both `messages` and `input`
+- `internal/adapter/codex/request_builder.go` owns `BuildRequest(...)`,
+  prompt and instruction assembly, developer/environment context injection,
+  native tool shaping, prompt cache key construction, reasoning/effort mapping,
+  and request input normalization from both `messages` and `input`.
+- Cursor tool aliasing is centralized in `internal/adapter/cursor/tools.go`,
+  while Codex request shaping still consumes those translated names at the
+  backend boundary.
+- `internal/adapter/codex_runtime.go` now owns the root Server's Codex direct
+  transport plumbing: auth lookup, websocket/HTTP selection, continuation
+  store coordination, and account metadata wiring.
+- `internal/adapter/codex_handler.go` has been deleted.
 
 Planned destination:
 
@@ -1188,16 +1199,15 @@ Related files already in Codex package:
 - `internal/adapter/codex/protocol.go`
 - `internal/adapter/codex/events.go`
 
-Planned changes:
+Remaining planned changes:
 
-1. Move `BuildRequest(...)` and related helper clusters under the Codex
-   package.
-2. Move Cursor-specific tool naming and client-contract translation out of
+1. Move Cursor-specific tool naming and client-contract translation out of
    Codex request-shaping code and into `internal/adapter/cursor/...` where
    possible.
-3. Keep root wrappers only as compatibility shims during the migration.
-4. Consolidate Codex request policy with existing `codex` package helpers so
-   the package owns all outbound wire shaping.
+2. Continue shrinking the Server bridge files so root owns auth/session
+   lifecycle only, not Codex wire policy.
+3. Consolidate any remaining Codex request policy with existing `codex`
+   package helpers so the package owns all outbound wire shaping.
 
 Exit criteria:
 
@@ -1214,9 +1224,10 @@ package.
 Current ownership leaks:
 
 - Codex stream parser exposure through backend package entrypoints
-- root-owned tool-call assembly helpers in `internal/adapter/codex_handler.go`
-- root-owned response merge through `mergeOAuthStreamChunks(...)`
-- root-owned direct degradation heuristics coupled to stream chunk details
+- Codex bridge methods in root still translate between Server state and the
+  backend `Dispatcher` interface
+- root-owned direct transport auth/session plumbing still sits outside the
+  Codex package because it depends on daemon-local auth/config state
 
 Planned destination:
 
@@ -1225,7 +1236,7 @@ Planned destination:
 
 Files involved:
 
-- `internal/adapter/codex_handler.go`
+- `internal/adapter/codex_runtime.go`
 - `internal/adapter/codex_bridge.go`
 - `internal/adapter/server_response.go`
 - `internal/adapter/codex/backend.go`
@@ -1254,8 +1265,9 @@ Current state:
 
 - `internal/adapter/codex/backend.go` already owns the dispatcher-level
   orchestration.
-- Root still owns major chunks of direct request construction and the app
-  fallback transport wrappers in `internal/adapter/codex_handler.go` and
+- Root still owns direct auth/session plumbing and app fallback transport
+  wrappers in `internal/adapter/codex_runtime.go`,
+  `internal/adapter/codex_sessions.go`, and
   `internal/adapter/codex_app_fallback.go`.
 
 Planned split:
@@ -1267,7 +1279,8 @@ Planned split:
 
 Files involved:
 
-- `internal/adapter/codex_handler.go`
+- `internal/adapter/codex_runtime.go`
+- `internal/adapter/codex_sessions.go`
 - `internal/adapter/codex_app_fallback.go`
 - `internal/adapter/codex/app_transport.go`
 - `internal/adapter/codex/managed_runtime.go`
@@ -1410,7 +1423,7 @@ Likely cleanup targets:
 - `internal/adapter/anthropic_bridge.go`
 - `internal/adapter/codex_bridge.go`
 - root helpers in `internal/adapter/oauth_handler.go`
-- root helpers in `internal/adapter/codex_handler.go`
+- root Codex runtime helpers that exist only as backend delegations
 - root response merge helpers in `internal/adapter/server_response.go`
 - stale generic fallback assumptions in root dispatch
 
@@ -1486,12 +1499,13 @@ Known remaining gap inventory:
 
 Clyde current direct Codex path:
 
-- HTTP SSE POST only:
-  `internal/adapter/codex_handler.go`
+- HTTP SSE and optional websocket POST are now rooted in
+  `internal/adapter/codex_runtime.go`, with Codex request construction in
+  `internal/adapter/codex/request_builder.go`
 - request body fields are limited to `model`, `instructions`, `store`,
   `stream`, `include`, `prompt_cache_key`, `client_metadata`, `reasoning`,
   `input`, `tools`, `tool_choice`, `parallel_tool_calls`:
-  `internal/adapter/codex_handler.go`
+  `internal/adapter/codex/request_builder.go`
 
 Codex Rust client parity surface (research repo):
 
@@ -2024,9 +2038,10 @@ Specific high-risk areas to isolate:
 - Anthropic prompt caching, thinking, and system block shaping in
   `internal/adapter/oauth_handler.go`
 - Codex tool aliasing and native tool shaping in
-  `internal/adapter/codex_handler.go`
+  `internal/adapter/codex/request_builder.go` plus Cursor tool translation in
+  `internal/adapter/cursor/tools.go`
 - Codex transport parity, service tier, and context-window truth in
-  `internal/adapter/codex_handler.go` and the planned
+  `internal/adapter/codex_runtime.go` and
   `internal/adapter/codex/transport_*` modules
 - Anthropic response classification in `internal/adapter/anthropic/` and
   notice and error routing in `internal/adapter/anthropic/backend/`,
@@ -2406,10 +2421,10 @@ anthropic-ratelimit-unified-overage-status: rejected` path and
    product vocabulary.
 5. [done] Added the Codex-owned `BuildRequest(...)` entrypoint; root
    dispatch now builds live direct requests through it.
-6. [partial] Live root calls now delegate into Codex backend entrypoints,
-   but `codex_handler.go` and `codex_bridge.go` intentionally remain as
-   Server facade layers. Delete them only in Phase 11 after dispatcher
-   seams are verified.
+6. [partial] Live root calls now delegate into Codex backend entrypoints.
+   `codex_handler.go` has been deleted. `codex_runtime.go` and
+   `codex_bridge.go` remain as Server facade layers because direct auth,
+   continuation storage, and app-session ownership are still root state.
 7. [done] Moved request-builder and parser assertions into
    `internal/adapter/codex/request_builder_test.go` and
    `internal/adapter/codex/parser_test.go`; deleted the historical root
@@ -2445,9 +2460,9 @@ anthropic-ratelimit-unified-overage-status: rejected` path and
 The detailed phase additions are documented in the Codex app parity
 workstream above. The concrete execution order is:
 
-1. [partial] Added request-body parity for the current root-owned
-   Codex request builder. `internal/adapter/codex_handler.go` now
-   forwards `max_completion_tokens` from the OpenAI surface into the
+1. [partial] Added request-body parity for the Codex-owned request builder.
+   `internal/adapter/codex/request_builder.go` forwards
+   `max_completion_tokens` from the OpenAI surface into the
    Codex request body and emits `service_tier` from
    `metadata.service_tier`, matching the Rust client mapping for
    `ServiceTier::Fast` (`fast -> priority`) and preserving other
@@ -2537,9 +2552,8 @@ workstream above. The concrete execution order is:
    `max_completion_tokens` passthrough, and
    `ServiceTierFromMetadata` owns the current request-surface
    `service_tier` mapping (`fast -> priority`, `flex` preserved,
-   invalid metadata ignored). `internal/adapter/codex_handler.go`
-   now delegates to those Codex-local helpers through `BuildRequest`
-   instead of inlining the policy. Lock-in tests:
+   invalid metadata ignored). The deleted `codex_handler.go` no longer
+   carries this policy. Lock-in tests:
    `TestBuildOutputControlsPassesThroughMaxCompletionTokens`,
    `TestServiceTierFromMetadataMapsFastToPriority`,
    `TestServiceTierFromMetadataPreservesFlex`, and
@@ -2639,9 +2653,8 @@ workstream above. The concrete execution order is:
    `TestResolveTransportSelectionFallsBackToApp`, and
    `TestResolveTransportSelectionReturnsFallbackError`.
 4. [done] Removed the remaining root-side direct degradation helper and
-   stale bridge assumption. The old adapter-root
-   `codexShouldEscalateDirect` copy in `internal/adapter/codex_handler.go`
-   is gone, and `internal/adapter/codex/selection.go` now calls the
+   stale bridge assumption. The old adapter-root direct escalation copy is
+   gone with `codex_handler.go`, and `internal/adapter/codex/selection.go` now calls the
    Codex-local `ShouldEscalateDirect(...)` helper directly instead of
    routing that decision back through the root `Dispatcher` interface.
    The corresponding `ShouldEscalateDirect` bridge method was removed
@@ -2737,9 +2750,9 @@ workstream above. The concrete execution order is:
 2. [todo] Delete `internal/adapter/codex_bridge.go` once Phase 6 and
    Phase 7 are complete.
 3. [todo] Delete remaining root helpers in
-   `internal/adapter/oauth_handler.go` and
-   `internal/adapter/codex_handler.go` that exist only as backend
-   delegations.
+   `internal/adapter/oauth_handler.go` and future Codex root helpers that
+   exist only as backend delegations. `internal/adapter/codex_handler.go` has
+   been deleted.
 4. [todo] Delete `internal/adapter/server_response.go` Anthropic
    response merge helpers if Phase 3 fully owns the response path.
 5. [done 2026-04-26] Remove stale generic fallback assumptions in root
@@ -2816,9 +2829,11 @@ workstream above. The concrete execution order is:
   request shaping, parser helpers, write-intent logic) is gone. The
   historical root `codex_handler_test.go` has also been deleted; Codex
   request and parser coverage now lives under `internal/adapter/codex/`.
-  The root `codex_handler.go` and `codex_bridge.go` still intentionally
-  exist as Server facade layers. Codex finish-reason normalization is
-  now closed through the shared `finishreason` helper.
+  The root `codex_handler.go` file itself has now been deleted; direct Codex
+  transport plumbing lives in `internal/adapter/codex_runtime.go`, while
+  `codex_bridge.go` still intentionally exists as the Server facade that
+  satisfies the backend `Dispatcher` interface. Codex finish-reason
+  normalization is now closed through the shared `finishreason` helper.
 - Phases 4 (backend-owned Anthropic fallback escalation), 8 (further
   `tooltrans` shrinkage), 9 (event-renderer normalization at the
   output boundary), 10 (test relocation under the backend packages),
@@ -3024,9 +3039,9 @@ entries, and orders the real work by dependency and debugging value.
 2. Delete `internal/adapter/codex_bridge.go` only after Codex Phase 6/7
    are verified against the reconciled checklist.
 3. Delete remaining root helpers in `internal/adapter/oauth_handler.go`
-   and any future `internal/adapter/codex_handler.go` helpers that exist
-   only as backend delegations. The old Codex request/parser
-   compatibility helpers have been removed.
+   and any future Codex root helpers that exist only as backend delegations.
+   The old Codex request/parser compatibility helpers and
+   `internal/adapter/codex_handler.go` have been removed.
 4. Delete `internal/adapter/server_response.go` Anthropic response merge
    helpers if Phase 3 fully owns the response path.
 5. [done 2026-04-26] Remove stale generic fallback assumptions in root

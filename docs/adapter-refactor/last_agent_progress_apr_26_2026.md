@@ -1441,3 +1441,40 @@ Next large batch:
   backend-specific request/response wrappers into backend-local packages, with
   the Codex request/response wrapper cleanup as the likely next high-impact
   chunk.
+
+## 2026-04-26 Codex handler deletion checkpoint
+
+Follow-up to the fallback shim removal. This slice removed the stale root
+Codex handler file and split its remaining live responsibilities into
+better-named Server boundary files.
+
+What changed:
+
+- `internal/adapter/codex_handler.go`: deleted. The unused
+  `collectCodex(...)`, `streamCodex(...)`, and `dispatchCodex(...)` wrappers
+  are gone with it.
+- `internal/adapter/codex_runtime.go`: added as the root Server's Codex direct
+  runtime bridge. It now owns the root-side Codex clock/cwd/shell hook wiring,
+  upstream-cache sanitizer shim, direct auth lookup, websocket/HTTP selection,
+  continuation-store coordination, and account metadata wiring.
+- `internal/adapter/codex_bridge.go`: removed unused `StreamCodex(...)` and
+  `CollectCodex(...)` bridge methods. The file now only exposes methods needed
+  by `adaptercodex.Dispatch(...)`.
+- `internal/adapter/codex_sessions.go`: moved small Codex item string helpers
+  next to the managed app-session parser that uses them.
+- `docs/adapter-refactor/adapter-refactor.md`: updated current-state, Phase 5,
+  Phase 6, and wrapper-deletion notes so `codex_handler.go` is no longer
+  described as live root ownership.
+
+Verification:
+
+- `go test ./internal/adapter/...` passed.
+- `make build` passed.
+- `dist/clyde daemon reload` passed with `active_sessions=1`, `new_pid=42431`.
+
+Next large batch:
+
+- Continue shrinking the Codex root surface by isolating direct/app auth and
+  session state dependencies behind a smaller Codex runtime interface, then
+  decide whether `codex_bridge.go` can collapse into a single root backend
+  adapter file.
