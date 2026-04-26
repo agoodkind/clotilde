@@ -2,7 +2,6 @@ package adapter
 
 import (
 	"context"
-	"errors"
 	"os"
 	"strings"
 	"time"
@@ -52,58 +51,15 @@ func (s *Server) runCodexDirect(
 	if err != nil {
 		return adaptercodex.NewRunResult("stop"), err
 	}
-	transportPayload := adaptercodex.BuildRequest(req, model, effort)
-	if s.codexWebsocketEnabled() {
-		wsReq := adaptercodex.ResponseCreateRequestFromHTTP(transportPayload)
-		fullWSReq := wsReq
-		turnState := adaptercodex.NewTurnState()
-		var continuation adaptercodex.ContinuationDecision
-		if s.codexContinue != nil {
-			continuation = s.codexContinue.Prepare(fullWSReq)
-			adaptercodex.LogContinuationDecision(ctx, s.log, adaptercodex.ContinuationTelemetry{
-				RequestID:          reqID,
-				Alias:              model.Alias,
-				Transport:          "responses_websocket",
-				Key:                continuation.Key,
-				Hit:                continuation.Hit,
-				MissReason:         continuation.MissReason,
-				FingerprintMatch:   continuation.FingerprintMatch,
-				PreviousResponseID: continuation.PreviousResponseID,
-				IncrementalCount:   len(continuation.IncrementalInput),
-			})
-			if continuation.Hit {
-				wsReq = adaptercodex.WithPreviousResponseID(wsReq, continuation.PreviousResponseID, continuation.IncrementalInput)
-			}
-		}
-		res, wsErr := adaptercodex.RunWebsocketTransport(ctx, adaptercodex.WebsocketTransportConfig{
-			URL:            s.codexWebsocketURL(),
-			Token:          token,
-			AccountID:      s.readCodexAccountID(),
-			RequestID:      reqID,
-			Alias:          model.Alias,
-			ConversationID: strings.TrimSpace(transportPayload.PromptCache),
-			TurnState:      turnState,
-			Prewarm:        strings.TrimSpace(wsReq.PreviousResponseID) == "",
-		}, wsReq, emit)
-		if wsErr == nil {
-			if s.codexContinue != nil {
-				s.codexContinue.Complete(continuation, fullWSReq, res)
-			}
-			return res, nil
-		}
-		if s.codexContinue != nil {
-			s.codexContinue.Forget(continuation.Key)
-		}
-		if !errors.Is(wsErr, adaptercodex.ErrWebsocketFallbackToHTTP) {
-			return adaptercodex.NewRunResult("stop"), wsErr
-		}
-	}
-	return adaptercodex.RunHTTPTransport(ctx, s.httpClient, adaptercodex.HTTPTransportConfig{
-		BaseURL:        s.codexBaseURL(),
-		Token:          token,
-		AccountID:      s.readCodexAccountID(),
-		RequestID:      reqID,
-		Alias:          model.Alias,
-		ConversationID: strings.TrimSpace(transportPayload.PromptCache),
-	}, transportPayload, emit)
+	return adaptercodex.RunDirect(ctx, adaptercodex.DirectConfig{
+		HTTPClient:       s.httpClient,
+		BaseURL:          s.codexBaseURL(),
+		WebsocketEnabled: s.codexWebsocketEnabled(),
+		WebsocketURL:     s.codexWebsocketURL(),
+		Token:            token,
+		AccountID:        s.readCodexAccountID(),
+		RequestID:        reqID,
+		Continuation:     s.codexContinue,
+		Log:              s.log,
+	}, req, model, effort, emit)
 }

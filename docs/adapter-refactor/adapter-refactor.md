@@ -1265,17 +1265,28 @@ Current state:
 
 - `internal/adapter/codex/backend.go` already owns the dispatcher-level
   orchestration.
-- Root still owns direct auth/session plumbing and app fallback transport
-  wrappers in `internal/adapter/codex_runtime.go`,
-  `internal/adapter/codex_sessions.go`, and
-  `internal/adapter/codex_app_fallback.go`.
+- `internal/adapter/codex/direct_runtime.go` owns direct request execution:
+  request construction, websocket-vs-HTTP selection, continuation-store
+  prepare/complete/forget policy, websocket fallback-to-HTTP handling, and
+  direct transport invocation.
+- `internal/adapter/codex/managed_runtime.go` owns managed app-session
+  admission, reset policy, prompt-mode selection, and assistant-anchor
+  updates.
+- `internal/adapter/codex/transport_app.go` owns app-server turn execution,
+  app event parsing, managed cache accounting, and one-shot app fallback
+  initialize/thread/turn RPC sequencing.
+- Root still owns unavoidable dependency plumbing: token/account lookup,
+  Codex URLs, HTTP client, app-server binary path, timeout, prompt-building
+  function injection, and session-manager construction.
 
-Planned split:
+Completed split:
 
-1. Codex package owns transport selection policy.
-2. Codex package owns direct HTTP transport.
-3. Codex package owns app transport.
-4. Codex package owns escalation logic between them.
+1. [done] Codex package owns transport selection policy.
+2. [done] Codex package owns direct HTTP and websocket execution policy.
+3. [done] Codex package owns app turn execution and app fallback RPC event
+   parsing.
+4. [done] Codex package owns escalation logic between direct, managed app, and
+   app fallback paths.
 
 Files involved:
 
@@ -1290,6 +1301,8 @@ Exit criteria:
 
 - Root chooses Codex only once.
 - Codex decides direct vs app vs fallback internally.
+- Root bridge methods provide dependencies only; they do not inspect Codex
+  transport result details or duplicate app event parsing.
 
 ## Phase 8: Shrink `tooltrans`
 
@@ -2421,10 +2434,13 @@ anthropic-ratelimit-unified-overage-status: rejected` path and
    product vocabulary.
 5. [done] Added the Codex-owned `BuildRequest(...)` entrypoint; root
    dispatch now builds live direct requests through it.
-6. [partial] Live root calls now delegate into Codex backend entrypoints.
-   `codex_handler.go` has been deleted. `codex_runtime.go` and
-   `codex_bridge.go` remain as Server facade layers because direct auth,
-   continuation storage, and app-session ownership are still root state.
+6. [done 2026-04-26] Live root calls now delegate into Codex backend
+   entrypoints. `codex_handler.go` has been deleted. Direct websocket/HTTP
+   selection moved to `internal/adapter/codex/direct_runtime.go`, managed app
+   session policy moved to `internal/adapter/codex/managed_runtime.go`, and
+   app event parsing moved to `internal/adapter/codex/transport_app.go`.
+   Root Codex files now provide dependency plumbing for auth/config/session
+   construction rather than owning transport policy.
 7. [done] Moved request-builder and parser assertions into
    `internal/adapter/codex/request_builder_test.go` and
    `internal/adapter/codex/parser_test.go`; deleted the historical root
@@ -2654,9 +2670,9 @@ workstream above. The concrete execution order is:
    `TestResolveTransportSelectionReturnsFallbackError`.
 4. [done] Removed the remaining root-side direct degradation helper and
    stale bridge assumption. The old adapter-root direct escalation copy is
-   gone with `codex_handler.go`, and `internal/adapter/codex/selection.go` now calls the
-   Codex-local `ShouldEscalateDirect(...)` helper directly instead of
-   routing that decision back through the root `Dispatcher` interface.
+  gone with `codex_handler.go`, and `internal/adapter/codex/selection.go`
+  now calls the Codex-local `ShouldEscalateDirect(...)` helper directly
+  instead of routing that decision back through the root `Dispatcher` interface.
    The corresponding `ShouldEscalateDirect` bridge method was removed
    from `internal/adapter/codex_bridge.go`, and the `codex.Dispatcher`
    interface no longer exposes that policy hook.
@@ -2820,7 +2836,7 @@ workstream above. The concrete execution order is:
   dependency hooks for the Anthropic stream client, SSE writer, context-usage
   tracker, notice claim store, and logging.
 - Codex Phases 5/6/7 have landed their core extraction slices, but they
-  are not fully closed. The live Codex direct transport now flows
+  are not fully closed at the wrapper-deletion level. The live Codex direct transport now flows
   through `internal/adapter/codex/request_builder.go`
   (`BuildRequest`); Codex collect merge goes through
   `internal/adapter/codex/respond.go` (`MergeChunks`); parser/tool-call
@@ -2830,10 +2846,14 @@ workstream above. The concrete execution order is:
   historical root `codex_handler_test.go` has also been deleted; Codex
   request and parser coverage now lives under `internal/adapter/codex/`.
   The root `codex_handler.go` file itself has now been deleted; direct Codex
-  transport plumbing lives in `internal/adapter/codex_runtime.go`, while
-  `codex_bridge.go` still intentionally exists as the Server facade that
-  satisfies the backend `Dispatcher` interface. Codex finish-reason
-  normalization is now closed through the shared `finishreason` helper.
+  transport dependency plumbing lives in `internal/adapter/codex_runtime.go`,
+  while direct websocket/HTTP execution policy lives in
+  `internal/adapter/codex/direct_runtime.go`. Managed session admission and
+  app turn execution now live in `internal/adapter/codex/managed_runtime.go`
+  and `internal/adapter/codex/transport_app.go`; `codex_bridge.go` still
+  intentionally exists as the Server facade that satisfies the backend
+  `Dispatcher` interface. Codex finish-reason normalization is now closed
+  through the shared `finishreason` helper.
 - Phases 4 (backend-owned Anthropic fallback escalation), 8 (further
   `tooltrans` shrinkage), 9 (event-renderer normalization at the
   output boundary), 10 (test relocation under the backend packages),

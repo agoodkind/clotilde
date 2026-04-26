@@ -1478,3 +1478,48 @@ Next large batch:
   session state dependencies behind a smaller Codex runtime interface, then
   decide whether `codex_bridge.go` can collapse into a single root backend
   adapter file.
+
+## 2026-04-26 Codex Phase 7 completion checkpoint
+
+Follow-up to the Codex handler deletion checkpoint. This slice completed the
+Phase 7 policy move: Codex now owns direct/websocket/app fallback policy, while
+root supplies only unavoidable daemon-local dependencies.
+
+What changed:
+
+- `internal/adapter/codex/direct_runtime.go`: added `RunDirect(...)` and
+  `DirectConfig`. The Codex package now owns direct request building,
+  websocket-vs-HTTP selection, continuation prepare/complete/forget policy,
+  websocket fallback-to-HTTP handling, and direct transport invocation.
+- `internal/adapter/codex_runtime.go`: reduced root `runCodexDirect(...)` to
+  token lookup plus a call into `adaptercodex.RunDirect(...)`.
+- `internal/adapter/codex/managed_runtime.go`: simplified
+  `RunManagedSession(...)` so it owns managed session admission/reset/prompt
+  policy directly, without a root callback interface for app-turn execution.
+- `internal/adapter/codex/transport_app.go`: added `RunManagedTurn(...)` as
+  the Codex-owned app turn event loop. Both managed app sessions and one-shot
+  app fallback now use this same parser/renderer/cache-accounting path.
+- `internal/adapter/codex_sessions.go`: removed the duplicated root app-server
+  event parser. Root now only builds the managed prompt plan and creates
+  `adaptercodex.AppTransport` instances.
+- `internal/adapter/codex/transport_app_test.go`: added managed-turn coverage
+  for assistant text capture and derived cache creation accounting.
+- `internal/adapter/codex/direct_runtime_test.go`: added direct-runtime
+  coverage for websocket 426 fallback to direct HTTP.
+- `docs/adapter-refactor/adapter-refactor.md`: marked Phase 7 policy movement
+  complete and clarified that remaining Codex root files are dependency
+  providers, not policy owners.
+
+Verification:
+
+- `go test ./internal/adapter/codex` passed.
+- `go test ./internal/adapter -run 'Test'` passed.
+- `go test ./internal/adapter/...` passed.
+- `make build` passed.
+- `dist/clyde daemon reload` passed with `active_sessions=1`, `new_pid=63446`.
+
+Next large batch:
+
+- Phase 8: shrink `internal/adapter/tooltrans/` by moving Anthropic-shaped
+  translation out of shared compatibility code and leaving only genuinely
+  shared event/wire aliases.

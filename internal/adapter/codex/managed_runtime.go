@@ -12,13 +12,11 @@ import (
 	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
-type ManagedRuntime interface {
-	Log() *slog.Logger
-	NormalizeAssistantAnchor(string) string
-	ManagedSummary(adapteropenai.ChatRequest) string
-	EffectiveAppEffort(adapteropenai.ChatRequest) any
-	EffectiveAppSummary(adapteropenai.ChatRequest) any
-	RunManagedTurn(context.Context, *ManagedSession, SessionSpec, string, string, any, any, func(tooltrans.OpenAIStreamChunk) error) (any, string, error)
+func ManagedSummary(req adapteropenai.ChatRequest) string {
+	if r := EffectiveReasoning(req, ""); r != nil && r.Summary != "" {
+		return r.Summary
+	}
+	return ""
 }
 
 type ManagedRunResult struct {
@@ -28,7 +26,7 @@ type ManagedRunResult struct {
 }
 
 func RunManagedSession(
-	rt ManagedRuntime,
+	log *slog.Logger,
 	ctx context.Context,
 	manager *SessionManager,
 	req adapteropenai.ChatRequest,
@@ -39,12 +37,15 @@ func RunManagedSession(
 	reqID string,
 	emit func(tooltrans.OpenAIStreamChunk) error,
 ) (ManagedRunResult, error) {
+	if log == nil {
+		log = slog.Default()
+	}
 	if manager == nil {
 		return ManagedRunResult{}, nil
 	}
 	sessionKey := cursor.StrongConversationKey()
 	if sessionKey == "" {
-		rt.Log().LogAttrs(ctx, slog.LevelInfo, "adapter.codex.session.not_admitted",
+		log.LogAttrs(ctx, slog.LevelInfo, "adapter.codex.session.not_admitted",
 			slog.String("request_id", reqID),
 			slog.String("reason", "missing_cursor_conversation_id"),
 			slog.String("cursor_request_id", cursor.RequestID),
@@ -57,7 +58,7 @@ func RunManagedSession(
 		Key:     sessionKey,
 		Model:   strings.TrimSpace(model.ClaudeModel),
 		Effort:  strings.ToLower(strings.TrimSpace(effort)),
-		Summary: strings.ToLower(strings.TrimSpace(rt.ManagedSummary(req))),
+		Summary: strings.ToLower(strings.TrimSpace(ManagedSummary(req))),
 		System:  plan.System,
 	}
 	if spec.Model == "" {
@@ -101,7 +102,7 @@ func RunManagedSession(
 		}
 	}
 
-	rt.Log().LogAttrs(ctx, slog.LevelInfo, "adapter.codex.session.admitted",
+	log.LogAttrs(ctx, slog.LevelInfo, "adapter.codex.session.admitted",
 		slog.String("request_id", reqID),
 		slog.String("session_key", sessionKey),
 		slog.String("cursor_conversation_id", cursor.ConversationID),
@@ -112,21 +113,28 @@ func RunManagedSession(
 
 	session.RunMu.Lock()
 	defer session.RunMu.Unlock()
-	res, assistantText, err := rt.RunManagedTurn(
+	transport, ok := session.Transport.(AppTurnTransport)
+	if !ok {
+		return ManagedRunResult{}, ManagedTransportTypeMismatch()
+	}
+	res, assistantText, err := RunManagedTurn(
 		ctx,
-		session,
-		spec,
-		reqID,
-		prompt,
-		rt.EffectiveAppEffort(req),
-		rt.EffectiveAppSummary(req),
+		transport,
+		AppTurnConfig{
+			RequestID: reqID,
+			Model:     spec.Model,
+			Effort:    EffectiveAppEffort(req),
+			Summary:   EffectiveAppSummary(req),
+			Prompt:    prompt,
+			Logger:    log,
+		},
 		emit,
 	)
 	if err != nil {
 		manager.Drop(session, "transport_error")
 		return ManagedRunResult{}, err
 	}
-	session.LastAssistant = rt.NormalizeAssistantAnchor(assistantText)
+	session.LastAssistant = NormalizeAssistantAnchor(assistantText, SanitizeForUpstreamCache)
 	return ManagedRunResult{Result: res, AssistantText: assistantText, Managed: true}, nil
 }
 

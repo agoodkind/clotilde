@@ -1,0 +1,92 @@
+package codex
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"strings"
+
+	adaptermodel "goodkind.io/clyde/internal/adapter/model"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	"goodkind.io/clyde/internal/adapter/tooltrans"
+)
+
+type DirectConfig struct {
+	HTTPClient       *http.Client
+	BaseURL          string
+	WebsocketEnabled bool
+	WebsocketURL     string
+	Token            string
+	AccountID        string
+	RequestID        string
+	Continuation     *ContinuationStore
+	Log              *slog.Logger
+}
+
+func RunDirect(
+	ctx context.Context,
+	cfg DirectConfig,
+	req adapteropenai.ChatRequest,
+	model adaptermodel.ResolvedModel,
+	effort string,
+	emit func(tooltrans.OpenAIStreamChunk) error,
+) (RunResult, error) {
+	if cfg.HTTPClient == nil {
+		cfg.HTTPClient = http.DefaultClient
+	}
+	transportPayload := BuildRequest(req, model, effort)
+	if cfg.WebsocketEnabled {
+		wsReq := ResponseCreateRequestFromHTTP(transportPayload)
+		fullWSReq := wsReq
+		turnState := NewTurnState()
+		var continuation ContinuationDecision
+		if cfg.Continuation != nil {
+			continuation = cfg.Continuation.Prepare(fullWSReq)
+			LogContinuationDecision(ctx, cfg.Log, ContinuationTelemetry{
+				RequestID:          cfg.RequestID,
+				Alias:              model.Alias,
+				Transport:          "responses_websocket",
+				Key:                continuation.Key,
+				Hit:                continuation.Hit,
+				MissReason:         continuation.MissReason,
+				FingerprintMatch:   continuation.FingerprintMatch,
+				PreviousResponseID: continuation.PreviousResponseID,
+				IncrementalCount:   len(continuation.IncrementalInput),
+			})
+			if continuation.Hit {
+				wsReq = WithPreviousResponseID(wsReq, continuation.PreviousResponseID, continuation.IncrementalInput)
+			}
+		}
+		res, wsErr := RunWebsocketTransport(ctx, WebsocketTransportConfig{
+			URL:            cfg.WebsocketURL,
+			Token:          cfg.Token,
+			AccountID:      cfg.AccountID,
+			RequestID:      cfg.RequestID,
+			Alias:          model.Alias,
+			ConversationID: strings.TrimSpace(transportPayload.PromptCache),
+			TurnState:      turnState,
+			Prewarm:        strings.TrimSpace(wsReq.PreviousResponseID) == "",
+		}, wsReq, emit)
+		if wsErr == nil {
+			if cfg.Continuation != nil {
+				cfg.Continuation.Complete(continuation, fullWSReq, res)
+			}
+			return res, nil
+		}
+		if cfg.Continuation != nil {
+			cfg.Continuation.Forget(continuation.Key)
+		}
+		if !errors.Is(wsErr, ErrWebsocketFallbackToHTTP) {
+			return NewRunResult("stop"), wsErr
+		}
+	}
+	return RunHTTPTransport(ctx, cfg.HTTPClient, HTTPTransportConfig{
+		BaseURL:        cfg.BaseURL,
+		Token:          cfg.Token,
+		AccountID:      cfg.AccountID,
+		RequestID:      cfg.RequestID,
+		Alias:          model.Alias,
+		ConversationID: strings.TrimSpace(transportPayload.PromptCache),
+	}, transportPayload, emit)
+}
