@@ -1367,3 +1367,42 @@ Next large batch:
   behind an Anthropic backend dispatcher boundary. After that,
   `internal/adapter/fallback_handler.go` should be close to a thin
   compatibility shim or deletable bridge.
+
+## 2026-04-26 fallback entrypoint checkpoint
+
+Follow-up to the fallback response runtime. This slice moved the remaining
+fallback preparation logic behind the Anthropic backend dispatcher boundary.
+
+What changed:
+
+- `internal/adapter/anthropic/backend/fallback_runtime.go`: added
+  `HandleFallback(...)` as the backend-owned entrypoint for explicit fallback
+  and OAuth-escalated fallback execution.
+- `internal/adapter/anthropic/backend/fallback_runtime.go`: moved fallback
+  configured-client validation, CLI alias validation, stream passthrough
+  validation, semaphore acquisition/release, unsupported-field logging,
+  fallback request construction, response-format prompt injection, and
+  transcript-resume policy out of root.
+- `internal/adapter/fallback_handler.go`: collapsed to a thin compatibility
+  shim that calls `anthropicbackend.HandleFallback(...)`; the semaphore
+  implementation remains in root for now.
+- `internal/adapter/anthropic_bridge.go`: added dispatcher methods for
+  fallback semaphore control, fallback config policy, transcript workspace
+  resolution, and JSON response-format prompt injection.
+- `internal/adapter/anthropic/backend/fallback_runtime_test.go`: added
+  backend-local coverage for the top-level fallback entrypoint, including
+  request construction, JSON prompt injection, tool choice mapping, acquire
+  and release, and missing CLI alias escalation.
+
+Verification:
+
+- `go test ./internal/adapter/anthropic/backend -count=1` passed.
+- `go test ./internal/adapter/...` passed.
+
+Next large batch:
+
+- Delete or bypass the tiny root fallback compatibility shim. The cleanest
+  direction is to make the root bridge method call
+  `anthropicbackend.HandleFallback(...)` directly, then remove
+  `internal/adapter/fallback_handler.go` or leave only shared semaphore code
+  in a better-named file.

@@ -23,6 +23,110 @@ type FallbackResponseDispatcher interface {
 	WriteError(http.ResponseWriter, int, string, string)
 	FallbackClient() FallbackClient
 	LogCacheUsageFallback(context.Context, string, string, string, int, int, int)
+	AcquireFallback(context.Context) error
+	ReleaseFallback()
+	ParseResponseFormat(any) any
+	FallbackJSONSystemPrompt(any) string
+	FallbackStreamPassthrough() bool
+	FallbackDropUnsupported() bool
+	FallbackTranscriptSynthesisEnabled() bool
+	FallbackTranscriptWorkspaceDir(string) string
+}
+
+func HandleFallback(
+	d FallbackResponseDispatcher,
+	w http.ResponseWriter,
+	r *http.Request,
+	req adapteropenai.ChatRequest,
+	model adaptermodel.ResolvedModel,
+	reqID string,
+	escalate bool,
+) error {
+	if d.FallbackClient() == nil {
+		return adapterruntime.EscalateOrWrite(
+			fmt.Errorf("fallback_unconfigured: adapter built without fallback client"),
+			escalate,
+			func(status int, code, msg string) error {
+				d.WriteError(w, status, code, msg)
+				return nil
+			},
+			http.StatusInternalServerError,
+			"fallback_unconfigured",
+			"adapter built without fallback client; set adapter.fallback.enabled=true and restart",
+		)
+	}
+	if model.CLIAlias == "" {
+		return adapterruntime.EscalateOrWrite(
+			fmt.Errorf("fallback_no_cli_alias: family %q has no CLI alias bound", model.FamilySlug),
+			escalate,
+			func(status int, code, msg string) error {
+				d.WriteError(w, status, code, msg)
+				return nil
+			},
+			http.StatusBadRequest,
+			"fallback_no_cli_alias",
+			"alias resolves to a family with no [adapter.fallback.cli_aliases] entry; cannot dispatch via claude -p",
+		)
+	}
+	if req.Stream && !d.FallbackStreamPassthrough() {
+		return adapterruntime.EscalateOrWrite(
+			fmt.Errorf("fallback_stream_disabled: stream_passthrough=false"),
+			escalate,
+			func(status int, code, msg string) error {
+				d.WriteError(w, status, code, msg)
+				return nil
+			},
+			http.StatusBadRequest,
+			"fallback_stream_disabled",
+			"this adapter is configured with stream_passthrough=false; pass stream=false",
+		)
+	}
+	if err := d.AcquireFallback(r.Context()); err != nil {
+		return adapterruntime.EscalateOrWrite(
+			fmt.Errorf("rate_limited: %w", err),
+			escalate,
+			func(status int, code, msg string) error {
+				d.WriteError(w, status, code, msg)
+				return nil
+			},
+			http.StatusTooManyRequests,
+			"rate_limited",
+			err.Error(),
+		)
+	}
+	defer d.ReleaseFallback()
+
+	logDroppedUnsupportedFallbackFields(d, r.Context(), req, model, reqID)
+	fbReq := fallback.BuildRequest(fallback.RequestBuildInput{
+		Model:      model.CLIAlias,
+		ModelAlias: model.Alias,
+		Messages:   req.Messages,
+		Tools:      req.Tools,
+		Functions:  req.Functions,
+		ToolChoice: req.ToolChoice,
+		RequestID:  reqID,
+	})
+	jsonSpec := d.ParseResponseFormat(req.ResponseFormat)
+	if instr := d.FallbackJSONSystemPrompt(jsonSpec); instr != "" {
+		if fbReq.System == "" {
+			fbReq.System = instr
+		} else {
+			fbReq.System = fbReq.System + "\n\n" + instr
+		}
+	}
+	if d.FallbackTranscriptSynthesisEnabled() {
+		resume := fallback.PrepareTranscriptResume(&fbReq, fallback.TranscriptResumeConfig{
+			WorkspaceDir: d.FallbackTranscriptWorkspaceDir(model.Alias),
+		})
+		logFallbackTranscriptResult(d, r.Context(), reqID, resume)
+	}
+
+	started := time.Now()
+	if req.Stream {
+		_ = req.StreamOptions
+		return StreamFallbackResponse(d, w, r, fbReq, model, reqID, started, escalate, true)
+	}
+	return CollectFallbackResponse(d, w, r.Context(), fbReq, model, reqID, started, jsonSpec, escalate)
 }
 
 func CollectFallbackResponse(
@@ -63,6 +167,51 @@ func CollectFallbackResponse(
 	logFallbackCompletion(d, ctx, req, model, reqID, started, final.FinishReason, final.Usage, raw.Usage, false)
 	logFallbackTerminalCompletion(d, ctx, req, model, reqID, started, final.FinishReason, final.Usage, raw.Usage, false)
 	return nil
+}
+
+func logDroppedUnsupportedFallbackFields(d FallbackResponseDispatcher, ctx context.Context, req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, reqID string) {
+	if !d.FallbackDropUnsupported() {
+		return
+	}
+	if req.ReasoningEffort != "" {
+		d.Log().LogAttrs(ctx, slog.LevelDebug, "adapter.fallback.dropped_field",
+			slog.String("request_id", reqID),
+			slog.String("field", "reasoning_effort"),
+			slog.String("value", req.ReasoningEffort),
+			slog.String("reason", "claude -p has no effort flag; planned via settings.json injection"),
+		)
+	}
+	if model.Thinking != "" && model.Thinking != adaptermodel.ThinkingDefault {
+		d.Log().LogAttrs(ctx, slog.LevelDebug, "adapter.fallback.dropped_field",
+			slog.String("request_id", reqID),
+			slog.String("field", "thinking"),
+			slog.String("value", model.Thinking),
+			slog.String("reason", "claude -p has no thinking flag; planned via settings.json injection"),
+		)
+	}
+}
+
+func logFallbackTranscriptResult(d FallbackResponseDispatcher, ctx context.Context, reqID string, resume fallback.TranscriptResumeResult) {
+	if !resume.Attempted {
+		return
+	}
+	if resume.Err != nil {
+		d.Log().LogAttrs(ctx, slog.LevelWarn, "fallback.transcript.write_failed",
+			slog.String("request_id", reqID),
+			slog.String("session_id", resume.SessionID),
+			slog.String("workspace_dir", resume.WorkspaceDir),
+			slog.Any("err", resume.Err),
+		)
+		return
+	}
+	if resume.Resumed {
+		d.Log().LogAttrs(ctx, slog.LevelDebug, "fallback.transcript.resumed",
+			slog.String("request_id", reqID),
+			slog.String("session_id", resume.SessionID),
+			slog.String("path", resume.Path),
+			slog.Int("prior_turns", resume.PriorTurns),
+		)
+	}
 }
 
 func StreamFallbackResponse(

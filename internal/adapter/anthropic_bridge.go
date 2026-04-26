@@ -120,6 +120,38 @@ func (s *Server) FallbackClient() anthropicbackend.FallbackClient {
 	return s.fb
 }
 
+func (s *Server) AcquireFallback(ctx context.Context) error {
+	return s.acquireFallback(ctx)
+}
+
+func (s *Server) ReleaseFallback() {
+	s.releaseFallback()
+}
+
+func (s *Server) FallbackJSONSystemPrompt(jsonSpec any) string {
+	spec, ok := jsonSpec.(JSONResponseSpec)
+	if !ok {
+		return ""
+	}
+	return spec.SystemPrompt(false)
+}
+
+func (s *Server) FallbackStreamPassthrough() bool {
+	return s.cfg.Fallback.StreamPassthrough
+}
+
+func (s *Server) FallbackDropUnsupported() bool {
+	return s.cfg.Fallback.DropUnsupported
+}
+
+func (s *Server) FallbackTranscriptSynthesisEnabled() bool {
+	return s.cfg.Fallback.TranscriptSynthesisEnabled
+}
+
+func (s *Server) FallbackTranscriptWorkspaceDir(alias string) string {
+	return s.cfg.Fallback.ResolveTranscriptWorkspaceDir(alias)
+}
+
 func (s *Server) LogCacheUsageFallback(ctx context.Context, backend, reqID, alias string, promptTokens, cacheCreationTokens, cacheReadTokens int) {
 	s.logCacheUsage(ctx, backend, reqID, alias, promptTokens, cacheCreationTokens, cacheReadTokens)
 }

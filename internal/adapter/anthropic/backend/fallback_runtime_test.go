@@ -2,6 +2,7 @@ package anthropicbackend
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"testing"
@@ -35,6 +36,14 @@ func (c *fakeFallbackClient) StreamOpenAI(ctx context.Context, req fallback.Requ
 type fakeFallbackDispatcher struct {
 	fakeResponseDispatcher
 	fb              *fakeFallbackClient
+	acquireErr      error
+	acquireCount    int
+	releaseCount    int
+	streamEnabled   bool
+	dropUnsupported bool
+	transcriptOn    bool
+	workspaceDir    string
+	jsonPrompt      string
 	writeStatus     int
 	writeValue      any
 	writeErrorCode  string
@@ -48,6 +57,39 @@ type fakeFallbackDispatcher struct {
 
 func (d *fakeFallbackDispatcher) FallbackClient() FallbackClient {
 	return d.fb
+}
+
+func (d *fakeFallbackDispatcher) AcquireFallback(context.Context) error {
+	d.acquireCount++
+	return d.acquireErr
+}
+
+func (d *fakeFallbackDispatcher) ReleaseFallback() {
+	d.releaseCount++
+}
+
+func (d *fakeFallbackDispatcher) ParseResponseFormat(raw any) any {
+	return raw
+}
+
+func (d *fakeFallbackDispatcher) FallbackJSONSystemPrompt(any) string {
+	return d.jsonPrompt
+}
+
+func (d *fakeFallbackDispatcher) FallbackStreamPassthrough() bool {
+	return d.streamEnabled
+}
+
+func (d *fakeFallbackDispatcher) FallbackDropUnsupported() bool {
+	return d.dropUnsupported
+}
+
+func (d *fakeFallbackDispatcher) FallbackTranscriptSynthesisEnabled() bool {
+	return d.transcriptOn
+}
+
+func (d *fakeFallbackDispatcher) FallbackTranscriptWorkspaceDir(string) string {
+	return d.workspaceDir
 }
 
 func (d *fakeFallbackDispatcher) WriteJSON(_ http.ResponseWriter, status int, v any) {
@@ -195,4 +237,88 @@ func TestStreamFallbackResponseWritesChunksDoneAndTerminalEvents(t *testing.T) {
 	if len(dispatcher.terminalEvents) != 1 || dispatcher.terminalEvents[0].Stage != adapterruntime.RequestStageCompleted {
 		t.Fatalf("terminal events = %+v", dispatcher.terminalEvents)
 	}
+}
+
+func TestHandleFallbackBuildsRequestAndAppliesJSONPrompt(t *testing.T) {
+	t.Parallel()
+	dispatcher := &fakeFallbackDispatcher{
+		streamEnabled: true,
+		jsonPrompt:    "Return JSON only.",
+	}
+	dispatcher.fb = &fakeFallbackClient{
+		collect: func(_ context.Context, req fallback.Request, in fallback.CollectOpenAIInput) (fallback.CollectOpenAIResult, error) {
+			if req.Model != "sonnet" {
+				t.Fatalf("Model = %q", req.Model)
+			}
+			if req.System != "system\n\nReturn JSON only." {
+				t.Fatalf("System = %q", req.System)
+			}
+			if len(req.Tools) != 1 || req.Tools[0].Name != "Read" {
+				t.Fatalf("Tools = %+v", req.Tools)
+			}
+			if req.ToolChoice != "Read" {
+				t.Fatalf("ToolChoice = %q", req.ToolChoice)
+			}
+			raw := fallback.Result{Text: "{}", Usage: fallback.Usage{PromptTokens: 1, CompletionTokens: 1, TotalTokens: 2}, Stop: "end_turn"}
+			return fallback.CollectOpenAIResult{
+				Raw: raw,
+				Final: fallback.BuildFinalResponse(fallback.FinalResponseInput{
+					Request:           req,
+					Result:            raw,
+					RequestID:         in.RequestID,
+					ModelAlias:        in.ModelAlias,
+					SystemFingerprint: in.SystemFingerprint,
+					CoerceText:        in.CoerceText,
+				}),
+			}, nil
+		},
+	}
+	req := adapteropenai.ChatRequest{
+		Messages: []adapteropenai.ChatMessage{
+			{Role: "system", Content: mustRawMessage(`"system"`)},
+			{Role: "user", Content: mustRawMessage(`"hi"`)},
+		},
+		Tools:      []adapteropenai.Tool{{Function: adapteropenai.ToolFunctionSchema{Name: "Read"}}},
+		ToolChoice: mustRawMessage(`{"type":"function","function":{"name":"Read"}}`),
+	}
+	model := adaptermodel.ResolvedModel{
+		Alias:      "alias",
+		Backend:    adaptermodel.BackendFallback,
+		FamilySlug: "sonnet-family",
+		CLIAlias:   "sonnet",
+	}
+	err := HandleFallback(dispatcher, nil, &http.Request{}, req, model, "req-1", false)
+	if err != nil {
+		t.Fatalf("HandleFallback: %v", err)
+	}
+	if dispatcher.acquireCount != 1 || dispatcher.releaseCount != 1 {
+		t.Fatalf("acquire/release = %d/%d", dispatcher.acquireCount, dispatcher.releaseCount)
+	}
+	if dispatcher.writeStatus != http.StatusOK {
+		t.Fatalf("writeStatus = %d", dispatcher.writeStatus)
+	}
+}
+
+func TestHandleFallbackRejectsMissingCLIAlias(t *testing.T) {
+	t.Parallel()
+	dispatcher := &fakeFallbackDispatcher{fb: &fakeFallbackClient{}, streamEnabled: true}
+	model := adaptermodel.ResolvedModel{
+		Alias:      "alias",
+		Backend:    adaptermodel.BackendFallback,
+		FamilySlug: "family",
+	}
+	err := HandleFallback(dispatcher, nil, &http.Request{}, adapteropenai.ChatRequest{}, model, "req-1", true)
+	if err == nil {
+		t.Fatalf("expected escalated error, got %v", err)
+	}
+	if dispatcher.acquireCount != 0 {
+		t.Fatalf("unexpected acquire count %d", dispatcher.acquireCount)
+	}
+	if dispatcher.writeStatus != 0 {
+		t.Fatalf("unexpected write status %d", dispatcher.writeStatus)
+	}
+}
+
+func mustRawMessage(s string) json.RawMessage {
+	return json.RawMessage(s)
 }
