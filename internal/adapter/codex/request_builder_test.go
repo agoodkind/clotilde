@@ -9,7 +9,7 @@ import (
 
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
-	"goodkind.io/clyde/internal/adapter/tooltrans"
+	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
 
 type ChatRequest = adapteropenai.ChatRequest
@@ -725,16 +725,16 @@ func TestBuildCodexRequestPreservesResponsesInputToolHistory(t *testing.T) {
 				}
 			case "call_shell":
 				sawShellCommand = true
-					t.Fatalf("shell replay used generic function call: %v", item)
+				t.Fatalf("shell replay used generic function call: %v", item)
+			}
+		case "local_shell_call":
+			if item["call_id"] == "call_shell" {
+				sawShellCommand = true
+				action, _ := item["action"].(map[string]any)
+				if action["working_directory"] != "/repo" {
+					t.Fatalf("shell action=%v", action)
 				}
-			case "local_shell_call":
-				if item["call_id"] == "call_shell" {
-					sawShellCommand = true
-					action, _ := item["action"].(map[string]any)
-					if action["working_directory"] != "/repo" {
-						t.Fatalf("shell action=%v", action)
-					}
-				}
+			}
 		case "function_call_output":
 			switch item["call_id"] {
 			case "call_glob":
@@ -900,7 +900,7 @@ func TestCodexLifecycleEventSummarizesFileChange(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected lifecycle event")
 	}
-	if got.Kind != tooltrans.EventFileChangeCompleted {
+	if got.Kind != adapterrender.EventFileChangeCompleted {
 		t.Fatalf("kind=%q", got.Kind)
 	}
 	if got.ChangeCount != 2 {
@@ -972,9 +972,9 @@ func TestParseCodexSSEEmitsToolCallDeltas(t *testing.T) {
 		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}},"sequence_number":10}`,
 		"",
 	}, "\n") + "\n")
-	r := tooltrans.NewEventRenderer("req", "alias", "codex", nil)
-	var got []tooltrans.OpenAIStreamChunk
-	res, err := ParseSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
+	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
+	var got []adapteropenai.StreamChunk
+	res, err := ParseSSE(stream, r, func(ch adapteropenai.StreamChunk) error {
 		got = append(got, ch)
 		return nil
 	})
@@ -984,7 +984,7 @@ func TestParseCodexSSEEmitsToolCallDeltas(t *testing.T) {
 	if res.FinishReason != "tool_calls" {
 		t.Fatalf("finish_reason=%q want tool_calls", res.FinishReason)
 	}
-	var deltas []tooltrans.OpenAIToolCall
+	var deltas []adapteropenai.ToolCall
 	for _, ch := range got {
 		if len(ch.Choices) == 0 {
 			continue
@@ -1014,9 +1014,9 @@ func TestParseCodexSSEEmitsToolArgumentsFromDoneWhenNoDeltaArrives(t *testing.T)
 		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}},"sequence_number":10}`,
 		"",
 	}, "\n") + "\n")
-	r := tooltrans.NewEventRenderer("req", "alias", "codex", nil)
-	var got []tooltrans.OpenAIStreamChunk
-	res, err := ParseSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
+	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
+	var got []adapteropenai.StreamChunk
+	res, err := ParseSSE(stream, r, func(ch adapteropenai.StreamChunk) error {
 		got = append(got, ch)
 		return nil
 	})
@@ -1053,9 +1053,9 @@ func TestParseCodexSSEDoesNotDuplicateToolArgumentsOnDoneAfterDelta(t *testing.T
 		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}},"sequence_number":10}`,
 		"",
 	}, "\n") + "\n")
-	r := tooltrans.NewEventRenderer("req", "alias", "codex", nil)
-	var got []tooltrans.OpenAIStreamChunk
-	_, err := ParseSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
+	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
+	var got []adapteropenai.StreamChunk
+	_, err := ParseSSE(stream, r, func(ch adapteropenai.StreamChunk) error {
 		got = append(got, ch)
 		return nil
 	})
@@ -1093,9 +1093,9 @@ func TestParseCodexSSEMapsToolAliasesBackToCursorNames(t *testing.T) {
 		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}},"sequence_number":10}`,
 		"",
 	}, "\n") + "\n")
-	r := tooltrans.NewEventRenderer("req", "alias", "codex", nil)
-	var got []tooltrans.OpenAIStreamChunk
-	_, err := ParseSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
+	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
+	var got []adapteropenai.StreamChunk
+	_, err := ParseSSE(stream, r, func(ch adapteropenai.StreamChunk) error {
 		got = append(got, ch)
 		return nil
 	})
@@ -1127,9 +1127,9 @@ func TestParseCodexSSEMapsNativeLocalShellToCursorShell(t *testing.T) {
 		`data: {"response":{"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`,
 		"",
 	}, "\n") + "\n")
-	r := tooltrans.NewEventRenderer("req", "alias", "codex", nil)
-	var got []tooltrans.OpenAIStreamChunk
-	res, err := ParseSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
+	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
+	var got []adapteropenai.StreamChunk
+	res, err := ParseSSE(stream, r, func(ch adapteropenai.StreamChunk) error {
 		got = append(got, ch)
 		return nil
 	})
@@ -1173,9 +1173,9 @@ func TestParseCodexSSEMapsShellCommandToCursorShell(t *testing.T) {
 		`data: {"response":{"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`,
 		"",
 	}, "\n") + "\n")
-	r := tooltrans.NewEventRenderer("req", "alias", "codex", nil)
-	var got []tooltrans.OpenAIStreamChunk
-	res, err := ParseSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
+	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
+	var got []adapteropenai.StreamChunk
+	res, err := ParseSSE(stream, r, func(ch adapteropenai.StreamChunk) error {
 		got = append(got, ch)
 		return nil
 	})
@@ -1220,9 +1220,9 @@ func TestParseCodexSSEMapsNativeApplyPatchToCursorApplyPatch(t *testing.T) {
 		`data: {"response":{"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`,
 		"",
 	}, "\n") + "\n")
-	r := tooltrans.NewEventRenderer("req", "alias", "codex", nil)
-	var got []tooltrans.OpenAIStreamChunk
-	res, err := ParseSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
+	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
+	var got []adapteropenai.StreamChunk
+	res, err := ParseSSE(stream, r, func(ch adapteropenai.StreamChunk) error {
 		got = append(got, ch)
 		return nil
 	})
@@ -1273,9 +1273,9 @@ func TestParseCodexSSESeparatesSummaryFromReasoningBody(t *testing.T) {
 }
 
 func TestCodexRendererSeparatesSummarySections(t *testing.T) {
-	r := tooltrans.NewEventRenderer("req", "alias", "codex", nil)
-	firstChunks := r.HandleEvent(tooltrans.Event{Kind: tooltrans.EventReasoningDelta, Text: "First heading", ReasoningKind: "summary", SummaryIndex: codexIntPtr(0)})
-	secondChunks := r.HandleEvent(tooltrans.Event{Kind: tooltrans.EventReasoningDelta, Text: "Second heading", ReasoningKind: "summary", SummaryIndex: codexIntPtr(1)})
+	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
+	firstChunks := r.HandleEvent(adapterrender.Event{Kind: adapterrender.EventReasoningDelta, Text: "First heading", ReasoningKind: "summary", SummaryIndex: codexIntPtr(0)})
+	secondChunks := r.HandleEvent(adapterrender.Event{Kind: adapterrender.EventReasoningDelta, Text: "Second heading", ReasoningKind: "summary", SummaryIndex: codexIntPtr(1)})
 	first := firstChunks[0].Choices[0].Delta.Content
 	second := secondChunks[0].Choices[0].Delta.Content
 	if !strings.Contains(first, "<!--clyde-thinking-->") {
@@ -1287,9 +1287,9 @@ func TestCodexRendererSeparatesSummarySections(t *testing.T) {
 }
 
 func TestCodexRendererSeparatesBoldSummaryHeadingWithoutIndexChange(t *testing.T) {
-	r := tooltrans.NewEventRenderer("req", "alias", "codex", nil)
-	_ = r.HandleEvent(tooltrans.Event{Kind: tooltrans.EventReasoningDelta, Text: "First paragraph.", ReasoningKind: "summary"})
-	secondChunks := r.HandleEvent(tooltrans.Event{Kind: tooltrans.EventReasoningDelta, Text: "**Second heading**", ReasoningKind: "summary"})
+	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
+	_ = r.HandleEvent(adapterrender.Event{Kind: adapterrender.EventReasoningDelta, Text: "First paragraph.", ReasoningKind: "summary"})
+	secondChunks := r.HandleEvent(adapterrender.Event{Kind: adapterrender.EventReasoningDelta, Text: "**Second heading**", ReasoningKind: "summary"})
 	second := secondChunks[0].Choices[0].Delta.Content
 	if !strings.Contains(second, "\n> \n> **Second heading**") {
 		t.Fatalf("expected bold heading separation, got %q", second)
@@ -1297,9 +1297,9 @@ func TestCodexRendererSeparatesBoldSummaryHeadingWithoutIndexChange(t *testing.T
 }
 
 func TestCodexRendererEmitsSyntheticThinkingPlaceholderWhenSignaledWithoutVisibleText(t *testing.T) {
-	r := tooltrans.NewEventRenderer("req", "alias", "codex", nil)
-	_ = r.HandleEvent(tooltrans.Event{Kind: tooltrans.EventReasoningSignaled})
-	chunks := r.HandleEvent(tooltrans.Event{Kind: tooltrans.EventReasoningFinished})
+	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
+	_ = r.HandleEvent(adapterrender.Event{Kind: adapterrender.EventReasoningSignaled})
+	chunks := r.HandleEvent(adapterrender.Event{Kind: adapterrender.EventReasoningFinished})
 	if len(chunks) != 1 {
 		t.Fatalf("chunks=%d want 1", len(chunks))
 	}
@@ -1310,9 +1310,9 @@ func TestCodexRendererEmitsSyntheticThinkingPlaceholderWhenSignaledWithoutVisibl
 }
 
 func collectCodexSSEForTest(stream *strings.Reader) (string, RunResult, error) {
-	r := tooltrans.NewEventRenderer("req", "alias", "codex", nil)
+	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
 	var got strings.Builder
-	res, err := ParseSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
+	res, err := ParseSSE(stream, r, func(ch adapteropenai.StreamChunk) error {
 		if len(ch.Choices) > 0 {
 			got.WriteString(ch.Choices[0].Delta.Content)
 		}
@@ -1321,8 +1321,8 @@ func collectCodexSSEForTest(stream *strings.Reader) (string, RunResult, error) {
 	return got.String(), res, err
 }
 
-func collectToolCalls(chunks []tooltrans.OpenAIStreamChunk) []tooltrans.OpenAIToolCall {
-	var out []tooltrans.OpenAIToolCall
+func collectToolCalls(chunks []adapteropenai.StreamChunk) []adapteropenai.ToolCall {
+	var out []adapteropenai.ToolCall
 	for _, ch := range chunks {
 		if len(ch.Choices) == 0 {
 			continue
@@ -1370,24 +1370,24 @@ func TestBuildCodexRequestParityMatrixPreservesAliasIntent(t *testing.T) {
 		wantMax       int
 	}{
 		{
-				name:      "native_alias_preserves_upstream_model",
-				model:     ResolvedModel{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"},
-				wantModel: "gpt-5.4",
-			},
-			{
-				name:      "native_long_context_alias_preserves_upstream_model",
-				model:     ResolvedModel{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"},
-				wantModel: "gpt-5.4",
-			},
-			{
-				name:      "spark_alias_preserves_spark_slug",
-				model:     ResolvedModel{Alias: "gpt-5.3-codex-spark", ClaudeModel: "gpt-5.3-codex-spark"},
-				wantModel: "gpt-5.3-codex-spark",
-			},
-			{
-				name:      "service_tier_and_max_completion_passthrough",
-				model:     ResolvedModel{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"},
-				metadata:  mustRaw(`{"service_tier":"fast"}`),
+			name:      "native_alias_preserves_upstream_model",
+			model:     ResolvedModel{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"},
+			wantModel: "gpt-5.4",
+		},
+		{
+			name:      "native_long_context_alias_preserves_upstream_model",
+			model:     ResolvedModel{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"},
+			wantModel: "gpt-5.4",
+		},
+		{
+			name:      "spark_alias_preserves_spark_slug",
+			model:     ResolvedModel{Alias: "gpt-5.3-codex-spark", ClaudeModel: "gpt-5.3-codex-spark"},
+			wantModel: "gpt-5.3-codex-spark",
+		},
+		{
+			name:      "service_tier_and_max_completion_passthrough",
+			model:     ResolvedModel{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"},
+			metadata:  mustRaw(`{"service_tier":"fast"}`),
 			wantModel: "gpt-5.4",
 			wantTier:  "priority",
 			wantMax:   4096,

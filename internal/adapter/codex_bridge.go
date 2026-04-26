@@ -8,22 +8,21 @@ import (
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
-	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
 func (s *Server) AppFallbackEnabled() bool {
 	return s.cfg.Codex.AppFallback
 }
 
-func (s *Server) RunCodexDirect(ctx context.Context, req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort, reqID string, emit func(tooltrans.OpenAIStreamChunk) error) (any, error) {
+func (s *Server) RunCodexDirect(ctx context.Context, req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort, reqID string, emit func(adapteropenai.StreamChunk) error) (any, error) {
 	return s.runCodexDirect(ctx, req, model, effort, reqID, emit)
 }
 
-func (s *Server) RunCodexManaged(ctx context.Context, req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort, reqID string, emit func(tooltrans.OpenAIStreamChunk) error) (any, string, bool, error) {
+func (s *Server) RunCodexManaged(ctx context.Context, req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort, reqID string, emit func(adapteropenai.StreamChunk) error) (any, string, bool, error) {
 	return s.runCodexManaged(ctx, req, model, effort, reqID, emit)
 }
 
-func (s *Server) RunCodexAppFallback(ctx context.Context, req adapteropenai.ChatRequest, reqID string, emit func(tooltrans.OpenAIStreamChunk) error) (any, error) {
+func (s *Server) RunCodexAppFallback(ctx context.Context, req adapteropenai.ChatRequest, reqID string, emit func(adapteropenai.StreamChunk) error) (any, error) {
 	return s.runCodexAppFallback(ctx, req, reqID, emit)
 }
 
@@ -39,11 +38,11 @@ func (s *Server) NewSSEWriter(w http.ResponseWriter) (adaptercodex.SSEWriter, er
 	return newSSEWriter(w)
 }
 
-func (s *Server) StreamChunkFromTooltrans(ch tooltrans.OpenAIStreamChunk) adapteropenai.StreamChunk {
+func (s *Server) StreamChunkFromTooltrans(ch adapteropenai.StreamChunk) adapteropenai.StreamChunk {
 	return streamChunkFromTooltrans(ch)
 }
 
-func (s *Server) MergeChunks(reqID, alias string, chunks []tooltrans.OpenAIStreamChunk, res any) any {
+func (s *Server) MergeChunks(reqID, alias string, chunks []adapteropenai.StreamChunk, res any) any {
 	typed := res.(codexRunResult)
 	return adaptercodex.MergeChunks(reqID, alias, systemFingerprint, chunks, typed)
 }

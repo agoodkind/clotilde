@@ -9,7 +9,6 @@ import (
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
-	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
 func ManagedSummary(req adapteropenai.ChatRequest) string {
@@ -35,7 +34,7 @@ func RunManagedSession(
 	effort string,
 	buildPlan func([]adapteropenai.ChatMessage) ManagedPromptPlan,
 	reqID string,
-	emit func(tooltrans.OpenAIStreamChunk) error,
+	emit func(adapteropenai.StreamChunk) error,
 ) (ManagedRunResult, error) {
 	if log == nil {
 		log = slog.Default()

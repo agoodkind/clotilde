@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"testing"
 
-	"goodkind.io/clyde/internal/adapter/tooltrans"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
 type fakeRPCClient struct {
@@ -62,7 +62,7 @@ func TestRunAppFallbackBootstrapsThreadAndTurn(t *testing.T) {
 		},
 	}
 
-	var chunks []tooltrans.OpenAIStreamChunk
+	var chunks []adapteropenai.StreamChunk
 	res, err := RunAppFallback(context.Background(), AppFallbackConfig{
 		Binary:         "codex",
 		RequestID:      "req-1",
@@ -76,7 +76,7 @@ func TestRunAppFallbackBootstrapsThreadAndTurn(t *testing.T) {
 			return rpc, nil
 		},
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-	}, func(ch tooltrans.OpenAIStreamChunk) error {
+	}, func(ch adapteropenai.StreamChunk) error {
 		chunks = append(chunks, ch)
 		return nil
 	})
@@ -108,7 +108,7 @@ func TestRunAppFallbackReturnsRPCError(t *testing.T) {
 		StartRPC: func(context.Context, string) (RPCClient, error) {
 			return nil, startErr
 		},
-	}, func(tooltrans.OpenAIStreamChunk) error { return nil })
+	}, func(adapteropenai.StreamChunk) error { return nil })
 	if !errors.Is(err, startErr) {
 		t.Fatalf("err=%v want spawn failed", err)
 	}
@@ -125,7 +125,7 @@ func TestRunManagedTurnTracksAssistantAndCache(t *testing.T) {
 			{Method: "turn/completed", Params: json.RawMessage(`{}`)},
 		},
 	}
-	var chunks []tooltrans.OpenAIStreamChunk
+	var chunks []adapteropenai.StreamChunk
 	res, assistant, err := RunManagedTurn(context.Background(), transport, AppTurnConfig{
 		RequestID: "req-managed",
 		Model:     "gpt-5.4",
@@ -133,7 +133,7 @@ func TestRunManagedTurnTracksAssistantAndCache(t *testing.T) {
 		Summary:   "auto",
 		Prompt:    "prompt",
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
-	}, func(ch tooltrans.OpenAIStreamChunk) error {
+	}, func(ch adapteropenai.StreamChunk) error {
 		chunks = append(chunks, ch)
 		return nil
 	})

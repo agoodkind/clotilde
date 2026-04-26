@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
-	"goodkind.io/clyde/internal/adapter/tooltrans"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
 type noticeClaimer func(kind string, resetsAt time.Time) bool
@@ -34,7 +34,7 @@ func EvaluateNoticeFromHeaders(h http.Header, noticesEnabled bool, claim noticeC
 }
 
 // noticeSentinelText wraps an upstream rate-limit / usage notice in
-// HTML-comment sentinels so tooltrans.stripNotice can remove the
+// HTML-comment sentinels so shared sentinel cleanup can remove the
 // whole envelope from chat history on the next turn (keeping the
 // Anthropic-side cache prefix byte-stable). The visible payload is
 // a compact markdown blockquote with a small-font inner span so the
@@ -48,15 +48,15 @@ func noticeSentinelText(text string) string {
 	)
 }
 
-func openAINoticeChunk(reqID, modelAlias, text string) tooltrans.OpenAIStreamChunk {
-	return tooltrans.OpenAIStreamChunk{
+func openAINoticeChunk(reqID, modelAlias, text string) adapteropenai.StreamChunk {
+	return adapteropenai.StreamChunk{
 		ID:      reqID,
 		Object:  "chat.completion.chunk",
 		Created: time.Now().Unix(),
 		Model:   modelAlias,
-		Choices: []tooltrans.OpenAIStreamChoice{{
+		Choices: []adapteropenai.StreamChoice{{
 			Index: 0,
-			Delta: tooltrans.OpenAIStreamDelta{
+			Delta: adapteropenai.StreamDelta{
 				Role:    "assistant",
 				Content: text,
 			},
@@ -71,7 +71,7 @@ func NoticeForStreamHeaders(
 	modelAlias string,
 	h http.Header,
 	noticesEnabled bool,
-	emit func(tooltrans.OpenAIStreamChunk) error,
+	emit func(adapteropenai.StreamChunk) error,
 	claim noticeClaimer,
 	unclaim noticeUnclaimer,
 ) (*anthropic.Notice, error) {

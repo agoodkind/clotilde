@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
-	"goodkind.io/clyde/internal/adapter/tooltrans"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
 func TestEmitUsageChunk(t *testing.T) {
@@ -217,7 +217,7 @@ func TestNoticeForStreamHeadersInjectsAndSkipsOnError(t *testing.T) {
 		"model",
 		h,
 		true,
-		func(chunk tooltrans.OpenAIStreamChunk) error {
+		func(chunk adapteropenai.StreamChunk) error {
 			calls++
 			return nil
 		},
@@ -238,7 +238,7 @@ func TestNoticeForStreamHeadersInjectsAndSkipsOnError(t *testing.T) {
 		"model",
 		h,
 		true,
-		func(chunk tooltrans.OpenAIStreamChunk) error {
+		func(chunk adapteropenai.StreamChunk) error {
 			calls++
 			return errors.New("emit failed")
 		},

@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/gorilla/websocket"
-	"goodkind.io/clyde/internal/adapter/tooltrans"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
 type ResponseCreateClientMetadata map[string]string
@@ -155,7 +155,7 @@ func writeAndParseWebsocketRequest(
 	conn *websocket.Conn,
 	cfg WebsocketTransportConfig,
 	payload ResponseCreateWsRequest,
-	emit func(tooltrans.OpenAIStreamChunk) error,
+	emit func(adapteropenai.StreamChunk) error,
 ) (RunResult, error) {
 	raw, err := MarshalResponseCreateWsRequest(payload)
 	if err != nil {
@@ -208,7 +208,7 @@ func RunWebsocketTransport(
 	ctx context.Context,
 	cfg WebsocketTransportConfig,
 	payload ResponseCreateWsRequest,
-	emit func(tooltrans.OpenAIStreamChunk) error,
+	emit func(adapteropenai.StreamChunk) error,
 ) (RunResult, error) {
 	conn, resp, err := dialResponsesWebsocket(ctx, cfg)
 	if resp != nil && resp.StatusCode == http.StatusUpgradeRequired {
@@ -227,7 +227,7 @@ func RunWebsocketTransport(
 		warmup := WithWarmupGenerateFalse(payload)
 		warmup.Tools = []any{}
 		logWebsocketPrepared(ctx, cfg, warmup, TransportTelemetry{WebsocketWarmup: true})
-		warmupResult, warmupErr := writeAndParseWebsocketRequest(conn, cfg, warmup, func(tooltrans.OpenAIStreamChunk) error {
+		warmupResult, warmupErr := writeAndParseWebsocketRequest(conn, cfg, warmup, func(adapteropenai.StreamChunk) error {
 			return nil
 		})
 		if warmupErr == nil && strings.TrimSpace(warmupResult.ResponseID) != "" {

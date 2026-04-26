@@ -5,12 +5,12 @@ import (
 	"errors"
 	"testing"
 
-	"goodkind.io/clyde/internal/adapter/tooltrans"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
 func TestTranslateRequestSimpleUserText(t *testing.T) {
 	t.Parallel()
-	req := tooltrans.OpenAIRequest{Model: "x", Messages: []tooltrans.OpenAIMessage{{Role: "user", Content: json.RawMessage(`"hello"`)}}}
+	req := adapteropenai.ChatRequest{Model: "x", Messages: []adapteropenai.ChatMessage{{Role: "user", Content: json.RawMessage(`"hello"`)}}}
 	out, err := TranslateRequest(req, "", 64)
 	if err != nil {
 		t.Fatal(err)
@@ -25,7 +25,7 @@ func TestTranslateRequestSimpleUserText(t *testing.T) {
 
 func TestTranslateRequestContentPartsTextOnly(t *testing.T) {
 	t.Parallel()
-	req := tooltrans.OpenAIRequest{Model: "x", Messages: []tooltrans.OpenAIMessage{{Role: "user", Content: json.RawMessage(`[{"type":"text","text":"hi"}]`)}}}
+	req := adapteropenai.ChatRequest{Model: "x", Messages: []adapteropenai.ChatMessage{{Role: "user", Content: json.RawMessage(`[{"type":"text","text":"hi"}]`)}}}
 	out, err := TranslateRequest(req, "", 64)
 	if err != nil {
 		t.Fatal(err)
@@ -37,7 +37,7 @@ func TestTranslateRequestContentPartsTextOnly(t *testing.T) {
 
 func TestTranslateRequestImageDataURI(t *testing.T) {
 	t.Parallel()
-	req := tooltrans.OpenAIRequest{Model: "x", Messages: []tooltrans.OpenAIMessage{{Role: "user", Content: json.RawMessage(`[{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBOR"}}]`)}}}
+	req := adapteropenai.ChatRequest{Model: "x", Messages: []adapteropenai.ChatMessage{{Role: "user", Content: json.RawMessage(`[{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBOR"}}]`)}}}
 	out, err := TranslateRequest(req, "", 64)
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +50,7 @@ func TestTranslateRequestImageDataURI(t *testing.T) {
 
 func TestTranslateRequestImageHTTPSURL(t *testing.T) {
 	t.Parallel()
-	req := tooltrans.OpenAIRequest{Model: "x", Messages: []tooltrans.OpenAIMessage{{Role: "user", Content: json.RawMessage(`[{"type":"image_url","image_url":{"url":"https://x/y.png"}}]`)}}}
+	req := adapteropenai.ChatRequest{Model: "x", Messages: []adapteropenai.ChatMessage{{Role: "user", Content: json.RawMessage(`[{"type":"image_url","image_url":{"url":"https://x/y.png"}}]`)}}}
 	out, err := TranslateRequest(req, "", 64)
 	if err != nil {
 		t.Fatal(err)
@@ -63,7 +63,7 @@ func TestTranslateRequestImageHTTPSURL(t *testing.T) {
 
 func TestTranslateRequestAudioRejected(t *testing.T) {
 	t.Parallel()
-	req := tooltrans.OpenAIRequest{Model: "x", Messages: []tooltrans.OpenAIMessage{{Role: "user", Content: json.RawMessage(`[{"type":"input_audio","input_audio":{"data":"qqq"}}]`)}}}
+	req := adapteropenai.ChatRequest{Model: "x", Messages: []adapteropenai.ChatMessage{{Role: "user", Content: json.RawMessage(`[{"type":"input_audio","input_audio":{"data":"qqq"}}]`)}}}
 	_, err := TranslateRequest(req, "", 64)
 	if err == nil || !errors.Is(err, ErrAudioUnsupported) {
 		t.Fatalf("expected ErrAudioUnsupported, got %v", err)
@@ -72,15 +72,15 @@ func TestTranslateRequestAudioRejected(t *testing.T) {
 
 func TestTranslateRequestToolsTranslated(t *testing.T) {
 	t.Parallel()
-	req := tooltrans.OpenAIRequest{
+	req := adapteropenai.ChatRequest{
 		Model: "x",
-		Messages: []tooltrans.OpenAIMessage{{
+		Messages: []adapteropenai.ChatMessage{{
 			Role:    "user",
 			Content: json.RawMessage(`"hi"`),
 		}},
-		Tools: []tooltrans.OpenAITool{
-			{Type: "function", Function: tooltrans.OpenAIToolFunctionSchema{Name: "a", Parameters: json.RawMessage(`{"type":"object"}`)}},
-			{Type: "function", Function: tooltrans.OpenAIToolFunctionSchema{Name: "b", Description: "d", Parameters: json.RawMessage(`{"a":1}`)}},
+		Tools: []adapteropenai.Tool{
+			{Type: "function", Function: adapteropenai.ToolFunctionSchema{Name: "a", Parameters: json.RawMessage(`{"type":"object"}`)}},
+			{Type: "function", Function: adapteropenai.ToolFunctionSchema{Name: "b", Description: "d", Parameters: json.RawMessage(`{"a":1}`)}},
 		},
 	}
 	out, err := TranslateRequest(req, "", 64)
@@ -110,9 +110,9 @@ func TestTranslateRequestToolChoiceVariants(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			req := tooltrans.OpenAIRequest{
+			req := adapteropenai.ChatRequest{
 				Model: "x",
-				Messages: []tooltrans.OpenAIMessage{{
+				Messages: []adapteropenai.ChatMessage{{
 					Role:    "user",
 					Content: json.RawMessage(`"hi"`),
 				}},
@@ -132,9 +132,9 @@ func TestTranslateRequestToolChoiceVariants(t *testing.T) {
 func TestTranslateRequestParallelToolCallsFalse(t *testing.T) {
 	t.Parallel()
 	f := false
-	req := tooltrans.OpenAIRequest{
+	req := adapteropenai.ChatRequest{
 		Model: "x",
-		Messages: []tooltrans.OpenAIMessage{{
+		Messages: []adapteropenai.ChatMessage{{
 			Role:    "user",
 			Content: json.RawMessage(`"hi"`),
 		}},
@@ -151,15 +151,15 @@ func TestTranslateRequestParallelToolCallsFalse(t *testing.T) {
 
 func TestTranslateRequestAssistantWithToolCalls(t *testing.T) {
 	t.Parallel()
-	req := tooltrans.OpenAIRequest{
+	req := adapteropenai.ChatRequest{
 		Model: "x",
-		Messages: []tooltrans.OpenAIMessage{{
+		Messages: []adapteropenai.ChatMessage{{
 			Role:    "assistant",
 			Content: json.RawMessage(`"ok"`),
-			ToolCalls: []tooltrans.OpenAIToolCall{{
+			ToolCalls: []adapteropenai.ToolCall{{
 				ID:   "call_1",
 				Type: "function",
-				Function: tooltrans.OpenAIToolCallFunction{
+				Function: adapteropenai.ToolCallFunction{
 					Name:      "get_weather",
 					Arguments: `{"loc":"NY"}`,
 				},
@@ -182,16 +182,16 @@ func TestTranslateRequestAssistantWithToolCalls(t *testing.T) {
 
 func TestTranslateRequestAssistantWithMultipleToolCallsPreservesOrder(t *testing.T) {
 	t.Parallel()
-	req := tooltrans.OpenAIRequest{
+	req := adapteropenai.ChatRequest{
 		Model: "x",
-		Messages: []tooltrans.OpenAIMessage{{
+		Messages: []adapteropenai.ChatMessage{{
 			Role:    "assistant",
 			Content: json.RawMessage(`"working"`),
-			ToolCalls: []tooltrans.OpenAIToolCall{
+			ToolCalls: []adapteropenai.ToolCall{
 				{
 					ID:   "call_1",
 					Type: "function",
-					Function: tooltrans.OpenAIToolCallFunction{
+					Function: adapteropenai.ToolCallFunction{
 						Name:      "get_weather",
 						Arguments: `{"loc":"NY"}`,
 					},
@@ -199,7 +199,7 @@ func TestTranslateRequestAssistantWithMultipleToolCallsPreservesOrder(t *testing
 				{
 					ID:   "call_2",
 					Type: "function",
-					Function: tooltrans.OpenAIToolCallFunction{
+					Function: adapteropenai.ToolCallFunction{
 						Name:      "write_file",
 						Arguments: `{"path":"out.md"}`,
 					},
@@ -228,9 +228,9 @@ func TestTranslateRequestAssistantWithMultipleToolCallsPreservesOrder(t *testing
 
 func TestTranslateRequestToolRoleMessage(t *testing.T) {
 	t.Parallel()
-	req := tooltrans.OpenAIRequest{
+	req := adapteropenai.ChatRequest{
 		Model: "x",
-		Messages: []tooltrans.OpenAIMessage{{
+		Messages: []adapteropenai.ChatMessage{{
 			Role:       "tool",
 			ToolCallID: "toolu_1",
 			Content:    json.RawMessage(`"result"`),
@@ -248,9 +248,9 @@ func TestTranslateRequestToolRoleMessage(t *testing.T) {
 
 func TestTranslateRequestRoleAlternationMerge(t *testing.T) {
 	t.Parallel()
-	req := tooltrans.OpenAIRequest{
+	req := adapteropenai.ChatRequest{
 		Model: "x",
-		Messages: []tooltrans.OpenAIMessage{
+		Messages: []adapteropenai.ChatMessage{
 			{Role: "user", Content: json.RawMessage(`"a"`)},
 			{Role: "user", Content: json.RawMessage(`"b"`)},
 		},
@@ -269,9 +269,9 @@ func TestTranslateRequestRoleAlternationMerge(t *testing.T) {
 
 func TestTranslateRequestSystemPrefixIdempotent(t *testing.T) {
 	t.Parallel()
-	req := tooltrans.OpenAIRequest{
+	req := adapteropenai.ChatRequest{
 		Model: "x",
-		Messages: []tooltrans.OpenAIMessage{{
+		Messages: []adapteropenai.ChatMessage{{
 			Role:    "system",
 			Content: json.RawMessage(`"SYS\n\nalready"`),
 		}},
@@ -287,13 +287,13 @@ func TestTranslateRequestSystemPrefixIdempotent(t *testing.T) {
 
 func TestTranslateRequestLegacyFunctions(t *testing.T) {
 	t.Parallel()
-	req := tooltrans.OpenAIRequest{
+	req := adapteropenai.ChatRequest{
 		Model: "x",
-		Messages: []tooltrans.OpenAIMessage{{
+		Messages: []adapteropenai.ChatMessage{{
 			Role:    "user",
 			Content: json.RawMessage(`"hi"`),
 		}},
-		Functions: []tooltrans.OpenAIFunction{{
+		Functions: []adapteropenai.Function{{
 			Name:        "legacy",
 			Description: "d",
 			Parameters:  json.RawMessage(`{"x":1}`),

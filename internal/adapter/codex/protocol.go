@@ -12,6 +12,7 @@ import (
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	"goodkind.io/clyde/internal/adapter/finishreason"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
@@ -165,7 +166,7 @@ func EffectiveAppSummary(req adapteropenai.ChatRequest) any {
 	return nil
 }
 
-func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(tooltrans.OpenAIStreamChunk) error) (RunResult, error) {
+func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(adapteropenai.StreamChunk) error) (RunResult, error) {
 	sc := bufio.NewScanner(body)
 	sc.Buffer(make([]byte, 0, 1024*128), 1024*1024*8)
 
@@ -174,13 +175,13 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 	out := NewRunResult("stop")
 	toolCallsByItemID := make(map[string]*toolCallState)
 	nextToolIndex := 0
-	emitToolCall := func(state *toolCallState, fn tooltrans.OpenAIToolCallFunction) error {
+	emitToolCall := func(state *toolCallState, fn adapteropenai.ToolCallFunction) error {
 		if state == nil {
 			return nil
 		}
-		return EmitRendered(renderer, tooltrans.Event{
-			Kind: tooltrans.EventToolCallDelta,
-			ToolCalls: []tooltrans.OpenAIToolCall{{
+		return EmitRendered(renderer, adapterrender.Event{
+			Kind: adapterrender.EventToolCallDelta,
+			ToolCalls: []adapteropenai.ToolCall{{
 				Index:    state.Index,
 				ID:       state.CallID,
 				Type:     state.Type,
@@ -259,7 +260,7 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 
 			if eventNameLocal == "response.output_text.delta" {
 				if delta, _ := raw["delta"].(string); delta != "" {
-					if err := EmitRendered(renderer, tooltrans.Event{Kind: tooltrans.EventAssistantTextDelta, Text: delta}, emit, nil); err != nil {
+					if err := EmitRendered(renderer, adapterrender.Event{Kind: adapterrender.EventAssistantTextDelta, Text: delta}, emit, nil); err != nil {
 						return out, err
 					}
 				}
@@ -289,7 +290,7 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 						state.NativeName = name
 					}
 					if created {
-						if err := emitToolCall(state, tooltrans.OpenAIToolCallFunction{Name: state.Name}); err != nil {
+						if err := emitToolCall(state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
 							return out, err
 						}
 					}
@@ -302,7 +303,7 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 							args = state.Arguments.String()
 						}
 						if converted, ok := ShellArgsFromShellCommandArguments(args); ok && !state.ArgumentsEmitted {
-							if err := emitToolCall(state, tooltrans.OpenAIToolCallFunction{Arguments: converted}); err != nil {
+							if err := emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: converted}); err != nil {
 								return out, err
 							}
 							state.ArgumentsEmitted = true
@@ -316,7 +317,7 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 						continue
 					}
 					if eventNameLocal == "response.output_item.done" && args != "" && !state.ArgumentDeltaSeen {
-						if err := emitToolCall(state, tooltrans.OpenAIToolCallFunction{Arguments: args}); err != nil {
+						if err := emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: args}); err != nil {
 							return out, err
 						}
 						state.ArgumentsEmitted = true
@@ -326,13 +327,13 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 					callID := strings.TrimSpace(mapString(item, "call_id"))
 					state, created := getToolState(itemID, callID, "Shell")
 					if created {
-						if err := emitToolCall(state, tooltrans.OpenAIToolCallFunction{Name: "Shell"}); err != nil {
+						if err := emitToolCall(state, adapteropenai.ToolCallFunction{Name: "Shell"}); err != nil {
 							return out, err
 						}
 					}
 					out.SetFinishReason("tool_calls")
 					if args, ok := ShellArgsFromLocalShellItem(item); ok && !state.ArgumentsEmitted {
-						if err := emitToolCall(state, tooltrans.OpenAIToolCallFunction{Arguments: args}); err != nil {
+						if err := emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: args}); err != nil {
 							return out, err
 						}
 						state.ArgumentsEmitted = true
@@ -353,7 +354,7 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 					}
 					state, created := getToolState(itemID, callID, cursorName)
 					if created {
-						if err := emitToolCall(state, tooltrans.OpenAIToolCallFunction{Name: state.Name}); err != nil {
+						if err := emitToolCall(state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
 							return out, err
 						}
 					}
@@ -363,7 +364,7 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 						input = state.Input.String()
 					}
 					if args, ok := ApplyPatchArgs(input); ok && !state.ArgumentsEmitted {
-						if err := emitToolCall(state, tooltrans.OpenAIToolCallFunction{Arguments: args}); err != nil {
+						if err := emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: args}); err != nil {
 							return out, err
 						}
 						state.ArgumentsEmitted = true
@@ -389,7 +390,7 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 						state.Arguments.WriteString(delta)
 						continue
 					}
-					if err := emitToolCall(state, tooltrans.OpenAIToolCallFunction{Arguments: delta}); err != nil {
+					if err := emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: delta}); err != nil {
 						return out, err
 					}
 				}
@@ -402,7 +403,7 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 				delta := rawString(raw, "delta")
 				state, created := getToolState(itemID, callID, "ApplyPatch")
 				if created {
-					if err := emitToolCall(state, tooltrans.OpenAIToolCallFunction{Name: state.Name}); err != nil {
+					if err := emitToolCall(state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
 						return out, err
 					}
 				}
@@ -410,7 +411,7 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 					state.Input.WriteString(delta)
 					state.ArgumentDeltaSeen = true
 					out.SetFinishReason("tool_calls")
-					if err := emitToolCall(state, tooltrans.OpenAIToolCallFunction{Arguments: delta}); err != nil {
+					if err := emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: delta}); err != nil {
 						return out, err
 					}
 					state.ArgumentsEmitted = true
@@ -429,8 +430,8 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 							summaryIdx = &idx
 						}
 					}
-					if err := EmitRendered(renderer, tooltrans.Event{
-						Kind:          tooltrans.EventReasoningDelta,
+					if err := EmitRendered(renderer, adapterrender.Event{
+						Kind:          adapterrender.EventReasoningDelta,
 						Text:          delta,
 						ReasoningKind: kind,
 						SummaryIndex:  summaryIdx,
@@ -454,7 +455,7 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 					}
 				}
 				out.ReasoningSignaled = reasoningTokens(raw) > 0
-				if err := EmitRendered(renderer, tooltrans.Event{Kind: tooltrans.EventReasoningFinished}, emit, nil); err != nil {
+				if err := EmitRendered(renderer, adapterrender.Event{Kind: adapterrender.EventReasoningFinished}, emit, nil); err != nil {
 					return out, err
 				}
 				renderer.Flush()
@@ -470,7 +471,7 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 				continue
 			}
 			if eventNameLocal == "response.failed" {
-				_ = EmitRendered(renderer, tooltrans.Event{Kind: tooltrans.EventReasoningFinished}, emit, nil)
+				_ = EmitRendered(renderer, adapterrender.Event{Kind: adapterrender.EventReasoningFinished}, emit, nil)
 				renderer.Flush()
 				msg := "codex response failed"
 				if e, ok := raw["error"].(map[string]any); ok {

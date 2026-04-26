@@ -7,7 +7,7 @@ import (
 	"time"
 
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
-	"goodkind.io/clyde/internal/adapter/tooltrans"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
 type codexRunResult = adaptercodex.RunResult
@@ -45,7 +45,7 @@ func (s *Server) runCodexDirect(
 	model ResolvedModel,
 	effort string,
 	reqID string,
-	emit func(tooltrans.OpenAIStreamChunk) error,
+	emit func(adapteropenai.StreamChunk) error,
 ) (codexRunResult, error) {
 	token, err := s.readCodexAccessToken()
 	if err != nil {

@@ -1,8 +1,6 @@
 package adapter
 
-import "goodkind.io/clyde/internal/adapter/tooltrans"
-
-func streamChunkFromTooltrans(och tooltrans.OpenAIStreamChunk) StreamChunk {
+func streamChunkFromTooltrans(och StreamChunk) StreamChunk {
 	out := StreamChunk{
 		ID:      och.ID,
 		Object:  och.Object,

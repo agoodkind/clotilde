@@ -9,7 +9,6 @@ import (
 
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
-	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
 type DirectConfig struct {
@@ -30,7 +29,7 @@ func RunDirect(
 	req adapteropenai.ChatRequest,
 	model adaptermodel.ResolvedModel,
 	effort string,
-	emit func(tooltrans.OpenAIStreamChunk) error,
+	emit func(adapteropenai.StreamChunk) error,
 ) (RunResult, error) {
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = http.DefaultClient

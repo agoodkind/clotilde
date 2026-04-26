@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-
-	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
 func TestToolUnmarshalOpenAICanonical(t *testing.T) {
@@ -115,7 +113,7 @@ func TestToolUnmarshalRejectsUnknownType(t *testing.T) {
 	}
 }
 
-func TestToolUnmarshalAnthropicRoundTripIntoTooltrans(t *testing.T) {
+func TestToolUnmarshalAnthropicRoundTripIntoOpenAI(t *testing.T) {
 	t.Parallel()
 
 	anthropicShape := json.RawMessage(`{"name":"weather","description":"Get weather","input_schema":{"type":"object","properties":{"zip":{"type":"string"}}}}`)
@@ -128,9 +126,9 @@ func TestToolUnmarshalAnthropicRoundTripIntoTooltrans(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal canonical: %v", err)
 	}
-	var tt tooltrans.OpenAITool
+	var tt Tool
 	if err := json.Unmarshal(canonical, &tt); err != nil {
-		t.Fatalf("unmarshal tooltrans: %v", err)
+		t.Fatalf("unmarshal OpenAI tool: %v", err)
 	}
 	if tt.Function.Name != "weather" {
 		t.Fatalf("name = %q, want weather", tt.Function.Name)

@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
-	"goodkind.io/clyde/internal/adapter/tooltrans"
+	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
 
 type AppFallbackConfig struct {
@@ -46,7 +46,7 @@ func RunManagedTurn(
 	ctx context.Context,
 	transport AppTurnTransport,
 	cfg AppTurnConfig,
-	emit func(tooltrans.OpenAIStreamChunk) error,
+	emit func(adapteropenai.StreamChunk) error,
 ) (RunResult, string, error) {
 	prompt := strings.TrimSpace(cfg.Prompt)
 	if prompt == "" {
@@ -72,7 +72,7 @@ func RunManagedTurn(
 
 	out := NewRunResult("stop")
 	var assistantText strings.Builder
-	renderer := tooltrans.NewEventRenderer(cfg.RequestID, cfg.Model, "codex", cfg.Logger)
+	renderer := adapterrender.NewEventRenderer(cfg.RequestID, cfg.Model, "codex", cfg.Logger)
 	for {
 		select {
 		case <-ctx.Done():
@@ -98,7 +98,7 @@ func RunManagedTurn(
 			_ = json.Unmarshal(msg.Params, &p)
 			LogToolingEvent(cfg.Logger, ctx, cfg.RequestID, msg.Method, slog.Int("delta_len", len(p.Delta)))
 			if p.Delta != "" {
-				if err := EmitRendered(renderer, tooltrans.Event{Kind: tooltrans.EventAssistantTextDelta, Text: p.Delta}, emit, &assistantText); err != nil {
+				if err := EmitRendered(renderer, adapterrender.Event{Kind: adapterrender.EventAssistantTextDelta, Text: p.Delta}, emit, &assistantText); err != nil {
 					return out, assistantText.String(), err
 				}
 			}
@@ -180,7 +180,7 @@ func RunManagedTurn(
 			_ = json.Unmarshal(msg.Params, &p)
 			out.ReasoningSignaled = true
 			LogReasoningEvent(cfg.Logger, ctx, cfg.RequestID, msg.Method, slog.Int("summary_index", p.SummaryIndex), slog.Bool("thinking_visible", renderer.State().ReasoningVisible))
-			if err := EmitRendered(renderer, tooltrans.Event{Kind: tooltrans.EventReasoningSignaled}, emit, &assistantText); err != nil {
+			if err := EmitRendered(renderer, adapterrender.Event{Kind: adapterrender.EventReasoningSignaled}, emit, &assistantText); err != nil {
 				return out, assistantText.String(), err
 			}
 		case "item/reasoning/summaryTextDelta", "item/reasoning/textDelta":
@@ -198,7 +198,7 @@ func RunManagedTurn(
 					kind = "summary"
 					summaryIdx = &p.SummaryIndex
 				}
-				if err := EmitRendered(renderer, tooltrans.Event{Kind: tooltrans.EventReasoningDelta, Text: p.Delta, ReasoningKind: kind, SummaryIndex: summaryIdx}, emit, &assistantText); err != nil {
+				if err := EmitRendered(renderer, adapterrender.Event{Kind: adapterrender.EventReasoningDelta, Text: p.Delta, ReasoningKind: kind, SummaryIndex: summaryIdx}, emit, &assistantText); err != nil {
 					return out, assistantText.String(), err
 				}
 			}
@@ -231,7 +231,7 @@ func RunManagedTurn(
 				out.ReasoningSignaled = true
 			}
 		case "turn/completed":
-			if err := EmitRendered(renderer, tooltrans.Event{Kind: tooltrans.EventReasoningFinished}, emit, &assistantText); err != nil {
+			if err := EmitRendered(renderer, adapterrender.Event{Kind: adapterrender.EventReasoningFinished}, emit, &assistantText); err != nil {
 				return out, assistantText.String(), err
 			}
 			state := renderer.State()
@@ -265,7 +265,7 @@ func (t *rpcAppTurnTransport) CachedInputTokens() int { return t.cached }
 
 func (t *rpcAppTurnTransport) SetCachedInputTokens(v int) { t.cached = v }
 
-func RunAppFallback(ctx context.Context, cfg AppFallbackConfig, emit func(tooltrans.OpenAIStreamChunk) error) (RunResult, error) {
+func RunAppFallback(ctx context.Context, cfg AppFallbackConfig, emit func(adapteropenai.StreamChunk) error) (RunResult, error) {
 	rpc, err := cfg.StartRPC(ctx, cfg.Binary)
 	if err != nil {
 		return NewRunResult("stop"), err

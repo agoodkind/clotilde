@@ -1433,6 +1433,8 @@ Verification:
 
 - `go test ./internal/adapter/...` passed.
 - `make build` passed.
+- `dist/clyde daemon reload` passed with `active_sessions=1`, `new_pid=97895`.
+- `make build` passed.
 - `dist/clyde daemon reload` passed with `active_sessions=1`, `new_pid=9178`.
 
 Next large batch:
@@ -1565,3 +1567,40 @@ Next large batch:
   away from `tooltrans` render/OpenAI aliases toward `internal/adapter/render`
   and `internal/adapter/openai`, then make backend stream parsing emit the
   normalized event model directly.
+
+## 2026-04-26 Phase 9 output ownership checkpoint
+
+Follow-up to the Phase 8 `tooltrans` shrink. This slice removed the remaining
+OpenAI wire and render aliases from `tooltrans` call sites, so package
+ownership is explicit before the deeper normalized-event parser work.
+
+What changed:
+
+- Codex production code now imports OpenAI stream/tool-call types from
+  `internal/adapter/openai` and normalized event/renderer types from
+  `internal/adapter/render` directly.
+- Anthropic backend response runtime and response merge code now use
+  `internal/adapter/openai` stream types directly.
+- Shared runtime notice chunks now use `internal/adapter/openai` directly.
+- Root adapter Codex bridge/runtime/session wrappers no longer import
+  `tooltrans` for stream chunks.
+- Adapter and backend tests were updated to use `internal/adapter/openai` and
+  `internal/adapter/render` directly.
+- Deleted `internal/adapter/tooltrans/event_renderer.go`,
+  `internal/adapter/tooltrans/thinking_inline.go`, and
+  `internal/adapter/tooltrans/types_openai_local.go`.
+- `internal/adapter/tooltrans/` now contains only `doc.go`, `sentinels.go`,
+  and the sentinel strip tests.
+- `docs/adapter-refactor/adapter-refactor.md` now records this as a Phase 9
+  ownership cleanup and leaves the deeper normalized-event parser boundary as
+  the next Phase 9 slice.
+
+Verification:
+
+- `go test ./internal/adapter/...` passed.
+
+Next large batch:
+
+- Continue Phase 9 by changing Anthropic and Codex stream parser boundaries to
+  emit `render.Event` streams first, with OpenAI chunk rendering tested only in
+  `internal/adapter/render`.

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
-	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
 type toolAccumulator struct {
@@ -18,7 +17,7 @@ type toolAccumulator struct {
 	args string
 }
 
-func MergeChunks(reqID, modelAlias, systemFingerprint string, chunks []tooltrans.OpenAIStreamChunk, res RunResult) adapteropenai.ChatResponse {
+func MergeChunks(reqID, modelAlias, systemFingerprint string, chunks []adapteropenai.StreamChunk, res RunResult) adapteropenai.ChatResponse {
 	var text strings.Builder
 	var reasoning strings.Builder
 	var refusalText strings.Builder

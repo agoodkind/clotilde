@@ -7,41 +7,42 @@ import (
 	"log/slog"
 	"strings"
 
-	"goodkind.io/clyde/internal/adapter/tooltrans"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
 
-func PlanEvent(explanation string, plan []map[string]string) (tooltrans.Event, bool) {
-	ev := tooltrans.Event{
-		Kind:            tooltrans.EventPlanUpdated,
+func PlanEvent(explanation string, plan []map[string]string) (adapterrender.Event, bool) {
+	ev := adapterrender.Event{
+		Kind:            adapterrender.EventPlanUpdated,
 		PlanExplanation: strings.TrimSpace(explanation),
-		Plan:            make([]tooltrans.EventPlanStep, 0, len(plan)),
+		Plan:            make([]adapterrender.EventPlanStep, 0, len(plan)),
 	}
 	for _, step := range plan {
 		label := strings.TrimSpace(step["step"])
 		if label == "" {
 			continue
 		}
-		ev.Plan = append(ev.Plan, tooltrans.EventPlanStep{
+		ev.Plan = append(ev.Plan, adapterrender.EventPlanStep{
 			Step:   label,
 			Status: strings.TrimSpace(step["status"]),
 		})
 	}
 	if ev.PlanExplanation == "" && len(ev.Plan) == 0 {
-		return tooltrans.Event{}, false
+		return adapterrender.Event{}, false
 	}
 	return ev, true
 }
 
-func LifecycleEvent(item map[string]any, completed bool) (tooltrans.Event, bool) {
+func LifecycleEvent(item map[string]any, completed bool) (adapterrender.Event, bool) {
 	itemType := itemType(item)
 	status := itemStatus(item)
 	switch itemType {
 	case "commandExecution", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "contextCompaction":
-		kind := tooltrans.EventToolStarted
+		kind := adapterrender.EventToolStarted
 		if completed {
-			kind = tooltrans.EventToolCompleted
+			kind = adapterrender.EventToolCompleted
 		}
-		return tooltrans.Event{
+		return adapterrender.Event{
 			Kind:       kind,
 			ItemType:   itemType,
 			ItemStatus: status,
@@ -52,11 +53,11 @@ func LifecycleEvent(item map[string]any, completed bool) (tooltrans.Event, bool)
 			Completed:  completed,
 		}, true
 	case "fileChange":
-		kind := tooltrans.EventFileChangeStarted
+		kind := adapterrender.EventFileChangeStarted
 		if completed {
-			kind = tooltrans.EventFileChangeCompleted
+			kind = adapterrender.EventFileChangeCompleted
 		}
-		return tooltrans.Event{
+		return adapterrender.Event{
 			Kind:        kind,
 			ItemType:    itemType,
 			ItemStatus:  status,
@@ -65,26 +66,26 @@ func LifecycleEvent(item map[string]any, completed bool) (tooltrans.Event, bool)
 			Completed:   completed,
 		}, true
 	default:
-		return tooltrans.Event{}, false
+		return adapterrender.Event{}, false
 	}
 }
 
-func ProgressEvent(method, itemID, text string) (tooltrans.Event, bool) {
+func ProgressEvent(method, itemID, text string) (adapterrender.Event, bool) {
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return tooltrans.Event{}, false
+		return adapterrender.Event{}, false
 	}
 	switch method {
 	case "item/fileChange/outputDelta", "item/fileChange/patchUpdated":
-		return tooltrans.Event{
-			Kind:     tooltrans.EventFileChangeProgress,
+		return adapterrender.Event{
+			Kind:     adapterrender.EventFileChangeProgress,
 			ItemID:   itemID,
 			ItemType: "fileChange",
 			Text:     text,
 		}, true
 	default:
-		return tooltrans.Event{
-			Kind:   tooltrans.EventToolProgress,
+		return adapterrender.Event{
+			Kind:   adapterrender.EventToolProgress,
 			ItemID: itemID,
 			Text:   text,
 		}, true
@@ -114,9 +115,9 @@ func LogProtocolEvent(ctx context.Context, requestID, backend, event string, att
 }
 
 func EmitRendered(
-	renderer *tooltrans.EventRenderer,
-	ev tooltrans.Event,
-	emit func(tooltrans.OpenAIStreamChunk) error,
+	renderer *adapterrender.EventRenderer,
+	ev adapterrender.Event,
+	emit func(adapteropenai.StreamChunk) error,
 	assistantText *strings.Builder,
 ) error {
 	for _, ch := range renderer.HandleEvent(ev) {
@@ -195,7 +196,7 @@ func toolName(item map[string]any) string {
 	return "tool"
 }
 
-func ParseTransportStream(body io.Reader, requestID, alias string, log *slog.Logger, emit func(tooltrans.OpenAIStreamChunk) error) (RunResult, error) {
-	renderer := tooltrans.NewEventRenderer(requestID, alias, "codex", log)
+func ParseTransportStream(body io.Reader, requestID, alias string, log *slog.Logger, emit func(adapteropenai.StreamChunk) error) (RunResult, error) {
+	renderer := adapterrender.NewEventRenderer(requestID, alias, "codex", log)
 	return ParseSSE(bufio.NewReader(body), renderer, emit)
 }

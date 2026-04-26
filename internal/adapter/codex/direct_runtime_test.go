@@ -11,7 +11,6 @@ import (
 
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
-	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
 func TestRunDirectFallsBackToHTTPAfterWebsocketUpgradeRequired(t *testing.T) {
@@ -48,7 +47,7 @@ func TestRunDirectFallsBackToHTTPAfterWebsocketUpgradeRequired(t *testing.T) {
 	}))
 	defer server.Close()
 
-	var chunks []tooltrans.OpenAIStreamChunk
+	var chunks []adapteropenai.StreamChunk
 	res, err := RunDirect(context.Background(), DirectConfig{
 		HTTPClient:       server.Client(),
 		BaseURL:          server.URL + "/responses",
@@ -63,7 +62,7 @@ func TestRunDirectFallsBackToHTTPAfterWebsocketUpgradeRequired(t *testing.T) {
 	}, adaptermodel.ResolvedModel{
 		Alias:       "gpt-5.4",
 		ClaudeModel: "gpt-5.4",
-	}, "medium", func(ch tooltrans.OpenAIStreamChunk) error {
+	}, "medium", func(ch adapteropenai.StreamChunk) error {
 		chunks = append(chunks, ch)
 		return nil
 	})

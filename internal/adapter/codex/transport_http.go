@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"goodkind.io/clyde/internal/adapter/tooltrans"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
 // HTTPTransportRequest is the current root-owned Codex request wire shape.
@@ -47,7 +47,7 @@ func RunHTTPTransport(
 	httpClient *http.Client,
 	cfg HTTPTransportConfig,
 	payload HTTPTransportRequest,
-	emit func(tooltrans.OpenAIStreamChunk) error,
+	emit func(adapteropenai.StreamChunk) error,
 ) (RunResult, error) {
 	conversationID := strings.TrimSpace(payload.PromptCache)
 	windowID := ""

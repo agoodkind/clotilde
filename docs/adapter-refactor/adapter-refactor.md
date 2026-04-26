@@ -1353,6 +1353,9 @@ Current foundation:
 
 - `internal/adapter/render/event_renderer.go` already owns a normalized event
   model and converts events into OpenAI stream chunks.
+- `internal/adapter/openai/` owns OpenAI request/response/stream wire types.
+- `internal/adapter/tooltrans/` no longer aliases render or OpenAI wire
+  symbols; it only owns cross-backend sentinel cleanup helpers.
 
 Target normalized event model should cover:
 
@@ -2726,14 +2729,25 @@ workstream above. The concrete execution order is:
 
 ### Phase 9 todos: normalize output around one event model
 
-1. [todo] Audit `internal/adapter/render/event_renderer.go` against
+1. [partial 2026-04-26] Audit `internal/adapter/render/event_renderer.go` against
    what the Anthropic and Codex stream paths emit today. Decide which
-   event kinds are missing from the normalized model.
-2. [todo] Update Anthropic and Codex stream parsers so they emit the
+   event kinds are missing from the normalized model. Current cleanup:
+   all call sites now import OpenAI stream types from
+   `internal/adapter/openai` and render event types from
+   `internal/adapter/render` directly instead of going through
+   `tooltrans` aliases.
+2. [partial 2026-04-26] Update Anthropic and Codex stream parsers so they emit the
    normalized event model directly instead of OpenAI-shaped chunks.
-3. [todo] Make the shared output layer the only place that knows about
-   OpenAI SSE framing and final JSON assembly. Backends should not
-   know about OpenAI wire shape.
+   Codex parsing already builds `render.Event` values before rendering
+   OpenAI chunks. Anthropic `StreamTranslator` also uses the render
+   event model internally, but its public contract still returns
+   OpenAI chunks; the next deeper slice is to expose normalized events
+   at that boundary.
+3. [partial 2026-04-26] Make the shared output layer the only place that knows about
+   OpenAI SSE framing and final JSON assembly. OpenAI type ownership is
+   now explicit through `internal/adapter/openai`, but backend stream
+   translator signatures still expose OpenAI chunks pending the next
+   normalized-event boundary.
 4. [todo] Update tests so backend stream coverage exercises normalized
    events; OpenAI chunk shape only appears in shared rendering tests.
 

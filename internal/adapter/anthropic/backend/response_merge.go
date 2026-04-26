@@ -8,7 +8,6 @@ import (
 	"time"
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
-	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
 // JSONCoercion captures the optional JSON-coercion contract a caller
@@ -42,7 +41,7 @@ type JSONCoercion struct {
 // set; otherwise the merger leaves assistant text untouched.
 func MergeStreamChunks(
 	reqID, modelAlias, systemFingerprint string,
-	chunks []tooltrans.OpenAIStreamChunk,
+	chunks []adapteropenai.StreamChunk,
 	usage adapteropenai.Usage,
 	finishReason string,
 	json JSONCoercion,

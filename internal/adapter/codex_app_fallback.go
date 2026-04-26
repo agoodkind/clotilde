@@ -4,14 +4,14 @@ import (
 	"context"
 
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
-	"goodkind.io/clyde/internal/adapter/tooltrans"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
 func (s *Server) runCodexAppFallback(
 	ctx context.Context,
 	req ChatRequest,
 	reqID string,
-	emit func(tooltrans.OpenAIStreamChunk) error,
+	emit func(adapteropenai.StreamChunk) error,
 ) (codexRunResult, error) {
 	cctx, cancel := context.WithTimeout(ctx, s.codexAppFallbackTimeout())
 	defer cancel()

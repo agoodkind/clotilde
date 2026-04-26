@@ -234,7 +234,7 @@ func stripNotice(text string, msgIdx, partIdx int) string {
 	if stripped == text {
 		return text
 	}
-	slog.Info("tooltrans.notice.stripped",
+	slog.Info("adapter.sentinel.notice.stripped",
 		"subcomponent", "tooltrans",
 		"msg_idx", msgIdx,
 		"part_idx", partIdx,

@@ -6,7 +6,7 @@ import (
 
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
-	"goodkind.io/clyde/internal/adapter/tooltrans"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
 type codexManagedPromptPlan = adaptercodex.ManagedPromptPlan
@@ -38,7 +38,7 @@ func (s *Server) runCodexManaged(
 	model ResolvedModel,
 	effort string,
 	reqID string,
-	emit func(tooltrans.OpenAIStreamChunk) error,
+	emit func(adapteropenai.StreamChunk) error,
 ) (codexRunResult, string, bool, error) {
 	out, err := adaptercodex.RunManagedSession(
 		s.log,

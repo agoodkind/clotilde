@@ -12,7 +12,6 @@ import (
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
-	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
 type TrackedUsage struct {
@@ -37,7 +36,7 @@ type ResponseDispatcher interface {
 	NewAnthropicSSEWriter(http.ResponseWriter) (ResponseSSEWriter, error)
 	AnthropicStreamClient() StreamClient
 	SystemFingerprint() string
-	StreamChunkFromTooltrans(tooltrans.OpenAIStreamChunk) adapteropenai.StreamChunk
+	StreamChunkFromTooltrans(adapteropenai.StreamChunk) adapteropenai.StreamChunk
 	StreamChunkHasVisibleContent(adapteropenai.StreamChunk) bool
 	TrackAnthropicContextUsage(string, adapteropenai.Usage) TrackedUsage
 	JSONCoercion(any) JSONCoercion
@@ -71,8 +70,8 @@ func CollectResponse(
 		}
 		notice = adapterruntime.EvaluateNoticeFromHeaders(h, d.NoticesEnabled(), d.ClaimNotice)
 	}
-	var buf []tooltrans.OpenAIStreamChunk
-	emit := func(ch tooltrans.OpenAIStreamChunk) error {
+	var buf []adapteropenai.StreamChunk
+	emit := func(ch adapteropenai.StreamChunk) error {
 		buf = append(buf, ch)
 		return nil
 	}
@@ -243,7 +242,7 @@ func StreamResponse(
 			model.Alias,
 			h,
 			d.NoticesEnabled(),
-			func(chunk tooltrans.OpenAIStreamChunk) error {
+			func(chunk adapteropenai.StreamChunk) error {
 				return emit(d.StreamChunkFromTooltrans(chunk))
 			},
 			d.ClaimNotice,
@@ -258,7 +257,7 @@ func StreamResponse(
 			)
 		}
 	}
-	anthUsage, _, finishReason, err := RunTranslatorStream(d.AnthropicStreamClient(), r.Context(), req, model, reqID, func(ch tooltrans.OpenAIStreamChunk) error {
+	anthUsage, _, finishReason, err := RunTranslatorStream(d.AnthropicStreamClient(), r.Context(), req, model, reqID, func(ch adapteropenai.StreamChunk) error {
 		return emit(d.StreamChunkFromTooltrans(ch))
 	})
 	if err != nil {

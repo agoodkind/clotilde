@@ -9,7 +9,6 @@ import (
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
-	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
 // Dispatcher is the narrow Codex backend surface the root adapter facade
@@ -17,14 +16,14 @@ import (
 // transport behavior remains behind the implementation callbacks.
 type Dispatcher interface {
 	AppFallbackEnabled() bool
-	RunCodexDirect(context.Context, adapteropenai.ChatRequest, adaptermodel.ResolvedModel, string, string, func(tooltrans.OpenAIStreamChunk) error) (any, error)
-	RunCodexManaged(context.Context, adapteropenai.ChatRequest, adaptermodel.ResolvedModel, string, string, func(tooltrans.OpenAIStreamChunk) error) (any, string, bool, error)
-	RunCodexAppFallback(context.Context, adapteropenai.ChatRequest, string, func(tooltrans.OpenAIStreamChunk) error) (any, error)
+	RunCodexDirect(context.Context, adapteropenai.ChatRequest, adaptermodel.ResolvedModel, string, string, func(adapteropenai.StreamChunk) error) (any, error)
+	RunCodexManaged(context.Context, adapteropenai.ChatRequest, adaptermodel.ResolvedModel, string, string, func(adapteropenai.StreamChunk) error) (any, string, bool, error)
+	RunCodexAppFallback(context.Context, adapteropenai.ChatRequest, string, func(adapteropenai.StreamChunk) error) (any, error)
 	EmitRequestStarted(context.Context, adaptermodel.ResolvedModel, string, string, string, bool)
 	EmitRequestStreamOpened(context.Context, adaptermodel.ResolvedModel, string, string, string, bool)
 	NewSSEWriter(http.ResponseWriter) (SSEWriter, error)
-	StreamChunkFromTooltrans(tooltrans.OpenAIStreamChunk) adapteropenai.StreamChunk
-	MergeChunks(string, string, []tooltrans.OpenAIStreamChunk, any) any
+	StreamChunkFromTooltrans(adapteropenai.StreamChunk) adapteropenai.StreamChunk
+	MergeChunks(string, string, []adapteropenai.StreamChunk, any) any
 	WriteJSON(http.ResponseWriter, int, any)
 	LogTerminal(context.Context, adapterruntime.RequestEvent)
 	Log() *slog.Logger
@@ -50,10 +49,10 @@ func Dispatch(d Dispatcher, w http.ResponseWriter, r *http.Request, req adaptero
 }
 
 func Collect(d Dispatcher, w http.ResponseWriter, r *http.Request, req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort, reqID string, started time.Time) error {
-	var chunks []tooltrans.OpenAIStreamChunk
+	var chunks []adapteropenai.StreamChunk
 	path := "direct"
 	d.EmitRequestStarted(r.Context(), model, path, reqID, model.Alias, false)
-	emit := func(ch tooltrans.OpenAIStreamChunk) error {
+	emit := func(ch adapteropenai.StreamChunk) error {
 		chunks = append(chunks, ch)
 		return nil
 	}
@@ -90,7 +89,7 @@ func Stream(d Dispatcher, w http.ResponseWriter, r *http.Request, req adapterope
 	sw.WriteSSEHeaders()
 	d.EmitRequestStreamOpened(r.Context(), model, path, reqID, model.Alias, true)
 	created := time.Now().Unix()
-	var directChunks []tooltrans.OpenAIStreamChunk
+	var directChunks []adapteropenai.StreamChunk
 	d.Log().LogAttrs(r.Context(), slog.LevelInfo, "adapter.codex.stream.mode",
 		slog.String("request_id", reqID),
 		slog.String("backend", "codex"),
@@ -99,7 +98,7 @@ func Stream(d Dispatcher, w http.ResponseWriter, r *http.Request, req adapterope
 		slog.Bool("app_fallback", d.AppFallbackEnabled()),
 		slog.Bool("direct_emit_live", !d.AppFallbackEnabled()),
 	)
-	directEmit := func(ch tooltrans.OpenAIStreamChunk) error {
+	directEmit := func(ch adapteropenai.StreamChunk) error {
 		directChunks = append(directChunks, ch)
 		if !d.AppFallbackEnabled() {
 			return sw.EmitStreamChunk(d.SystemFingerprint(), d.StreamChunkFromTooltrans(ch))
@@ -112,7 +111,7 @@ func Stream(d Dispatcher, w http.ResponseWriter, r *http.Request, req adapterope
 		d.EmitRequestStarted(r.Context(), model, "app", reqID, model.Alias, true)
 		d.EmitRequestStreamOpened(r.Context(), model, "app", reqID, model.Alias, true)
 		var assistantText string
-		emit := func(ch tooltrans.OpenAIStreamChunk) error {
+		emit := func(ch adapteropenai.StreamChunk) error {
 			return sw.EmitStreamChunk(d.SystemFingerprint(), d.StreamChunkFromTooltrans(ch))
 		}
 		assistantRes, assistantText, managedRun, runErr := d.RunCodexManaged(r.Context(), req, model, effort, reqID, emit)

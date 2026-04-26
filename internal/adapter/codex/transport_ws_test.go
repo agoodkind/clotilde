@@ -12,7 +12,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"goodkind.io/clyde/internal/adapter/tooltrans"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
 func TestResponseCreateRequestFromHTTPUsesResponseCreateShape(t *testing.T) {
@@ -140,7 +140,7 @@ func TestRunWebsocketTransportReturnsFallbackOnUpgradeRequired(t *testing.T) {
 		Token:     "test-token",
 		RequestID: "req-1",
 		Alias:     "gpt-5.4",
-	}, ResponseCreateWsRequest{Type: "response.create"}, func(tooltrans.OpenAIStreamChunk) error {
+	}, ResponseCreateWsRequest{Type: "response.create"}, func(adapteropenai.StreamChunk) error {
 		return nil
 	})
 	if !errors.Is(err, ErrWebsocketFallbackToHTTP) {
@@ -205,7 +205,7 @@ func TestRunWebsocketTransportParsesTextAndCompletion(t *testing.T) {
 	defer server.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	var chunks []tooltrans.OpenAIStreamChunk
+	var chunks []adapteropenai.StreamChunk
 	result, err := RunWebsocketTransport(context.Background(), WebsocketTransportConfig{
 		URL:            wsURL,
 		Token:          "test-token",
@@ -214,7 +214,7 @@ func TestRunWebsocketTransportParsesTextAndCompletion(t *testing.T) {
 		Alias:          "gpt-5.4",
 		ConversationID: "cursor:conv-123",
 		TurnState:      turnState,
-	}, ResponseCreateWsRequest{Type: "response.create"}, func(ch tooltrans.OpenAIStreamChunk) error {
+	}, ResponseCreateWsRequest{Type: "response.create"}, func(ch adapteropenai.StreamChunk) error {
 		chunks = append(chunks, ch)
 		return nil
 	})
@@ -295,7 +295,7 @@ func TestRunWebsocketTransportPrewarmsAndReusesConnection(t *testing.T) {
 	defer server.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	var chunks []tooltrans.OpenAIStreamChunk
+	var chunks []adapteropenai.StreamChunk
 	result, err := RunWebsocketTransport(context.Background(), WebsocketTransportConfig{
 		URL:            wsURL,
 		Token:          "test-token",
@@ -309,7 +309,7 @@ func TestRunWebsocketTransportPrewarmsAndReusesConnection(t *testing.T) {
 		Model: "gpt-5.4",
 		Input: []map[string]any{{"type": "message", "role": "user", "content": "hello"}},
 		Tools: []any{map[string]any{"type": "function", "name": "read_file"}},
-	}, func(ch tooltrans.OpenAIStreamChunk) error {
+	}, func(ch adapteropenai.StreamChunk) error {
 		chunks = append(chunks, ch)
 		return nil
 	})
@@ -402,7 +402,7 @@ func TestRunWebsocketTransportReconnectsAfterPrewarmFailure(t *testing.T) {
 	defer server.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	var chunks []tooltrans.OpenAIStreamChunk
+	var chunks []adapteropenai.StreamChunk
 	result, err := RunWebsocketTransport(context.Background(), WebsocketTransportConfig{
 		URL:            wsURL,
 		Token:          "test-token",
@@ -415,7 +415,7 @@ func TestRunWebsocketTransportReconnectsAfterPrewarmFailure(t *testing.T) {
 		Type:  "response.create",
 		Model: "gpt-5.4",
 		Input: []map[string]any{{"type": "message", "role": "user", "content": "hello"}},
-	}, func(ch tooltrans.OpenAIStreamChunk) error {
+	}, func(ch adapteropenai.StreamChunk) error {
 		chunks = append(chunks, ch)
 		return nil
 	})

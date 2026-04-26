@@ -15,7 +15,6 @@ import (
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
-	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
 // TestBuildErrorBodyForUpstreamMapsClassToType locks in the mapping
@@ -165,7 +164,7 @@ func (d *fakeResponseDispatcher) SystemFingerprint() string {
 	return "fp-test"
 }
 
-func (d *fakeResponseDispatcher) StreamChunkFromTooltrans(chunk tooltrans.OpenAIStreamChunk) adapteropenai.StreamChunk {
+func (d *fakeResponseDispatcher) StreamChunkFromTooltrans(chunk adapteropenai.StreamChunk) adapteropenai.StreamChunk {
 	out := adapteropenai.StreamChunk{
 		ID:      chunk.ID,
 		Object:  chunk.Object,

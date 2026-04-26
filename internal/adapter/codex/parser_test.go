@@ -5,7 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"goodkind.io/clyde/internal/adapter/tooltrans"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
 
 // Phase 10 relocation: these tests live next to the parser implementation
@@ -110,9 +111,9 @@ func TestParseSSEEmitsToolCallDeltas(t *testing.T) {
 		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}},"sequence_number":10}`,
 		"",
 	}, "\n") + "\n")
-	r := tooltrans.NewEventRenderer("req", "alias", "codex", nil)
-	var got []tooltrans.OpenAIStreamChunk
-	res, err := ParseSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
+	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
+	var got []adapteropenai.StreamChunk
+	res, err := ParseSSE(stream, r, func(ch adapteropenai.StreamChunk) error {
 		got = append(got, ch)
 		return nil
 	})
@@ -122,7 +123,7 @@ func TestParseSSEEmitsToolCallDeltas(t *testing.T) {
 	if res.FinishReason != "tool_calls" {
 		t.Fatalf("finish_reason=%q want tool_calls", res.FinishReason)
 	}
-	var deltas []tooltrans.OpenAIToolCall
+	var deltas []adapteropenai.ToolCall
 	for _, ch := range got {
 		if len(ch.Choices) == 0 {
 			continue
@@ -149,9 +150,9 @@ func TestParseSSEMapsNativeLocalShellToCursorShell(t *testing.T) {
 		`data: {"response":{"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`,
 		"",
 	}, "\n") + "\n")
-	r := tooltrans.NewEventRenderer("req", "alias", "codex", nil)
-	var got []tooltrans.OpenAIStreamChunk
-	res, err := ParseSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
+	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
+	var got []adapteropenai.StreamChunk
+	res, err := ParseSSE(stream, r, func(ch adapteropenai.StreamChunk) error {
 		got = append(got, ch)
 		return nil
 	})
@@ -196,9 +197,9 @@ func TestParseSSEMapsNativeApplyPatchToCursorApplyPatch(t *testing.T) {
 		`data: {"response":{"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`,
 		"",
 	}, "\n") + "\n")
-	r := tooltrans.NewEventRenderer("req", "alias", "codex", nil)
-	var got []tooltrans.OpenAIStreamChunk
-	res, err := ParseSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
+	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
+	var got []adapteropenai.StreamChunk
+	res, err := ParseSSE(stream, r, func(ch adapteropenai.StreamChunk) error {
 		got = append(got, ch)
 		return nil
 	})
@@ -248,9 +249,9 @@ func TestParseSSESeparatesSummaryFromReasoningBody(t *testing.T) {
 }
 
 func collectSSE(stream *strings.Reader) (string, RunResult, error) {
-	r := tooltrans.NewEventRenderer("req", "alias", "codex", nil)
+	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
 	var got strings.Builder
-	res, err := ParseSSE(stream, r, func(ch tooltrans.OpenAIStreamChunk) error {
+	res, err := ParseSSE(stream, r, func(ch adapteropenai.StreamChunk) error {
 		if len(ch.Choices) > 0 {
 			got.WriteString(ch.Choices[0].Delta.Content)
 		}
@@ -259,8 +260,8 @@ func collectSSE(stream *strings.Reader) (string, RunResult, error) {
 	return got.String(), res, err
 }
 
-func collectToolCallsLocal(chunks []tooltrans.OpenAIStreamChunk) []tooltrans.OpenAIToolCall {
-	var out []tooltrans.OpenAIToolCall
+func collectToolCallsLocal(chunks []adapteropenai.StreamChunk) []adapteropenai.ToolCall {
+	var out []adapteropenai.ToolCall
 	for _, ch := range chunks {
 		if len(ch.Choices) == 0 {
 			continue
