@@ -27,6 +27,7 @@ type RunResult struct {
 	ReasoningVisible           bool
 	DerivedCacheCreationTokens int
 	ResponseID                 string
+	OutputItems                []map[string]any
 }
 
 func NewRunResult(finishReason string) RunResult {
@@ -268,6 +269,9 @@ func ParseSSE(body io.Reader, renderer *tooltrans.EventRenderer, emit func(toolt
 			if eventNameLocal == "response.output_item.added" || eventNameLocal == "response.output_item.done" {
 				item, _ := raw["item"].(map[string]any)
 				itemType, _ := item["type"].(string)
+				if eventNameLocal == "response.output_item.done" && item != nil {
+					out.OutputItems = append(out.OutputItems, cloneMap(item))
+				}
 				if itemType == "function_call" {
 					itemID := strings.TrimSpace(mapString(item, "id"))
 					callID := strings.TrimSpace(mapString(item, "call_id"))

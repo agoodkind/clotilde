@@ -46,6 +46,81 @@ func TestContinuationStoreReusesPreviousResponseWithPrefixDelta(t *testing.T) {
 	}
 }
 
+func TestContinuationStoreReusesPreviousResponseWithOutputItemBaseline(t *testing.T) {
+	store := NewContinuationStore()
+	first := ResponseCreateWsRequest{
+		Type:           "response.create",
+		Model:          "gpt-5.4",
+		Instructions:   "base",
+		PromptCacheKey: "cursor:conv-123",
+		Input: []map[string]any{
+			{"type": "message", "role": "user", "content": "hello"},
+		},
+	}
+	outputItem := map[string]any{
+		"id":      "msg-1",
+		"type":    "message",
+		"role":    "assistant",
+		"content": []map[string]any{{"type": "output_text", "text": "assistant output"}},
+	}
+	store.Complete(ContinuationDecision{}, first, RunResult{
+		ResponseID:  "resp-1",
+		OutputItems: []map[string]any{outputItem},
+	})
+
+	second := first
+	second.Input = append(cloneInput(first.Input), cloneMap(outputItem), map[string]any{
+		"type":    "message",
+		"role":    "user",
+		"content": "follow up",
+	})
+	decision := store.Prepare(second)
+	if !decision.Hit {
+		t.Fatalf("expected continuation hit, miss_reason=%q", decision.MissReason)
+	}
+	if decision.PreviousResponseID != "resp-1" {
+		t.Fatalf("previous_response_id=%q want resp-1", decision.PreviousResponseID)
+	}
+	if len(decision.IncrementalInput) != 1 || itemRole(decision.IncrementalInput[0]) != "user" {
+		t.Fatalf("incremental_input=%v", decision.IncrementalInput)
+	}
+}
+
+func TestContinuationStoreMissesWhenOutputItemBaselineMissing(t *testing.T) {
+	store := NewContinuationStore()
+	first := ResponseCreateWsRequest{
+		Type:           "response.create",
+		Model:          "gpt-5.4",
+		Instructions:   "base",
+		PromptCacheKey: "cursor:conv-123",
+		Input: []map[string]any{
+			{"type": "message", "role": "user", "content": "hello"},
+		},
+	}
+	store.Complete(ContinuationDecision{}, first, RunResult{
+		ResponseID: "resp-1",
+		OutputItems: []map[string]any{{
+			"id":      "msg-1",
+			"type":    "message",
+			"role":    "assistant",
+			"content": []map[string]any{{"type": "output_text", "text": "assistant output"}},
+		}},
+	})
+
+	second := first
+	second.Input = append(cloneInput(first.Input),
+		map[string]any{"type": "message", "role": "assistant", "content": "assistant output"},
+		map[string]any{"type": "message", "role": "user", "content": "follow up"},
+	)
+	decision := store.Prepare(second)
+	if decision.Hit {
+		t.Fatalf("unexpected continuation hit")
+	}
+	if decision.MissReason != "output_item_baseline_mismatch" {
+		t.Fatalf("miss_reason=%q want output_item_baseline_mismatch", decision.MissReason)
+	}
+}
+
 func TestContinuationStoreUsesTailAfterAssistantForCursorReplay(t *testing.T) {
 	store := NewContinuationStore()
 	first := ResponseCreateWsRequest{

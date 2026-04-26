@@ -53,6 +53,33 @@ func TestParseSSEMapsIncompleteResponseToLengthFinishReason(t *testing.T) {
 	}
 }
 
+func TestParseSSECapturesCompletedOutputItems(t *testing.T) {
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.output_item.done",
+		`data: {"item":{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"Assistant output."}]}}`,
+		"",
+		"event: response.output_item.done",
+		`data: {"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"read_file","arguments":"{\"path\":\"README.md\"}"}}`,
+		"",
+		"event: response.completed",
+		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}},"sequence_number":10}`,
+		"",
+	}, "\n") + "\n")
+	_, res, err := collectSSE(stream)
+	if err != nil {
+		t.Fatalf("ParseSSE: %v", err)
+	}
+	if len(res.OutputItems) != 2 {
+		t.Fatalf("output_items len=%d want 2: %#v", len(res.OutputItems), res.OutputItems)
+	}
+	if got, _ := res.OutputItems[0]["id"].(string); got != "msg_1" {
+		t.Fatalf("first output item id=%q want msg_1", got)
+	}
+	if got, _ := res.OutputItems[1]["type"].(string); got != "function_call" {
+		t.Fatalf("second output item type=%q want function_call", got)
+	}
+}
+
 func TestParseSSERetainsResponseIDFromCreatedEvent(t *testing.T) {
 	stream := strings.NewReader(strings.Join([]string{
 		"event: response.created",

@@ -19,6 +19,7 @@ type ContinuationEntry struct {
 	ConfigFingerprint  string
 	PreviousResponseID string
 	Input              []map[string]any
+	OutputItems        []map[string]any
 }
 
 type ContinuationDecision struct {
@@ -59,7 +60,7 @@ func (s *ContinuationStore) Prepare(req ResponseCreateWsRequest) ContinuationDec
 		out.MissReason = "fingerprint_mismatch"
 		return out
 	}
-	incremental, reason := incrementalContinuationInput(entry.Input, req.Input)
+	incremental, reason := incrementalContinuationInput(entry.Input, entry.OutputItems, req.Input)
 	if len(incremental) == 0 {
 		out.MissReason = reason
 		return out
@@ -90,6 +91,7 @@ func (s *ContinuationStore) Complete(decision ContinuationDecision, fullReq Resp
 		ConfigFingerprint:  continuationConfigFingerprint(fullReq),
 		PreviousResponseID: responseID,
 		Input:              cloneInput(fullReq.Input),
+		OutputItems:        cloneInput(result.OutputItems),
 	}
 }
 
@@ -103,9 +105,18 @@ func (s *ContinuationStore) Forget(key string) {
 	delete(s.entries, key)
 }
 
-func incrementalContinuationInput(previous, current []map[string]any) ([]map[string]any, string) {
+func incrementalContinuationInput(previous, outputItems, current []map[string]any) ([]map[string]any, string) {
 	if len(current) == 0 {
 		return nil, "empty_input"
+	}
+	if len(outputItems) > 0 {
+		baseline := make([]map[string]any, 0, len(previous)+len(outputItems))
+		baseline = append(baseline, previous...)
+		baseline = append(baseline, outputItems...)
+		if len(current) > len(baseline) && inputPrefixEqual(baseline, current) {
+			return cloneInput(current[len(baseline):]), ""
+		}
+		return nil, "output_item_baseline_mismatch"
 	}
 	if len(previous) > 0 && len(current) > len(previous) && inputPrefixEqual(previous, current) {
 		return cloneInput(current[len(previous):]), ""
@@ -181,6 +192,16 @@ func cloneInput(in []map[string]any) []map[string]any {
 		out[i] = cloned
 	}
 	return out
+}
+
+func cloneMap(item map[string]any) map[string]any {
+	if item == nil {
+		return nil
+	}
+	raw, _ := json.Marshal(item)
+	var cloned map[string]any
+	_ = json.Unmarshal(raw, &cloned)
+	return cloned
 }
 
 func jsonEqual(a, b any) bool {
