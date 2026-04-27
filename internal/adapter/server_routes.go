@@ -13,17 +13,24 @@ import (
 // Start binds the TCP listener and serves until ctx is done.
 func (s *Server) Start(ctx context.Context) error {
 	addr := s.Addr()
-	s.httpSrv = &http.Server{
-		Addr:              addr,
-		Handler:           s.mux,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("adapter listen %s: %w", addr, err)
 	}
+	return s.StartOnListener(ctx, lis)
+}
+
+// StartOnListener serves the adapter on an already-bound listener.
+// Daemon reload uses this to inherit the existing adapter socket
+// without creating a bind gap.
+func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
+	s.httpSrv = &http.Server{
+		Addr:              lis.Addr().String(),
+		Handler:           s.mux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
 	s.log.LogAttrs(context.Background(), slog.LevelInfo, "adapter listening",
-		slog.String("addr", addr),
+		slog.String("addr", lis.Addr().String()),
 		slog.Int("models", len(s.registry.List())),
 	)
 	errCh := make(chan error, 1)

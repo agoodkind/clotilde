@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -78,6 +79,11 @@ type Server struct {
 	contextMu         sync.Mutex
 	contextStates     map[string]sessionContextState
 	contextRefreshSem chan struct{}
+
+	reloadMu sync.Mutex
+	reloadFn func(context.Context) (reloadReport, error)
+
+	skipRuntimeCleanup atomic.Bool
 }
 
 // wrapperSession holds runtime state for one active claude wrapper process.
@@ -97,12 +103,27 @@ type remoteWorker struct {
 
 var remoteWorkerExecutable = os.Executable
 
+type reloadReport struct {
+	BinaryReloaded bool
+	NewPID         int
+}
+
 type sessionContextState struct {
 	Usage      sessionctx.Usage
 	Loaded     bool
 	Status     string
 	Refreshing bool
 	RetryAfter time.Time
+}
+
+func (s *Server) SetReloadFunc(fn func(context.Context) (reloadReport, error)) {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	s.reloadFn = fn
+}
+
+func (s *Server) preserveRuntimeDirsOnClose() {
+	s.skipRuntimeCleanup.Store(true)
 }
 
 // New creates a new daemon Server and starts watching the global settings file.
@@ -516,10 +537,13 @@ func (s *Server) Close() {
 	defer s.mu.Unlock()
 
 	for _, sess := range s.sessions {
-		_ = os.RemoveAll(config.SessionRuntimeDir(sess.wrapperID))
+		if !s.skipRuntimeCleanup.Load() {
+			_ = os.RemoveAll(config.SessionRuntimeDir(sess.wrapperID))
+		}
 	}
 	s.log.LogAttrs(context.Background(), slog.LevelInfo, "daemon closed",
 		slog.Int("cleaned_sessions", len(s.sessions)),
+		slog.Bool("preserved_runtime_dirs", s.skipRuntimeCleanup.Load()),
 	)
 }
 
@@ -787,13 +811,12 @@ func (s *Server) watchGlobalSettings() {
 				s.log.LogAttrs(context.Background(), slog.LevelDebug, "global settings file changed",
 					slog.String("event", event.Op.String()),
 				)
-				if err := s.loadGlobalSettings(); err != nil {
+				if err := s.reloadGlobalSettings(context.Background()); err != nil {
 					s.log.LogAttrs(context.Background(), slog.LevelWarn, "failed to reload global settings",
 						slog.Any("err", err),
 					)
 					continue
 				}
-				s.syncAllSessions()
 			}
 
 		case err, ok := <-s.watcher.Errors:
@@ -805,6 +828,54 @@ func (s *Server) watchGlobalSettings() {
 			)
 		}
 	}
+}
+
+func (s *Server) reloadGlobalSettings(ctx context.Context) error {
+	if err := s.loadGlobalSettings(); err != nil {
+		return err
+	}
+	s.syncAllSessions()
+	s.log.LogAttrs(ctx, slog.LevelInfo, "daemon global settings reloaded",
+		slog.Int("active_sessions", s.activeSessionCount()),
+	)
+	return nil
+}
+
+func (s *Server) activeSessionCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.sessions)
+}
+
+// ReloadDaemon starts a replacement daemon binary and then lets the
+// current process drain. Existing accepted gRPC streams stay attached
+// to this process until they finish; new clients connect to the
+// replacement once it has rebound the runtime socket.
+func (s *Server) ReloadDaemon(ctx context.Context, req *clydev1.ReloadDaemonRequest) (*clydev1.ReloadDaemonResponse, error) {
+	start := time.Now()
+	s.reloadMu.Lock()
+	fn := s.reloadFn
+	s.reloadMu.Unlock()
+
+	if fn == nil {
+		return nil, status.Error(codes.FailedPrecondition, "daemon reload is not available")
+	}
+	report, err := fn(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "reload binary: %v", err)
+	}
+	active := s.activeSessionCount()
+	s.log.LogAttrs(ctx, slog.LevelInfo, "daemon reload completed",
+		slog.Int("active_sessions", active),
+		slog.Bool("binary_reloaded", report.BinaryReloaded),
+		slog.Int("new_pid", report.NewPID),
+		slog.Int64("duration_ms", time.Since(start).Milliseconds()),
+	)
+	return &clydev1.ReloadDaemonResponse{
+		ActiveSessions: int32(active),
+		BinaryReloaded: report.BinaryReloaded,
+		NewPid:         int64(report.NewPID),
+	}, nil
 }
 
 // loadGlobalSettings reads ~/.claude/settings.json into memory.
@@ -1356,6 +1427,94 @@ func (s *Server) UpdateGlobalSettings(ctx context.Context, req *clydev1.UpdateGl
 		slog.Bool("remote_control", cfg.Defaults.RemoteControl),
 	)
 	return &clydev1.UpdateGlobalSettingsResponse{}, nil
+}
+
+func (s *Server) ListConfigControls(ctx context.Context, _ *clydev1.ListConfigControlsRequest) (*clydev1.ListConfigControlsResponse, error) {
+	cfg, err := config.LoadGlobalOrDefault()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "load global: %v", err)
+	}
+	descs := config.ListControlDescriptors(cfg)
+	out := make([]*clydev1.ConfigControl, 0, len(descs))
+	for _, desc := range descs {
+		out = append(out, protoConfigControl(desc))
+	}
+	s.log.LogAttrs(ctx, slog.LevelDebug, "daemon.config_controls.list",
+		slog.String("component", "daemon"),
+		slog.Int("count", len(out)),
+	)
+	return &clydev1.ListConfigControlsResponse{Controls: out}, nil
+}
+
+func (s *Server) UpdateConfigControl(ctx context.Context, req *clydev1.UpdateConfigControlRequest) (*clydev1.UpdateConfigControlResponse, error) {
+	key := strings.TrimSpace(req.GetKey())
+	if key == "" {
+		return nil, status.Error(codes.InvalidArgument, "key is required")
+	}
+	cfg, err := config.LoadGlobalOrDefault()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "load global: %v", err)
+	}
+	if err := config.UpdateControlValue(cfg, key, req.GetValue()); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "update control: %v", err)
+	}
+	if err := config.SaveGlobal(cfg); err != nil {
+		return nil, status.Errorf(codes.Internal, "save global: %v", err)
+	}
+	if key == "defaults.remote_control" {
+		s.publishGlobalSettingsEvent(cfg.Defaults.RemoteControl)
+	}
+	var updated *clydev1.ConfigControl
+	for _, desc := range config.ListControlDescriptors(cfg) {
+		if desc.Key == key {
+			updated = protoConfigControl(desc)
+			break
+		}
+	}
+	s.log.LogAttrs(ctx, slog.LevelInfo, "daemon.config_controls.updated",
+		slog.String("component", "daemon"),
+		slog.String("key", key),
+		slog.String("value", strings.TrimSpace(req.GetValue())),
+	)
+	return &clydev1.UpdateConfigControlResponse{Control: updated}, nil
+}
+
+func protoConfigControl(desc config.ControlDescriptor) *clydev1.ConfigControl {
+	options := make([]*clydev1.ConfigControlOption, 0, len(desc.Options))
+	for _, opt := range desc.Options {
+		options = append(options, &clydev1.ConfigControlOption{
+			Value:       opt.Value,
+			Label:       opt.Label,
+			Description: opt.Description,
+		})
+	}
+	return &clydev1.ConfigControl{
+		Key:          desc.Key,
+		Section:      desc.Section,
+		Label:        desc.Label,
+		Description:  desc.Description,
+		Type:         protoConfigControlType(desc.Type),
+		Value:        desc.Value,
+		DefaultValue: desc.DefaultValue,
+		Options:      options,
+		Sensitive:    desc.Sensitive,
+		ReadOnly:     desc.ReadOnly,
+	}
+}
+
+func protoConfigControlType(kind config.ControlType) clydev1.ConfigControlType {
+	switch kind {
+	case config.ControlTypeBool:
+		return clydev1.ConfigControlType_CONFIG_CONTROL_TYPE_BOOL
+	case config.ControlTypeEnum:
+		return clydev1.ConfigControlType_CONFIG_CONTROL_TYPE_ENUM
+	case config.ControlTypeString:
+		return clydev1.ConfigControlType_CONFIG_CONTROL_TYPE_STRING
+	case config.ControlTypePath:
+		return clydev1.ConfigControlType_CONFIG_CONTROL_TYPE_PATH
+	default:
+		return clydev1.ConfigControlType_CONFIG_CONTROL_TYPE_UNSPECIFIED
+	}
 }
 
 // StartRemoteSession creates a canonical clyde session row, persists remote

@@ -50,10 +50,11 @@ const (
 // rotating file handles flush. closer.Close() is safe to call once.
 func Setup(cfg config.LoggingConfig, role ProcessRole) (io.Closer, error) {
 	level := strings.ToLower(strings.TrimSpace(cfg.Level))
+	if level == "" {
+		level = "info"
+	}
 	switch level {
 	case "debug", "info", "warn", "error":
-	case "":
-		return nopCloser{}, fmt.Errorf("slogger: logging.level required, must be one of debug|info|warn|error, got %q", level)
 	default:
 		return nopCloser{}, fmt.Errorf("slogger: logging.level required, must be one of debug|info|warn|error, got %q", level)
 	}

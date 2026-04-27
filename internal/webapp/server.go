@@ -29,7 +29,7 @@ const DefaultPort = 11435
 
 // DefaultHost is the loopback bind. The dashboard never binds a
 // public interface unless the user explicitly sets WebAppConfig.Host.
-const DefaultHost = "127.0.0.1"
+const DefaultHost = "[::1]"
 
 // Bridge is the daemon side view of one active remote control
 // session. The webapp does not import the daemon protobuf, so the
@@ -103,12 +103,19 @@ func (s *Server) Addr() string {
 // Start binds the listener and serves until ctx is done.
 func (s *Server) Start(ctx context.Context) error {
 	addr := s.Addr()
-	srv := &http.Server{Addr: addr, Handler: s.mux, ReadHeaderTimeout: 5 * time.Second}
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("webapp listen %s: %w", addr, err)
 	}
-	s.log.Info("webapp listening", "addr", addr)
+	return s.StartOnListener(ctx, lis)
+}
+
+// StartOnListener serves the dashboard on an already-bound listener.
+// Daemon reload uses this to inherit the existing dashboard socket
+// without creating a bind gap.
+func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
+	srv := &http.Server{Addr: lis.Addr().String(), Handler: s.mux, ReadHeaderTimeout: 5 * time.Second}
+	s.log.Info("webapp listening", "addr", lis.Addr().String())
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve(lis) }()
 	select {

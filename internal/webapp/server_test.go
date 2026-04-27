@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"goodkind.io/clyde/internal/config"
 )
@@ -30,6 +32,37 @@ func TestHealthOK(t *testing.T) {
 	}
 	if resp.StatusCode != 200 {
 		t.Fatalf("got %d", resp.StatusCode)
+	}
+}
+
+func TestStartOnListenerServesHealth(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	s := New(config.WebAppConfig{}, Deps{}, log)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- s.StartOnListener(ctx, lis) }()
+
+	resp, err := http.Get("http://" + lis.Addr().String() + "/healthz")
+	if err != nil {
+		t.Fatalf("get health: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("server exit: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("server did not stop")
 	}
 }
 

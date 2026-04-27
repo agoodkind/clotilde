@@ -42,7 +42,7 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(cfg).NotTo(BeNil())
 		Expect(cfg.Profiles).To(BeEmpty())
-		Expect(cfg.Logging.Level).To(BeEmpty())
+		Expect(cfg.Logging.Level).To(Equal("info"))
 		Expect(cfg.Logging.Rotation.Enabled).NotTo(BeNil())
 		Expect(*cfg.Logging.Rotation.Enabled).To(BeTrue())
 		Expect(cfg.Logging.Rotation.MaxSizeMB).To(Equal(5))

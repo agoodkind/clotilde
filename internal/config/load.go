@@ -117,6 +117,9 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 		return nil
 	}
 	logLevel := strings.ToLower(strings.TrimSpace(cfg.Logging.Level))
+	if logLevel == "" {
+		logLevel = "info"
+	}
 	cfg.Logging.Level = logLevel
 	cfg.Logging.Paths.TUI = strings.TrimSpace(cfg.Logging.Paths.TUI)
 	cfg.Logging.Paths.Daemon = strings.TrimSpace(cfg.Logging.Paths.Daemon)
@@ -165,7 +168,52 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 	if cfg.Logging.Body.Mode == "" {
 		cfg.Logging.Body.Mode = "summary"
 	}
+
+	cfg.MITM.Providers = normalizeMITMProviders(cfg.MITM.Providers)
+	switch cfg.MITM.Providers {
+	case "both", "claude", "codex":
+	default:
+		return fmt.Errorf("mitm.providers must be one of both|claude|codex")
+	}
+
+	cfg.MITM.BodyMode = normalizeMITMBodyMode(cfg.MITM.BodyMode)
+	switch cfg.MITM.BodyMode {
+	case "summary", "raw", "off":
+	default:
+		return fmt.Errorf("mitm.body_mode must be one of summary|raw|off")
+	}
+
+	cfg.MITM.CaptureDir = strings.TrimSpace(cfg.MITM.CaptureDir)
+	if cfg.MITM.CaptureDir == "" {
+		cfg.MITM.CaptureDir = filepath.Join(DefaultStateDir(), "mitm")
+	}
 	return nil
+}
+
+func normalizeMITMProviders(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "both", "all":
+		return "both"
+	case "claude":
+		return "claude"
+	case "codex":
+		return "codex"
+	default:
+		return strings.ToLower(strings.TrimSpace(v))
+	}
+}
+
+func normalizeMITMBodyMode(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "summary":
+		return "summary"
+	case "raw":
+		return "raw"
+	case "off":
+		return "off"
+	default:
+		return strings.ToLower(strings.TrimSpace(v))
+	}
 }
 
 // MergedProfiles helper removed; callers now use LoadGlobalOrDefault and project

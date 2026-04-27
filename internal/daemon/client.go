@@ -253,6 +253,64 @@ func SubscribeProviderStats(parent context.Context) (<-chan *clydev1.ProviderSta
 	return out, cancel, nil
 }
 
+func ReloadDaemon(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
+	log := daemonClientLog(ctx)
+	log.DebugContext(ctx, "daemon.client.reload.begin")
+	unlock, err := lockDaemonReload(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.reload.connect_failed", "err", err)
+		return nil, err
+	}
+	defer c.conn.Close()
+	rpcCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	resp, err := c.rpc.ReloadDaemon(rpcCtx, &clydev1.ReloadDaemonRequest{})
+	if err != nil {
+		log.DebugContext(rpcCtx, "daemon.client.reload.rpc_failed", "err", err)
+		return nil, err
+	}
+	log.DebugContext(rpcCtx, "daemon.client.reload.ok",
+		"active_sessions", resp.GetActiveSessions(),
+		"binary_reloaded", resp.GetBinaryReloaded(),
+		"new_pid", resp.GetNewPid(),
+	)
+	return resp, nil
+}
+
+func lockDaemonReload(ctx context.Context) (func(), error) {
+	if err := config.EnsureRuntimeDir(); err != nil {
+		return nil, err
+	}
+	lockPath := filepath.Join(config.RuntimeDir(), "daemon.reload.lock")
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open reload lock: %w", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX)
+	}()
+	select {
+	case <-ctx.Done():
+		_ = lockFile.Close()
+		return nil, ctx.Err()
+	case err := <-done:
+		if err != nil {
+			_ = lockFile.Close()
+			return nil, fmt.Errorf("lock reload: %w", err)
+		}
+	}
+	return func() {
+		_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+		_ = lockFile.Close()
+	}, nil
+}
+
 // findDaemonPID locates the running daemon's pid via launchctl. Returns
 // 0 with no error when the daemon is not registered.
 func findDaemonPID() (int, error) {
@@ -657,6 +715,49 @@ func UpdateGlobalRemoteControlViaDaemonOutcome(ctx context.Context, enabled bool
 	}
 	log.DebugContext(rpcCtx, "daemon.client.update_global_remote_control.ok")
 	return LifecycleOutcomeReady, nil
+}
+
+func ListConfigControlsViaDaemon(ctx context.Context) ([]*clydev1.ConfigControl, error) {
+	log := daemonClientLog(ctx)
+	log.DebugContext(ctx, "daemon.client.list_config_controls.begin")
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.list_config_controls.connect_failed", "err", err)
+		return nil, err
+	}
+	defer c.conn.Close()
+	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	resp, err := c.rpc.ListConfigControls(rpcCtx, &clydev1.ListConfigControlsRequest{})
+	if err != nil {
+		log.DebugContext(rpcCtx, "daemon.client.list_config_controls.rpc_failed", "err", err)
+		return nil, err
+	}
+	log.DebugContext(rpcCtx, "daemon.client.list_config_controls.ok", "count", len(resp.GetControls()))
+	return resp.GetControls(), nil
+}
+
+func UpdateConfigControlViaDaemon(ctx context.Context, key, value string) (*clydev1.ConfigControl, error) {
+	log := daemonClientLog(ctx)
+	log.DebugContext(ctx, "daemon.client.update_config_control.begin", "key", key)
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.update_config_control.connect_failed", "err", err)
+		return nil, err
+	}
+	defer c.conn.Close()
+	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	resp, err := c.rpc.UpdateConfigControl(rpcCtx, &clydev1.UpdateConfigControlRequest{
+		Key:   key,
+		Value: value,
+	})
+	if err != nil {
+		log.DebugContext(rpcCtx, "daemon.client.update_config_control.rpc_failed", "key", key, "err", err)
+		return nil, err
+	}
+	log.DebugContext(rpcCtx, "daemon.client.update_config_control.ok", "key", key)
+	return resp.GetControl(), nil
 }
 
 func lifecycleOutcomeForError(err error) LifecycleOutcome {
