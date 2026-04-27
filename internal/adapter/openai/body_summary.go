@@ -13,19 +13,25 @@ const (
 )
 
 type BodySummary struct {
-	Model             string          `json:"model,omitempty"`
-	Stream            bool            `json:"stream"`
-	MessageCount      int             `json:"message_count"`
-	MessagesChars     int             `json:"messages_chars"`
-	Messages          []MsgSummary    `json:"messages"`
-	Tools             []ToolSummary   `json:"tools"`
-	ToolCount         int             `json:"tool_count"`
-	ToolChoice        json.RawMessage `json:"tool_choice,omitempty"`
-	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
-	Logprobs          *bool           `json:"logprobs,omitempty"`
-	Temperature       *float64        `json:"temperature,omitempty"`
-	TopP              *float64        `json:"top_p,omitempty"`
-	MaxTokens         *int            `json:"max_tokens,omitempty"`
+	Model                string          `json:"model,omitempty"`
+	Stream               bool            `json:"stream"`
+	MessageCount         int             `json:"message_count"`
+	MessagesChars        int             `json:"messages_chars"`
+	Messages             []MsgSummary    `json:"messages"`
+	Tools                []ToolSummary   `json:"tools"`
+	ToolCount            int             `json:"tool_count"`
+	ToolChoice           json.RawMessage `json:"tool_choice,omitempty"`
+	ParallelToolCalls    *bool           `json:"parallel_tool_calls,omitempty"`
+	Logprobs             *bool           `json:"logprobs,omitempty"`
+	Temperature          *float64        `json:"temperature,omitempty"`
+	TopP                 *float64        `json:"top_p,omitempty"`
+	MaxTokens            *int            `json:"max_tokens,omitempty"`
+	MaxCompletion        *int            `json:"max_completion_tokens,omitempty"`
+	MaxOutputTokens      *int            `json:"max_output_tokens,omitempty"`
+	ServiceTier          string          `json:"service_tier,omitempty"`
+	HasTextControls      bool            `json:"has_text_controls,omitempty"`
+	Truncation           string          `json:"truncation,omitempty"`
+	PromptCacheRetention string          `json:"prompt_cache_retention,omitempty"`
 }
 
 type MsgSummary struct {
@@ -62,15 +68,21 @@ func SummarizeChatRequest(req ChatRequest) BodySummary {
 	}
 
 	summary := BodySummary{
-		Model:             req.Model,
-		Stream:            req.Stream,
-		MessageCount:      len(req.Messages),
-		ToolChoice:        toolChoice,
-		ParallelToolCalls: req.ParallelTools,
-		Logprobs:          req.Logprobs,
-		Temperature:       req.Temperature,
-		TopP:              req.TopP,
-		MaxTokens:         req.MaxTokens,
+		Model:                req.Model,
+		Stream:               req.Stream,
+		MessageCount:         len(req.Messages),
+		ToolChoice:           toolChoice,
+		ParallelToolCalls:    req.ParallelTools,
+		Logprobs:             req.Logprobs,
+		Temperature:          req.Temperature,
+		TopP:                 req.TopP,
+		MaxTokens:            req.MaxTokens,
+		MaxCompletion:        req.MaxComplTokens,
+		MaxOutputTokens:      req.MaxOutputTokens,
+		ServiceTier:          req.ServiceTier,
+		HasTextControls:      len(req.Text) > 0 && string(req.Text) != "null",
+		Truncation:           req.Truncation,
+		PromptCacheRetention: req.PromptCacheRetention,
 	}
 
 	summary.ToolCount = len(req.Tools) + len(req.Functions)

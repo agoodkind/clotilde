@@ -448,17 +448,20 @@ func TestCodexTransportParityMatrixSerialization(t *testing.T) {
 
 	maxCompletion := 3072
 	httpReq := HTTPTransportRequest{
-		Model:             "gpt-5.4",
-		Instructions:      "base instructions",
-		Input:             []map[string]any{{"type": "message", "role": "user", "content": "hello"}},
-		Tools:             []any{map[string]any{"type": "function", "name": "read_file"}},
-		ToolChoice:        "auto",
-		ParallelToolCalls: true,
-		Reasoning:         &Reasoning{Effort: "medium"},
-		Include:           []string{"reasoning.encrypted_content"},
-		ServiceTier:       "priority",
-		PromptCache:       "cursor:conv-123",
-		MaxCompletion:     &maxCompletion,
+		Model:                "gpt-5.4",
+		Instructions:         "base instructions",
+		Input:                []map[string]any{{"type": "message", "role": "user", "content": "hello"}},
+		Tools:                []any{map[string]any{"type": "function", "name": "read_file"}},
+		ToolChoice:           "auto",
+		ParallelToolCalls:    true,
+		Reasoning:            &Reasoning{Effort: "medium"},
+		Include:              []string{"reasoning.encrypted_content"},
+		ServiceTier:          "priority",
+		PromptCache:          "cursor:conv-123",
+		PromptCacheRetention: "24h",
+		Text:                 json.RawMessage(`{"verbosity":"high"}`),
+		Truncation:           "auto",
+		MaxCompletion:        &maxCompletion,
 	}
 
 	httpEncoded, err := json.Marshal(httpReq)
@@ -477,6 +480,16 @@ func TestCodexTransportParityMatrixSerialization(t *testing.T) {
 	}
 	if got, _ := httpPayload["max_completion_tokens"].(float64); int(got) != maxCompletion {
 		t.Fatalf("http max_completion_tokens=%v want %d", httpPayload["max_completion_tokens"], maxCompletion)
+	}
+	if got, _ := httpPayload["prompt_cache_retention"].(string); got != "24h" {
+		t.Fatalf("http prompt_cache_retention=%q want 24h", got)
+	}
+	if got, _ := httpPayload["truncation"].(string); got != "auto" {
+		t.Fatalf("http truncation=%q want auto", got)
+	}
+	text, _ := httpPayload["text"].(map[string]any)
+	if text["verbosity"] != "high" {
+		t.Fatalf("http text=%v want verbosity high", httpPayload["text"])
 	}
 
 	wsReq := ResponseCreateRequestFromHTTP(httpReq)
@@ -498,6 +511,16 @@ func TestCodexTransportParityMatrixSerialization(t *testing.T) {
 	}
 	if got, _ := wsPayload["max_completion_tokens"].(float64); int(got) != maxCompletion {
 		t.Fatalf("ws max_completion_tokens=%v want %d", wsPayload["max_completion_tokens"], maxCompletion)
+	}
+	if got, _ := wsPayload["prompt_cache_retention"].(string); got != "24h" {
+		t.Fatalf("ws prompt_cache_retention=%q want 24h", got)
+	}
+	if got, _ := wsPayload["truncation"].(string); got != "auto" {
+		t.Fatalf("ws truncation=%q want auto", got)
+	}
+	text, _ = wsPayload["text"].(map[string]any)
+	if text["verbosity"] != "high" {
+		t.Fatalf("ws text=%v want verbosity high", wsPayload["text"])
 	}
 	if got, _ := wsPayload["previous_response_id"].(string); got != "resp-123" {
 		t.Fatalf("ws previous_response_id=%q want resp-123", got)

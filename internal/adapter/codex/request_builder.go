@@ -157,19 +157,22 @@ func BuildRequest(req adapteropenai.ChatRequest, model adaptermodel.ResolvedMode
 	include := RequestInclude(req.Include, reasoning != nil)
 	outputControls := BuildOutputControls(req)
 	return HTTPTransportRequest{
-		Model:             modelName,
-		Instructions:      instructions,
-		Store:             false,
-		Stream:            true,
-		Include:           include,
-		PromptCache:       requestContextTrackerKey(cursorReq, model.Alias),
-		ServiceTier:       ServiceTierFromMetadata(req.Metadata),
-		Reasoning:         reasoning,
-		MaxCompletion:     outputControls.MaxCompletion,
-		Input:             input,
-		Tools:             toolSpecs(req, modelName),
-		ToolChoice:        "auto",
-		ParallelToolCalls: parallelToolCalls(req),
+		Model:                modelName,
+		Instructions:         instructions,
+		Store:                false,
+		Stream:               true,
+		Include:              include,
+		PromptCache:          requestContextTrackerKey(cursorReq, model.Alias),
+		PromptCacheRetention: outputControls.PromptCacheRetention,
+		ServiceTier:          ServiceTierFromRequest(req),
+		Reasoning:            reasoning,
+		MaxCompletion:        outputControls.MaxCompletion,
+		Text:                 outputControls.Text,
+		Truncation:           outputControls.Truncation,
+		Input:                input,
+		Tools:                toolSpecs(req, modelName),
+		ToolChoice:           "auto",
+		ParallelToolCalls:    parallelToolCalls(req),
 	}
 }
 

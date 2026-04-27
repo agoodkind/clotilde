@@ -17,20 +17,23 @@ import (
 // This stays in the Codex package so the direct HTTP SSE transport can be
 // exercised and moved independently of the root adapter facade.
 type HTTPTransportRequest struct {
-	Model             string            `json:"model"`
-	Instructions      string            `json:"instructions"`
-	Store             bool              `json:"store"`
-	Stream            bool              `json:"stream"`
-	Include           []string          `json:"include,omitempty"`
-	PromptCache       string            `json:"prompt_cache_key,omitempty"`
-	ServiceTier       string            `json:"service_tier,omitempty"`
-	ClientMetadata    map[string]string `json:"client_metadata,omitempty"`
-	Reasoning         *Reasoning        `json:"reasoning,omitempty"`
-	MaxCompletion     *int              `json:"max_completion_tokens,omitempty"`
-	Input             []map[string]any  `json:"input"`
-	Tools             []any             `json:"tools,omitempty"`
-	ToolChoice        string            `json:"tool_choice,omitempty"`
-	ParallelToolCalls bool              `json:"parallel_tool_calls,omitempty"`
+	Model                string            `json:"model"`
+	Instructions         string            `json:"instructions"`
+	Store                bool              `json:"store"`
+	Stream               bool              `json:"stream"`
+	Include              []string          `json:"include,omitempty"`
+	PromptCache          string            `json:"prompt_cache_key,omitempty"`
+	PromptCacheRetention string            `json:"prompt_cache_retention,omitempty"`
+	ServiceTier          string            `json:"service_tier,omitempty"`
+	Text                 json.RawMessage   `json:"text,omitempty"`
+	Truncation           string            `json:"truncation,omitempty"`
+	ClientMetadata       map[string]string `json:"client_metadata,omitempty"`
+	Reasoning            *Reasoning        `json:"reasoning,omitempty"`
+	MaxCompletion        *int              `json:"max_completion_tokens,omitempty"`
+	Input                []map[string]any  `json:"input"`
+	Tools                []any             `json:"tools,omitempty"`
+	ToolChoice           string            `json:"tool_choice,omitempty"`
+	ParallelToolCalls    bool              `json:"parallel_tool_calls,omitempty"`
 }
 
 type HTTPTransportConfig struct {

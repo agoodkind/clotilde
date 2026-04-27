@@ -1361,13 +1361,18 @@ func codexItemTypeString(item codexInputItem) string {
 
 func TestBuildCodexRequestParityMatrixPreservesAliasIntent(t *testing.T) {
 	cases := []struct {
-		name          string
-		model         ResolvedModel
-		metadata      []byte
-		maxCompletion *int
-		wantModel     string
-		wantTier      string
-		wantMax       int
+		name                 string
+		model                ResolvedModel
+		metadata             []byte
+		maxCompletion        *int
+		maxOutput            *int
+		serviceTier          string
+		text                 []byte
+		truncation           string
+		promptCacheRetention string
+		wantModel            string
+		wantTier             string
+		wantMax              int
 	}{
 		{
 			name:      "native_alias_preserves_upstream_model",
@@ -1396,13 +1401,33 @@ func TestBuildCodexRequestParityMatrixPreservesAliasIntent(t *testing.T) {
 				return &v
 			}(),
 		},
+		{
+			name:      "responses_controls_passthrough",
+			model:     ResolvedModel{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"},
+			wantModel: "gpt-5.4",
+			wantTier:  "priority",
+			wantMax:   8192,
+			maxOutput: func() *int {
+				v := 8192
+				return &v
+			}(),
+			serviceTier:          "fast",
+			text:                 mustRaw(`{"verbosity":"high"}`),
+			truncation:           "auto",
+			promptCacheRetention: "24h",
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			req := ChatRequest{
-				Metadata:       tc.metadata,
-				MaxComplTokens: tc.maxCompletion,
+				Metadata:             tc.metadata,
+				MaxComplTokens:       tc.maxCompletion,
+				MaxOutputTokens:      tc.maxOutput,
+				ServiceTier:          tc.serviceTier,
+				Text:                 tc.text,
+				Truncation:           tc.truncation,
+				PromptCacheRetention: tc.promptCacheRetention,
 				Messages: []ChatMessage{{
 					Role:    "user",
 					Content: json.RawMessage(`"hello"`),
@@ -1419,6 +1444,15 @@ func TestBuildCodexRequestParityMatrixPreservesAliasIntent(t *testing.T) {
 				if out.MaxCompletion == nil || *out.MaxCompletion != tc.wantMax {
 					t.Fatalf("max_completion_tokens=%v want %d", out.MaxCompletion, tc.wantMax)
 				}
+			}
+			if len(tc.text) > 0 && string(out.Text) != string(tc.text) {
+				t.Fatalf("text=%s want %s", out.Text, tc.text)
+			}
+			if tc.truncation != "" && out.Truncation != tc.truncation {
+				t.Fatalf("truncation=%q want %q", out.Truncation, tc.truncation)
+			}
+			if tc.promptCacheRetention != "" && out.PromptCacheRetention != tc.promptCacheRetention {
+				t.Fatalf("prompt_cache_retention=%q want %q", out.PromptCacheRetention, tc.promptCacheRetention)
 			}
 		})
 	}

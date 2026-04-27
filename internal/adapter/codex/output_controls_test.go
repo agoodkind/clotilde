@@ -16,6 +16,40 @@ func TestBuildOutputControlsPassesThroughMaxCompletionTokens(t *testing.T) {
 	}
 }
 
+func TestBuildOutputControlsFallsBackAcrossResponseAndChatBudgets(t *testing.T) {
+	maxOutput := 8192
+	maxTokens := 2048
+	controls := BuildOutputControls(adapteropenai.ChatRequest{
+		MaxOutputTokens: &maxOutput,
+		MaxTokens:       &maxTokens,
+	})
+	if controls.MaxCompletion == nil || *controls.MaxCompletion != maxOutput {
+		t.Fatalf("max_completion_tokens=%v want %d", controls.MaxCompletion, maxOutput)
+	}
+
+	controls = BuildOutputControls(adapteropenai.ChatRequest{MaxTokens: &maxTokens})
+	if controls.MaxCompletion == nil || *controls.MaxCompletion != maxTokens {
+		t.Fatalf("max_completion_tokens=%v want %d", controls.MaxCompletion, maxTokens)
+	}
+}
+
+func TestBuildOutputControlsPreservesResponsesTextAndRetention(t *testing.T) {
+	controls := BuildOutputControls(adapteropenai.ChatRequest{
+		Text:                 json.RawMessage(`{"verbosity":"high"}`),
+		Truncation:           "auto",
+		PromptCacheRetention: "24h",
+	})
+	if string(controls.Text) != `{"verbosity":"high"}` {
+		t.Fatalf("text=%s", controls.Text)
+	}
+	if controls.Truncation != "auto" {
+		t.Fatalf("truncation=%q want auto", controls.Truncation)
+	}
+	if controls.PromptCacheRetention != "24h" {
+		t.Fatalf("prompt_cache_retention=%q want 24h", controls.PromptCacheRetention)
+	}
+}
+
 func TestServiceTierFromMetadataMapsFastToPriority(t *testing.T) {
 	if got := ServiceTierFromMetadata(json.RawMessage(`{"service_tier":"fast"}`)); got != "priority" {
 		t.Fatalf("service_tier=%q want priority", got)
@@ -31,6 +65,16 @@ func TestServiceTierFromMetadataPreservesFlex(t *testing.T) {
 func TestServiceTierFromMetadataIgnoresInvalidMetadata(t *testing.T) {
 	if got := ServiceTierFromMetadata(json.RawMessage(`{bad`)); got != "" {
 		t.Fatalf("service_tier=%q want empty", got)
+	}
+}
+
+func TestServiceTierFromRequestPrefersTopLevel(t *testing.T) {
+	got := ServiceTierFromRequest(adapteropenai.ChatRequest{
+		ServiceTier: "fast",
+		Metadata:    json.RawMessage(`{"service_tier":"flex"}`),
+	})
+	if got != "priority" {
+		t.Fatalf("service_tier=%q want priority", got)
 	}
 }
 
