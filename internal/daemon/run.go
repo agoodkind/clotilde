@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,6 +40,7 @@ type ExtraLoop func(log *slog.Logger) func()
 const adapterConfigReloadDebounce = 250 * time.Millisecond
 const adapterShutdownWait = 4 * time.Second
 const reloadHTTPDrainWait = 500 * time.Millisecond
+const reloadGRPCDrainWait = 10 * time.Minute
 const envDaemonReloadChild = "CLYDE_DAEMON_RELOAD_CHILD"
 const envDaemonInheritedListeners = "CLYDE_DAEMON_INHERITED_LISTENERS"
 const envDaemonReadyFD = "CLYDE_DAEMON_READY_FD"
@@ -49,6 +51,8 @@ const (
 	listenerNameWebApp  = "webapp"
 )
 
+var errReloadBeforeProcessLock = errors.New("daemon reload is unavailable until this daemon owns the process lock")
+
 type adapterLaunchConfig struct {
 	Enabled bool
 	Adapter config.AdapterConfig
@@ -56,11 +60,12 @@ type adapterLaunchConfig struct {
 }
 
 type adapterProcess struct {
-	cancel context.CancelFunc
-	drain  func(context.Context) error
-	close  func() error
-	done   chan struct{}
-	lis    net.Listener
+	cancel        context.CancelFunc
+	drain         func(context.Context) error
+	forceClose    func() error
+	closeListener func() error
+	done          chan struct{}
+	lis           net.Listener
 }
 
 type adapterController struct {
@@ -84,12 +89,13 @@ type inheritedRuntime struct {
 }
 
 type webAppProcess struct {
-	cancel func()
-	drain  func(context.Context) error
-	close  func() error
-	done   chan struct{}
-	lis    net.Listener
-	cfg    config.WebAppConfig
+	cancel        func()
+	drain         func(context.Context) error
+	forceClose    func() error
+	closeListener func() error
+	done          chan struct{}
+	lis           net.Listener
+	cfg           config.WebAppConfig
 }
 
 type daemonRuntime struct {
@@ -116,6 +122,7 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
 	}
 	reloadChild := os.Getenv(envDaemonReloadChild) == "1"
 	var lockHeld atomic.Bool
+	var lockReleaseOnce sync.Once
 	lockAcquired := make(chan struct{})
 	if reloadChild {
 		go acquireReloadChildProcessLock(log, lockFile, lockPath, &lockHeld, lockAcquired)
@@ -130,12 +137,28 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
 		lockHeld.Store(true)
 		close(lockAcquired)
 	}
-	defer func() {
-		if lockHeld.Load() {
-			_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
-		}
-		_ = lockFile.Close()
-	}()
+	releaseProcessLock := func(reason string) {
+		lockReleaseOnce.Do(func() {
+			if lockHeld.Swap(false) {
+				if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN); err != nil {
+					log.Warn("daemon.process_lock.release_failed",
+						"component", "daemon",
+						"lock_path", lockPath,
+						"reason", reason,
+						"err", err,
+					)
+				} else {
+					log.Info("daemon.process_lock.released",
+						"component", "daemon",
+						"lock_path", lockPath,
+						"reason", reason,
+					)
+				}
+			}
+			_ = lockFile.Close()
+		})
+	}
+	defer releaseProcessLock("exit")
 
 	socketPath := config.DaemonSocketPath()
 
@@ -175,23 +198,42 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
 
 	var exclusiveMu sync.Mutex
 	var exclusiveCancels []func()
-	defer func() {
-		exclusiveMu.Lock()
-		cancels := append([]func(){}, exclusiveCancels...)
-		exclusiveMu.Unlock()
-		for i := len(cancels) - 1; i >= 0; i-- {
-			cancels[i]()
-		}
-	}()
+	var exclusiveStopped bool
+	var exclusiveStopOnce sync.Once
+	stopExclusiveLoops := func(reason string) {
+		exclusiveStopOnce.Do(func() {
+			exclusiveMu.Lock()
+			exclusiveStopped = true
+			cancels := append([]func(){}, exclusiveCancels...)
+			exclusiveCancels = nil
+			exclusiveMu.Unlock()
+			for i := len(cancels) - 1; i >= 0; i-- {
+				cancels[i]()
+			}
+			log.Info("daemon.exclusive_subsystems.stopped",
+				"component", "daemon",
+				"reason", reason,
+			)
+		})
+	}
+	defer stopExclusiveLoops("exit")
 	if adapterCancel != nil {
+		exclusiveMu.Lock()
 		exclusiveCancels = append(exclusiveCancels, adapterCancel)
+		exclusiveMu.Unlock()
 	}
 	if webProc != nil && webProc.cancel != nil {
+		exclusiveMu.Lock()
 		exclusiveCancels = append(exclusiveCancels, webProc.cancel)
+		exclusiveMu.Unlock()
 	}
 
 	startExclusiveLoops := func() {
 		exclusiveMu.Lock()
+		if exclusiveStopped {
+			exclusiveMu.Unlock()
+			return
+		}
 		for _, loop := range extraLoops {
 			if loop == nil {
 				continue
@@ -215,8 +257,8 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
 		startExclusiveLoops()
 	}
 
-	srv.SetReloadFunc(func(ctx context.Context) (reloadReport, error) {
-		return reloadDaemonBinary(ctx, log, grpcServer, rt, srv)
+	setReloadFuncWhenProcessOwner(srv, &lockHeld, func(ctx context.Context) (reloadReport, error) {
+		return reloadDaemonBinary(ctx, log, grpcServer, rt, srv, stopExclusiveLoops, releaseProcessLock)
 	})
 
 	log.Info("daemon.listening",
@@ -233,12 +275,21 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
 	return grpcServer.Serve(listener)
 }
 
+func setReloadFuncWhenProcessOwner(srv *Server, lockHeld *atomic.Bool, fn func(context.Context) (reloadReport, error)) {
+	srv.SetReloadFunc(func(ctx context.Context) (reloadReport, error) {
+		if lockHeld == nil || !lockHeld.Load() {
+			return reloadReport{}, errReloadBeforeProcessLock
+		}
+		return fn(ctx)
+	})
+}
+
 func acquireReloadChildProcessLock(log *slog.Logger, lockFile *os.File, lockPath string, lockHeld *atomic.Bool, lockAcquired chan<- struct{}) {
 	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
 		log.Warn("daemon.reload_child.lock_failed",
 			"component", "daemon",
 			"lock_path", lockPath,
-			slog.Any("err", err),
+			"err", err,
 		)
 		return
 	}
@@ -312,7 +363,7 @@ func loadInheritedRuntime() (inheritedRuntime, error) {
 	return out, nil
 }
 
-func reloadDaemonBinary(ctx context.Context, log *slog.Logger, grpcServer *grpc.Server, rt *daemonRuntime, srv *Server) (reloadReport, error) {
+func reloadDaemonBinary(ctx context.Context, log *slog.Logger, grpcServer *grpc.Server, rt *daemonRuntime, srv *Server, stopExclusive func(string), releaseProcessLock func(string)) (reloadReport, error) {
 	rt.reloadLock.Lock()
 	defer rt.reloadLock.Unlock()
 	executablePath, err := os.Executable()
@@ -368,12 +419,42 @@ func reloadDaemonBinary(ctx context.Context, log *slog.Logger, grpcServer *grpc.
 	}
 	srv.preserveRuntimeDirsOnClose()
 	drainReloadedPublicHTTP(log, rt)
+	if stopExclusive != nil {
+		stopExclusive("reload_handoff")
+	}
+	grpcDrainStarted := make(chan struct{})
 	go func() {
 		log.Info("daemon.reload.draining_old_process",
 			"component", "daemon",
-			"new_pid", cmd.Process.Pid)
-		grpcServer.GracefulStop()
+			"new_pid", cmd.Process.Pid,
+			"timeout", reloadGRPCDrainWait.String(),
+		)
+		done := make(chan struct{})
+		go func() {
+			close(grpcDrainStarted)
+			grpcServer.GracefulStop()
+			close(done)
+		}()
+		select {
+		case <-done:
+			log.Info("daemon.reload.old_process_grpc_drain_complete",
+				"component", "daemon",
+				"new_pid", cmd.Process.Pid,
+			)
+		case <-time.After(reloadGRPCDrainWait):
+			log.Warn("daemon.reload.old_process_grpc_drain_timeout",
+				"component", "daemon",
+				"new_pid", cmd.Process.Pid,
+				"timeout", reloadGRPCDrainWait.String(),
+			)
+			grpcServer.Stop()
+			<-done
+		}
 	}()
+	<-grpcDrainStarted
+	if releaseProcessLock != nil {
+		releaseProcessLock("reload_handoff")
+	}
 	return reloadReport{BinaryReloaded: true, NewPID: cmd.Process.Pid}, nil
 }
 
@@ -389,12 +470,12 @@ func drainReloadedPublicHTTP(log *slog.Logger, rt *daemonRuntime) {
 			"component", "daemon",
 			"addr", listenerAddr(rt.webapp.lis),
 		)
-		if rt.webapp.close != nil {
-			if err := rt.webapp.close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		if rt.webapp.closeListener != nil {
+			if err := rt.webapp.closeListener(); err != nil && !errors.Is(err, net.ErrClosed) {
 				log.Warn("daemon.reload.webapp_listener_close_failed",
 					"component", "daemon",
 					"addr", listenerAddr(rt.webapp.lis),
-					slog.Any("err", err),
+					"err", err,
 				)
 			}
 		}
@@ -405,8 +486,27 @@ func drainReloadedPublicHTTP(log *slog.Logger, rt *daemonRuntime) {
 			log.Warn("daemon.reload.webapp_drain_timeout",
 				"component", "daemon",
 				"addr", listenerAddr(rt.webapp.lis),
-				slog.Any("err", err),
+				"err", err,
 			)
+		} else {
+			log.Info("daemon.reload.webapp_drain_complete",
+				"component", "daemon",
+				"addr", listenerAddr(rt.webapp.lis),
+			)
+		}
+		if rt.webapp.forceClose != nil {
+			if err := rt.webapp.forceClose(); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+				log.Warn("daemon.reload.webapp_force_close_failed",
+					"component", "daemon",
+					"addr", listenerAddr(rt.webapp.lis),
+					"err", err,
+				)
+			} else if err != nil {
+				log.Debug("daemon.reload.webapp_force_closed",
+					"component", "daemon",
+					"addr", listenerAddr(rt.webapp.lis),
+				)
+			}
 		}
 	}
 }
@@ -555,7 +655,7 @@ func startWebApp(log *slog.Logger, srv *Server, inherited net.Listener) (*webApp
 	if err != nil {
 		log.Warn("webapp.config_load_failed",
 			"component", "webapp",
-			slog.Any("err", err),
+			"err", err,
 		)
 		return nil, nil
 	}
@@ -609,17 +709,18 @@ func startWebApp(log *slog.Logger, srv *Server, inherited net.Listener) (*webApp
 		if err := srvW.StartOnListener(ctx, lis); err != nil {
 			log.Error("webapp.exited",
 				"component", "webapp",
-				slog.Any("err", err),
+				"err", err,
 			)
 		}
 	}()
 	return &webAppProcess{
-		cancel: cancel,
-		drain:  srvW.Shutdown,
-		close:  lis.Close,
-		done:   done,
-		lis:    lis,
-		cfg:    cfg.WebApp,
+		cancel:        cancel,
+		drain:         srvW.Shutdown,
+		forceClose:    srvW.Close,
+		closeListener: lis.Close,
+		done:          done,
+		lis:           lis,
+		cfg:           cfg.WebApp,
 	}, nil
 }
 
@@ -637,7 +738,7 @@ func startAdapter(log *slog.Logger, srv *Server, inherited net.Listener) (*adapt
 	if err != nil {
 		log.Warn("adapter.config_load_failed",
 			"component", "adapter",
-			slog.Any("err", err),
+			"err", err,
 		)
 		return nil, nil, nil
 	}
@@ -658,7 +759,7 @@ func startAdapter(log *slog.Logger, srv *Server, inherited net.Listener) (*adapt
 	if err != nil {
 		log.Warn("adapter.config_watch_failed",
 			"component", "adapter",
-			slog.Any("err", err),
+			"err", err,
 		)
 	}
 	return ctrl, func() {
@@ -715,14 +816,14 @@ func watchAdapterConfig(log *slog.Logger, ctrl *adapterController) (func(), erro
 			if err != nil {
 				log.Warn("adapter.config_reload_failed",
 					"component", "adapter",
-					slog.Any("err", err),
+					"err", err,
 				)
 				return
 			}
 			if err := ctrl.apply(launchConfigFromGlobal(cfg), false, nil); err != nil {
 				log.Warn("adapter.config_reload_apply_failed",
 					"component", "adapter",
-					slog.Any("err", err),
+					"err", err,
 				)
 			}
 		}
@@ -768,7 +869,7 @@ func watchAdapterConfig(log *slog.Logger, ctrl *adapterController) (func(), erro
 				}
 				log.Warn("adapter.config_watch.error",
 					"component", "adapter",
-					slog.Any("err", err),
+					"err", err,
 				)
 			}
 		}
@@ -815,7 +916,7 @@ func (c *adapterController) apply(next adapterLaunchConfig, startup bool, inheri
 		if err != nil {
 			c.log.Error("adapter.registry.invalid_config",
 				"component", "adapter",
-				slog.Any("err", err),
+				"err", err,
 			)
 			if startup {
 				return fmt.Errorf("adapter registry: %w", err)
@@ -884,12 +985,12 @@ func (c *adapterController) drainReloadedProcess(timeout time.Duration) {
 		"component", "daemon",
 		"addr", listenerAddr(proc.lis),
 	)
-	if proc.close != nil {
-		if err := proc.close(); err != nil && !errors.Is(err, net.ErrClosed) {
+	if proc.closeListener != nil {
+		if err := proc.closeListener(); err != nil && !errors.Is(err, net.ErrClosed) {
 			c.log.Warn("daemon.reload.adapter_listener_close_failed",
 				"component", "daemon",
 				"addr", listenerAddr(proc.lis),
-				slog.Any("err", err),
+				"err", err,
 			)
 		}
 	}
@@ -900,8 +1001,27 @@ func (c *adapterController) drainReloadedProcess(timeout time.Duration) {
 		c.log.Warn("daemon.reload.adapter_drain_timeout",
 			"component", "daemon",
 			"addr", listenerAddr(proc.lis),
-			slog.Any("err", err),
+			"err", err,
 		)
+	} else {
+		c.log.Info("daemon.reload.adapter_drain_complete",
+			"component", "daemon",
+			"addr", listenerAddr(proc.lis),
+		)
+	}
+	if proc.forceClose != nil {
+		if err := proc.forceClose(); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			c.log.Warn("daemon.reload.adapter_force_close_failed",
+				"component", "daemon",
+				"addr", listenerAddr(proc.lis),
+				"err", err,
+			)
+		} else if err != nil {
+			c.log.Debug("daemon.reload.adapter_force_closed",
+				"component", "daemon",
+				"addr", listenerAddr(proc.lis),
+			)
+		}
 	}
 }
 
@@ -934,15 +1054,16 @@ func startAdapterProcess(log *slog.Logger, srv *adapter.Server, lis net.Listener
 		if err := srv.StartOnListener(ctx, lis); err != nil {
 			log.Error("adapter.exited",
 				"component", "adapter",
-				slog.Any("err", err),
+				"err", err,
 			)
 		}
 	}()
 	return &adapterProcess{
-		cancel: cancel,
-		drain:  srv.Shutdown,
-		close:  lis.Close,
-		done:   done,
-		lis:    lis,
+		cancel:        cancel,
+		drain:         srv.Shutdown,
+		forceClose:    srv.Close,
+		closeListener: lis.Close,
+		done:          done,
+		lis:           lis,
 	}
 }

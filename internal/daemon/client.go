@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
@@ -261,25 +263,48 @@ func ReloadDaemon(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 		return nil, err
 	}
 	defer unlock()
-	c, err := ConnectOrStart(ctx)
-	if err != nil {
-		log.DebugContext(ctx, "daemon.client.reload.connect_failed", "err", err)
-		return nil, err
-	}
-	defer c.conn.Close()
-	rpcCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+
+	retryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	resp, err := c.rpc.ReloadDaemon(rpcCtx, &clydev1.ReloadDaemonRequest{})
-	if err != nil {
-		log.DebugContext(rpcCtx, "daemon.client.reload.rpc_failed", "err", err)
-		return nil, err
+	for attempt := 1; ; attempt++ {
+		c, err := ConnectOrStart(retryCtx)
+		if err != nil {
+			log.DebugContext(retryCtx, "daemon.client.reload.connect_failed",
+				"attempt", attempt,
+				"err", err,
+			)
+			return nil, err
+		}
+		rpcCtx, rpcCancel := context.WithTimeout(retryCtx, 10*time.Second)
+		resp, err := c.rpc.ReloadDaemon(rpcCtx, &clydev1.ReloadDaemonRequest{})
+		rpcCancel()
+		_ = c.conn.Close()
+		if err == nil {
+			log.DebugContext(retryCtx, "daemon.client.reload.ok",
+				"attempt", attempt,
+				"active_sessions", resp.GetActiveSessions(),
+				"binary_reloaded", resp.GetBinaryReloaded(),
+				"new_pid", resp.GetNewPid(),
+			)
+			return resp, nil
+		}
+		if status.Code(err) != codes.FailedPrecondition {
+			log.DebugContext(retryCtx, "daemon.client.reload.rpc_failed",
+				"attempt", attempt,
+				"err", err,
+			)
+			return nil, err
+		}
+		log.DebugContext(retryCtx, "daemon.client.reload.retry_not_owner",
+			"attempt", attempt,
+			"err", err,
+		)
+		select {
+		case <-retryCtx.Done():
+			return nil, retryCtx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
-	log.DebugContext(rpcCtx, "daemon.client.reload.ok",
-		"active_sessions", resp.GetActiveSessions(),
-		"binary_reloaded", resp.GetBinaryReloaded(),
-		"new_pid", resp.GetNewPid(),
-	)
-	return resp, nil
 }
 
 func lockDaemonReload(ctx context.Context) (func(), error) {

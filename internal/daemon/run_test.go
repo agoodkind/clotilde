@@ -2,18 +2,22 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestIsAdapterConfigEvent(t *testing.T) {
@@ -115,7 +119,7 @@ func TestReloadDaemonCallsReloadFunc(t *testing.T) {
 	srv := &Server{
 		log:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		sessions:       map[string]*wrapperSession{"wrapper-reload-1": {wrapperID: "wrapper-reload-1", sessionName: "chat-1"}},
-		globalSettings: map[string]any{},
+		globalSettings: map[string]json.RawMessage{},
 	}
 	srv.SetReloadFunc(func(_ context.Context) (reloadReport, error) {
 		called = true
@@ -137,6 +141,39 @@ func TestReloadDaemonCallsReloadFunc(t *testing.T) {
 	}
 	if resp.GetNewPid() != 1234 {
 		t.Fatalf("new pid=%d want 1234", resp.GetNewPid())
+	}
+}
+
+func TestReloadDaemonRequiresProcessLock(t *testing.T) {
+	var lockHeld atomic.Bool
+	called := false
+	srv := &Server{
+		log:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		globalSettings: map[string]json.RawMessage{},
+	}
+	setReloadFuncWhenProcessOwner(srv, &lockHeld, func(_ context.Context) (reloadReport, error) {
+		called = true
+		return reloadReport{BinaryReloaded: true, NewPID: 4321}, nil
+	})
+
+	_, err := srv.ReloadDaemon(context.Background(), &clydev1.ReloadDaemonRequest{})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("reload before lock code=%v err=%v, want FailedPrecondition", status.Code(err), err)
+	}
+	if called {
+		t.Fatalf("reload func should not be called before process lock is held")
+	}
+
+	lockHeld.Store(true)
+	resp, err := srv.ReloadDaemon(context.Background(), &clydev1.ReloadDaemonRequest{})
+	if err != nil {
+		t.Fatalf("reload after lock: %v", err)
+	}
+	if !called {
+		t.Fatalf("reload func should be called after process lock is held")
+	}
+	if resp.GetNewPid() != 4321 {
+		t.Fatalf("new pid=%d want 4321", resp.GetNewPid())
 	}
 }
 

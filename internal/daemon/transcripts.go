@@ -1,4 +1,4 @@
-// Per session transcript tail aggregator. The daemon owns one
+// Package daemon hosts the long-running Clyde background services.
 // transcript.Tailer per active session id regardless of how many
 // gRPC subscribers are connected. Each subscriber gets its own
 // buffered channel; a slow subscriber drops events for itself
@@ -20,11 +20,17 @@ type transcriptHub struct {
 	entries  map[string]*hubEntry
 }
 
+type transcriptSubscriberState bool
+
+type transcriptHubSignal struct {
+	Requested bool
+}
+
 type hubEntry struct {
-	tailer       *transcript.Tailer
-	subscribers  map[chan *clydev1.TailTranscriptResponse]struct{}
+	tailer         *transcript.Tailer
+	subscribers    map[chan *clydev1.TailTranscriptResponse]transcriptSubscriberState
 	transcriptPath string
-	stop         chan struct{}
+	stop           chan transcriptHubSignal
 }
 
 func newTranscriptHub() *transcriptHub {
@@ -47,16 +53,16 @@ func (h *transcriptHub) Subscribe(sessionID, path string, startOffset int64) (<-
 		}
 		entry = &hubEntry{
 			tailer:         t,
-			subscribers:    make(map[chan *clydev1.TailTranscriptResponse]struct{}),
+			subscribers:    make(map[chan *clydev1.TailTranscriptResponse]transcriptSubscriberState),
 			transcriptPath: path,
-			stop:           make(chan struct{}),
+			stop:           make(chan transcriptHubSignal),
 		}
 		h.entries[sessionID] = entry
 		go h.fanOut(sessionID, entry)
 	}
 
 	ch := make(chan *clydev1.TailTranscriptResponse, 64)
-	entry.subscribers[ch] = struct{}{}
+	entry.subscribers[ch] = true
 
 	cleanup := func() {
 		h.mu.Lock()

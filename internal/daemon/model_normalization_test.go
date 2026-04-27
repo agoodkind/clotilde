@@ -40,7 +40,7 @@ func TestResolveSessionSettingsNormalizesStoredModel(t *testing.T) {
 
 	srv := &Server{
 		log:            slog.New(slog.NewTextHandler(io.Discard, nil)),
-		globalSettings: map[string]any{},
+		globalSettings: map[string]json.RawMessage{},
 	}
 
 	model, effort := srv.resolveSessionSettings("chat-1")
@@ -84,6 +84,25 @@ func TestReadSessionSettingsNormalizesRuntimeModel(t *testing.T) {
 	}
 	if effort != "xhigh" {
 		t.Fatalf("effort=%q want %q", effort, "xhigh")
+	}
+}
+
+func TestSessionIsActiveChecksOpenWrapperSessions(t *testing.T) {
+	srv := &Server{
+		sessions: map[string]*wrapperSession{
+			"wrapper-1": {wrapperID: "wrapper-1", sessionName: "open-chat"},
+			"wrapper-2": {wrapperID: "wrapper-2", sessionName: ""},
+		},
+	}
+
+	if !srv.sessionIsActive("open-chat") {
+		t.Fatalf("expected named wrapper session to be active")
+	}
+	if srv.sessionIsActive("closed-chat") {
+		t.Fatalf("expected unknown session to be inactive")
+	}
+	if srv.sessionIsActive("") {
+		t.Fatalf("expected empty session name to be inactive")
 	}
 }
 
@@ -146,7 +165,7 @@ func TestWriteSettingsJSONPersistsNormalizedModel(t *testing.T) {
 
 	srv := &Server{
 		log:            slog.New(slog.NewTextHandler(io.Discard, nil)),
-		globalSettings: map[string]any{},
+		globalSettings: map[string]json.RawMessage{},
 	}
 
 	settingsPath, err := srv.writeSettingsJSON("wrapper-2", "clyde-gpt-5.5-1m-xhigh", "xhigh")

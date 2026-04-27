@@ -38,13 +38,35 @@ type activeProviderRequest struct {
 	Streaming bool
 }
 
+type providerStatsSubscriberSet map[chan *clydev1.ProviderStatsEvent]bool
+
+type providerStatsLogRecord struct {
+	Msg                        string      `json:"msg"`
+	Provider                   string      `json:"provider"`
+	Backend                    string      `json:"backend"`
+	RequestID                  string      `json:"request_id"`
+	Alias                      string      `json:"alias"`
+	Model                      string      `json:"model"`
+	Stream                     bool        `json:"stream"`
+	FinishReason               string      `json:"finish_reason"`
+	PromptTokens               json.Number `json:"prompt_tokens"`
+	CompletionTokens           json.Number `json:"completion_tokens"`
+	CacheReadTokens            json.Number `json:"cache_read_tokens"`
+	CacheCreationTokens        json.Number `json:"cache_creation_tokens"`
+	DerivedCacheCreationTokens json.Number `json:"derived_cache_creation_tokens"`
+	CostMicrocents             json.Number `json:"cost_microcents"`
+	DurationMs                 json.Number `json:"duration_ms"`
+	Error                      string      `json:"error"`
+	Err                        string      `json:"err"`
+}
+
 type providerStatsHub struct {
 	log          *slog.Logger
 	mu           sync.RWMutex
 	providers    map[string]*providerAggregate
 	active       map[string]activeProviderRequest
 	terminalSeen map[string]adapterruntime.RequestStage
-	subscribers  map[chan *clydev1.ProviderStatsEvent]struct{}
+	subscribers  providerStatsSubscriberSet
 	loadedAt     time.Time
 }
 
@@ -54,7 +76,7 @@ func newProviderStatsHub(log *slog.Logger) *providerStatsHub {
 		providers:    make(map[string]*providerAggregate),
 		active:       make(map[string]activeProviderRequest),
 		terminalSeen: make(map[string]adapterruntime.RequestStage),
-		subscribers:  make(map[chan *clydev1.ProviderStatsEvent]struct{}),
+		subscribers:  make(providerStatsSubscriberSet),
 		loadedAt:     time.Now(),
 	}
 	h.replayLogs()
@@ -75,12 +97,11 @@ func (h *providerStatsHub) replayLogs() {
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 256*1024), 4*1024*1024)
 	for scanner.Scan() {
-		var rec map[string]any
+		var rec providerStatsLogRecord
 		if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
 			continue
 		}
-		msg, _ := rec["msg"].(string)
-		ev, ok := requestEventFromLogRecord(msg, rec)
+		ev, ok := requestEventFromLogRecord(rec)
 		if !ok {
 			continue
 		}
@@ -114,9 +135,9 @@ func resolveProviderStatsLogPath() (string, error) {
 	return filepath.Join(state, "clyde.jsonl"), nil
 }
 
-func requestEventFromLogRecord(msg string, rec map[string]any) (adapterruntime.RequestEvent, bool) {
+func requestEventFromLogRecord(rec providerStatsLogRecord) (adapterruntime.RequestEvent, bool) {
 	stage := adapterruntime.RequestStage("")
-	switch msg {
+	switch rec.Msg {
 	case "adapter.request.started":
 		stage = adapterruntime.RequestStageStarted
 	case "adapter.request.stream_opened":
@@ -132,24 +153,24 @@ func requestEventFromLogRecord(msg string, rec map[string]any) (adapterruntime.R
 	}
 	ev := adapterruntime.RequestEvent{
 		Stage:                      stage,
-		Provider:                   stringValue(rec, "provider"),
-		Backend:                    stringValue(rec, "backend"),
-		RequestID:                  stringValue(rec, "request_id"),
-		Alias:                      stringValue(rec, "alias"),
-		ModelID:                    stringValue(rec, "model"),
-		Stream:                     boolValue(rec, "stream"),
-		FinishReason:               stringValue(rec, "finish_reason"),
-		TokensIn:                   intValue(rec, "prompt_tokens"),
-		TokensOut:                  intValue(rec, "completion_tokens"),
-		CacheReadTokens:            intValue(rec, "cache_read_tokens"),
-		CacheCreationTokens:        intValue(rec, "cache_creation_tokens"),
-		DerivedCacheCreationTokens: intValue(rec, "derived_cache_creation_tokens"),
-		CostMicrocents:             int64Value(rec, "cost_microcents"),
-		DurationMs:                 int64Value(rec, "duration_ms"),
-		Err:                        stringValue(rec, "error"),
+		Provider:                   rec.Provider,
+		Backend:                    rec.Backend,
+		RequestID:                  rec.RequestID,
+		Alias:                      rec.Alias,
+		ModelID:                    rec.Model,
+		Stream:                     rec.Stream,
+		FinishReason:               rec.FinishReason,
+		TokensIn:                   int(numberValue(rec.PromptTokens)),
+		TokensOut:                  int(numberValue(rec.CompletionTokens)),
+		CacheReadTokens:            int(numberValue(rec.CacheReadTokens)),
+		CacheCreationTokens:        int(numberValue(rec.CacheCreationTokens)),
+		DerivedCacheCreationTokens: int(numberValue(rec.DerivedCacheCreationTokens)),
+		CostMicrocents:             numberValue(rec.CostMicrocents),
+		DurationMs:                 numberValue(rec.DurationMs),
+		Err:                        rec.Error,
 	}
 	if ev.Err == "" {
-		ev.Err = stringValue(rec, "err")
+		ev.Err = rec.Err
 	}
 	if ev.Provider == "" || ev.RequestID == "" {
 		return adapterruntime.RequestEvent{}, false
@@ -157,41 +178,15 @@ func requestEventFromLogRecord(msg string, rec map[string]any) (adapterruntime.R
 	return ev, true
 }
 
-func stringValue(rec map[string]any, key string) string {
-	v, _ := rec[key]
-	switch t := v.(type) {
-	case string:
-		return t
-	default:
-		return ""
-	}
-}
-
-func boolValue(rec map[string]any, key string) bool {
-	v, _ := rec[key]
-	b, _ := v.(bool)
-	return b
-}
-
-func intValue(rec map[string]any, key string) int {
-	return int(int64Value(rec, key))
-}
-
-func int64Value(rec map[string]any, key string) int64 {
-	v, _ := rec[key]
-	switch t := v.(type) {
-	case float64:
-		return int64(t)
-	case int:
-		return int64(t)
-	case int64:
-		return t
-	case json.Number:
-		n, _ := t.Int64()
-		return n
-	default:
+func numberValue(v json.Number) int64 {
+	if v == "" {
 		return 0
 	}
+	n, err := v.Int64()
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 func providerRequestKey(provider, requestID string) string {
@@ -335,7 +330,7 @@ func (h *providerStatsHub) loadedAtUnix() int64 {
 func (h *providerStatsHub) subscribe() chan *clydev1.ProviderStatsEvent {
 	ch := make(chan *clydev1.ProviderStatsEvent, 32)
 	h.mu.Lock()
-	h.subscribers[ch] = struct{}{}
+	h.subscribers[ch] = true
 	h.mu.Unlock()
 	return ch
 }

@@ -7,6 +7,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -46,16 +47,16 @@ type Server struct {
 
 	watcher        *fsnotify.Watcher
 	bridgeWatcher  *bridge.Watcher
-	globalSettings map[string]any // last-known global settings.json content
+	globalSettings map[string]json.RawMessage // last-known global settings.json content
 
 	// scanWake fires the discovery scanner immediately. Buffered so a
 	// trigger never blocks the caller.
-	scanWake chan struct{}
+	scanWake chan discoveryScanSignal
 
 	// subscribers receive registry events as they happen. The mutex
 	// guards the map so subscribe and broadcast can run concurrently.
 	subMu       sync.Mutex
-	subscribers map[chan *clydev1.SubscribeRegistryResponse]struct{}
+	subscribers map[chan *clydev1.SubscribeRegistryResponse]registrySubscriberState
 
 	// settingsLocks serialises writes per session name so two callers
 	// updating the same session do not stomp on each other. The lock
@@ -78,7 +79,7 @@ type Server struct {
 
 	contextMu         sync.Mutex
 	contextStates     map[string]sessionContextState
-	contextRefreshSem chan struct{}
+	contextRefreshSem chan contextRefreshPermit
 
 	reloadMu sync.Mutex
 	reloadFn func(context.Context) (reloadReport, error)
@@ -106,6 +107,16 @@ var remoteWorkerExecutable = os.Executable
 type reloadReport struct {
 	BinaryReloaded bool
 	NewPID         int
+}
+
+type discoveryScanSignal struct {
+	Requested bool
+}
+
+type registrySubscriberState bool
+
+type contextRefreshPermit struct {
+	Acquired bool
 }
 
 type sessionContextState struct {
@@ -138,15 +149,15 @@ func New(log *slog.Logger) (*Server, error) {
 		sessions:          make(map[string]*wrapperSession),
 		watcher:           watcher,
 		bridgeWatcher:     nil,
-		scanWake:          make(chan struct{}, 4),
-		subscribers:       make(map[chan *clydev1.SubscribeRegistryResponse]struct{}),
+		scanWake:          make(chan discoveryScanSignal, 4),
+		subscribers:       make(map[chan *clydev1.SubscribeRegistryResponse]registrySubscriberState),
 		settingsLocks:     make(map[string]*sync.Mutex),
 		bridges:           make(map[string]*clydev1.Bridge),
 		transcripts:       newTranscriptHub(),
 		providerStats:     newProviderStatsHub(log),
 		remoteWorkers:     make(map[string]*remoteWorker),
 		contextStates:     make(map[string]sessionContextState),
-		contextRefreshSem: make(chan struct{}, 2),
+		contextRefreshSem: make(chan contextRefreshPermit, 2),
 	}
 
 	globalPath := globalSettingsPath()
@@ -156,7 +167,7 @@ func New(log *slog.Logger) (*Server, error) {
 			slog.Any("err", err),
 		)
 	} else {
-		globalModel, _ := s.globalSettings["model"].(string)
+		globalModel := globalSettingString(s.globalSettings, "model")
 		log.LogAttrs(context.Background(), slog.LevelInfo, "global settings loaded",
 			slog.String("path", globalPath),
 			slog.String("model", globalModel),
@@ -297,7 +308,7 @@ func (s *Server) runDiscoveryOnce() {
 // Subscribers also receive a SESSION_ADOPTED event for each new entry.
 func (s *Server) TriggerScan(ctx context.Context, _ *clydev1.TriggerScanRequest) (*clydev1.TriggerScanResponse, error) {
 	select {
-	case s.scanWake <- struct{}{}:
+	case s.scanWake <- discoveryScanSignal{Requested: true}:
 	default:
 		// Channel is full; another wake is already pending.
 	}
@@ -312,7 +323,7 @@ func (s *Server) SubscribeRegistry(_ *clydev1.SubscribeRegistryRequest, stream c
 	ch := make(chan *clydev1.SubscribeRegistryResponse, 32)
 
 	s.subMu.Lock()
-	s.subscribers[ch] = struct{}{}
+	s.subscribers[ch] = true
 	s.subMu.Unlock()
 
 	defer func() {
@@ -698,22 +709,26 @@ func adapterScratchDir() string {
 // merging global settings with the per-session model override.
 func (s *Server) writeSettingsJSON(wrapperID, model, effortLevel string) (string, error) {
 	s.mu.RLock()
-	globalCopy := make(map[string]any, len(s.globalSettings))
+	globalCopy := make(map[string]json.RawMessage, len(s.globalSettings))
 	for k, v := range s.globalSettings {
 		globalCopy[k] = v
 	}
-	globalModel, _ := s.globalSettings["model"].(string)
+	globalModel := globalSettingString(s.globalSettings, "model")
 	s.mu.RUnlock()
 
-	model = adaptercursor.NormalizeModelAlias(model)
+	model = adaptercursor.NormalizeSessionSettingsModel(model)
 	if model != "" {
-		globalCopy["model"] = model
+		if encoded, err := json.Marshal(model); err == nil {
+			globalCopy["model"] = encoded
+		}
 	}
 	if effortLevel != "" {
-		globalCopy["effortLevel"] = effortLevel
+		if encoded, err := json.Marshal(effortLevel); err == nil {
+			globalCopy["effortLevel"] = encoded
+		}
 	}
 
-	effectiveModel, _ := globalCopy["model"].(string)
+	effectiveModel := globalSettingString(globalCopy, "model")
 	s.log.LogAttrs(context.Background(), slog.LevelDebug, "writing per-session settings",
 		slog.String("wrapper_id", wrapperID),
 		slog.String("global_model", globalModel),
@@ -793,7 +808,7 @@ func (s *Server) readSessionSettings(wrapperID string) (model, effortLevel strin
 		return "", ""
 	}
 	model, _ = settings["model"].(string)
-	model = adaptercursor.NormalizeModelAlias(model)
+	model = adaptercursor.NormalizeSessionSettingsModel(model)
 	effortLevel, _ = settings["effortLevel"].(string)
 	return model, effortLevel
 }
@@ -862,6 +877,9 @@ func (s *Server) ReloadDaemon(ctx context.Context, req *clydev1.ReloadDaemonRequ
 	}
 	report, err := fn(ctx)
 	if err != nil {
+		if errors.Is(err, errReloadBeforeProcessLock) {
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		}
 		return nil, status.Errorf(codes.Internal, "reload binary: %v", err)
 	}
 	active := s.activeSessionCount()
@@ -888,19 +906,19 @@ func (s *Server) loadGlobalSettings() error {
 				slog.String("path", path),
 			)
 			s.mu.Lock()
-			s.globalSettings = make(map[string]any)
+			s.globalSettings = make(map[string]json.RawMessage)
 			s.mu.Unlock()
 			return nil
 		}
 		return fmt.Errorf("failed to read global settings: %w", err)
 	}
 
-	var settings map[string]any
+	var settings map[string]json.RawMessage
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return fmt.Errorf("failed to parse global settings: %w", err)
 	}
 
-	model, _ := settings["model"].(string)
+	model := globalSettingString(settings, "model")
 	s.log.LogAttrs(context.Background(), slog.LevelDebug, "global settings reloaded",
 		slog.String("model", model),
 		slog.Int("keys", len(settings)),
@@ -918,12 +936,12 @@ func (s *Server) loadGlobalSettings() error {
 // field not set at the session level.
 func (s *Server) resolveSessionSettings(sessionName string) (model, effortLevel string) {
 	s.mu.RLock()
-	globalModel, _ := s.globalSettings["model"].(string)
-	globalEffort, _ := s.globalSettings["effortLevel"].(string)
+	globalModel := globalSettingString(s.globalSettings, "model")
+	globalEffort := globalSettingString(s.globalSettings, "effortLevel")
 	s.mu.RUnlock()
 
 	model = globalModel
-	model = adaptercursor.NormalizeModelAlias(model)
+	model = adaptercursor.NormalizeSessionSettingsModel(model)
 	effortLevel = globalEffort
 
 	if sessionName == "" {
@@ -939,7 +957,7 @@ func (s *Server) resolveSessionSettings(sessionName string) (model, effortLevel 
 	sessSettings := loadClydeSessionSettings(sessionName)
 	if sessSettings != nil {
 		if sessSettings.Model != "" {
-			model = adaptercursor.NormalizeModelAlias(sessSettings.Model)
+			model = adaptercursor.NormalizeSessionSettingsModel(sessSettings.Model)
 		}
 		if sessSettings.EffortLevel != "" {
 			effortLevel = sessSettings.EffortLevel
@@ -960,6 +978,21 @@ func (s *Server) resolveSessionSettings(sessionName string) (model, effortLevel 
 	}
 
 	return model, effortLevel
+}
+
+func globalSettingString(settings map[string]json.RawMessage, key string) string {
+	if len(settings) == 0 {
+		return ""
+	}
+	raw, ok := settings[key]
+	if !ok || len(raw) == 0 {
+		return ""
+	}
+	var out string
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return ""
+	}
+	return out
 }
 
 // loadClydeSessionSettings loads settings.json from the clyde global
@@ -1002,6 +1035,21 @@ func (s *Server) ListActiveSessions(_ context.Context, _ *clydev1.ListActiveSess
 	}
 
 	return &clydev1.ListActiveSessionsResponse{Sessions: active}, nil
+}
+
+func (s *Server) sessionIsActive(sessionName string) bool {
+	sessionName = strings.TrimSpace(sessionName)
+	if sessionName == "" {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, sess := range s.sessions {
+		if sess != nil && sess.sessionName == sessionName {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) ListSessions(ctx context.Context, _ *clydev1.ListSessionsRequest) (*clydev1.ListSessionsResponse, error) {
@@ -1119,7 +1167,7 @@ func (s *Server) refreshContextUsage(sess *session.Session) {
 	if sess == nil {
 		return
 	}
-	s.contextRefreshSem <- struct{}{}
+	s.contextRefreshSem <- contextRefreshPermit{Acquired: true}
 	defer func() { <-s.contextRefreshSem }()
 
 	workSess := *sess
@@ -1211,7 +1259,7 @@ func (s *Server) sessionSummary(store *session.FileStore, sess *session.Session)
 		}
 	}
 	if model == "-" && settings != nil && settings.Model != "" {
-		model = adaptercursor.NormalizeModelAlias(settings.Model)
+		model = adaptercursor.NormalizeSessionSettingsModel(settings.Model)
 	}
 	stats := inspectStatsFor(sess.Metadata.TranscriptPath)
 	size := int64(0)
@@ -1275,7 +1323,7 @@ func (s *Server) sessionDetail(store *session.FileStore, sess *session.Session) 
 	}
 	if model == "-" {
 		if settings, _ := store.LoadSettings(sess.Name); settings != nil && settings.Model != "" {
-			model = adaptercursor.NormalizeModelAlias(settings.Model)
+			model = adaptercursor.NormalizeSessionSettingsModel(settings.Model)
 		}
 	}
 	stats := inspectStatsFor(sess.Metadata.TranscriptPath)
@@ -1369,7 +1417,7 @@ func (s *Server) UpdateSessionSettings(ctx context.Context, req *clydev1.UpdateS
 	}
 	if req.Settings != nil {
 		if applyMask("model") {
-			current.Model = adaptercursor.NormalizeModelAlias(req.Settings.Model)
+			current.Model = adaptercursor.NormalizeSessionSettingsModel(req.Settings.Model)
 		}
 		if applyMask("effort_level") {
 			current.EffortLevel = req.Settings.EffortLevel
@@ -1955,6 +2003,9 @@ func (s *Server) runCompact(
 	if sess == nil {
 		return status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
 	}
+	if mode == compactengine.RuntimeModeApply && !req.GetForce() && s.sessionIsActive(sess.Name) {
+		return status.Errorf(codes.FailedPrecondition, "session %q is currently open; exit it first or pass --force", sess.Name)
+	}
 
 	strippers := compactengine.Strippers{}
 	if req.Strippers != nil {
@@ -1975,13 +2026,19 @@ func (s *Server) runCompact(
 		ev.Sequence = sequence
 		return stream.Send(ev)
 	}
+	if err := send(&clydev1.CompactEvent{
+		Kind:    clydev1.CompactEvent_KIND_STATUS,
+		Message: "loading transcript and probing context...",
+	}); err != nil {
+		return err
+	}
 
 	modelForCount := req.GetModel()
 	modelForRender := req.GetModel()
 	if !req.GetModelExplicit() {
 		modelForCount, modelForRender, _ = compactengine.ResolveModelForCounting(store, sess, req.GetModel())
 	}
-	upfront, _, upfrontErr := compactengine.BuildRuntimeUpfront(ctx, compactengine.RuntimeRequest{
+	upfront, staticOverhead, slice, upfrontErr := compactengine.BuildRuntimeUpfront(ctx, compactengine.RuntimeRequest{
 		Session:      sess,
 		Store:        store,
 		TargetTokens: int(req.GetTargetTokens()),
@@ -1991,6 +2048,12 @@ func (s *Server) runCompact(
 	}, modelForRender)
 	if upfrontErr != nil {
 		return status.Errorf(codes.Internal, "build compact upfront: %v", upfrontErr)
+	}
+	if err := send(&clydev1.CompactEvent{
+		Kind:    clydev1.CompactEvent_KIND_STATUS,
+		Message: "planning compaction...",
+	}); err != nil {
+		return err
 	}
 	if err := send(&clydev1.CompactEvent{
 		Kind: clydev1.CompactEvent_KIND_UPFRONT,
@@ -2035,16 +2098,19 @@ func (s *Server) runCompact(
 	}
 
 	result, runErr := compactengine.RunRuntime(ctx, compactengine.RuntimeRequest{
-		Session:       sess,
-		Store:         store,
-		TargetTokens:  int(req.GetTargetTokens()),
-		Reserved:      int(req.GetReservedTokens()),
-		Model:         modelForCount,
-		ModelExplicit: req.GetModelExplicit(),
-		Strippers:     strippers,
-		Summarize:     req.GetSummarize(),
-		Force:         req.GetForce(),
-		Mode:          mode,
+		Session:                sess,
+		Store:                  store,
+		TargetTokens:           int(req.GetTargetTokens()),
+		Reserved:               int(req.GetReservedTokens()),
+		Model:                  modelForCount,
+		ModelExplicit:          req.GetModelExplicit(),
+		Strippers:              strippers,
+		Summarize:              req.GetSummarize(),
+		Force:                  req.GetForce(),
+		Mode:                   mode,
+		PreparedUpfront:        &upfront,
+		PreparedStaticOverhead: staticOverhead,
+		PreparedSlice:          slice,
 	}, onIteration)
 	if runErr != nil {
 		s.log.Error("daemon.compact.run_failed",
