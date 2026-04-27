@@ -61,6 +61,7 @@ type Server struct {
 	log   *slog.Logger
 	token string
 	mux   *http.ServeMux
+	srv   *http.Server
 
 	mu       sync.Mutex
 	starting []startedSession
@@ -115,6 +116,7 @@ func (s *Server) Start(ctx context.Context) error {
 // without creating a bind gap.
 func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
 	srv := &http.Server{Addr: lis.Addr().String(), Handler: s.mux, ReadHeaderTimeout: 5 * time.Second}
+	s.srv = srv
 	s.log.Info("webapp listening", "addr", lis.Addr().String())
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve(lis) }()
@@ -122,7 +124,7 @@ func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
 	case <-ctx.Done():
 		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		_ = srv.Shutdown(shutCtx)
+		_ = s.Shutdown(shutCtx)
 		return nil
 	case err := <-errCh:
 		if errors.Is(err, http.ErrServerClosed) {
@@ -130,6 +132,17 @@ func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
 		}
 		return err
 	}
+}
+
+// Shutdown stops accepting new dashboard requests, closes idle
+// keepalive connections, and lets active handlers finish until ctx
+// expires.
+func (s *Server) Shutdown(ctx context.Context) error {
+	if s.srv == nil {
+		return nil
+	}
+	s.srv.SetKeepAlivesEnabled(false)
+	return s.srv.Shutdown(ctx)
 }
 
 func (s *Server) routes() *http.ServeMux {

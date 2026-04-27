@@ -37,6 +37,7 @@ type ExtraLoop func(log *slog.Logger) func()
 
 const adapterConfigReloadDebounce = 250 * time.Millisecond
 const adapterShutdownWait = 4 * time.Second
+const reloadHTTPDrainWait = 500 * time.Millisecond
 const envDaemonReloadChild = "CLYDE_DAEMON_RELOAD_CHILD"
 const envDaemonInheritedListeners = "CLYDE_DAEMON_INHERITED_LISTENERS"
 const envDaemonReadyFD = "CLYDE_DAEMON_READY_FD"
@@ -55,6 +56,7 @@ type adapterLaunchConfig struct {
 
 type adapterProcess struct {
 	cancel context.CancelFunc
+	drain  func(context.Context) error
 	done   chan struct{}
 	lis    net.Listener
 }
@@ -81,6 +83,8 @@ type inheritedRuntime struct {
 
 type webAppProcess struct {
 	cancel func()
+	drain  func(context.Context) error
+	done   chan struct{}
 	lis    net.Listener
 	cfg    config.WebAppConfig
 }
@@ -360,6 +364,7 @@ func reloadDaemonBinary(ctx context.Context, log *slog.Logger, grpcServer *grpc.
 		return reloadReport{}, err
 	}
 	srv.preserveRuntimeDirsOnClose()
+	drainReloadedPublicHTTP(log, rt)
 	go func() {
 		time.Sleep(100 * time.Millisecond)
 		log.Info("daemon.reload.draining_old_process",
@@ -368,6 +373,31 @@ func reloadDaemonBinary(ctx context.Context, log *slog.Logger, grpcServer *grpc.
 		grpcServer.GracefulStop()
 	}()
 	return reloadReport{BinaryReloaded: true, NewPID: cmd.Process.Pid}, nil
+}
+
+func drainReloadedPublicHTTP(log *slog.Logger, rt *daemonRuntime) {
+	if rt == nil {
+		return
+	}
+	if rt.adapter != nil {
+		rt.adapter.drainReloadedProcess(reloadHTTPDrainWait)
+	}
+	if rt.webapp != nil && rt.webapp.drain != nil {
+		log.Info("daemon.reload.draining_old_webapp",
+			"component", "daemon",
+			"addr", listenerAddr(rt.webapp.lis),
+		)
+		ctx, cancel := context.WithTimeout(context.Background(), reloadHTTPDrainWait)
+		err := rt.webapp.drain(ctx)
+		cancel()
+		if err != nil {
+			log.Warn("daemon.reload.webapp_drain_timeout",
+				"component", "daemon",
+				"addr", listenerAddr(rt.webapp.lis),
+				slog.Any("err", err),
+			)
+		}
+	}
 }
 
 func waitForReplacementDaemon(ctx context.Context, ready io.Reader) error {
@@ -447,6 +477,13 @@ func listenerFile(lis net.Listener) (*os.File, error) {
 	default:
 		return nil, fmt.Errorf("unsupported listener type %T", lis)
 	}
+}
+
+func listenerAddr(lis net.Listener) string {
+	if lis == nil {
+		return ""
+	}
+	return lis.Addr().String()
 }
 
 func validateReloadListenerConfig(rt *daemonRuntime) error {
@@ -555,7 +592,9 @@ func startWebApp(log *slog.Logger, srv *Server, inherited net.Listener) (*webApp
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		if err := srvW.StartOnListener(ctx, lis); err != nil {
 			log.Error("webapp.exited",
 				"component", "webapp",
@@ -565,6 +604,8 @@ func startWebApp(log *slog.Logger, srv *Server, inherited net.Listener) (*webApp
 	}()
 	return &webAppProcess{
 		cancel: cancel,
+		drain:  srvW.Shutdown,
+		done:   done,
 		lis:    lis,
 		cfg:    cfg.WebApp,
 	}, nil
@@ -820,6 +861,29 @@ func (c *adapterController) listener() net.Listener {
 	return c.proc.lis
 }
 
+func (c *adapterController) drainReloadedProcess(timeout time.Duration) {
+	c.mu.Lock()
+	proc := c.proc
+	c.mu.Unlock()
+	if proc == nil || proc.drain == nil {
+		return
+	}
+	c.log.Info("daemon.reload.draining_old_adapter",
+		"component", "daemon",
+		"addr", listenerAddr(proc.lis),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	err := proc.drain(ctx)
+	cancel()
+	if err != nil {
+		c.log.Warn("daemon.reload.adapter_drain_timeout",
+			"component", "daemon",
+			"addr", listenerAddr(proc.lis),
+			slog.Any("err", err),
+		)
+	}
+}
+
 func (c *adapterController) stop() {
 	c.mu.Lock()
 	proc := c.proc
@@ -855,6 +919,7 @@ func startAdapterProcess(log *slog.Logger, srv *adapter.Server, lis net.Listener
 	}()
 	return &adapterProcess{
 		cancel: cancel,
+		drain:  srv.Shutdown,
 		done:   done,
 		lis:    lis,
 	}

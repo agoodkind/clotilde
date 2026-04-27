@@ -39,7 +39,7 @@ func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
 	case <-ctx.Done():
 		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		_ = s.httpSrv.Shutdown(shutCtx)
+		_ = s.Shutdown(shutCtx)
 		if s.codexSessions != nil {
 			s.codexSessions.CloseAll()
 		}
@@ -50,6 +50,16 @@ func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
 		}
 		return err
 	}
+}
+
+// Shutdown stops accepting new adapter requests, closes idle keepalive
+// connections, and lets active handlers finish until ctx expires.
+func (s *Server) Shutdown(ctx context.Context) error {
+	if s.httpSrv == nil {
+		return nil
+	}
+	s.httpSrv.SetKeepAlivesEnabled(false)
+	return s.httpSrv.Shutdown(ctx)
 }
 
 func (s *Server) routes() *http.ServeMux {
