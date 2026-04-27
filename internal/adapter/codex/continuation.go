@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -29,6 +30,24 @@ type ContinuationDecision struct {
 	FingerprintMatch   bool
 	PreviousResponseID string
 	IncrementalInput   []map[string]any
+	Diagnostics        ContinuationDiagnostics
+}
+
+type ContinuationDiagnostics struct {
+	ExpectedEventCount int
+	CurrentEventCount  int
+	MatchStart         int
+	MatchEnd           int
+	Mismatch           *ContinuationMismatch
+}
+
+type ContinuationMismatch struct {
+	ExpectedEventIndex int
+	CurrentEventIndex  int
+	ExpectedItemIndex  int
+	CurrentItemIndex   int
+	Expected           string
+	Current            string
 }
 
 func NewContinuationStore() *ContinuationStore {
@@ -60,13 +79,14 @@ func (s *ContinuationStore) Prepare(req ResponseCreateWsRequest) ContinuationDec
 		out.MissReason = "fingerprint_mismatch"
 		return out
 	}
-	incremental, reason := incrementalContinuationInput(entry.Input, entry.OutputItems, req.Input)
-	if len(incremental) == 0 {
-		out.MissReason = reason
+	diff := incrementalContinuationInput(entry.Input, entry.OutputItems, req.Input)
+	out.Diagnostics = diff.Diagnostics
+	if len(diff.IncrementalInput) == 0 {
+		out.MissReason = diff.Reason
 		return out
 	}
 	out.Hit = true
-	out.IncrementalInput = incremental
+	out.IncrementalInput = diff.IncrementalInput
 	return out
 }
 
@@ -105,31 +125,28 @@ func (s *ContinuationStore) Forget(key string) {
 	delete(s.entries, key)
 }
 
-func incrementalContinuationInput(previous, outputItems, current []map[string]any) ([]map[string]any, string) {
+type continuationDiffResult struct {
+	IncrementalInput []map[string]any
+	Reason           string
+	Diagnostics      ContinuationDiagnostics
+}
+
+func incrementalContinuationInput(previous, outputItems, current []map[string]any) continuationDiffResult {
 	if len(current) == 0 {
-		return nil, "empty_input"
+		return continuationDiffResult{Reason: "empty_input"}
 	}
 	if len(outputItems) > 0 {
-		if len(current) > len(previous)+len(outputItems) && inputPrefixEqual(previous, current) {
-			tailStart, ok := continuationOutputPrefixOffset(outputItems, current[len(previous):])
-			if ok {
-				return cloneInput(current[len(previous)+tailStart+len(outputItems):]), ""
-			}
-		}
-		if end, ok := continuationOutputSequenceEnd(outputItems, current); ok && end < len(current) {
-			return cloneInput(current[end:]), ""
-		}
-		return nil, "output_item_baseline_mismatch"
+		return diffContinuationOutputBaseline(outputItems, current)
 	}
 	if len(previous) > 0 && len(current) > len(previous) && inputPrefixEqual(previous, current) {
-		return cloneInput(current[len(previous):]), ""
+		return continuationDiffResult{IncrementalInput: cloneInput(current[len(previous):])}
 	}
 	for i := len(current) - 1; i >= 0; i-- {
 		if itemRole(current[i]) == "assistant" && i+1 < len(current) {
-			return cloneInput(current[i+1:]), ""
+			return continuationDiffResult{IncrementalInput: cloneInput(current[i+1:])}
 		}
 	}
-	return nil, "no_incremental_input"
+	return continuationDiffResult{Reason: "no_incremental_input"}
 }
 
 func inputPrefixEqual(previous, current []map[string]any) bool {
@@ -138,51 +155,6 @@ func inputPrefixEqual(previous, current []map[string]any) bool {
 	}
 	for i := range previous {
 		if !jsonEqual(previous[i], current[i]) {
-			return false
-		}
-	}
-	return true
-}
-
-func continuationOutputPrefixOffset(outputItems, current []map[string]any) (int, bool) {
-	if len(outputItems) > len(current) {
-		return 0, false
-	}
-	if continuationOutputPrefixEqual(outputItems, current) {
-		return 0, true
-	}
-	for offset := 0; offset < len(current); offset++ {
-		if itemRole(current[offset]) != "assistant" {
-			return 0, false
-		}
-		if len(outputItems) > len(current[offset+1:]) {
-			return 0, false
-		}
-		if continuationOutputPrefixEqual(outputItems, current[offset+1:]) {
-			return offset + 1, true
-		}
-	}
-	return 0, false
-}
-
-func continuationOutputSequenceEnd(outputItems, current []map[string]any) (int, bool) {
-	if len(outputItems) == 0 || len(outputItems) > len(current) {
-		return 0, false
-	}
-	for start := len(current) - len(outputItems); start >= 0; start-- {
-		if continuationOutputPrefixEqual(outputItems, current[start:]) {
-			return start + len(outputItems), true
-		}
-	}
-	return 0, false
-}
-
-func continuationOutputPrefixEqual(outputItems, current []map[string]any) bool {
-	if len(outputItems) > len(current) {
-		return false
-	}
-	for i := range outputItems {
-		if !continuationItemEqual(outputItems[i], current[i]) {
 			return false
 		}
 	}
@@ -199,6 +171,131 @@ func continuationItemEqual(a, b map[string]any) bool {
 		}
 	}
 	return jsonEqual(canonicalContinuationItem(a), canonicalContinuationItem(b))
+}
+
+type indexedContinuationEvent struct {
+	Event     continuationEvent
+	ItemIndex int
+}
+
+func diffContinuationOutputBaseline(outputItems, current []map[string]any) continuationDiffResult {
+	expected := indexedContinuationEvents(outputItems)
+	actual := indexedContinuationEvents(current)
+	out := continuationDiffResult{
+		Diagnostics: ContinuationDiagnostics{
+			ExpectedEventCount: len(expected),
+			CurrentEventCount:  len(actual),
+			MatchStart:         -1,
+			MatchEnd:           -1,
+		},
+	}
+	if len(expected) == 0 {
+		out.Reason = "output_item_baseline_without_events"
+		return out
+	}
+	if len(actual) < len(expected) {
+		out.Reason = "output_item_baseline_mismatch"
+		out.Diagnostics.Mismatch = continuationMismatchAt(expected, actual, 0, 0)
+		return out
+	}
+	for start := len(actual) - len(expected); start >= 0; start-- {
+		if continuationEventSequenceEqual(expected, actual[start:start+len(expected)]) {
+			last := actual[start+len(expected)-1]
+			tailStart := last.ItemIndex + 1
+			out.Diagnostics.MatchStart = actual[start].ItemIndex
+			out.Diagnostics.MatchEnd = tailStart
+			if tailStart < len(current) {
+				out.IncrementalInput = cloneInput(current[tailStart:])
+				return out
+			}
+			out.Reason = "no_incremental_input_after_output_baseline"
+			return out
+		}
+	}
+	out.Reason = "output_item_baseline_mismatch"
+	bestStart, matched := continuationBestEventPrefix(expected, actual)
+	out.Diagnostics.Mismatch = continuationMismatchAt(expected, actual, matched, bestStart+matched)
+	return out
+}
+
+func indexedContinuationEvents(items []map[string]any) []indexedContinuationEvent {
+	out := make([]indexedContinuationEvent, 0, len(items))
+	for idx, item := range items {
+		event, ok := canonicalContinuationEvent(item)
+		if !ok {
+			event = continuationEvent{
+				Kind:    "raw:" + strings.TrimSpace(mapString(item, "type")),
+				Payload: canonicalContinuationJSON(canonicalContinuationItem(item)),
+			}
+		}
+		out = append(out, indexedContinuationEvent{Event: event, ItemIndex: idx})
+	}
+	return out
+}
+
+func continuationEventSequenceEqual(expected, actual []indexedContinuationEvent) bool {
+	if len(expected) != len(actual) {
+		return false
+	}
+	for i := range expected {
+		if !continuationEventsEqual(expected[i].Event, actual[i].Event) {
+			return false
+		}
+	}
+	return true
+}
+
+func continuationEventsEqual(a, b continuationEvent) bool {
+	if a.Identity != "" || b.Identity != "" {
+		return a.Kind == b.Kind && a.Identity != "" && a.Identity == b.Identity
+	}
+	return a == b
+}
+
+func continuationBestEventPrefix(expected, actual []indexedContinuationEvent) (int, int) {
+	bestStart := 0
+	bestMatched := 0
+	for start := range actual {
+		matched := 0
+		for matched < len(expected) && start+matched < len(actual) {
+			if !continuationEventsEqual(expected[matched].Event, actual[start+matched].Event) {
+				break
+			}
+			matched++
+		}
+		if matched > bestMatched {
+			bestStart = start
+			bestMatched = matched
+		}
+	}
+	if bestMatched == 0 && len(expected) > 0 {
+		for start := range actual {
+			if actual[start].Event.Kind == expected[0].Event.Kind {
+				return start, 0
+			}
+		}
+	}
+	return bestStart, bestMatched
+}
+
+func continuationMismatchAt(expected, actual []indexedContinuationEvent, expectedIdx, actualIdx int) *ContinuationMismatch {
+	mismatch := &ContinuationMismatch{
+		ExpectedEventIndex: expectedIdx,
+		CurrentEventIndex:  actualIdx,
+		ExpectedItemIndex:  -1,
+		CurrentItemIndex:   -1,
+		Expected:           "<end>",
+		Current:            "<end>",
+	}
+	if expectedIdx >= 0 && expectedIdx < len(expected) {
+		mismatch.ExpectedItemIndex = expected[expectedIdx].ItemIndex
+		mismatch.Expected = expected[expectedIdx].Event.Summary()
+	}
+	if actualIdx >= 0 && actualIdx < len(actual) {
+		mismatch.CurrentItemIndex = actual[actualIdx].ItemIndex
+		mismatch.Current = actual[actualIdx].Event.Summary()
+	}
+	return mismatch
 }
 
 type continuationEvent struct {
@@ -251,9 +348,36 @@ func canonicalContinuationEvent(item map[string]any) (continuationEvent, bool) {
 			Identity: strings.TrimSpace(mapString(item, "call_id")),
 			Text:     continuationOutputText(item["output"]),
 		}, true
+	case "reasoning":
+		return continuationEvent{
+			Kind:     "reasoning",
+			Identity: strings.TrimSpace(mapString(item, "id")),
+			Text:     continuationReasoningText(item),
+			Payload:  rawString(item, "encrypted_content"),
+		}, true
 	default:
 		return continuationEvent{}, false
 	}
+}
+
+func (e continuationEvent) Summary() string {
+	parts := []string{"kind=" + e.Kind}
+	if e.Identity != "" {
+		parts = append(parts, "id="+e.Identity)
+	}
+	if e.Role != "" {
+		parts = append(parts, "role="+e.Role)
+	}
+	if e.Name != "" {
+		parts = append(parts, "name="+e.Name)
+	}
+	if e.Text != "" {
+		parts = append(parts, "text_len="+strconv.Itoa(len(e.Text)))
+	}
+	if e.Payload != "" {
+		parts = append(parts, "payload_len="+strconv.Itoa(len(e.Payload)))
+	}
+	return strings.Join(parts, " ")
 }
 
 func canonicalContinuationItem(item map[string]any) map[string]any {
@@ -322,6 +446,26 @@ func continuationOutputText(raw any) string {
 		return text
 	}
 	return ""
+}
+
+func continuationReasoningText(item map[string]any) string {
+	if text := continuationContentText(item["summary"]); text != "" {
+		return text
+	}
+	if text := continuationContentText(item["content"]); text != "" {
+		return text
+	}
+	raw := map[string]any{}
+	if summary, ok := item["summary"]; ok {
+		raw["summary"] = summary
+	}
+	if content, ok := item["content"]; ok {
+		raw["content"] = content
+	}
+	if len(raw) == 0 {
+		return ""
+	}
+	return canonicalContinuationJSON(raw)
 }
 
 func canonicalContinuationString(raw string) string {

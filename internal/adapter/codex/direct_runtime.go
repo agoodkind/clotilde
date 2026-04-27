@@ -46,7 +46,7 @@ func RunDirect(
 		var continuation ContinuationDecision
 		if cfg.Continuation != nil {
 			continuation = cfg.Continuation.Prepare(fullWSReq)
-			LogContinuationDecision(ctx, cfg.Log, ContinuationTelemetry{
+			continuationTelemetry := ContinuationTelemetry{
 				RequestID:          cfg.RequestID,
 				Alias:              model.Alias,
 				Transport:          "responses_websocket",
@@ -56,7 +56,20 @@ func RunDirect(
 				FingerprintMatch:   continuation.FingerprintMatch,
 				PreviousResponseID: continuation.PreviousResponseID,
 				IncrementalCount:   len(continuation.IncrementalInput),
-			})
+				ExpectedEventCount: continuation.Diagnostics.ExpectedEventCount,
+				CurrentEventCount:  continuation.Diagnostics.CurrentEventCount,
+				BaselineMatchStart: continuation.Diagnostics.MatchStart,
+				BaselineMatchEnd:   continuation.Diagnostics.MatchEnd,
+			}
+			if mismatch := continuation.Diagnostics.Mismatch; mismatch != nil {
+				continuationTelemetry.MismatchExpectedIndex = mismatch.ExpectedEventIndex
+				continuationTelemetry.MismatchCurrentIndex = mismatch.CurrentEventIndex
+				continuationTelemetry.MismatchExpectedItem = mismatch.ExpectedItemIndex
+				continuationTelemetry.MismatchCurrentItem = mismatch.CurrentItemIndex
+				continuationTelemetry.MismatchExpected = mismatch.Expected
+				continuationTelemetry.MismatchCurrent = mismatch.Current
+			}
+			LogContinuationDecision(ctx, cfg.Log, continuationTelemetry)
 			if continuation.Hit {
 				wsReq = WithPreviousResponseID(wsReq, continuation.PreviousResponseID, continuation.IncrementalInput)
 			}

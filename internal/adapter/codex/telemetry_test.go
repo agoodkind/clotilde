@@ -53,3 +53,45 @@ func TestLogTransportPreparedIncludesParityFields(t *testing.T) {
 		}
 	}
 }
+
+func TestLogContinuationDecisionIncludesMismatchDiagnostics(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	LogContinuationDecision(context.Background(), log, ContinuationTelemetry{
+		RequestID:             "req-1",
+		Alias:                 "gpt-5.4",
+		Transport:             "responses_websocket",
+		Key:                   "cursor:conv-123",
+		Hit:                   false,
+		MissReason:            "output_item_baseline_mismatch",
+		FingerprintMatch:      true,
+		PreviousResponseID:    "resp-123",
+		ExpectedEventCount:    1,
+		CurrentEventCount:     4,
+		BaselineMatchStart:    -1,
+		BaselineMatchEnd:      -1,
+		MismatchExpectedIndex: 0,
+		MismatchCurrentIndex:  2,
+		MismatchExpectedItem:  0,
+		MismatchCurrentItem:   2,
+		MismatchExpected:      "kind=tool_call id=call_pwd name=Shell payload_len=35",
+		MismatchCurrent:       "kind=tool_call id=call_ls name=Shell payload_len=52",
+	})
+
+	out := buf.String()
+	for _, want := range []string{
+		`"miss_reason":"output_item_baseline_mismatch"`,
+		`"expected_event_count":1`,
+		`"current_event_count":4`,
+		`"baseline_match_start":-1`,
+		`"mismatch_expected_event_index":0`,
+		`"mismatch_current_event_index":2`,
+		`"mismatch_expected":"kind=tool_call id=call_pwd name=Shell payload_len=35"`,
+		`"mismatch_current":"kind=tool_call id=call_ls name=Shell payload_len=52"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("log output missing %q in %s", want, out)
+		}
+	}
+}

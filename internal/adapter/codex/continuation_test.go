@@ -1,6 +1,9 @@
 package codex
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestContinuationStoreMissesWithoutPriorResponse(t *testing.T) {
 	store := NewContinuationStore()
@@ -329,6 +332,97 @@ func TestContinuationToolEventsCanonicalizeShellArgumentAliases(t *testing.T) {
 	}
 	if !continuationItemEqual(a, b) {
 		t.Fatalf("expected canonical shell calls to match")
+	}
+}
+
+func TestContinuationStoreReportsCanonicalMismatchDiagnostics(t *testing.T) {
+	store := NewContinuationStore()
+	first := ResponseCreateWsRequest{
+		Type:           "response.create",
+		Model:          "gpt-5.4",
+		Instructions:   "base",
+		PromptCacheKey: "cursor:conv-123",
+		Input: []map[string]any{
+			{"type": "message", "role": "user", "content": "inspect"},
+		},
+	}
+	store.Complete(ContinuationDecision{}, first, RunResult{
+		ResponseID: "resp-1",
+		OutputItems: []map[string]any{{
+			"type":      "function_call",
+			"call_id":   "call_pwd",
+			"name":      "shell_command",
+			"arguments": `{"command":"pwd","workdir":"/repo"}`,
+		}},
+	})
+
+	second := first
+	second.Input = []map[string]any{
+		{"type": "message", "role": "developer", "content": "reshaped cursor preamble"},
+		{"type": "message", "role": "user", "content": "inspect"},
+		{
+			"type":      "function_call",
+			"call_id":   "call_ls",
+			"name":      "Shell",
+			"arguments": `{"working_directory":"/repo","command":"ls","block_until_ms":1000}`,
+		},
+		{"type": "message", "role": "user", "content": "next"},
+	}
+	decision := store.Prepare(second)
+	if decision.Hit {
+		t.Fatalf("unexpected continuation hit")
+	}
+	if decision.MissReason != "output_item_baseline_mismatch" {
+		t.Fatalf("miss_reason=%q want output_item_baseline_mismatch", decision.MissReason)
+	}
+	mismatch := decision.Diagnostics.Mismatch
+	if mismatch == nil {
+		t.Fatalf("expected mismatch diagnostics")
+	}
+	if !strings.Contains(mismatch.Expected, "kind=tool_call id=call_pwd name=Shell") {
+		t.Fatalf("expected summary=%q", mismatch.Expected)
+	}
+	if !strings.Contains(mismatch.Current, "kind=tool_call id=call_ls name=Shell") {
+		t.Fatalf("current summary=%q", mismatch.Current)
+	}
+}
+
+func TestContinuationStoreDiffsReasoningOutputItems(t *testing.T) {
+	store := NewContinuationStore()
+	first := ResponseCreateWsRequest{
+		Type:           "response.create",
+		Model:          "gpt-5.4",
+		Instructions:   "base",
+		PromptCacheKey: "cursor:conv-123",
+		Input: []map[string]any{
+			{"type": "message", "role": "user", "content": "think"},
+		},
+	}
+	reasoning := map[string]any{
+		"type": "reasoning",
+		"id":   "rs_1",
+		"summary": []map[string]any{{
+			"type": "summary_text",
+			"text": "Need to inspect.",
+		}},
+	}
+	store.Complete(ContinuationDecision{}, first, RunResult{
+		ResponseID:  "resp-1",
+		OutputItems: []map[string]any{reasoning},
+	})
+
+	second := first
+	second.Input = append(cloneInput(first.Input), cloneMap(reasoning), map[string]any{
+		"type":    "message",
+		"role":    "user",
+		"content": "next",
+	})
+	decision := store.Prepare(second)
+	if !decision.Hit {
+		t.Fatalf("expected continuation hit, miss_reason=%q", decision.MissReason)
+	}
+	if len(decision.IncrementalInput) != 1 || itemRole(decision.IncrementalInput[0]) != "user" {
+		t.Fatalf("incremental_input=%v", decision.IncrementalInput)
 	}
 }
 
