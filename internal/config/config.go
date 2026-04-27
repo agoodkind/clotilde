@@ -43,6 +43,9 @@ type Config struct {
 	// is the wiring point for the eventual rewrite against the
 	// in-process adapter. Disabled by default until then.
 	Labeler LabelerConfig `json:"labeler,omitempty" toml:"labeler,omitempty"`
+	// MITM configures the local capture proxy used for Claude/Codex
+	// subprocesses and for adapter-side request observability.
+	MITM MITMConfig `json:"mitm,omitempty" toml:"mitm,omitempty"`
 }
 
 // LoggingConfig carries global logging settings.
@@ -679,6 +682,25 @@ type Defaults struct {
 	Model           string `json:"model,omitempty" toml:"model,omitempty"`
 	EffortLevel     string `json:"effortLevel,omitempty" toml:"effort_level,omitempty"`
 	AnthropicAPIKey string `json:"anthropicApiKey,omitempty" toml:"anthropic_api_key,omitempty"`
+}
+
+// MITMConfig configures the local capture proxy and its persistence.
+type MITMConfig struct {
+	EnabledDefault bool   `json:"enabledDefault,omitempty" toml:"enabled_default,omitempty"`
+	Providers      string `json:"providers,omitempty" toml:"providers,omitempty"`
+	BodyMode       string `json:"bodyMode,omitempty" toml:"body_mode,omitempty"`
+	CaptureDir     string `json:"captureDir,omitempty" toml:"capture_dir,omitempty"`
+}
+
+func (m MITMConfig) EnabledFor(provider string) bool {
+	switch normalizeMITMProviders(m.Providers) {
+	case "claude":
+		return provider == "claude"
+	case "codex":
+		return provider == "codex"
+	default:
+		return provider == "claude" || provider == "codex"
+	}
 }
 
 // Profile represents a named preset of session settings.

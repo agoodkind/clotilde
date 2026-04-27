@@ -3,18 +3,18 @@ package config
 import "testing"
 
 func TestSearchLocalResolvedEmbeddingURLFallsBackToURL(t *testing.T) {
-	s := SearchLocal{URL: "http://127.0.0.1:1234/"}
-	if got := s.ResolvedEmbeddingURL(); got != "http://127.0.0.1:1234" {
+	s := SearchLocal{URL: "http://[::1]:1234/"}
+	if got := s.ResolvedEmbeddingURL(); got != "http://[::1]:1234" {
 		t.Fatalf("got %q", got)
 	}
 }
 
 func TestSearchLocalResolvedEmbeddingURLUsesEmbeddingURL(t *testing.T) {
 	s := SearchLocal{
-		URL:          "http://127.0.0.1:1234",
-		EmbeddingURL: "http://127.0.0.1:5400/",
+		URL:          "http://[::1]:1234",
+		EmbeddingURL: "http://[::1]:5400/",
 	}
-	if got := s.ResolvedEmbeddingURL(); got != "http://127.0.0.1:5400" {
+	if got := s.ResolvedEmbeddingURL(); got != "http://[::1]:5400" {
 		t.Fatalf("got %q", got)
 	}
 }
