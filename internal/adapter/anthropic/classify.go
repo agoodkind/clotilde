@@ -1,4 +1,4 @@
-// Response classification for Anthropic /v1/messages calls.
+// Package anthropic implements Anthropic wire models and helpers.
 //
 // Classify maps the observed transport state, HTTP status, and unified
 // rate-limit response headers into one of four mutually exclusive
@@ -148,21 +148,19 @@ func Classify(resp *http.Response, transportErr error) Classification {
 
 	out := Classification{Status: resp.StatusCode}
 
-	switch {
-	case resp.StatusCode == http.StatusOK:
+	switch resp.StatusCode {
+	case http.StatusOK:
 		populateWarningFlags(&out, resp.Header)
 		if out.HasOverageRejected || out.HasOverageActive || out.SurpassedThreshold || out.AllowedWarning {
 			out.Class = ResponseClassSuccessWithWarning
 		} else {
 			out.Class = ResponseClassSuccessNoWarning
 		}
-	case resp.StatusCode == http.StatusTooManyRequests:
+	case http.StatusTooManyRequests:
 		populateWarningFlags(&out, resp.Header)
 		out.Class = ResponseClassRetryableError
 		out.Retryable = true
-	case resp.StatusCode == http.StatusBadGateway,
-		resp.StatusCode == http.StatusServiceUnavailable,
-		resp.StatusCode == http.StatusGatewayTimeout:
+	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
 		out.Class = ResponseClassRetryableError
 		out.Retryable = true
 	default:

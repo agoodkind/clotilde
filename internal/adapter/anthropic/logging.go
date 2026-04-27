@@ -1,4 +1,4 @@
-// Response logging: rate-limit header capture, typed responseEvent, and JSONL mirror.
+// Package anthropic implements Anthropic wire models and helpers.
 package anthropic
 
 import (

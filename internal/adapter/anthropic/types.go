@@ -1,9 +1,10 @@
-// Wire types, request/response shapes, and stream event vocabulary.
+// Package anthropic implements Anthropic wire models and helpers.
 package anthropic
 
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 )
 
@@ -199,7 +200,7 @@ func (r Request) MarshalJSON() ([]byte, error) {
 	insertion := []byte(`"system":` + string(blocks) + `,`)
 	// Insert just after the opening brace.
 	if len(encoded) < 2 || encoded[0] != '{' {
-		return nil, json.Unmarshal(encoded, nil) // should never happen
+		return nil, fmt.Errorf("anthropic: marshaled request is not a JSON object: %q", encoded)
 	}
 	out := make([]byte, 0, len(encoded)+len(insertion))
 	out = append(out, '{')

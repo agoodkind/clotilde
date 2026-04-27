@@ -1,4 +1,4 @@
-// Subprocess: argv assembly, environment, and working directory.
+// Package fallback contains Anthropic CLI fallback runtime helpers.
 package fallback
 
 import (
@@ -12,6 +12,9 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	adapterconfig "goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/mitm"
 )
 
 // stderrTailLimit caps how much stderr we hold per spawn before discarding
@@ -225,6 +228,13 @@ func (c *Client) buildEnv() []string {
 			"CLYDE_DISABLE_DAEMON=1",
 			"CLYDE_SUPPRESS_HOOKS=1",
 		)
+	}
+	if cfg, err := adapterconfig.LoadGlobalOrDefault(); err == nil {
+		if extra, mitmErr := mitm.ClaudeEnv(context.Background(), cfg.MITM, slog.Default()); mitmErr == nil {
+			for key, value := range extra {
+				env = append(env, fmt.Sprintf("%s=%s", key, value))
+			}
+		}
 	}
 	return env
 }

@@ -1,4 +1,4 @@
-// Config validation, Client constructor, and Collect/Stream entry points.
+// Package fallback contains Anthropic CLI fallback runtime helpers.
 package fallback
 
 import (

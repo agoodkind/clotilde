@@ -1,4 +1,4 @@
-// Friendly rate-limit error messages built from anthropic-ratelimit-unified-*
+// Package anthropic implements Anthropic wire models and helpers.
 // response headers. Mirrors the user-visible strings the upstream CLI shows
 // (e.g. "You've hit your weekly limit · resets 3:45pm (PDT)") so OpenAI-spec
 // clients like Cursor surface something actionable instead of the raw 429

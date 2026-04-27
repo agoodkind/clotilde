@@ -1,6 +1,8 @@
 package anthropicbackend
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -23,10 +25,10 @@ type FallbackConfig struct {
 type Dispatcher interface {
 	ResponseDispatcher
 	AnthropicConfigured() bool
-	AcquirePrimary(any) error
+	AcquirePrimary(context.Context) error
 	ReleasePrimary()
-	BuildAnthropicWire(adapteropenai.ChatRequest, adaptermodel.ResolvedModel, string, any, string) (anthropic.Request, error)
-	ParseResponseFormat(any) any
+	BuildAnthropicWire(adapteropenai.ChatRequest, adaptermodel.ResolvedModel, string, ResponseFormatSpec, string) (anthropic.Request, error)
+	ParseResponseFormat(json.RawMessage) ResponseFormatSpec
 	RequestContextTrackerKey(adapteropenai.ChatRequest, string) string
 	WriteError(http.ResponseWriter, int, string, string)
 	HandleOAuth(http.ResponseWriter, *http.Request, adapteropenai.ChatRequest, adaptermodel.ResolvedModel, string, string, bool) error

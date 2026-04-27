@@ -39,8 +39,9 @@ type ResponseDispatcher interface {
 	StreamChunkFromTooltrans(adapteropenai.StreamChunk) adapteropenai.StreamChunk
 	StreamChunkHasVisibleContent(adapteropenai.StreamChunk) bool
 	TrackAnthropicContextUsage(string, adapteropenai.Usage) TrackedUsage
-	JSONCoercion(any) JSONCoercion
-	WriteJSON(http.ResponseWriter, int, any)
+	JSONCoercion(ResponseFormatSpec) JSONCoercion
+	WriteJSON(http.ResponseWriter, int, adapteropenai.ChatResponse)
+	WriteErrorJSON(http.ResponseWriter, int, adapteropenai.ErrorResponse)
 	LogTerminal(context.Context, adapterruntime.RequestEvent)
 	LogCacheUsageAnthropic(context.Context, string, string, string, anthropic.Usage)
 	CacheTTL() string
@@ -57,7 +58,7 @@ func CollectResponse(
 	model adaptermodel.ResolvedModel,
 	reqID string,
 	started time.Time,
-	jsonSpec any,
+	jsonSpec ResponseFormatSpec,
 	escalate bool,
 	trackerKey string,
 ) error {
@@ -122,7 +123,9 @@ func CollectResponse(
 			err,
 			escalate,
 			func(status int, code, msg string) error {
-				d.WriteJSON(w, status, map[string]any{"error": map[string]any{"message": msg, "type": code}})
+				d.WriteErrorJSON(w, status, adapteropenai.ErrorResponse{
+					Error: adapteropenai.ErrorBody{Message: msg, Type: code},
+				})
 				return nil
 			},
 			http.StatusBadGateway,
@@ -214,7 +217,9 @@ func StreamResponse(
 			fmt.Errorf("no_flusher: streaming not supported by transport"),
 			escalate,
 			func(status int, code, msg string) error {
-				d.WriteJSON(w, status, map[string]any{"error": map[string]any{"message": msg, "type": code}})
+				d.WriteErrorJSON(w, status, adapteropenai.ErrorResponse{
+					Error: adapteropenai.ErrorBody{Message: msg, Type: code},
+				})
 				return nil
 			},
 			http.StatusInternalServerError,

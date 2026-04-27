@@ -1,4 +1,4 @@
-// Synthesized Claude Code transcript JSONL for --resume continuity.
+// Package fallback contains Anthropic CLI fallback runtime helpers.
 // Phase 3 of the adapter-prompt-caching plan: instead of flattening
 // the whole history into a single positional prompt every turn, we
 // write a JSONL transcript in the shape Claude Code expects, then

@@ -1,4 +1,4 @@
-// stream-json stdout parsing for Collect and Stream.
+// Package fallback contains Anthropic CLI fallback runtime helpers.
 package fallback
 
 import (

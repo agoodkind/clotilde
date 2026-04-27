@@ -197,11 +197,14 @@ func (d *fakeResponseDispatcher) TrackAnthropicContextUsage(string, adapteropena
 	return TrackedUsage{}
 }
 
-func (d *fakeResponseDispatcher) JSONCoercion(any) JSONCoercion {
+func (d *fakeResponseDispatcher) JSONCoercion(ResponseFormatSpec) JSONCoercion {
 	return JSONCoercion{}
 }
 
-func (d *fakeResponseDispatcher) WriteJSON(http.ResponseWriter, int, any) {
+func (d *fakeResponseDispatcher) WriteJSON(http.ResponseWriter, int, adapteropenai.ChatResponse) {
+}
+
+func (d *fakeResponseDispatcher) WriteErrorJSON(http.ResponseWriter, int, adapteropenai.ErrorResponse) {
 }
 
 func (d *fakeResponseDispatcher) LogTerminal(context.Context, adapterruntime.RequestEvent) {

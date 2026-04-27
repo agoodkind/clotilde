@@ -1,4 +1,4 @@
-// Client construction and /v1/messages request execution.
+// Package anthropic implements Anthropic wire models and helpers.
 package anthropic
 
 import (

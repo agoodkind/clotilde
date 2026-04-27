@@ -2,6 +2,7 @@ package anthropicbackend
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -25,8 +26,8 @@ type FallbackResponseDispatcher interface {
 	LogCacheUsageFallback(context.Context, string, string, string, int, int, int)
 	AcquireFallback(context.Context) error
 	ReleaseFallback()
-	ParseResponseFormat(any) any
-	FallbackJSONSystemPrompt(any) string
+	ParseResponseFormat(json.RawMessage) ResponseFormatSpec
+	FallbackJSONSystemPrompt(ResponseFormatSpec) string
 	FallbackStreamPassthrough() bool
 	FallbackDropUnsupported() bool
 	FallbackTranscriptSynthesisEnabled() bool
@@ -137,7 +138,7 @@ func CollectFallbackResponse(
 	model adaptermodel.ResolvedModel,
 	reqID string,
 	started time.Time,
-	jsonSpec any,
+	jsonSpec ResponseFormatSpec,
 	escalate bool,
 ) error {
 	d.EmitRequestStarted(ctx, model, "fallback", reqID, req.Model, false)

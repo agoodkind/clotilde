@@ -1,4 +1,4 @@
-// Request, result, and stream-json event shapes.
+// Package fallback contains Anthropic CLI fallback runtime helpers.
 package fallback
 
 // Message is one turn in the conversation. The driver collapses the

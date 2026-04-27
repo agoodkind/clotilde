@@ -1,4 +1,4 @@
-// Deterministic session-id derivation. Same conversation yields the
+// Package fallback contains Anthropic CLI fallback runtime helpers.
 // same UUID across back-to-back fallback invocations so `claude -p`
 // writes to a stable transcript file, which in turn stabilizes the
 // byte sequence the upstream prompt cache hashes against.

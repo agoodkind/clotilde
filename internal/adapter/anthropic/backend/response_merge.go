@@ -27,6 +27,17 @@ type JSONCoercion struct {
 	Validate func(text string) bool
 }
 
+// ResponseFormatSpec is the backend-local shape for the optional OpenAI
+// `response_format` request contract. The root adapter translates its decoded
+// request field into this neutral backend form so Anthropic ownership stays
+// inside the backend package without creating a package cycle back to root.
+type ResponseFormatSpec struct {
+	Mode       string
+	SchemaName string
+	// TODO replace with a deeply enumerated named type
+	Schema     json.RawMessage
+}
+
 // MergeStreamChunks reconstructs the final ChatResponse from a buffer
 // of streamed OpenAI chunks emitted by the Anthropic translator.
 //

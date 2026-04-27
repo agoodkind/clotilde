@@ -68,11 +68,11 @@ func (d *fakeFallbackDispatcher) ReleaseFallback() {
 	d.releaseCount++
 }
 
-func (d *fakeFallbackDispatcher) ParseResponseFormat(raw any) any {
-	return raw
+func (d *fakeFallbackDispatcher) ParseResponseFormat(raw json.RawMessage) ResponseFormatSpec {
+	return ResponseFormatSpec{Mode: string(raw)}
 }
 
-func (d *fakeFallbackDispatcher) FallbackJSONSystemPrompt(any) string {
+func (d *fakeFallbackDispatcher) FallbackJSONSystemPrompt(ResponseFormatSpec) string {
 	return d.jsonPrompt
 }
 
@@ -92,7 +92,12 @@ func (d *fakeFallbackDispatcher) FallbackTranscriptWorkspaceDir(string) string {
 	return d.workspaceDir
 }
 
-func (d *fakeFallbackDispatcher) WriteJSON(_ http.ResponseWriter, status int, v any) {
+func (d *fakeFallbackDispatcher) WriteJSON(_ http.ResponseWriter, status int, v adapteropenai.ChatResponse) {
+	d.writeStatus = status
+	d.writeValue = v
+}
+
+func (d *fakeFallbackDispatcher) WriteErrorJSON(_ http.ResponseWriter, status int, v adapteropenai.ErrorResponse) {
 	d.writeStatus = status
 	d.writeValue = v
 }
@@ -148,7 +153,7 @@ func TestCollectFallbackResponseWritesFinalAndTerminalEvents(t *testing.T) {
 	}
 	req := fallback.Request{Model: "sonnet", SessionID: "session-1"}
 	model := adaptermodel.ResolvedModel{Alias: "alias", Backend: adaptermodel.BackendFallback}
-	err := CollectFallbackResponse(dispatcher, nil, context.Background(), req, model, "req-1", time.Now(), nil, false)
+	err := CollectFallbackResponse(dispatcher, nil, context.Background(), req, model, "req-1", time.Now(), ResponseFormatSpec{}, false)
 	if err != nil {
 		t.Fatalf("CollectFallbackResponse: %v", err)
 	}
@@ -176,7 +181,7 @@ func TestCollectFallbackResponseEscalatesErrorsWithoutWriting(t *testing.T) {
 	}}
 	req := fallback.Request{Model: "sonnet"}
 	model := adaptermodel.ResolvedModel{Alias: "alias", Backend: adaptermodel.BackendFallback}
-	err := CollectFallbackResponse(dispatcher, nil, context.Background(), req, model, "req-1", time.Now(), nil, true)
+	err := CollectFallbackResponse(dispatcher, nil, context.Background(), req, model, "req-1", time.Now(), ResponseFormatSpec{}, true)
 	if !errors.Is(err, upstreamErr) {
 		t.Fatalf("err = %v want %v", err, upstreamErr)
 	}

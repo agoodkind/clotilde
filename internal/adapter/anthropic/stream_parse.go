@@ -1,4 +1,4 @@
-// SSE parsing for /v1/messages streaming: wire structs and dispatchSSE.
+// Package anthropic implements Anthropic wire models and helpers.
 package anthropic
 
 import (

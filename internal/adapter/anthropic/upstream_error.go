@@ -1,4 +1,4 @@
-// UpstreamError is the typed error the Anthropic client returns for
+// Package anthropic implements Anthropic wire models and helpers.
 // failed /v1/messages calls. It bundles the Classification (so
 // downstream code can route on the four classes without re-parsing
 // headers or status codes), the original error message, and the
