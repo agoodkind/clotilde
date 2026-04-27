@@ -59,3 +59,6 @@ tmp_*
 /.tmp_print_clyde_models.go
 /clyde
 /tmp_check_detail_*.go
+
+# Cursor IDE plan exports and chat transcripts (local, regenerable)
+/.cursor/
