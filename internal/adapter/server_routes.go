@@ -45,7 +45,7 @@ func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
 		}
 		return nil
 	case err := <-errCh:
-		if errors.Is(err, http.ErrServerClosed) {
+		if errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
 			return nil
 		}
 		return err

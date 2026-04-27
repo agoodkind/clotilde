@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -57,6 +58,7 @@ type adapterLaunchConfig struct {
 type adapterProcess struct {
 	cancel context.CancelFunc
 	drain  func(context.Context) error
+	close  func() error
 	done   chan struct{}
 	lis    net.Listener
 }
@@ -84,6 +86,7 @@ type inheritedRuntime struct {
 type webAppProcess struct {
 	cancel func()
 	drain  func(context.Context) error
+	close  func() error
 	done   chan struct{}
 	lis    net.Listener
 	cfg    config.WebAppConfig
@@ -366,7 +369,6 @@ func reloadDaemonBinary(ctx context.Context, log *slog.Logger, grpcServer *grpc.
 	srv.preserveRuntimeDirsOnClose()
 	drainReloadedPublicHTTP(log, rt)
 	go func() {
-		time.Sleep(100 * time.Millisecond)
 		log.Info("daemon.reload.draining_old_process",
 			"component", "daemon",
 			"new_pid", cmd.Process.Pid)
@@ -387,6 +389,15 @@ func drainReloadedPublicHTTP(log *slog.Logger, rt *daemonRuntime) {
 			"component", "daemon",
 			"addr", listenerAddr(rt.webapp.lis),
 		)
+		if rt.webapp.close != nil {
+			if err := rt.webapp.close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				log.Warn("daemon.reload.webapp_listener_close_failed",
+					"component", "daemon",
+					"addr", listenerAddr(rt.webapp.lis),
+					slog.Any("err", err),
+				)
+			}
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), reloadHTTPDrainWait)
 		err := rt.webapp.drain(ctx)
 		cancel()
@@ -605,6 +616,7 @@ func startWebApp(log *slog.Logger, srv *Server, inherited net.Listener) (*webApp
 	return &webAppProcess{
 		cancel: cancel,
 		drain:  srvW.Shutdown,
+		close:  lis.Close,
 		done:   done,
 		lis:    lis,
 		cfg:    cfg.WebApp,
@@ -872,6 +884,15 @@ func (c *adapterController) drainReloadedProcess(timeout time.Duration) {
 		"component", "daemon",
 		"addr", listenerAddr(proc.lis),
 	)
+	if proc.close != nil {
+		if err := proc.close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			c.log.Warn("daemon.reload.adapter_listener_close_failed",
+				"component", "daemon",
+				"addr", listenerAddr(proc.lis),
+				slog.Any("err", err),
+			)
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	err := proc.drain(ctx)
 	cancel()
@@ -920,6 +941,7 @@ func startAdapterProcess(log *slog.Logger, srv *adapter.Server, lis net.Listener
 	return &adapterProcess{
 		cancel: cancel,
 		drain:  srv.Shutdown,
+		close:  lis.Close,
 		done:   done,
 		lis:    lis,
 	}

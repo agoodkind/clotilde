@@ -271,6 +271,41 @@ This ensures complete cleanup even after multiple `/clear` operations (and `/com
 
 The daemon optionally hosts an OpenAI Chat Completions v1 HTTP surface under `internal/adapter/`. Incoming `model` strings resolve through a registry built from `[adapter]` and `[adapter.models]` in config (`internal/adapter/models.go`). Backends include direct Claude, Anthropic HTTP, configured shunts, and the local `claude` CLI fallback (`BackendFallback`). See `reasoning_effort` and family `efforts` in the adapter packages for how effort maps to wire format. Streaming and non streaming paths exist; tool calling, images, and embeddings policies are enforced in the dispatcher. There is no checked in `docs/openai-adapter.md`; read the code and config schema as the source of truth.
 
+### Daemon reload behavior
+
+`clyde daemon reload` is a zero-bind-gap binary handoff, not a
+blind process restart. Keep these semantics intact when changing
+`internal/daemon/run.go`, `internal/adapter/`, or `internal/webapp/`:
+
+- Reload always re-execs the daemon's current `os.Executable()` path.
+  The client does not send an executable path.
+- The old daemon passes daemon-owned listener file descriptors to the
+  child with `exec.Cmd.ExtraFiles`: gRPC Unix socket, adapter TCP
+  listener when enabled, and webapp TCP listener when enabled.
+- Listener addresses are part of the handoff contract. If adapter or
+  webapp host/port changed, reload must reject with a clear "full
+  restart required" error rather than rebinding.
+- The child starts public listeners from inherited FDs first, reports
+  readiness over the reload pipe, then waits to acquire
+  `daemon.process.lock` before running exclusive background loops.
+- After the child is healthy, the old daemon immediately stops
+  accepting public traffic: adapter and webapp listener references
+  are closed, keepalives are disabled, idle keepalive connections are
+  closed, and active HTTP handlers may finish until the drain
+  deadline. This is intentional. Existing TCP keepalive connections
+  cannot be transferred to the new Go HTTP server state, and leaving
+  them reusable lets clients such as Cloudflare Tunnel/Cursor keep
+  sending new requests to stale code. New TCP connections after reload
+  completion must be accepted only by the child generation.
+- Existing gRPC streams stay on the old process until they finish
+  because reload uses `grpc.Server.GracefulStop()`. This includes
+  in-flight compaction preview/apply streams.
+- Preserve active session runtime dirs while the old process drains so
+  wrappers and remote-control sockets can reacquire against the child.
+- Concurrent reloads should remain serialized by the reload lock; a
+  queued reload reconnects to the latest daemon generation, giving
+  last-writer-wins behavior.
+
 ### Remote Control (`--remote-control`)
 
 Sessions can opt into Claude Code's bridge so the running conversation is exposed at `https://claude.ai/code/<bridgeSessionId>`. Three layers cooperate:
