@@ -3,6 +3,7 @@ package adapter
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -103,6 +104,76 @@ func TestShutdownClosesIdleKeepaliveConnection(t *testing.T) {
 			t.Fatalf("server exit: %v", err)
 		}
 	case <-time.After(2 * time.Second):
+		t.Fatalf("server did not stop")
+	}
+}
+
+func TestCloseForceClosesActiveConnection(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	cfg := baseConfig()
+	cfg.Enabled = true
+	srv, err := New(cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	srv.mux.HandleFunc("/test/block", func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- srv.StartOnListener(ctx, lis) }()
+
+	client := &http.Client{}
+	respCh := make(chan error, 1)
+	go func() {
+		resp, err := client.Get("http://" + lis.Addr().String() + "/test/block")
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		respCh <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatalf("handler did not start")
+	}
+
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	if err := srv.Shutdown(shutCtx); err == nil {
+		shutCancel()
+		close(release)
+		t.Fatalf("shutdown unexpectedly completed while handler was active")
+	}
+	shutCancel()
+	if err := srv.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		close(release)
+		t.Fatalf("close: %v", err)
+	}
+
+	select {
+	case <-respCh:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatalf("active client was not closed")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("server exit: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		close(release)
 		t.Fatalf("server did not stop")
 	}
 }

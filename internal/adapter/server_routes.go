@@ -24,10 +24,14 @@ func (s *Server) Start(ctx context.Context) error {
 // Daemon reload uses this to inherit the existing adapter socket
 // without creating a bind gap.
 func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
+	s.connMu.Lock()
+	s.conns = make(map[net.Conn]http.ConnState)
+	s.connMu.Unlock()
 	s.httpSrv = &http.Server{
 		Addr:              lis.Addr().String(),
 		Handler:           s.mux,
 		ReadHeaderTimeout: 5 * time.Second,
+		ConnState:         s.trackConnState,
 	}
 	s.log.LogAttrs(context.Background(), slog.LevelInfo, "adapter listening",
 		slog.String("addr", lis.Addr().String()),
@@ -59,7 +63,53 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	s.httpSrv.SetKeepAlivesEnabled(false)
+	s.closeTrackedConns(http.StateIdle)
 	return s.httpSrv.Shutdown(ctx)
+}
+
+// Close force-closes all adapter HTTP connections. It is used after a
+// bounded reload drain so stale keepalive or active Cloudflare
+// connections cannot pin traffic to the old binary indefinitely.
+func (s *Server) Close() error {
+	if s.httpSrv == nil {
+		return nil
+	}
+	s.closeTrackedConns(http.StateNew, http.StateActive, http.StateIdle, http.StateHijacked)
+	return s.httpSrv.Close()
+}
+
+func (s *Server) trackConnState(conn net.Conn, state http.ConnState) {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	if s.conns == nil {
+		s.conns = make(map[net.Conn]http.ConnState)
+	}
+	if state == http.StateClosed {
+		delete(s.conns, conn)
+		return
+	}
+	s.conns[conn] = state
+}
+
+func (s *Server) closeTrackedConns(states ...http.ConnState) {
+	if len(states) == 0 {
+		return
+	}
+	wanted := make(map[http.ConnState]bool, len(states))
+	for _, state := range states {
+		wanted[state] = true
+	}
+	var toClose []net.Conn
+	s.connMu.Lock()
+	for conn, state := range s.conns {
+		if wanted[state] {
+			toClose = append(toClose, conn)
+		}
+	}
+	s.connMu.Unlock()
+	for _, conn := range toClose {
+		_ = conn.Close()
+	}
 }
 
 func (s *Server) routes() *http.ServeMux {

@@ -86,9 +86,8 @@ func LookupRates(modelID string) (ModelRates, bool) {
 	return modelRates[bestKey], true
 }
 
-// EstimateCostMicrocents computes the reference cost of one request
-// from its token counts and TTL choice. Breakdown fields let the
-// aggregator attribute savings to each cache category.
+// CostInputs contains token counts and TTL settings used by
+// EstimateCostMicrocents.
 //
 // TTL values accepted: "5m" (default), "1h". Any other string is
 // treated as 5m since the API defaults to 5m when omitted.

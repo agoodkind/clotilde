@@ -104,6 +104,8 @@ type Server struct {
 	token    string
 	mux      *http.ServeMux
 	httpSrv  *http.Server
+	connMu   sync.Mutex
+	conns    map[net.Conn]http.ConnState
 	oauthMgr *oauth.Manager
 	anthr    *anthropic.Client
 	// fb is the optional `claude -p` fallback driver. nil unless

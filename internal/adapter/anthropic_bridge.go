@@ -18,20 +18,29 @@ func (s *Server) AnthropicConfigured() bool {
 	return s.anthr != nil
 }
 
-func (s *Server) AcquirePrimary(ctx any) error {
-	return s.acquire(ctx.(context.Context))
+func (s *Server) AcquirePrimary(ctx context.Context) error {
+	return s.acquire(ctx)
 }
 
 func (s *Server) ReleasePrimary() {
 	s.release()
 }
 
-func (s *Server) BuildAnthropicWire(req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort string, jsonSpec any, reqID string) (anthropic.Request, error) {
-	return s.buildAnthropicWire(req, model, effort, jsonSpec.(JSONResponseSpec), reqID)
+func (s *Server) BuildAnthropicWire(req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort string, jsonSpec anthropicbackend.ResponseFormatSpec, reqID string) (anthropic.Request, error) {
+	return s.buildAnthropicWire(req, model, effort, JSONResponseSpec{
+		Mode:       jsonSpec.Mode,
+		SchemaName: jsonSpec.SchemaName,
+		Schema:     jsonSpec.Schema,
+	}, reqID)
 }
 
-func (s *Server) ParseResponseFormat(raw any) any {
-	return ParseResponseFormat(raw.(json.RawMessage))
+func (s *Server) ParseResponseFormat(raw json.RawMessage) anthropicbackend.ResponseFormatSpec {
+	spec := ParseResponseFormat(raw)
+	return anthropicbackend.ResponseFormatSpec{
+		Mode:       spec.Mode,
+		SchemaName: spec.SchemaName,
+		Schema:     spec.Schema,
+	}
 }
 
 func (s *Server) RequestContextTrackerKey(req adapteropenai.ChatRequest, modelAlias string) string {
@@ -90,9 +99,8 @@ func (s *Server) TrackAnthropicContextUsage(key string, raw adapteropenai.Usage)
 // JSONCoercion translates the root-side JSONResponseSpec passed via
 // the Dispatcher.ParseResponseFormat hook into the neutral
 // JSONCoercion contract the Anthropic merger expects.
-func (s *Server) JSONCoercion(jsonSpec any) anthropicbackend.JSONCoercion {
-	spec, ok := jsonSpec.(JSONResponseSpec)
-	if !ok || spec.Mode == "" {
+func (s *Server) JSONCoercion(jsonSpec anthropicbackend.ResponseFormatSpec) anthropicbackend.JSONCoercion {
+	if jsonSpec.Mode == "" {
 		return anthropicbackend.JSONCoercion{}
 	}
 	return anthropicbackend.JSONCoercion{
@@ -139,12 +147,16 @@ func (s *Server) ReleaseFallback() {
 	}
 }
 
-func (s *Server) FallbackJSONSystemPrompt(jsonSpec any) string {
-	spec, ok := jsonSpec.(JSONResponseSpec)
-	if !ok {
-		return ""
-	}
-	return spec.SystemPrompt(false)
+func (s *Server) FallbackJSONSystemPrompt(jsonSpec anthropicbackend.ResponseFormatSpec) string {
+	return JSONResponseSpec{
+		Mode:       jsonSpec.Mode,
+		SchemaName: jsonSpec.SchemaName,
+		Schema:     jsonSpec.Schema,
+	}.SystemPrompt(false)
+}
+
+func (s *Server) WriteErrorJSON(w http.ResponseWriter, status int, v adapteropenai.ErrorResponse) {
+	writeJSON(w, status, v)
 }
 
 func (s *Server) FallbackStreamPassthrough() bool {

@@ -31,7 +31,7 @@ func streamChunkFromTooltrans(och StreamChunk) StreamChunk {
 			for _, t := range c.Logprobs.Content {
 				top := make([]TopLogprob, 0, len(t.TopLogprobs))
 				for _, x := range t.TopLogprobs {
-					top = append(top, TopLogprob{Token: x.Token, Logprob: x.Logprob, Bytes: x.Bytes})
+					top = append(top, TopLogprob(x))
 				}
 				sc.Logprobs.Content = append(sc.Logprobs.Content, LogprobToken{
 					Token: t.Token, Logprob: t.Logprob, Bytes: t.Bytes, TopLogprobs: top,
