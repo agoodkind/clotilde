@@ -72,11 +72,47 @@ func runDashboardTUI() {
 		_, _ = fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
 		slog.Error("dashboard.tui_error",
 			"component", "tui",
-			slog.Any("err", err),
+			"err", err,
 		)
 		os.Exit(1)
 	}
 	slog.Info("dashboard.closed", "component", "tui")
+}
+
+// RunBasedirLaunch opens the dashboard scoped to one workspace root.
+// The caller is responsible for only invoking this for an existing directory.
+func RunBasedirLaunch(basedir string) int {
+	if !isatty.IsTerminal(os.Stdin.Fd()) || !isatty.IsTerminal(os.Stdout.Fd()) {
+		return ForwardToClaude(os.Args[1:])
+	}
+	daemon.NudgeDiscoveryScan()
+	canonical := session.CanonicalWorkspaceRoot(basedir)
+	slog.Info("dashboard.basedir.opened",
+		"component", "tui",
+		"basedir", canonical,
+	)
+
+	dashboardCwd, _ := os.Getwd()
+	cb := buildAppCallbacks(dashboardCwd)
+	app := ui.NewApp(nil, cb, ui.AppOptions{
+		DashboardLaunchCWD: dashboardCwd,
+		LaunchBasedir:      canonical,
+	})
+
+	if err := app.Run(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
+		slog.Error("dashboard.basedir.tui_error",
+			"component", "tui",
+			"basedir", canonical,
+			"err", err,
+		)
+		return 1
+	}
+	slog.Info("dashboard.basedir.closed",
+		"component", "tui",
+		"basedir", canonical,
+	)
+	return 0
 }
 
 // runDiscoveryAdoption walks ~/.claude/projects and creates registry
@@ -308,6 +344,17 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 				return daemonLifecycleError("update_global_remote_control", outcome, err)
 			}
 			return nil
+		},
+		LoadConfigControls: func() ([]ui.ConfigControl, error) {
+			raw, err := daemon.ListConfigControlsViaDaemon(context.Background())
+			if err != nil {
+				return nil, err
+			}
+			return configControlsFromProto(raw), nil
+		},
+		UpdateConfigControl: func(key, value string) error {
+			_, err := daemon.UpdateConfigControlViaDaemon(context.Background(), key, value)
+			return err
 		},
 		ListBridges: func() ([]ui.Bridge, error) {
 			raw, err := daemon.ListBridgesViaDaemon(context.Background())
@@ -644,6 +691,35 @@ func sessionDetailFromProto(resp *clydev1.GetSessionDetailResponse) ui.SessionDe
 	return out
 }
 
+func configControlsFromProto(raw []*clydev1.ConfigControl) []ui.ConfigControl {
+	out := make([]ui.ConfigControl, 0, len(raw))
+	for _, control := range raw {
+		if control == nil {
+			continue
+		}
+		entry := ui.ConfigControl{
+			Key:          control.GetKey(),
+			Section:      control.GetSection(),
+			Label:        control.GetLabel(),
+			Description:  control.GetDescription(),
+			Type:         strings.ToLower(strings.TrimPrefix(control.GetType().String(), "CONFIG_CONTROL_TYPE_")),
+			Value:        control.GetValue(),
+			DefaultValue: control.GetDefaultValue(),
+			Sensitive:    control.GetSensitive(),
+			ReadOnly:     control.GetReadOnly(),
+		}
+		for _, opt := range control.GetOptions() {
+			entry.Options = append(entry.Options, ui.ConfigControlOption{
+				Value:       opt.GetValue(),
+				Label:       opt.GetLabel(),
+				Description: opt.GetDescription(),
+			})
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
 func timeFromNanos(n int64) time.Time {
 	if n <= 0 {
 		return time.Time{}
@@ -665,7 +741,7 @@ func runClaudeWithEnv(args []string, env []string) int {
 		_, _ = fmt.Fprintf(os.Stderr, "clyde: cannot find claude binary: %v\n", err)
 		slog.Error("forward.claude_not_found",
 			"component", "cli",
-			slog.Any("err", err),
+			"err", err,
 		)
 		return 1
 	}
@@ -692,31 +768,31 @@ func runClaudeWithEnv(args []string, env []string) int {
 // claude-code entrypoints/cli.tsx fast paths and main.tsx program.command
 // registrations). When clyde forwards to claude and these are the first
 // token, skip the post-claude TUI (same intent as api / print).
-var claudePassthroughFirstArgSkipsPostSessionTUI = map[string]struct{}{
-	"agents":             {},
-	"assistant":          {},
-	"attach":             {},
-	"auth":               {},
-	"auto-mode":          {},
-	"bridge":             {},
-	"daemon":             {},
-	"doctor":             {},
-	"environment-runner": {},
-	"install":            {},
-	"kill":               {},
-	"logs":               {},
-	"plugin":             {},
-	"plugins":            {},
-	"ps":                 {},
-	"rc":                 {},
-	"remote":             {},
-	"remote-control":     {},
-	"self-hosted-runner": {},
-	"server":             {},
-	"setup-token":        {},
-	"sync":               {},
-	"update":             {},
-	"upgrade":            {},
+var claudePassthroughFirstArgSkipsPostSessionTUI = map[string]bool{
+	"agents":             true,
+	"assistant":          true,
+	"attach":             true,
+	"auth":               true,
+	"auto-mode":          true,
+	"bridge":             true,
+	"daemon":             true,
+	"doctor":             true,
+	"environment-runner": true,
+	"install":            true,
+	"kill":               true,
+	"logs":               true,
+	"plugin":             true,
+	"plugins":            true,
+	"ps":                 true,
+	"rc":                 true,
+	"remote":             true,
+	"remote-control":     true,
+	"self-hosted-runner": true,
+	"server":             true,
+	"setup-token":        true,
+	"sync":               true,
+	"update":             true,
+	"upgrade":            true,
 }
 
 // passthroughSkipsPostSessionTUI reports args that should not open the
@@ -952,7 +1028,7 @@ func deleteSession(sess *session.Session, store session.Store) error {
 			"component", "cli",
 			"session", sess.Name,
 			"session_id", sess.Metadata.SessionID,
-			slog.Any("err", err),
+			"err", err,
 		)
 	} else {
 		allDeletedFiles.Transcript = append(allDeletedFiles.Transcript, deleted.Transcript...)
@@ -967,7 +1043,7 @@ func deleteSession(sess *session.Session, store session.Store) error {
 				"component", "cli",
 				"session", sess.Name,
 				"previous_session_id", prevSessionID,
-				slog.Any("err", err),
+				"err", err,
 			)
 		} else {
 			allDeletedFiles.Transcript = append(allDeletedFiles.Transcript, deleted.Transcript...)
@@ -994,7 +1070,7 @@ func deleteSession(sess *session.Session, store session.Store) error {
 			slog.Error("session.delete.style_failed",
 				"component", "cli",
 				"session", sess.Name,
-				slog.Any("err", err),
+				"err", err,
 			)
 		}
 	}

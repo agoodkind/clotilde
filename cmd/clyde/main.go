@@ -48,7 +48,7 @@ func main() {
 	if err != nil {
 		slog.Error("clyde.slogger.setup_failed",
 			"component", "cli",
-			slog.Any("err", err),
+			"err", err,
 		)
 		_, _ = fmt.Fprintln(os.Stderr, "slogger setup failed:", err)
 		os.Exit(1)
@@ -60,6 +60,11 @@ func main() {
 		switch mode {
 		case cmd.ModePassthrough:
 			os.Exit(cmd.ForwardToClaudeThenDashboard(os.Args[1:]))
+		case cmd.ModeBasedirLaunch:
+			if len(rewritten) == 0 {
+				os.Exit(1)
+			}
+			os.Exit(cmd.RunBasedirLaunch(rewritten[0]))
 		case cmd.ModeResumeNoArgDashboard:
 			os.Args = os.Args[:1]
 		case cmd.ModeResumeFlag:
