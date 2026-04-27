@@ -174,10 +174,10 @@ func (c *clydeServiceClient) SubscribeRegistry(ctx context.Context, in *Subscrib
 		return nil, err
 	}
 	x := &grpc.GenericClientStream[SubscribeRegistryRequest, SubscribeRegistryResponse]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
+	if err := x.SendMsg(in); err != nil {
 		return nil, err
 	}
-	if err := x.ClientStream.CloseSend(); err != nil {
+	if err := x.CloseSend(); err != nil {
 		return nil, err
 	}
 	return x, nil
@@ -203,10 +203,10 @@ func (c *clydeServiceClient) SubscribeProviderStats(ctx context.Context, in *Sub
 		return nil, err
 	}
 	x := &grpc.GenericClientStream[SubscribeProviderStatsRequest, ProviderStatsEvent]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
+	if err := x.SendMsg(in); err != nil {
 		return nil, err
 	}
-	if err := x.ClientStream.CloseSend(); err != nil {
+	if err := x.CloseSend(); err != nil {
 		return nil, err
 	}
 	return x, nil
@@ -312,10 +312,10 @@ func (c *clydeServiceClient) TailTranscript(ctx context.Context, in *TailTranscr
 		return nil, err
 	}
 	x := &grpc.GenericClientStream[TailTranscriptRequest, TailTranscriptResponse]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
+	if err := x.SendMsg(in); err != nil {
 		return nil, err
 	}
-	if err := x.ClientStream.CloseSend(); err != nil {
+	if err := x.CloseSend(); err != nil {
 		return nil, err
 	}
 	return x, nil
@@ -341,10 +341,10 @@ func (c *clydeServiceClient) CompactPreview(ctx context.Context, in *CompactRunR
 		return nil, err
 	}
 	x := &grpc.GenericClientStream[CompactRunRequest, CompactEvent]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
+	if err := x.SendMsg(in); err != nil {
 		return nil, err
 	}
-	if err := x.ClientStream.CloseSend(); err != nil {
+	if err := x.CloseSend(); err != nil {
 		return nil, err
 	}
 	return x, nil
@@ -360,10 +360,10 @@ func (c *clydeServiceClient) CompactApply(ctx context.Context, in *CompactRunReq
 		return nil, err
 	}
 	x := &grpc.GenericClientStream[CompactRunRequest, CompactEvent]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
+	if err := x.SendMsg(in); err != nil {
 		return nil, err
 	}
-	if err := x.ClientStream.CloseSend(); err != nil {
+	if err := x.CloseSend(); err != nil {
 		return nil, err
 	}
 	return x, nil

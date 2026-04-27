@@ -15,7 +15,7 @@ Add a stanza to `~/.config/clyde/config.toml`:
 [web_app]
 enabled = true
 port = 11435
-host = "127.0.0.1"
+host = "[::1]"
 require_token = "your-bearer-here"   # optional auth
 ```
 
