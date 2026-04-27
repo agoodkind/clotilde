@@ -60,6 +60,40 @@ type completedResponse struct {
 	} `json:"response"`
 }
 
+// Mirrors the observed Responses SSE envelope from
+// research/codex/codex-rs/codex-api/src/sse/responses.rs and the local
+// mock websocket script. The item payload remains a named raw-object boundary
+// because Codex emits a broad response-item union here.
+type transportStreamEvent struct {
+	Type         string              `json:"type"`
+	Response     *transportResponse  `json:"response,omitempty"`
+	Item         transportItem       `json:"item,omitempty"`
+	ItemID       string              `json:"item_id,omitempty"`
+	CallID       string              `json:"call_id,omitempty"`
+	Delta        string              `json:"delta,omitempty"`
+	SummaryIndex *int                `json:"summary_index,omitempty"`
+	Error        *transportErrorBody `json:"error,omitempty"`
+}
+
+type transportResponse struct {
+	ID                string `json:"id,omitempty"`
+	Status            string `json:"status,omitempty"`
+	IncompleteDetails struct {
+		Reason string `json:"reason,omitempty"`
+	} `json:"incomplete_details,omitempty"`
+	Usage struct {
+		OutputTokensDetails struct {
+			ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+		} `json:"output_tokens_details,omitempty"`
+	} `json:"usage,omitempty"`
+}
+
+type transportErrorBody struct {
+	Message string `json:"message,omitempty"`
+}
+
+type transportItem map[string]json.RawMessage
+
 type toolCallState struct {
 	Index             int
 	ItemID            string
@@ -153,18 +187,25 @@ func EffectiveReasoning(req adapteropenai.ChatRequest, effort string) *Reasoning
 	return &out
 }
 
-func EffectiveAppEffort(req adapteropenai.ChatRequest) any {
-	if r := EffectiveReasoning(req, ""); r != nil && r.Effort != "" {
-		return r.Effort
+// EffectiveAppEffort returns the reasoning effort the app transport
+// should use, or ReasoningEffortUnset if not configured. Callers
+// serialize via json `omitempty`, which drops the field when empty.
+// The string-typed enum mirrors codex_protocol::openai_models::ReasoningEffort.
+func EffectiveAppEffort(req adapteropenai.ChatRequest) ReasoningEffort {
+	if r := EffectiveReasoning(req, ""); r != nil {
+		return ReasoningEffort(r.Effort)
 	}
-	return nil
+	return ReasoningEffortUnset
 }
 
-func EffectiveAppSummary(req adapteropenai.ChatRequest) any {
-	if r := EffectiveReasoning(req, ""); r != nil && r.Summary != "" {
-		return r.Summary
+// EffectiveAppSummary returns the reasoning summary mode for the app
+// transport, or ReasoningSummaryUnset if not configured. Mirrors
+// codex_protocol::config_types::ReasoningSummary.
+func EffectiveAppSummary(req adapteropenai.ChatRequest) ReasoningSummary {
+	if r := EffectiveReasoning(req, ""); r != nil {
+		return ReasoningSummary(r.Summary)
 	}
-	return nil
+	return ReasoningSummaryUnset
 }
 
 func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(adapteropenai.StreamChunk) error) (RunResult, error) {
@@ -258,13 +299,13 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 			if strings.TrimSpace(payload) == "[DONE]" {
 				break
 			}
-			var raw map[string]any
+			var raw transportStreamEvent
 			if err := json.Unmarshal([]byte(payload), &raw); err != nil {
 				continue
 			}
 
 			if eventNameLocal == "response.output_text.delta" {
-				if delta, _ := raw["delta"].(string); delta != "" {
+				if delta := raw.Delta; delta != "" {
 					if err := EmitRendered(renderer, adapterrender.Event{Kind: adapterrender.EventAssistantTextDelta, Text: delta}, emit, nil); err != nil {
 						return out, err
 					}
@@ -273,19 +314,19 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 			}
 
 			if eventNameLocal == "response.output_item.added" || eventNameLocal == "response.output_item.done" {
-				item, _ := raw["item"].(map[string]any)
-				itemType, _ := item["type"].(string)
+				item := raw.Item
+				itemType := item.string("type")
 				if itemType == "function_call" {
-					itemID := strings.TrimSpace(mapString(item, "id"))
-					callID := strings.TrimSpace(mapString(item, "call_id"))
+					itemID := strings.TrimSpace(item.string("id"))
+					callID := strings.TrimSpace(item.string("call_id"))
 					if itemID == "" {
 						itemID = callID
 					}
 					if callID == "" {
 						callID = itemID
 					}
-					name := strings.TrimSpace(mapString(item, "name"))
-					args := mapString(item, "arguments")
+					name := strings.TrimSpace(item.string("name"))
+					args := item.string("arguments")
 					cursorName := InboundToolName(name)
 					state, created := getToolState(itemID, callID, cursorName)
 					if state.NativeName == "" {
@@ -300,7 +341,7 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 						state.Name = InboundToolName(name)
 					}
 					if eventNameLocal == "response.output_item.done" && item != nil {
-						completed := cloneMap(item)
+						completed := item.cloneMap()
 						if strings.TrimSpace(mapString(completed, "arguments")) == "" && state.Arguments.Len() > 0 {
 							completed["arguments"] = state.Arguments.String()
 						}
@@ -333,10 +374,10 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 					}
 				} else if itemType == "local_shell_call" {
 					if eventNameLocal == "response.output_item.done" && item != nil {
-						out.OutputItems = append(out.OutputItems, cloneMap(item))
+						out.OutputItems = append(out.OutputItems, item.cloneMap())
 					}
-					itemID := strings.TrimSpace(mapString(item, "id"))
-					callID := strings.TrimSpace(mapString(item, "call_id"))
+					itemID := strings.TrimSpace(item.string("id"))
+					callID := strings.TrimSpace(item.string("call_id"))
 					state, created := getToolState(itemID, callID, "Shell")
 					if created {
 						if err := emitToolCall(state, adapteropenai.ToolCallFunction{Name: "Shell"}); err != nil {
@@ -344,7 +385,7 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 						}
 					}
 					out.SetFinishReason("tool_calls")
-					if args, ok := ShellArgsFromLocalShellItem(item); ok && !state.ArgumentsEmitted {
+					if args, ok := ShellArgsFromLocalShellItem(item.cloneMap()); ok && !state.ArgumentsEmitted {
 						if err := emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: args}); err != nil {
 							return out, err
 						}
@@ -358,11 +399,11 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 					}
 				} else if itemType == "custom_tool_call" {
 					if eventNameLocal == "response.output_item.done" && item != nil {
-						out.OutputItems = append(out.OutputItems, cloneMap(item))
+						out.OutputItems = append(out.OutputItems, item.cloneMap())
 					}
-					itemID := strings.TrimSpace(mapString(item, "id"))
-					callID := strings.TrimSpace(mapString(item, "call_id"))
-					name := mapString(item, "name")
+					itemID := strings.TrimSpace(item.string("id"))
+					callID := strings.TrimSpace(item.string("call_id"))
+					name := item.string("name")
 					cursorName := InboundToolName(name)
 					if IsApplyPatchToolName(cursorName) || IsApplyPatchToolName(name) {
 						cursorName = "ApplyPatch"
@@ -374,7 +415,7 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 						}
 					}
 					out.SetFinishReason("tool_calls")
-					input := rawString(item, "input")
+					input := item.string("input")
 					if input == "" {
 						input = state.Input.String()
 					}
@@ -391,14 +432,14 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 						)
 					}
 				} else if eventNameLocal == "response.output_item.done" && item != nil {
-					out.OutputItems = append(out.OutputItems, cloneMap(item))
+					out.OutputItems = append(out.OutputItems, item.cloneMap())
 				}
 				continue
 			}
 
 			if eventNameLocal == "response.function_call_arguments.delta" {
-				itemID := strings.TrimSpace(mapString(raw, "item_id"))
-				delta := mapString(raw, "delta")
+				itemID := strings.TrimSpace(raw.ItemID)
+				delta := raw.Delta
 				state := toolCallsByItemID[itemID]
 				if state != nil && delta != "" {
 					state.ArgumentDeltaSeen = true
@@ -415,9 +456,9 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 			}
 
 			if eventNameLocal == "response.custom_tool_call_input.delta" {
-				itemID := strings.TrimSpace(mapString(raw, "item_id"))
-				callID := strings.TrimSpace(mapString(raw, "call_id"))
-				delta := rawString(raw, "delta")
+				itemID := strings.TrimSpace(raw.ItemID)
+				callID := strings.TrimSpace(raw.CallID)
+				delta := raw.Delta
 				state, created := getToolState(itemID, callID, "ApplyPatch")
 				if created {
 					if err := emitToolCall(state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
@@ -437,15 +478,12 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 			}
 
 			if strings.Contains(eventNameLocal, "reasoning") && strings.HasSuffix(eventNameLocal, ".delta") {
-				if delta, _ := raw["delta"].(string); delta != "" {
+				if delta := raw.Delta; delta != "" {
 					kind := "text"
 					var summaryIdx *int
 					if strings.Contains(eventNameLocal, "summary") {
 						kind = "summary"
-						if v, ok := raw["summary_index"].(float64); ok {
-							idx := int(v)
-							summaryIdx = &idx
-						}
+						summaryIdx = raw.SummaryIndex
 					}
 					if err := EmitRendered(renderer, adapterrender.Event{
 						Kind:          adapterrender.EventReasoningDelta,
@@ -461,8 +499,7 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 
 			if eventNameLocal == "response.completed" {
 				var c completedResponse
-				b, _ := json.Marshal(raw)
-				if err := json.Unmarshal(b, &c); err == nil {
+				if err := json.Unmarshal([]byte(payload), &c); err == nil {
 					if responseID := strings.TrimSpace(c.Response.ID); responseID != "" {
 						out.ResponseID = responseID
 					}
@@ -471,7 +508,7 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 						out.SetFinishReason(finishreason.FromCodexResponse(c.Response.Status, c.Response.IncompleteDetails.Reason))
 					}
 				}
-				out.ReasoningSignaled = reasoningTokens(raw) > 0
+				out.ReasoningSignaled = reasoningTokensFromEvent(raw) > 0
 				if err := EmitRendered(renderer, adapterrender.Event{Kind: adapterrender.EventReasoningFinished}, emit, nil); err != nil {
 					return out, err
 				}
@@ -482,8 +519,8 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 				return out, nil
 			}
 			if eventNameLocal == "response.created" {
-				if response, _ := raw["response"].(map[string]any); response != nil {
-					out.ResponseID = strings.TrimSpace(mapString(response, "id"))
+				if raw.Response != nil {
+					out.ResponseID = strings.TrimSpace(raw.Response.ID)
 				}
 				continue
 			}
@@ -491,10 +528,8 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 				_ = EmitRendered(renderer, adapterrender.Event{Kind: adapterrender.EventReasoningFinished}, emit, nil)
 				renderer.Flush()
 				msg := "codex response failed"
-				if e, ok := raw["error"].(map[string]any); ok {
-					if m, ok := e["message"].(string); ok && m != "" {
-						msg = m
-					}
+				if raw.Error != nil && raw.Error.Message != "" {
+					msg = raw.Error.Message
 				}
 				return out, fmt.Errorf("%s", msg)
 			}
@@ -519,6 +554,28 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 	return out, nil
 }
 
+func (item transportItem) string(key string) string {
+	raw := item[key]
+	if len(raw) == 0 {
+		return ""
+	}
+	var out string
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return ""
+	}
+	return out
+}
+
+func (item transportItem) cloneMap() map[string]any {
+	if item == nil {
+		return nil
+	}
+	raw, _ := json.Marshal(item)
+	var out map[string]any
+	_ = json.Unmarshal(raw, &out)
+	return out
+}
+
 func mapUsage(c completedResponse) adapteropenai.Usage {
 	u := adapteropenai.Usage{
 		PromptTokens:     c.Response.Usage.InputTokens,
@@ -531,18 +588,11 @@ func mapUsage(c completedResponse) adapteropenai.Usage {
 	return u
 }
 
-func reasoningTokens(raw map[string]any) int {
-	response, _ := raw["response"].(map[string]any)
-	usage, _ := response["usage"].(map[string]any)
-	details, _ := usage["output_tokens_details"].(map[string]any)
-	switch v := details["reasoning_tokens"].(type) {
-	case float64:
-		return int(v)
-	case int:
-		return v
-	default:
+func reasoningTokensFromEvent(raw transportStreamEvent) int {
+	if raw.Response == nil {
 		return 0
 	}
+	return raw.Response.Usage.OutputTokensDetails.ReasoningTokens
 }
 
 func rawString(m map[string]any, key string) string {

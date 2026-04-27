@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -108,23 +109,33 @@ type WebsocketTransportConfig struct {
 	TurnState      *TurnState
 	Prewarm        bool
 	PrewarmTimeout time.Duration
+	BodyLog        BodyLogConfig
+}
+
+// Mirrors the observed Responses websocket envelope from
+// research/codex/scripts/mock_responses_websocket_server.py.
+type websocketEventEnvelope struct {
+	Type  string                 `json:"type"`
+	Error *websocketErrorPayload `json:"error,omitempty"`
+}
+
+type websocketErrorPayload struct {
+	Message string `json:"message,omitempty"`
 }
 
 func websocketMessageToSyntheticSSE(message []byte) ([]byte, error) {
-	var raw map[string]any
+	var raw websocketEventEnvelope
 	if err := json.Unmarshal(message, &raw); err != nil {
 		return nil, err
 	}
-	kind, _ := raw["type"].(string)
+	kind := strings.TrimSpace(raw.Type)
 	if kind == "" {
 		return nil, fmt.Errorf("codex websocket message missing type")
 	}
 	if kind == "error" {
 		msg := "codex websocket error"
-		if errObj, _ := raw["error"].(map[string]any); errObj != nil {
-			if m, _ := errObj["message"].(string); strings.TrimSpace(m) != "" {
-				msg = m
-			}
+		if raw.Error != nil && strings.TrimSpace(raw.Error.Message) != "" {
+			msg = raw.Error.Message
 		}
 		return nil, fmt.Errorf("%s", msg)
 	}
@@ -156,9 +167,9 @@ func streamWebsocketAsSyntheticSSE(conn *websocket.Conn) io.Reader {
 				_ = pw.CloseWithError(err)
 				return
 			}
-			var raw map[string]any
+			var raw websocketEventEnvelope
 			if err := json.Unmarshal(message, &raw); err == nil {
-				if kind, _ := raw["type"].(string); kind == "response.completed" || kind == "response.failed" {
+				if raw.Type == "response.completed" || raw.Type == "response.failed" {
 					return
 				}
 			}
@@ -172,11 +183,13 @@ func writeAndParseWebsocketRequest(
 	cfg WebsocketTransportConfig,
 	payload ResponseCreateWsRequest,
 	emit func(adapteropenai.StreamChunk) error,
+	warmup bool,
 ) (RunResult, error) {
 	raw, err := MarshalResponseCreateWsRequest(payload)
 	if err != nil {
 		return NewRunResult("stop"), err
 	}
+	logWebsocketFrame(context.Background(), cfg, payload, raw, warmup)
 	if err := conn.WriteMessage(websocket.TextMessage, raw); err != nil {
 		return NewRunResult("stop"), err
 	}
@@ -186,6 +199,38 @@ func writeAndParseWebsocketRequest(
 		return result, nil
 	}
 	return result, err
+}
+
+// logWebsocketFrame emits codex.responses.request for every websocket
+// frame Clyde writes (warmup and primary). The frame bytes are exactly
+// what the wire receives, so corruption between BuildRequest and the
+// websocket write is observable in the JSONL feed.
+func logWebsocketFrame(ctx context.Context, cfg WebsocketTransportConfig, payload ResponseCreateWsRequest, frame []byte, warmup bool) {
+	mode, maxBytes := cfg.BodyLog.Resolve()
+	if mode == BodyLogOff {
+		return
+	}
+	ev := requestEvent{
+		Subcomponent:       "codex",
+		Transport:          "responses_websocket",
+		RequestID:          cfg.RequestID,
+		Alias:              cfg.Alias,
+		Model:              payload.Model,
+		URL:                cfg.URL,
+		BodyBytes:          len(frame),
+		InputCount:         len(payload.Input),
+		ToolCount:          len(payload.Tools),
+		PreviousResponseID: payload.PreviousResponseID,
+		Warmup:             warmup,
+	}
+	body, b64, truncated := applyBodyMode(frame, mode, maxBytes)
+	ev.Body = body
+	ev.BodyB64 = b64
+	ev.BodyTruncated = truncated
+	if mode == BodyLogSummary || mode == BodyLogWhitelist {
+		ev.BodySummary = summarizeWsRequest(payload)
+	}
+	logCodexEvent(ctx, slog.LevelDebug, "codex.responses.request", ev.toSlogAttrs())
 }
 
 func dialResponsesWebsocket(ctx context.Context, cfg WebsocketTransportConfig) (*websocket.Conn, *http.Response, error) {
@@ -249,7 +294,7 @@ func RunWebsocketTransport(
 		_ = conn.SetReadDeadline(time.Now().Add(prewarmTimeout))
 		warmupResult, warmupErr := writeAndParseWebsocketRequest(conn, cfg, warmup, func(adapteropenai.StreamChunk) error {
 			return nil
-		})
+		}, true)
 		_ = conn.SetReadDeadline(time.Time{})
 		if warmupErr == nil && strings.TrimSpace(warmupResult.ResponseID) != "" {
 			payload = WithPreviousResponseID(payload, warmupResult.ResponseID, []map[string]any{})
@@ -279,5 +324,5 @@ func RunWebsocketTransport(
 		WebsocketConnectionReuse: connectionReused,
 	})
 
-	return writeAndParseWebsocketRequest(conn, cfg, payload, emit)
+	return writeAndParseWebsocketRequest(conn, cfg, payload, emit, false)
 }

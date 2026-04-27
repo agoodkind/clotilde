@@ -19,7 +19,7 @@ func ManagedSummary(req adapteropenai.ChatRequest) string {
 }
 
 type ManagedRunResult struct {
-	Result        any
+	Result        RunResult
 	AssistantText string
 	Managed       bool
 }

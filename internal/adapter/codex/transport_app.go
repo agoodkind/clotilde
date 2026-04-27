@@ -15,17 +15,21 @@ type AppFallbackConfig struct {
 	Binary         string
 	RequestID      string
 	Model          string
-	Effort         any
-	Summary        any
+	Effort         ReasoningEffort
+	Summary        ReasoningSummary
 	SystemPrompt   string
 	Prompt         string
 	SanitizePrompt func(string) string
 	StartRPC       RPCStarter
+	StartRPCEnv    map[string]string
 	Logger         *slog.Logger
+	BodyLog        BodyLogConfig
 }
 
+// AppTurnTransport is the narrow JSON-RPC surface RunManagedTurn uses
+// to drive a Codex app session.
 type AppTurnTransport interface {
-	Send(id int, method string, params any) error
+	SendTurnStart(id int, params RPCTurnStartParams) error
 	Next() (RPCMessage, error)
 	ThreadID() string
 	CachedInputTokens() int
@@ -35,11 +39,12 @@ type AppTurnTransport interface {
 type AppTurnConfig struct {
 	RequestID      string
 	Model          string
-	Effort         any
-	Summary        any
+	Effort         ReasoningEffort
+	Summary        ReasoningSummary
 	Prompt         string
 	SanitizePrompt func(string) string
 	Logger         *slog.Logger
+	BodyLog        BodyLogConfig
 }
 
 func RunManagedTurn(
@@ -56,17 +61,16 @@ func RunManagedTurn(
 	if sanitize == nil {
 		sanitize = SanitizeForUpstreamCache
 	}
-	if err := transport.Send(3, "turn/start", map[string]any{
-		"threadId":       transport.ThreadID(),
-		"approvalPolicy": "never",
-		"model":          cfg.Model,
-		"effort":         cfg.Effort,
-		"summary":        cfg.Summary,
-		"input": []map[string]any{{
-			"type": "text",
-			"text": sanitize(prompt),
-		}},
-	}); err != nil {
+	turnParams := RPCTurnStartParams{
+		ThreadID:       transport.ThreadID(),
+		ApprovalPolicy: AskForApprovalNever,
+		Model:          cfg.Model,
+		Effort:         cfg.Effort,
+		Summary:        cfg.Summary,
+		Input:          []RPCTurnInputItem{NewTextInput(sanitize(prompt))},
+	}
+	logAppRPCRequest(ctx, cfg.RequestID, cfg.Model, "turn/start", turnParams, cfg.BodyLog)
+	if err := transport.SendTurnStart(3, turnParams); err != nil {
 		return NewRunResult("stop"), "", err
 	}
 
@@ -83,6 +87,7 @@ func RunManagedTurn(
 		if err != nil {
 			return out, assistantText.String(), err
 		}
+		logAppRPCResponse(ctx, cfg.RequestID, cfg.Model, msg, cfg.BodyLog)
 		if msg.ID != nil && RPCIDEquals(msg.ID, 3) {
 			if msg.Error != nil {
 				return out, assistantText.String(), fmt.Errorf("codex turn/start: %s", msg.Error.Message)
@@ -92,9 +97,7 @@ func RunManagedTurn(
 		LogProtocolEvent(ctx, cfg.RequestID, "codex", msg.Method, slog.Int("params_bytes", len(msg.Params)))
 		switch msg.Method {
 		case "item/agentMessage/delta":
-			var p struct {
-				Delta string `json:"delta"`
-			}
+			var p RPCAgentMessageDeltaNotification
 			_ = json.Unmarshal(msg.Params, &p)
 			LogToolingEvent(cfg.Logger, ctx, cfg.RequestID, msg.Method, slog.Int("delta_len", len(p.Delta)))
 			if p.Delta != "" {
@@ -103,40 +106,25 @@ func RunManagedTurn(
 				}
 			}
 		case "turn/plan/updated":
-			var p struct {
-				Explanation string `json:"explanation"`
-				Plan        []struct {
-					Step   string `json:"step"`
-					Status string `json:"status"`
-				} `json:"plan"`
-			}
+			var p RPCTurnPlanUpdatedNotification
 			_ = json.Unmarshal(msg.Params, &p)
-			plan := make([]map[string]string, 0, len(p.Plan))
-			for _, step := range p.Plan {
-				plan = append(plan, map[string]string{"step": step.Step, "status": step.Status})
-			}
-			LogToolingEvent(cfg.Logger, ctx, cfg.RequestID, msg.Method, slog.Int("plan_steps", len(plan)), slog.Bool("has_explanation", strings.TrimSpace(p.Explanation) != ""))
-			if ev, ok := PlanEvent(p.Explanation, plan); ok {
+			LogToolingEvent(cfg.Logger, ctx, cfg.RequestID, msg.Method, slog.Int("plan_steps", len(p.Plan)), slog.Bool("has_explanation", strings.TrimSpace(p.Explanation) != ""))
+			if ev, ok := PlanEvent(p.Explanation, p.Plan); ok {
 				if err := EmitRendered(renderer, ev, emit, &assistantText); err != nil {
 					return out, assistantText.String(), err
 				}
 			}
 		case "item/started", "item/completed":
-			var p struct {
-				Item map[string]any `json:"item"`
-			}
+			var p RPCItemNotification
 			_ = json.Unmarshal(msg.Params, &p)
-			LogToolingEvent(cfg.Logger, ctx, cfg.RequestID, msg.Method, slog.String("item_type", itemType(p.Item)), slog.String("item_status", itemStatus(p.Item)))
+			LogToolingEvent(cfg.Logger, ctx, cfg.RequestID, msg.Method, slog.String("item_type", p.Item.ItemType()), slog.String("item_status", p.Item.ItemStatus()))
 			if ev, ok := LifecycleEvent(p.Item, msg.Method == "item/completed"); ok {
 				if err := EmitRendered(renderer, ev, emit, &assistantText); err != nil {
 					return out, assistantText.String(), err
 				}
 			}
 		case "item/commandExecution/outputDelta", "item/fileChange/outputDelta":
-			var p struct {
-				Delta  string `json:"delta"`
-				ItemID string `json:"itemId"`
-			}
+			var p RPCOutputDeltaNotification
 			_ = json.Unmarshal(msg.Params, &p)
 			LogToolingEvent(cfg.Logger, ctx, cfg.RequestID, msg.Method, slog.String("item_id", p.ItemID), slog.Int("delta_len", len(p.Delta)))
 			if ev, ok := ProgressEvent(msg.Method, p.ItemID, p.Delta); ok {
@@ -145,10 +133,7 @@ func RunManagedTurn(
 				}
 			}
 		case "item/mcpToolCall/progress":
-			var p struct {
-				Message string `json:"message"`
-				ItemID  string `json:"itemId"`
-			}
+			var p RPCMcpToolCallProgressNotification
 			_ = json.Unmarshal(msg.Params, &p)
 			LogToolingEvent(cfg.Logger, ctx, cfg.RequestID, msg.Method, slog.String("item_id", p.ItemID), slog.Int("message_len", len(p.Message)))
 			if ev, ok := ProgressEvent(msg.Method, p.ItemID, p.Message); ok {
@@ -157,10 +142,7 @@ func RunManagedTurn(
 				}
 			}
 		case "item/fileChange/patchUpdated":
-			var p struct {
-				ItemID  string `json:"itemId"`
-				Changes []any  `json:"changes"`
-			}
+			var p RPCFileChangePatchUpdatedNotification
 			_ = json.Unmarshal(msg.Params, &p)
 			LogToolingEvent(cfg.Logger, ctx, cfg.RequestID, msg.Method, slog.String("item_id", p.ItemID), slog.Int("change_count", len(p.Changes)))
 			changeCount := len(p.Changes)
@@ -174,9 +156,7 @@ func RunManagedTurn(
 				}
 			}
 		case "item/reasoning/summaryPartAdded":
-			var p struct {
-				SummaryIndex int `json:"summaryIndex"`
-			}
+			var p RPCReasoningSummaryPartAddedNotification
 			_ = json.Unmarshal(msg.Params, &p)
 			out.ReasoningSignaled = true
 			LogReasoningEvent(cfg.Logger, ctx, cfg.RequestID, msg.Method, slog.Int("summary_index", p.SummaryIndex), slog.Bool("thinking_visible", renderer.State().ReasoningVisible))
@@ -184,10 +164,7 @@ func RunManagedTurn(
 				return out, assistantText.String(), err
 			}
 		case "item/reasoning/summaryTextDelta", "item/reasoning/textDelta":
-			var p struct {
-				Delta        string `json:"delta"`
-				SummaryIndex int    `json:"summaryIndex"`
-			}
+			var p RPCReasoningTextDeltaNotification
 			_ = json.Unmarshal(msg.Params, &p)
 			out.ReasoningSignaled = true
 			LogReasoningEvent(cfg.Logger, ctx, cfg.RequestID, msg.Method, slog.Int("summary_index", p.SummaryIndex), slog.Int("delta_len", len(p.Delta)), slog.Bool("thinking_visible_before", renderer.State().ReasoningVisible))
@@ -203,17 +180,7 @@ func RunManagedTurn(
 				}
 			}
 		case "thread/tokenUsage/updated":
-			var p struct {
-				TokenUsage struct {
-					Last struct {
-						TotalTokens           int `json:"totalTokens"`
-						InputTokens           int `json:"inputTokens"`
-						CachedInputTokens     int `json:"cachedInputTokens"`
-						OutputTokens          int `json:"outputTokens"`
-						ReasoningOutputTokens int `json:"reasoningOutputTokens"`
-					} `json:"last"`
-				} `json:"tokenUsage"`
-			}
+			var p RPCThreadTokenUsageUpdatedNotification
 			_ = json.Unmarshal(msg.Params, &p)
 			currentCached := p.TokenUsage.Last.CachedInputTokens
 			derivedCacheCreate := DeriveCacheCreationTokens(transport.CachedInputTokens(), currentCached)
@@ -253,8 +220,8 @@ type rpcAppTurnTransport struct {
 	cached   int
 }
 
-func (t *rpcAppTurnTransport) Send(id int, method string, params any) error {
-	return t.rpc.Send(id, method, params)
+func (t *rpcAppTurnTransport) SendTurnStart(id int, params RPCTurnStartParams) error {
+	return t.rpc.SendTurnStart(id, params)
 }
 
 func (t *rpcAppTurnTransport) Next() (RPCMessage, error) { return t.rpc.Next() }
@@ -266,7 +233,7 @@ func (t *rpcAppTurnTransport) CachedInputTokens() int { return t.cached }
 func (t *rpcAppTurnTransport) SetCachedInputTokens(v int) { t.cached = v }
 
 func RunAppFallback(ctx context.Context, cfg AppFallbackConfig, emit func(adapteropenai.StreamChunk) error) (RunResult, error) {
-	rpc, err := cfg.StartRPC(ctx, cfg.Binary)
+	rpc, err := cfg.StartRPC(ctx, cfg.Binary, cfg.StartRPCEnv)
 	if err != nil {
 		return NewRunResult("stop"), err
 	}
@@ -278,6 +245,7 @@ func RunAppFallback(ctx context.Context, cfg AppFallbackConfig, emit func(adapte
 			if err != nil {
 				return RPCMessage{}, err
 			}
+			logAppRPCResponse(ctx, cfg.RequestID, cfg.Model, msg, cfg.BodyLog)
 			if msg.ID == nil || !RPCIDEquals(msg.ID, id) {
 				continue
 			}
@@ -288,32 +256,37 @@ func RunAppFallback(ctx context.Context, cfg AppFallbackConfig, emit func(adapte
 		}
 	}
 
-	if err := rpc.Send(1, "initialize", map[string]any{
-		"clientInfo": map[string]any{
-			"name":    "clyde-adapter",
-			"title":   "Clyde Adapter",
-			"version": "0.1.0",
+	initParams := RPCInitializeParams{
+		ClientInfo: RPCClientInfo{
+			Name:    "clyde-adapter",
+			Title:   "Clyde Adapter",
+			Version: "0.1.0",
 		},
-	}); err != nil {
+	}
+	logAppRPCRequest(ctx, cfg.RequestID, cfg.Model, "initialize", initParams, cfg.BodyLog)
+	if err := rpc.SendInitialize(1, initParams); err != nil {
 		return NewRunResult("stop"), err
 	}
 	if _, err := waitFor(1); err != nil {
 		return NewRunResult("stop"), err
 	}
-	if err := rpc.Notify("initialized", map[string]any{}); err != nil {
+	if err := rpc.NotifyInitialized(); err != nil {
 		return NewRunResult("stop"), err
 	}
 
 	threadID := ""
-	if err := rpc.Send(2, "thread/start", map[string]any{
-		"cwd":              ".",
-		"approvalPolicy":   "never",
-		"ephemeral":        true,
-		"model":            strings.TrimSpace(cfg.Model),
-		"reasoningEffort":  cfg.Effort,
-		"reasoningSummary": cfg.Summary,
-		"systemPrompt":     strings.TrimSpace(cfg.SystemPrompt),
-	}); err != nil {
+	threadParams := RPCThreadStartParams{
+		Cwd:                    ".",
+		ApprovalPolicy:         AskForApprovalNever,
+		Ephemeral:              true,
+		Model:                  strings.TrimSpace(cfg.Model),
+		BaseInstructions:       strings.TrimSpace(cfg.SystemPrompt),
+		ServiceName:            "clyde-codex-session",
+		ExperimentalRawEvents:  false,
+		PersistExtendedHistory: false,
+	}
+	logAppRPCRequest(ctx, cfg.RequestID, cfg.Model, "thread/start", threadParams, cfg.BodyLog)
+	if err := rpc.SendThreadStart(2, threadParams); err != nil {
 		return NewRunResult("stop"), err
 	}
 	threadMsg, err := waitFor(2)
@@ -321,17 +294,17 @@ func RunAppFallback(ctx context.Context, cfg AppFallbackConfig, emit func(adapte
 		return NewRunResult("stop"), err
 	}
 	if len(threadMsg.Result) > 0 {
-		var r struct {
-			ThreadID string `json:"threadId"`
-		}
+		var r RPCThreadStartResponse
 		_ = json.Unmarshal(threadMsg.Result, &r)
-		threadID = strings.TrimSpace(r.ThreadID)
+		threadID = strings.TrimSpace(r.Thread.ID)
 	}
 	defer func() {
 		if threadID == "" {
 			return
 		}
-		_ = rpc.Send(9, "thread/archive", map[string]any{"threadId": threadID})
+		archiveParams := RPCThreadArchiveParams{ThreadID: threadID}
+		logAppRPCRequest(ctx, cfg.RequestID, cfg.Model, "thread/archive", archiveParams, cfg.BodyLog)
+		_ = rpc.SendThreadArchive(9, archiveParams)
 	}()
 
 	out, _, err := RunManagedTurn(ctx, &rpcAppTurnTransport{rpc: rpc, threadID: threadID}, AppTurnConfig{
@@ -342,6 +315,75 @@ func RunAppFallback(ctx context.Context, cfg AppFallbackConfig, emit func(adapte
 		Prompt:         cfg.Prompt,
 		SanitizePrompt: cfg.SanitizePrompt,
 		Logger:         cfg.Logger,
+		BodyLog:        cfg.BodyLog,
 	}, emit)
 	return out, err
+}
+
+// logAppRPCRequest is the codex.app.request equivalent of the
+// websocket/HTTP wire-body log. The typed struct is marshalled to JSON
+// and then run through the defensive secret-key redactor before the
+// payload is recorded. Callers should always pass one of the
+// RPC*Params structs from app_protocol.go.
+func logAppRPCRequest(ctx context.Context, requestID, model, method string, params rpcRequestParams, bodyLog BodyLogConfig) {
+	mode, maxBytes := bodyLog.Resolve()
+	if mode == BodyLogOff {
+		return
+	}
+	raw, err := json.Marshal(params)
+	if err != nil {
+		raw = []byte(fmt.Sprintf("%v", params))
+	}
+	redacted := redactedRPCParams(raw)
+	ev := requestEvent{
+		Subcomponent: "codex",
+		Transport:    "app_rpc",
+		Method:       method,
+		RequestID:    requestID,
+		Model:        model,
+		BodyBytes:    len(redacted),
+	}
+	body, b64, truncated := applyBodyMode(redacted, mode, maxBytes)
+	ev.Body = body
+	ev.BodyB64 = b64
+	ev.BodyTruncated = truncated
+	logCodexEvent(ctx, slog.LevelDebug, "codex.app.request", ev.toSlogAttrs())
+}
+
+func logAppRPCResponse(ctx context.Context, requestID, model string, msg RPCMessage, bodyLog BodyLogConfig) {
+	mode, maxBytes := bodyLog.Resolve()
+	if mode == BodyLogOff {
+		return
+	}
+	raw := msg.Result
+	if len(raw) == 0 {
+		raw = msg.Params
+	}
+	if msg.Error != nil {
+		errorBody, err := json.Marshal(msg.Error)
+		if err == nil {
+			raw = errorBody
+		}
+	}
+	redacted := redactedRPCParams(raw)
+	method := msg.Method
+	if method == "" && msg.ID != nil {
+		method = "rpc.response." + msg.ID.IntString()
+	}
+	ev := responseEventCodex{
+		Subcomponent: "codex",
+		Transport:    "app_rpc",
+		Method:       method,
+		RequestID:    requestID,
+		Model:        model,
+		BodyBytes:    len(redacted),
+	}
+	if msg.Error != nil {
+		ev.Err = msg.Error.Message
+	}
+	body, b64, truncated := applyBodyMode(redacted, mode, maxBytes)
+	ev.Body = body
+	ev.BodyB64 = b64
+	ev.BodyTruncated = truncated
+	logCodexEvent(ctx, slog.LevelDebug, "codex.app.response", ev.toSlogAttrs())
 }

@@ -61,5 +61,9 @@ func (s *Server) runCodexDirect(
 		RequestID:        reqID,
 		Continuation:     s.codexContinue,
 		Log:              s.log,
+		BodyLog: adaptercodex.BodyLogConfig{
+			Mode:  s.logging.Body.Mode,
+			MaxKB: s.logging.Body.MaxKB,
+		},
 	}, req, model, effort, emit)
 }

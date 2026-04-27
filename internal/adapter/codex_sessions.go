@@ -55,6 +55,5 @@ func (s *Server) runCodexManaged(
 	if err != nil {
 		return codexRunResult{}, "", out.Managed, err
 	}
-	res, _ := out.Result.(codexRunResult)
-	return res, out.AssistantText, out.Managed, nil
+	return out.Result, out.AssistantText, out.Managed, nil
 }

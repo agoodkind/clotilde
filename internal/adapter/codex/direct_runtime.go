@@ -21,6 +21,7 @@ type DirectConfig struct {
 	RequestID        string
 	Continuation     *ContinuationStore
 	Log              *slog.Logger
+	BodyLog          BodyLogConfig
 }
 
 func RunDirect(
@@ -83,6 +84,7 @@ func RunDirect(
 			ConversationID: conversationID,
 			TurnState:      turnState,
 			Prewarm:        strings.TrimSpace(wsReq.PreviousResponseID) == "",
+			BodyLog:        cfg.BodyLog,
 		}, wsReq, emit)
 		if wsErr == nil {
 			if cfg.Continuation != nil {
@@ -104,5 +106,6 @@ func RunDirect(
 		RequestID:      cfg.RequestID,
 		Alias:          model.Alias,
 		ConversationID: strings.TrimSpace(transportPayload.PromptCache),
+		BodyLog:        cfg.BodyLog,
 	}, transportPayload, emit)
 }

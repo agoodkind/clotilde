@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -15,7 +16,23 @@ type stdioRPCClient struct {
 	stdout *bufio.Reader
 }
 
-func StartRPC(ctx context.Context, bin string) (RPCClient, error) {
+type rpcRequestParams interface {
+	rpcMethod() string
+}
+
+type rpcRequestEnvelope struct {
+	JSONRPC string           `json:"jsonrpc"`
+	ID      int              `json:"id"`
+	Method  string           `json:"method"`
+	Params  rpcRequestParams `json:"params"`
+}
+
+type rpcNotificationEnvelope struct {
+	JSONRPC string `json:"jsonrpc"`
+	Method  string `json:"method"`
+}
+
+func StartRPC(ctx context.Context, bin string, env map[string]string) (RPCClient, error) {
 	cmd := exec.CommandContext(ctx, bin, "app-server", "--listen", "stdio://")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -26,6 +43,12 @@ func StartRPC(ctx context.Context, bin string) (RPCClient, error) {
 		return nil, err
 	}
 	cmd.Stderr = io.Discard
+	if len(env) > 0 {
+		cmd.Env = os.Environ()
+		for key, value := range env {
+			cmd.Env = append(cmd.Env, key+"="+value)
+		}
+	}
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
@@ -36,14 +59,15 @@ func StartRPC(ctx context.Context, bin string) (RPCClient, error) {
 	}, nil
 }
 
-func (c *stdioRPCClient) Send(id int, method string, params any) error {
-	body := map[string]any{
-		"jsonrpc": "2.0",
-		"id":      id,
-		"method":  method,
-		"params":  params,
-	}
-	raw, err := json.Marshal(body)
+func (c *stdioRPCClient) SendInitialize(id int, params RPCInitializeParams) error {
+	return c.send(id, params)
+}
+
+func (c *stdioRPCClient) NotifyInitialized() error {
+	raw, err := json.Marshal(rpcNotificationEnvelope{
+		JSONRPC: "2.0",
+		Method:  "initialized",
+	})
 	if err != nil {
 		return err
 	}
@@ -51,11 +75,24 @@ func (c *stdioRPCClient) Send(id int, method string, params any) error {
 	return err
 }
 
-func (c *stdioRPCClient) Notify(method string, params any) error {
-	raw, err := json.Marshal(map[string]any{
-		"jsonrpc": "2.0",
-		"method":  method,
-		"params":  params,
+func (c *stdioRPCClient) SendThreadStart(id int, params RPCThreadStartParams) error {
+	return c.send(id, params)
+}
+
+func (c *stdioRPCClient) SendTurnStart(id int, params RPCTurnStartParams) error {
+	return c.send(id, params)
+}
+
+func (c *stdioRPCClient) SendThreadArchive(id int, params RPCThreadArchiveParams) error {
+	return c.send(id, params)
+}
+
+func (c *stdioRPCClient) send(id int, params rpcRequestParams) error {
+	raw, err := json.Marshal(rpcRequestEnvelope{
+		JSONRPC: "2.0",
+		ID:      id,
+		Method:  params.rpcMethod(),
+		Params:  params,
 	})
 	if err != nil {
 		return err

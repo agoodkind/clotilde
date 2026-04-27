@@ -4,11 +4,46 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
+type RPCID struct {
+	raw string
+}
+
+func NewRPCID(id int) RPCID {
+	return RPCID{raw: strconv.Itoa(id)}
+}
+
+func (id RPCID) IntString() string {
+	return id.raw
+}
+
+func (id RPCID) Equals(want int) bool {
+	return id.raw == strconv.Itoa(want)
+}
+
+func (id *RPCID) UnmarshalJSON(raw []byte) error {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		id.raw = ""
+		return nil
+	}
+	if unquoted, err := strconv.Unquote(trimmed); err == nil {
+		id.raw = strings.TrimSpace(unquoted)
+		return nil
+	}
+	var number json.Number
+	if err := json.Unmarshal(raw, &number); err != nil {
+		return err
+	}
+	id.raw = number.String()
+	return nil
+}
+
 type RPCMessage struct {
-	ID     any             `json:"id,omitempty"`
+	ID     *RPCID          `json:"id,omitempty"`
 	Method string          `json:"method,omitempty"`
 	Params json.RawMessage `json:"params,omitempty"`
 	Result json.RawMessage `json:"result,omitempty"`
@@ -21,13 +56,16 @@ type RPCError struct {
 }
 
 type RPCClient interface {
-	Send(id int, method string, params any) error
-	Notify(method string, params any) error
+	SendInitialize(id int, params RPCInitializeParams) error
+	NotifyInitialized() error
+	SendThreadStart(id int, params RPCThreadStartParams) error
+	SendTurnStart(id int, params RPCTurnStartParams) error
+	SendThreadArchive(id int, params RPCThreadArchiveParams) error
 	Next() (RPCMessage, error)
 	Close() error
 }
 
-type RPCStarter func(context.Context, string) (RPCClient, error)
+type RPCStarter func(context.Context, string, map[string]string) (RPCClient, error)
 
 type AppTransport struct {
 	cancel                context.CancelFunc
@@ -38,7 +76,7 @@ type AppTransport struct {
 
 func NewAppTransport(bin string, spec SessionSpec, start RPCStarter) (*AppTransport, error) {
 	sessCtx, cancel := context.WithCancel(context.Background())
-	rpc, err := start(sessCtx, bin)
+	rpc, err := start(sessCtx, bin, nil)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -49,11 +87,11 @@ func NewAppTransport(bin string, spec SessionSpec, start RPCStarter) (*AppTransp
 		return nil, err
 	}
 
-	if err := rpc.Send(1, "initialize", map[string]any{
-		"clientInfo": map[string]any{
-			"name":    "clyde-adapter",
-			"title":   "Clyde Adapter",
-			"version": "0.1.0",
+	if err := rpc.SendInitialize(1, RPCInitializeParams{
+		ClientInfo: RPCClientInfo{
+			Name:    "clyde-adapter",
+			Title:   "Clyde Adapter",
+			Version: "0.1.0",
 		},
 	}); err != nil {
 		return cleanup(err)
@@ -61,18 +99,18 @@ func NewAppTransport(bin string, spec SessionSpec, start RPCStarter) (*AppTransp
 	if _, err := waitFor(rpc, 1); err != nil {
 		return cleanup(err)
 	}
-	if err := rpc.Notify("initialized", map[string]any{}); err != nil {
+	if err := rpc.NotifyInitialized(); err != nil {
 		return cleanup(err)
 	}
-	if err := rpc.Send(2, "thread/start", map[string]any{
-		"model":                  spec.Model,
-		"cwd":                    ".",
-		"approvalPolicy":         "never",
-		"ephemeral":              true,
-		"serviceName":            "clyde-codex-session",
-		"baseInstructions":       spec.System,
-		"experimentalRawEvents":  false,
-		"persistExtendedHistory": false,
+	if err := rpc.SendThreadStart(2, RPCThreadStartParams{
+		Model:                  spec.Model,
+		Cwd:                    ".",
+		ApprovalPolicy:         AskForApprovalNever,
+		Ephemeral:              true,
+		ServiceName:            "clyde-codex-session",
+		BaseInstructions:       spec.System,
+		ExperimentalRawEvents:  false,
+		PersistExtendedHistory: false,
 	}); err != nil {
 		return cleanup(err)
 	}
@@ -80,11 +118,7 @@ func NewAppTransport(bin string, spec SessionSpec, start RPCStarter) (*AppTransp
 	if err != nil {
 		return cleanup(err)
 	}
-	var threadResp struct {
-		Thread struct {
-			ID string `json:"id"`
-		} `json:"thread"`
-	}
+	var threadResp RPCThreadStartResponse
 	if err := json.Unmarshal(startResp.Result, &threadResp); err != nil {
 		return cleanup(err)
 	}
@@ -97,7 +131,7 @@ func (t *AppTransport) Close() error {
 		return nil
 	}
 	if t.rpc != nil && strings.TrimSpace(t.threadID) != "" {
-		_ = t.rpc.Send(9, "thread/archive", map[string]any{"threadId": t.threadID})
+		_ = t.rpc.SendThreadArchive(9, RPCThreadArchiveParams{ThreadID: t.threadID})
 	}
 	if t.cancel != nil {
 		t.cancel()
@@ -108,8 +142,8 @@ func (t *AppTransport) Close() error {
 	return nil
 }
 
-func (t *AppTransport) Send(id int, method string, params any) error {
-	return t.rpc.Send(id, method, params)
+func (t *AppTransport) SendTurnStart(id int, params RPCTurnStartParams) error {
+	return t.rpc.SendTurnStart(id, params)
 }
 
 func (t *AppTransport) Next() (RPCMessage, error) {
@@ -128,17 +162,8 @@ func (t *AppTransport) SetCachedInputTokens(v int) {
 	t.lastCachedInputTokens = v
 }
 
-func RPCIDEquals(v any, want int) bool {
-	switch id := v.(type) {
-	case float64:
-		return int(id) == want
-	case int:
-		return id == want
-	case string:
-		return id == fmt.Sprintf("%d", want)
-	default:
-		return false
-	}
+func RPCIDEquals(v *RPCID, want int) bool {
+	return v != nil && v.Equals(want)
 }
 
 func waitFor(rpc RPCClient, id int) (RPCMessage, error) {

@@ -21,16 +21,31 @@ type fakeRPCClient struct {
 type rpcCall struct {
 	id     int
 	method string
-	params any
+	params rpcRequestParams
 }
 
-func (f *fakeRPCClient) Send(id int, method string, params any) error {
-	f.sent = append(f.sent, rpcCall{id: id, method: method, params: params})
+func (f *fakeRPCClient) SendInitialize(id int, params RPCInitializeParams) error {
+	f.sent = append(f.sent, rpcCall{id: id, method: params.rpcMethod(), params: params})
 	return nil
 }
 
-func (f *fakeRPCClient) Notify(method string, params any) error {
-	f.sent = append(f.sent, rpcCall{id: 0, method: method, params: params})
+func (f *fakeRPCClient) NotifyInitialized() error {
+	f.sent = append(f.sent, rpcCall{id: 0, method: "initialized"})
+	return nil
+}
+
+func (f *fakeRPCClient) SendThreadStart(id int, params RPCThreadStartParams) error {
+	f.sent = append(f.sent, rpcCall{id: id, method: params.rpcMethod(), params: params})
+	return nil
+}
+
+func (f *fakeRPCClient) SendTurnStart(id int, params RPCTurnStartParams) error {
+	f.sent = append(f.sent, rpcCall{id: id, method: params.rpcMethod(), params: params})
+	return nil
+}
+
+func (f *fakeRPCClient) SendThreadArchive(id int, params RPCThreadArchiveParams) error {
+	f.sent = append(f.sent, rpcCall{id: id, method: params.rpcMethod(), params: params})
 	return nil
 }
 
@@ -54,8 +69,8 @@ func (f *fakeRPCClient) Close() error {
 func TestRunAppFallbackBootstrapsThreadAndTurn(t *testing.T) {
 	rpc := &fakeRPCClient{
 		next: []RPCMessage{
-			{ID: 1, Result: json.RawMessage(`{}`)},
-			{ID: 2, Result: json.RawMessage(`{"threadId":"thread-123"}`)},
+			{ID: rpcIDPtr(1), Result: json.RawMessage(`{"userAgent":"codex","codexHome":"/tmp/codex","platformFamily":"unix","platformOs":"macos"}`)},
+			{ID: rpcIDPtr(2), Result: json.RawMessage(`{"thread":{"id":"thread-123"},"model":"gpt-5.4"}`)},
 			{Method: "item/agentMessage/delta", Params: json.RawMessage(`{"delta":"hello "}`)},
 			{Method: "item/agentMessage/delta", Params: json.RawMessage(`{"delta":"world"}`)},
 			{Method: "turn/completed", Params: json.RawMessage(`{}`)},
@@ -72,7 +87,7 @@ func TestRunAppFallbackBootstrapsThreadAndTurn(t *testing.T) {
 		SystemPrompt:   "sys",
 		Prompt:         "prompt",
 		SanitizePrompt: func(s string) string { return s },
-		StartRPC: func(context.Context, string) (RPCClient, error) {
+		StartRPC: func(context.Context, string, map[string]string) (RPCClient, error) {
 			return rpc, nil
 		},
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -105,7 +120,7 @@ func TestRunAppFallbackReturnsRPCError(t *testing.T) {
 	_, err := RunAppFallback(context.Background(), AppFallbackConfig{
 		Binary:    "codex",
 		RequestID: "req-1",
-		StartRPC: func(context.Context, string) (RPCClient, error) {
+		StartRPC: func(context.Context, string, map[string]string) (RPCClient, error) {
 			return nil, startErr
 		},
 	}, func(adapteropenai.StreamChunk) error { return nil })
@@ -161,8 +176,8 @@ type fakeAppTurnTransport struct {
 	cached   int
 }
 
-func (f *fakeAppTurnTransport) Send(id int, method string, params any) error {
-	f.sent = append(f.sent, rpcCall{id: id, method: method, params: params})
+func (f *fakeAppTurnTransport) SendTurnStart(id int, params RPCTurnStartParams) error {
+	f.sent = append(f.sent, rpcCall{id: id, method: params.rpcMethod(), params: params})
 	return nil
 }
 
@@ -180,3 +195,8 @@ func (f *fakeAppTurnTransport) ThreadID() string { return f.threadID }
 func (f *fakeAppTurnTransport) CachedInputTokens() int { return f.cached }
 
 func (f *fakeAppTurnTransport) SetCachedInputTokens(v int) { f.cached = v }
+
+func rpcIDPtr(id int) *RPCID {
+	out := NewRPCID(id)
+	return &out
+}

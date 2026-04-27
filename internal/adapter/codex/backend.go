@@ -16,22 +16,22 @@ import (
 // transport behavior remains behind the implementation callbacks.
 type Dispatcher interface {
 	AppFallbackEnabled() bool
-	RunCodexDirect(context.Context, adapteropenai.ChatRequest, adaptermodel.ResolvedModel, string, string, func(adapteropenai.StreamChunk) error) (any, error)
-	RunCodexManaged(context.Context, adapteropenai.ChatRequest, adaptermodel.ResolvedModel, string, string, func(adapteropenai.StreamChunk) error) (any, string, bool, error)
-	RunCodexAppFallback(context.Context, adapteropenai.ChatRequest, string, func(adapteropenai.StreamChunk) error) (any, error)
+	RunCodexDirect(context.Context, adapteropenai.ChatRequest, adaptermodel.ResolvedModel, string, string, func(adapteropenai.StreamChunk) error) (RunResult, error)
+	RunCodexManaged(context.Context, adapteropenai.ChatRequest, adaptermodel.ResolvedModel, string, string, func(adapteropenai.StreamChunk) error) (RunResult, string, bool, error)
+	RunCodexAppFallback(context.Context, adapteropenai.ChatRequest, string, func(adapteropenai.StreamChunk) error) (RunResult, error)
 	EmitRequestStarted(context.Context, adaptermodel.ResolvedModel, string, string, string, bool)
 	EmitRequestStreamOpened(context.Context, adaptermodel.ResolvedModel, string, string, string, bool)
 	NewSSEWriter(http.ResponseWriter) (SSEWriter, error)
 	StreamChunkFromTooltrans(adapteropenai.StreamChunk) adapteropenai.StreamChunk
-	MergeChunks(string, string, []adapteropenai.StreamChunk, any) any
-	WriteJSON(http.ResponseWriter, int, any)
+	MergeChunks(string, string, []adapteropenai.StreamChunk, RunResult) adapteropenai.ChatResponse
+	WriteJSON(http.ResponseWriter, int, adapteropenai.ChatResponse)
 	LogTerminal(context.Context, adapterruntime.RequestEvent)
 	Log() *slog.Logger
 	SystemFingerprint() string
-	ResultUsage(any) *adapteropenai.Usage
-	ResultFinishReason(any) string
-	ResultReasoning(any) (bool, bool)
-	ResultDerivedCacheCreationTokens(any) int
+	ResultUsage(RunResult) *adapteropenai.Usage
+	ResultFinishReason(RunResult) string
+	ResultReasoning(RunResult) (bool, bool)
+	ResultDerivedCacheCreationTokens(RunResult) int
 }
 
 type SSEWriter interface {
@@ -57,7 +57,7 @@ func Collect(d Dispatcher, w http.ResponseWriter, r *http.Request, req adapterop
 		return nil
 	}
 	directRes, directErr := d.RunCodexDirect(r.Context(), req, model, effort, reqID, emit)
-	path, res, _, err := resolveTransportSelection(d, r.Context(), req, model, reqID, started, chunks, directRes, directErr, false, func() (any, bool, error) {
+	path, res, _, err := resolveTransportSelection(d, r.Context(), req, model, reqID, started, chunks, directRes, directErr, false, func() (RunResult, bool, error) {
 		chunks = nil
 		d.EmitRequestStarted(r.Context(), model, "app", reqID, model.Alias, false)
 		assistantRes, assistantText, managedRun, runErr := d.RunCodexManaged(r.Context(), req, model, effort, reqID, emit)
@@ -107,7 +107,7 @@ func Stream(d Dispatcher, w http.ResponseWriter, r *http.Request, req adapterope
 	}
 
 	directRes, directErr := d.RunCodexDirect(r.Context(), req, model, effort, reqID, directEmit)
-	path, res, _, runErr := resolveTransportSelection(d, r.Context(), req, model, reqID, started, directChunks, directRes, directErr, true, func() (any, bool, error) {
+	path, res, _, runErr := resolveTransportSelection(d, r.Context(), req, model, reqID, started, directChunks, directRes, directErr, true, func() (RunResult, bool, error) {
 		d.EmitRequestStarted(r.Context(), model, "app", reqID, model.Alias, true)
 		d.EmitRequestStreamOpened(r.Context(), model, "app", reqID, model.Alias, true)
 		var assistantText string

@@ -11,20 +11,20 @@ import (
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
 
-func PlanEvent(explanation string, plan []map[string]string) (adapterrender.Event, bool) {
+func PlanEvent(explanation string, plan []RPCTurnPlanStep) (adapterrender.Event, bool) {
 	ev := adapterrender.Event{
 		Kind:            adapterrender.EventPlanUpdated,
 		PlanExplanation: strings.TrimSpace(explanation),
 		Plan:            make([]adapterrender.EventPlanStep, 0, len(plan)),
 	}
 	for _, step := range plan {
-		label := strings.TrimSpace(step["step"])
+		label := strings.TrimSpace(step.Step)
 		if label == "" {
 			continue
 		}
 		ev.Plan = append(ev.Plan, adapterrender.EventPlanStep{
 			Step:   label,
-			Status: strings.TrimSpace(step["status"]),
+			Status: strings.TrimSpace(step.Status),
 		})
 	}
 	if ev.PlanExplanation == "" && len(ev.Plan) == 0 {
@@ -33,9 +33,9 @@ func PlanEvent(explanation string, plan []map[string]string) (adapterrender.Even
 	return ev, true
 }
 
-func LifecycleEvent(item map[string]any, completed bool) (adapterrender.Event, bool) {
-	itemType := itemType(item)
-	status := itemStatus(item)
+func LifecycleEvent(item RPCThreadItem, completed bool) (adapterrender.Event, bool) {
+	itemType := item.ItemType()
+	status := item.ItemStatus()
 	switch itemType {
 	case "commandExecution", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "contextCompaction":
 		kind := adapterrender.EventToolStarted
@@ -46,10 +46,10 @@ func LifecycleEvent(item map[string]any, completed bool) (adapterrender.Event, b
 			Kind:       kind,
 			ItemType:   itemType,
 			ItemStatus: status,
-			ItemID:     mapString(item, "id"),
-			ToolName:   toolName(item),
-			ServerName: mapString(item, "server"),
-			Command:    mapString(item, "command"),
+			ItemID:     item.ID,
+			ToolName:   item.ToolName(),
+			ServerName: item.Server,
+			Command:    item.Command,
 			Completed:  completed,
 		}, true
 	case "fileChange":
@@ -61,8 +61,8 @@ func LifecycleEvent(item map[string]any, completed bool) (adapterrender.Event, b
 			Kind:        kind,
 			ItemType:    itemType,
 			ItemStatus:  status,
-			ItemID:      mapString(item, "id"),
-			ChangeCount: fileChangeCount(item),
+			ItemID:      item.ID,
+			ChangeCount: item.FileChangeCount(),
 			Completed:   completed,
 		}, true
 	default:
@@ -144,56 +144,47 @@ func logTransportEvent(log *slog.Logger, ctx context.Context, requestID, msg str
 	log.LogAttrs(ctx, slog.LevelDebug, msg, base...)
 }
 
-func mapString(m map[string]any, key string) string {
-	if m == nil {
-		return ""
-	}
-	v, _ := m[key].(string)
-	return strings.TrimSpace(v)
+func (item RPCThreadItem) ItemType() string {
+	return strings.TrimSpace(item.Type)
 }
 
-func mapSlice(m map[string]any, key string) []any {
-	if m == nil {
-		return nil
-	}
-	v, _ := m[key].([]any)
-	return v
+func (item RPCThreadItem) ItemStatus() string {
+	return strings.TrimSpace(item.Status)
 }
 
-func itemType(item map[string]any) string {
-	return mapString(item, "type")
-}
-
-func itemStatus(item map[string]any) string {
-	return mapString(item, "status")
-}
-
-func fileChangeCount(item map[string]any) int {
-	changes := mapSlice(item, "changes")
-	count := len(changes)
+func (item RPCThreadItem) FileChangeCount() int {
+	count := len(item.Changes)
 	if count == 0 {
 		count = 1
 	}
 	return count
 }
 
-func toolName(item map[string]any) string {
-	if cmd := mapString(item, "command"); cmd != "" {
+func (item RPCThreadItem) ToolName() string {
+	if cmd := strings.TrimSpace(item.Command); cmd != "" {
 		return cmd
 	}
-	if tool := mapString(item, "tool"); tool != "" {
+	if tool := strings.TrimSpace(item.Tool); tool != "" {
 		return tool
 	}
-	server := mapString(item, "server")
-	tool := mapString(item, "tool")
+	server := strings.TrimSpace(item.Server)
+	tool := strings.TrimSpace(item.Tool)
 	name := strings.Trim(strings.Join([]string{server, tool}, "/"), "/")
 	if name != "" {
 		return name
 	}
-	if typ := itemType(item); typ != "" {
+	if typ := item.ItemType(); typ != "" {
 		return typ
 	}
 	return "tool"
+}
+
+func mapString(m map[string]any, key string) string {
+	if m == nil {
+		return ""
+	}
+	v, _ := m[key].(string)
+	return strings.TrimSpace(v)
 }
 
 func ParseTransportStream(body io.Reader, requestID, alias string, log *slog.Logger, emit func(adapteropenai.StreamChunk) error) (RunResult, error) {

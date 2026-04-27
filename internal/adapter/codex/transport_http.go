@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
@@ -43,6 +44,7 @@ type HTTPTransportConfig struct {
 	RequestID      string
 	Alias          string
 	ConversationID string
+	BodyLog        BodyLogConfig
 }
 
 func RunHTTPTransport(
@@ -95,14 +97,77 @@ func RunHTTPTransport(
 		FunctionToolCount: functionToolCount,
 	})
 
+	// codex.responses.request mirrors anthropic.messages.request: it
+	// captures outbound wire bytes so payload corruption between
+	// BuildRequest and the HTTP write is visible end-to-end. Mode is
+	// controlled by logging.body.mode plumbed through DirectConfig.
+	mode, maxBytes := cfg.BodyLog.Resolve()
+	if mode != BodyLogOff {
+		ev := requestEvent{
+			Subcomponent: "codex",
+			Transport:    "responses_http",
+			RequestID:    cfg.RequestID,
+			Alias:        cfg.Alias,
+			Model:        payload.Model,
+			URL:          cfg.BaseURL,
+			BodyBytes:    len(raw),
+			Headers:      redactedCodexOutboundHeaders(httpReq.Header),
+			InputCount:   len(payload.Input),
+			ToolCount:    len(payload.Tools),
+		}
+		body, b64, truncated := applyBodyMode(raw, mode, maxBytes)
+		ev.Body = body
+		ev.BodyB64 = b64
+		ev.BodyTruncated = truncated
+		if mode == BodyLogSummary || mode == BodyLogWhitelist {
+			ev.BodySummary = summarizeHTTPRequest(payload)
+		}
+		logCodexEvent(ctx, slog.LevelDebug, "codex.responses.request", ev.toSlogAttrs())
+	}
+
+	postStarted := time.Now()
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
+		logCodexEvent(ctx, slog.LevelError, "codex.responses.post_failed", responseEventCodex{
+			Subcomponent: "codex",
+			Transport:    "responses_http",
+			RequestID:    cfg.RequestID,
+			Alias:        cfg.Alias,
+			Model:        payload.Model,
+			BodyBytes:    len(raw),
+			DurationMs:   time.Since(postStarted).Milliseconds(),
+			Err:          err.Error(),
+		}.toSlogAttrs())
 		return NewRunResult("stop"), err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		errBody, errB64, errTruncated := applyBodyMode(b, mode, maxBytes)
+		logCodexEvent(ctx, slog.LevelError, "codex.responses.upstream_error", responseEventCodex{
+			Subcomponent:  "codex",
+			Transport:     "responses_http",
+			RequestID:     cfg.RequestID,
+			Alias:         cfg.Alias,
+			Model:         payload.Model,
+			Status:        resp.StatusCode,
+			BodyBytes:     len(b),
+			DurationMs:    time.Since(postStarted).Milliseconds(),
+			Body:          errBody,
+			BodyB64:       errB64,
+			BodyTruncated: errTruncated,
+		}.toSlogAttrs())
 		return NewRunResult("stop"), fmt.Errorf("codex backend %s: %s", resp.Status, strings.TrimSpace(string(b)))
 	}
+	logCodexEvent(ctx, slog.LevelInfo, "codex.responses.connected", responseEventCodex{
+		Subcomponent: "codex",
+		Transport:    "responses_http",
+		RequestID:    cfg.RequestID,
+		Alias:        cfg.Alias,
+		Model:        payload.Model,
+		Status:       resp.StatusCode,
+		BodyBytes:    len(raw),
+		DurationMs:   time.Since(postStarted).Milliseconds(),
+	}.toSlogAttrs())
 	return ParseTransportStream(resp.Body, cfg.RequestID, cfg.Alias, slog.Default(), emit)
 }

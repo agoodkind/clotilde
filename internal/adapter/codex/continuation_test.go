@@ -487,6 +487,29 @@ func TestContinuationStoreInvalidatesOnConfigMismatch(t *testing.T) {
 	}
 }
 
+func TestContinuationStoreInvalidatesOnInstructionsChange(t *testing.T) {
+	store := NewContinuationStore()
+	first := ResponseCreateWsRequest{
+		Type:           "response.create",
+		Model:          "gpt-5.4",
+		Instructions:   "<permissions instructions>old</permissions instructions>",
+		PromptCacheKey: "cursor:conv-instr",
+		Input:          []map[string]any{{"type": "message", "role": "user", "content": "hello"}},
+	}
+	store.Complete(ContinuationDecision{}, first, RunResult{ResponseID: "resp-instr-1"})
+
+	second := first
+	second.Instructions = "<permissions_instructions>new</permissions_instructions>"
+	second.Input = append(cloneInput(first.Input), map[string]any{"type": "message", "role": "user", "content": "next"})
+	decision := store.Prepare(second)
+	if decision.Hit {
+		t.Fatalf("unexpected continuation hit after instructions change")
+	}
+	if decision.MissReason != "fingerprint_mismatch" {
+		t.Fatalf("miss_reason=%q want fingerprint_mismatch", decision.MissReason)
+	}
+}
+
 func TestContinuationStoreForgetsOnFailure(t *testing.T) {
 	store := NewContinuationStore()
 	first := ResponseCreateWsRequest{

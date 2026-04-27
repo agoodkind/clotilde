@@ -308,7 +308,7 @@ func TestBuildCodexRequestReplaysAssistantTurnsAsOutputText(t *testing.T) {
 		switch {
 		case codexInputContentType(item) == "output_text":
 			foundOutput = true
-		case strings.Contains(codexInputContentText(item), "<permissions instructions>"):
+		case strings.Contains(codexInputContentText(item), "<permissions_instructions>"):
 			foundPermissions = true
 		case strings.Contains(codexInputContentText(item), "<environment_context>"):
 			foundEnvironment = true
@@ -364,7 +364,7 @@ func TestBuildCodexRequestInjectsContextBeforeFinalUserTurn(t *testing.T) {
 		t.Fatalf("role[5]=%q want final user", got)
 	}
 	devContent := codexInputContentText(out.Input[2])
-	if !strings.Contains(devContent, "<permissions instructions>") || !strings.Contains(devContent, "<tool_calling_instructions>") || !strings.Contains(devContent, "system rules") {
+	if !strings.Contains(devContent, "<permissions_instructions>") || !strings.Contains(devContent, "<tool_calling_instructions>") || !strings.Contains(devContent, "system rules") {
 		t.Fatalf("developer_context=%q", devContent)
 	}
 	content := codexInputContentText(out.Input[3])
@@ -802,7 +802,7 @@ func TestBuildCodexRequestFromCapturedWriteReplay(t *testing.T) {
 	foundEnvironment := false
 	for _, item := range out.Input {
 		text := codexInputContentText(item)
-		if strings.Contains(text, "<permissions instructions>") {
+		if strings.Contains(text, "<permissions_instructions>") {
 			foundPermissions = true
 		}
 		if strings.Contains(text, "<environment_context>") {
@@ -875,12 +875,12 @@ func TestBuildCodexManagedPromptPlanStripsThinkingEnvelopeFromAssistantAnchor(t 
 }
 
 func TestCodexLifecycleEventSummarizesFileChange(t *testing.T) {
-	item := map[string]any{
-		"type":   "fileChange",
-		"status": "completed",
-		"changes": []any{
-			map[string]any{},
-			map[string]any{},
+	item := RPCThreadItem{
+		Type:   "fileChange",
+		Status: "completed",
+		Changes: []RPCFileUpdateChange{
+			{Path: "a.txt", Kind: "update", Diff: "@@ a"},
+			{Path: "b.txt", Kind: "update", Diff: "@@ b"},
 		},
 	}
 	got, ok := LifecycleEvent(item, true)
@@ -896,9 +896,9 @@ func TestCodexLifecycleEventSummarizesFileChange(t *testing.T) {
 }
 
 func TestCodexPlanEventFormatsSteps(t *testing.T) {
-	got, ok := PlanEvent("Clarifying tool usage", []map[string]string{
-		{"step": "inspect payloads", "status": "completed"},
-		{"step": "render tool output", "status": "inProgress"},
+	got, ok := PlanEvent("Clarifying tool usage", []RPCTurnPlanStep{
+		{Step: "inspect payloads", Status: "completed"},
+		{Step: "render tool output", Status: "inProgress"},
 	})
 	if !ok {
 		t.Fatalf("expected plan event")

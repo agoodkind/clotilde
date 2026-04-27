@@ -14,15 +14,15 @@ func (s *Server) AppFallbackEnabled() bool {
 	return s.cfg.Codex.AppFallback
 }
 
-func (s *Server) RunCodexDirect(ctx context.Context, req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort, reqID string, emit func(adapteropenai.StreamChunk) error) (any, error) {
+func (s *Server) RunCodexDirect(ctx context.Context, req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort, reqID string, emit func(adapteropenai.StreamChunk) error) (adaptercodex.RunResult, error) {
 	return s.runCodexDirect(ctx, req, model, effort, reqID, emit)
 }
 
-func (s *Server) RunCodexManaged(ctx context.Context, req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort, reqID string, emit func(adapteropenai.StreamChunk) error) (any, string, bool, error) {
+func (s *Server) RunCodexManaged(ctx context.Context, req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort, reqID string, emit func(adapteropenai.StreamChunk) error) (adaptercodex.RunResult, string, bool, error) {
 	return s.runCodexManaged(ctx, req, model, effort, reqID, emit)
 }
 
-func (s *Server) RunCodexAppFallback(ctx context.Context, req adapteropenai.ChatRequest, reqID string, emit func(adapteropenai.StreamChunk) error) (any, error) {
+func (s *Server) RunCodexAppFallback(ctx context.Context, req adapteropenai.ChatRequest, reqID string, emit func(adapteropenai.StreamChunk) error) (adaptercodex.RunResult, error) {
 	return s.runCodexAppFallback(ctx, req, reqID, emit)
 }
 
@@ -42,12 +42,11 @@ func (s *Server) StreamChunkFromTooltrans(ch adapteropenai.StreamChunk) adaptero
 	return streamChunkFromTooltrans(ch)
 }
 
-func (s *Server) MergeChunks(reqID, alias string, chunks []adapteropenai.StreamChunk, res any) any {
-	typed := res.(codexRunResult)
-	return adaptercodex.MergeChunks(reqID, alias, systemFingerprint, chunks, typed)
+func (s *Server) MergeChunks(reqID, alias string, chunks []adapteropenai.StreamChunk, res adaptercodex.RunResult) adapteropenai.ChatResponse {
+	return adaptercodex.MergeChunks(reqID, alias, systemFingerprint, chunks, res)
 }
 
-func (s *Server) WriteJSON(w http.ResponseWriter, status int, v any) {
+func (s *Server) WriteJSON(w http.ResponseWriter, status int, v adapteropenai.ChatResponse) {
 	writeJSON(w, status, v)
 }
 
@@ -59,20 +58,18 @@ func (s *Server) SystemFingerprint() string {
 	return systemFingerprint
 }
 
-func (s *Server) ResultUsage(res any) *adapteropenai.Usage {
-	typed := res.(codexRunResult)
-	return &typed.Usage
+func (s *Server) ResultUsage(res adaptercodex.RunResult) *adapteropenai.Usage {
+	return &res.Usage
 }
 
-func (s *Server) ResultFinishReason(res any) string {
-	return res.(codexRunResult).FinishReason
+func (s *Server) ResultFinishReason(res adaptercodex.RunResult) string {
+	return res.FinishReason
 }
 
-func (s *Server) ResultReasoning(res any) (bool, bool) {
-	typed := res.(codexRunResult)
-	return typed.ReasoningSignaled, typed.ReasoningVisible
+func (s *Server) ResultReasoning(res adaptercodex.RunResult) (bool, bool) {
+	return res.ReasoningSignaled, res.ReasoningVisible
 }
 
-func (s *Server) ResultDerivedCacheCreationTokens(res any) int {
-	return res.(codexRunResult).DerivedCacheCreationTokens
+func (s *Server) ResultDerivedCacheCreationTokens(res adaptercodex.RunResult) int {
+	return res.DerivedCacheCreationTokens
 }

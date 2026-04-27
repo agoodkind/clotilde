@@ -17,7 +17,7 @@ type transportSelector interface {
 	LogTerminal(context.Context, adapterruntime.RequestEvent)
 }
 
-type fallbackRunFunc func() (any, bool, error)
+type fallbackRunFunc func() (RunResult, bool, error)
 
 func resolveTransportSelection(
 	d transportSelector,
@@ -27,20 +27,18 @@ func resolveTransportSelection(
 	reqID string,
 	started time.Time,
 	directChunks []adapteropenai.StreamChunk,
-	directRes any,
+	directRes RunResult,
 	directErr error,
 	stream bool,
 	fallback fallbackRunFunc,
-) (path string, res any, managed bool, err error) {
+) (path string, res RunResult, managed bool, err error) {
 	path = "direct"
 	res = directRes
 	err = directErr
 
 	if err == nil && d.AppFallbackEnabled() {
 		finishReason := ""
-		if runResult, ok := res.(RunResult); ok {
-			finishReason = runResult.FinishReason
-		}
+		finishReason = res.FinishReason
 		if escalate, reason := ShouldEscalateDirect(req, directChunks, finishReason); escalate {
 			d.Log().LogAttrs(ctx, slog.LevelWarn, "adapter.codex.direct.degraded",
 				slog.String("request_id", reqID),
