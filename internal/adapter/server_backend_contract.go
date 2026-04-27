@@ -49,6 +49,14 @@ func (s *Server) dispatchResolvedChat(
 	reqID string,
 	body []byte,
 ) {
+	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.backend.dispatching",
+		slog.String("request_id", reqID),
+		slog.String("alias", req.Model),
+		slog.String("backend", string(model.Backend)),
+		slog.String("resolved_model", model.ClaudeModel),
+		slog.String("effort", effort),
+		slog.Bool("stream", req.Stream),
+	)
 	switch model.Backend {
 	case BackendShunt:
 		s.forwardShunt(w, r, model, body)

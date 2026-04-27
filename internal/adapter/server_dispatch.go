@@ -97,6 +97,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	bodyBytes := len(body)
+	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.chat.ingress",
+		slog.String("request_id", reqID),
+		slog.String("method", r.Method),
+		slog.String("path", r.URL.Path),
+		slog.String("remote_addr", r.RemoteAddr),
+		slog.Int("body_bytes", bodyBytes),
+		slog.String("user_agent", r.UserAgent()),
+		slog.String("cf_ray", r.Header.Get("Cf-Ray")),
+		slog.String("cf_connecting_ip", r.Header.Get("Cf-Connecting-Ip")),
+	)
 	rawAttrs := rawChatLogEvent{
 		RequestID:  reqID,
 		Method:     r.Method,
@@ -139,6 +149,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if parseErr != nil {
+		s.log.LogAttrs(r.Context(), slog.LevelWarn, "adapter.chat.parse_failed",
+			slog.String("request_id", reqID),
+			slog.String("err", parseErr.Error()),
+			slog.Int("body_bytes", bodyBytes),
+		)
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON: "+parseErr.Error())
 		return
 	}
@@ -152,6 +167,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if len(req.Messages) == 0 && len(req.Input) > 0 {
 		count, nerr := normalizeMessagesFromInput(&req)
 		if nerr != nil {
+			s.log.LogAttrs(r.Context(), slog.LevelWarn, "adapter.messages.normalize_failed",
+				slog.String("request_id", reqID),
+				slog.String("model", req.Model),
+				slog.String("err", nerr.Error()),
+			)
 			writeError(w, http.StatusBadRequest, "invalid_request", nerr.Error())
 			return
 		}
@@ -164,6 +184,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(req.Messages) == 0 {
+		s.log.LogAttrs(r.Context(), slog.LevelWarn, "adapter.chat.validation_failed",
+			slog.String("request_id", reqID),
+			slog.String("model", req.Model),
+			slog.String("reason", "messages_required"),
+		)
 		writeError(w, http.StatusBadRequest, "invalid_request", "messages is required")
 		return
 	}
@@ -185,6 +210,17 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeModelResolutionError(w, err.Error())
 		return
 	}
+	resolveAttrs := []slog.Attr{
+		slog.String("request_id", reqID),
+		slog.String("alias", req.Model),
+		slog.String("backend", string(model.Backend)),
+		slog.String("resolved_model", model.ClaudeModel),
+		slog.String("effort", effort),
+		slog.Int("context_window", model.Context),
+		slog.Bool("stream", req.Stream),
+	}
+	resolveAttrs = append(resolveAttrs, adaptercursor.BoundaryLogAttrs(cursorReq, cursorReq.OpenAI.Model, nil)...)
+	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.model.resolved", resolveAttrs...)
 
 	var ok bool
 	model, ok = s.applyBackendOverride(w, r, req, model, reqID)

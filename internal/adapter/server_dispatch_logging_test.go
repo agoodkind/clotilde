@@ -182,6 +182,34 @@ func TestHandleChatLogsOffModeSkipsEvent(t *testing.T) {
 	}
 }
 
+func TestHandleChatLogsIngressBeforeParse(t *testing.T) {
+	t.Parallel()
+	srv, buf := newLoggingServer(t, config.LoggingConfig{
+		Body: config.LoggingBody{
+			Mode: "off",
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{"))
+	req.Header.Set("User-Agent", "Cursor/route-probe")
+	resp := httptest.NewRecorder()
+	srv.mux.ServeHTTP(resp, req)
+
+	ingress := findLogEvent(t, buf, "adapter.chat.ingress")
+	if ingress == nil {
+		t.Fatalf("expected adapter.chat.ingress event")
+	}
+	if ingress["user_agent"] != "Cursor/route-probe" {
+		t.Fatalf("user_agent=%v", ingress["user_agent"])
+	}
+	if ingress["body_bytes"] != float64(1) {
+		t.Fatalf("body_bytes=%v", ingress["body_bytes"])
+	}
+	if evt := findLogEvent(t, buf, "adapter.chat.parse_failed"); evt == nil {
+		t.Fatalf("expected adapter.chat.parse_failed event")
+	}
+}
+
 func TestHandleChatAcceptsResponsesInputShape(t *testing.T) {
 	t.Parallel()
 	srv, _ := newLoggingServer(t, config.LoggingConfig{
@@ -291,6 +319,20 @@ func TestHandleChatLogsCursorModelNormalization(t *testing.T) {
 	}
 	if evt["cursor_can_spawn_agent"] != true {
 		t.Fatalf("cursor_can_spawn_agent=%v", evt["cursor_can_spawn_agent"])
+	}
+	resolved := findLogEvent(t, buf, "adapter.model.resolved")
+	if resolved == nil {
+		t.Fatalf("expected adapter.model.resolved event")
+	}
+	if resolved["backend"] != BackendCodex {
+		t.Fatalf("resolved backend=%v", resolved["backend"])
+	}
+	dispatch := findLogEvent(t, buf, "adapter.backend.dispatching")
+	if dispatch == nil {
+		t.Fatalf("expected adapter.backend.dispatching event")
+	}
+	if dispatch["alias"] != "gpt-5.4" {
+		t.Fatalf("dispatch alias=%v", dispatch["alias"])
 	}
 }
 
