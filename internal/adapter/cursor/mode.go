@@ -6,10 +6,10 @@ import (
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
-const permissionsInstructions = `<permissions instructions>
+const permissionsInstructions = `<permissions_instructions>
 Filesystem sandboxing defines which files can be read or written. ` + "`sandbox_mode`" + ` is ` + "`danger-full-access`" + `: No filesystem sandboxing - all commands are permitted. Network access is enabled.
 Approval policy is currently ` + "`never`" + `. Use the available tools directly when they help complete the task.
-</permissions instructions>`
+</permissions_instructions>`
 
 const toolCallingInstructions = `<tool_calling_instructions>
 - When you call a tool, emit complete JSON arguments that satisfy the tool schema.

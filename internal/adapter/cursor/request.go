@@ -18,7 +18,7 @@ type Request struct {
 	ConversationID  string
 	WorkspacePath   string
 	NormalizedModel string
-	Metadata        map[string]any
+	Metadata        map[string]json.RawMessage
 	RawToolNames    []string
 	Mode            Mode
 	CanSwitchMode   bool
@@ -62,7 +62,8 @@ func metadataString(raw json.RawMessage, keys ...string) string {
 	}
 	for _, key := range keys {
 		if v, ok := m[key]; ok {
-			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+			var s string
+			if json.Unmarshal(v, &s) == nil && strings.TrimSpace(s) != "" {
 				return strings.TrimSpace(s)
 			}
 		}
@@ -70,40 +71,47 @@ func metadataString(raw json.RawMessage, keys ...string) string {
 	return ""
 }
 
-func metadataMap(raw json.RawMessage) map[string]any {
+func metadataMap(raw json.RawMessage) map[string]json.RawMessage {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil
 	}
-	var m map[string]any
+	var m map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return nil
 	}
 	return m
 }
 
-func metadataHasAny(m map[string]any, keys ...string) bool {
+func metadataHasAny(m map[string]json.RawMessage, keys ...string) bool {
 	for _, key := range keys {
-		v, ok := m[key]
+		raw, ok := m[key]
 		if !ok {
 			continue
 		}
-		switch typed := v.(type) {
-		case bool:
-			if typed {
+		var asBool bool
+		if json.Unmarshal(raw, &asBool) == nil {
+			if asBool {
 				return true
 			}
-		case string:
-			if strings.TrimSpace(typed) != "" && strings.TrimSpace(typed) != "false" {
+			continue
+		}
+		var asString string
+		if json.Unmarshal(raw, &asString) == nil {
+			trimmed := strings.TrimSpace(asString)
+			if trimmed != "" && trimmed != "false" {
 				return true
 			}
-		case float64:
-			if typed != 0 {
+			continue
+		}
+		var asNumber float64
+		if json.Unmarshal(raw, &asNumber) == nil {
+			if asNumber != 0 {
 				return true
 			}
-		default:
-			if typed != nil {
-				return true
-			}
+			continue
+		}
+		if string(raw) != "null" {
+			return true
 		}
 	}
 	return false

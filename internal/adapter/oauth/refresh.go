@@ -1,4 +1,4 @@
-// Token refresh: cross-process lock and HTTP exchange.
+// Package oauth manages adapter OAuth token flows and persistence.
 package oauth
 
 import (
@@ -101,7 +101,7 @@ func (m *Manager) refreshLocked(ctx context.Context, current *Tokens) (*Tokens, 
 	if err := writeCredentials(m.credentialsDir, newTokens); err != nil {
 		slog.Warn("oauth.credentials.write_failed",
 			"subcomponent", "oauth",
-			slog.Any("err", err),
+			"err", err,
 		)
 	}
 	return newTokens, nil

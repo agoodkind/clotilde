@@ -23,6 +23,20 @@ func TestNormalizeModelAliasPreservesForegroundAliasParity(t *testing.T) {
 	}
 }
 
+func TestNormalizeSessionSettingsModelStripsEffortSuffixFor1MModels(t *testing.T) {
+	testCases := map[string]string{
+		"clyde-gpt-5.4-1m-medium": "clyde-gpt-5.4-1m",
+		"clyde-gpt-5.5-1m-xhigh":  "clyde-gpt-5.5-1m",
+		"clyde-gpt-5.4":           "clyde-gpt-5.4",
+	}
+
+	for rawModel, want := range testCases {
+		if got := NormalizeSessionSettingsModel(rawModel); got != want {
+			t.Fatalf("NormalizeSessionSettingsModel(%q) = %q want %q", rawModel, got, want)
+		}
+	}
+}
+
 func TestTranslateRequestCarriesNormalizedModel(t *testing.T) {
 	req := TranslateRequest(adapteropenai.ChatRequest{
 		Model: "gpt-5.4",

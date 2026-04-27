@@ -1,4 +1,4 @@
-// Credential loading, refresh, and token types.
+// Package oauth manages adapter OAuth token flows and persistence.
 package oauth
 
 import (

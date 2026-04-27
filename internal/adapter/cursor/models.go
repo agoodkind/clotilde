@@ -20,6 +20,21 @@ func NormalizeModelAlias(rawModel string) string {
 	return strings.TrimSpace(rawModel)
 }
 
+// NormalizeSessionSettingsModel removes effort suffixes from Cursor-style
+// 1m aliases so model and effort can be stored independently.
+func NormalizeSessionSettingsModel(rawModel string) string {
+	normalized := NormalizeModelAlias(rawModel)
+	if !strings.Contains(normalized, "-1m-") {
+		return normalized
+	}
+	for _, suffix := range []string{"-low", "-medium", "-high", "-xhigh"} {
+		if strings.HasSuffix(normalized, suffix) {
+			return strings.TrimSuffix(normalized, suffix)
+		}
+	}
+	return normalized
+}
+
 func RequestPath(req Request) RequestPathKind {
 	if metadataHasAny(req.Metadata, "cursorResumeTaskId", "resumeTaskId", "resume", "isResume") {
 		return RequestPathResume

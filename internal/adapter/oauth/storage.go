@@ -1,4 +1,4 @@
-// Credential loading from keychain or file, and merged file writes.
+// Package oauth manages adapter OAuth token flows and persistence.
 package oauth
 
 import (

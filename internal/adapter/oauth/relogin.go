@@ -1,4 +1,4 @@
-// Auto-relogin: shells out to `claude auth login` when token refresh
+// Package oauth manages adapter OAuth token flows and persistence.
 // fails with invalid_grant. Concurrent callers coalesce into a single
 // child process via per-process singleflight + cross-process flock.
 package oauth

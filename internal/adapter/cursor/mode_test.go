@@ -48,7 +48,7 @@ func TestCodexPromptContextIncludesCursorDeveloperSections(t *testing.T) {
 		t.Fatalf("developer sections=%d", len(got.DeveloperSections))
 	}
 	joined := strings.Join(got.DeveloperSections, "\n\n")
-	if !strings.Contains(joined, "<permissions instructions>") || !strings.Contains(joined, "<tool_calling_instructions>") || !strings.Contains(joined, "system rules") {
+	if !strings.Contains(joined, "<permissions_instructions>") || !strings.Contains(joined, "<tool_calling_instructions>") || !strings.Contains(joined, "system rules") {
 		t.Fatalf("developer sections=%q", joined)
 	}
 	if len(got.UserSections) != 1 || !strings.Contains(got.UserSections[0], "<environment_context>") {

@@ -1,4 +1,4 @@
-// Public Manager API: token cache and coordination.
+// Package oauth manages adapter OAuth token flows and persistence.
 package oauth
 
 import (
@@ -55,7 +55,10 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 	defer m.mu.Unlock()
 
 	if err := m.invalidateIfDiskChanged(); err != nil {
-		// Non fatal; the cached value is still usable if it parses.
+		slog.Debug("oauth.cache.invalidate_check_failed",
+			"subcomponent", "oauth",
+			"err", err,
+		)
 	}
 
 	tokens := m.cached
@@ -85,7 +88,7 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 		slog.Error("oauth.token.refresh_failed",
 			"subcomponent", "oauth",
 			"duration_ms", time.Since(refreshStarted).Milliseconds(),
-			slog.Any("err", err),
+			"err", err,
 		)
 		if isInvalidGrant(err) {
 			slog.Info("oauth.refresh.invalid_grant_detected",
