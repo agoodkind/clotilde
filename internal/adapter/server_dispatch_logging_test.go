@@ -385,6 +385,19 @@ func TestHandleChatModelResolutionErrorUsesCursorNativeShape(t *testing.T) {
 	}
 }
 
+func TestServerAddrUsesIPv6LoopbackDefault(t *testing.T) {
+	t.Parallel()
+	srv, _ := newLoggingServer(t, config.LoggingConfig{
+		Body: config.LoggingBody{
+			Mode: "off",
+		},
+	})
+
+	if got := srv.Addr(); got != "[::1]:11434" {
+		t.Fatalf("Addr()=%q want [::1]:11434", got)
+	}
+}
+
 func newLoggingServer(t *testing.T, logging config.LoggingConfig, opts ...func(*config.AdapterConfig)) (*Server, *bytes.Buffer) {
 	t.Helper()
 	cfg := baseConfig()

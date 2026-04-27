@@ -32,7 +32,7 @@ const DefaultPort = 11434
 
 // DefaultHost is the loopback bind. The adapter never binds a public
 // interface unless the user explicitly sets AdapterConfig.Host.
-const DefaultHost = "[::1]"
+const DefaultHost = "::1"
 
 // DefaultMaxConcurrent caps the number of in flight claude
 // subprocesses when the config omits a value.
