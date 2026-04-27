@@ -190,7 +190,70 @@ func continuationOutputPrefixEqual(outputItems, current []map[string]any) bool {
 }
 
 func continuationItemEqual(a, b map[string]any) bool {
+	if aEvent, ok := canonicalContinuationEvent(a); ok {
+		if bEvent, ok := canonicalContinuationEvent(b); ok {
+			if aEvent.Identity != "" || bEvent.Identity != "" {
+				return aEvent.Kind == bEvent.Kind && aEvent.Identity != "" && aEvent.Identity == bEvent.Identity
+			}
+			return aEvent == bEvent
+		}
+	}
 	return jsonEqual(canonicalContinuationItem(a), canonicalContinuationItem(b))
+}
+
+type continuationEvent struct {
+	Kind     string
+	Identity string
+	Role     string
+	Name     string
+	Text     string
+	Payload  string
+}
+
+func canonicalContinuationEvent(item map[string]any) (continuationEvent, bool) {
+	itemType := strings.TrimSpace(mapString(item, "type"))
+	switch itemType {
+	case "message":
+		return continuationEvent{
+			Kind: "message",
+			Role: strings.ToLower(strings.TrimSpace(mapString(item, "role"))),
+			Text: continuationContentText(item["content"]),
+		}, true
+	case "function_call":
+		name := InboundToolName(mapString(item, "name"))
+		payload := canonicalContinuationString(mapString(item, "arguments"))
+		if IsShellToolName(name) {
+			payload = canonicalContinuationShellArguments(mapString(item, "arguments"))
+		}
+		return continuationEvent{
+			Kind:     "tool_call",
+			Identity: strings.TrimSpace(mapString(item, "call_id")),
+			Name:     name,
+			Payload:  payload,
+		}, true
+	case "local_shell_call":
+		return continuationEvent{
+			Kind:     "tool_call",
+			Identity: strings.TrimSpace(mapString(item, "call_id")),
+			Name:     "Shell",
+			Payload:  canonicalContinuationLocalShellAction(item["action"]),
+		}, true
+	case "custom_tool_call":
+		return continuationEvent{
+			Kind:     "tool_call",
+			Identity: strings.TrimSpace(mapString(item, "call_id")),
+			Name:     InboundToolName(mapString(item, "name")),
+			Payload:  rawString(item, "input"),
+		}, true
+	case "function_call_output", "custom_tool_call_output":
+		return continuationEvent{
+			Kind:     "tool_output",
+			Identity: strings.TrimSpace(mapString(item, "call_id")),
+			Text:     continuationOutputText(item["output"]),
+		}, true
+	default:
+		return continuationEvent{}, false
+	}
 }
 
 func canonicalContinuationItem(item map[string]any) map[string]any {
@@ -273,6 +336,79 @@ func canonicalContinuationString(raw string) string {
 	encoded, err := json.Marshal(decoded)
 	if err != nil {
 		return raw
+	}
+	return string(encoded)
+}
+
+func canonicalContinuationShellArguments(raw string) string {
+	args := ToolCallArgsMap(raw)
+	if args == nil {
+		return canonicalContinuationString(raw)
+	}
+	out := map[string]any{}
+	if command := StringArg(args, "command", "cmd"); command != "" {
+		out["command"] = command
+	}
+	if workdir := StringArg(args, "workdir", "working_directory", "cwd"); workdir != "" {
+		out["workdir"] = workdir
+	}
+	if timeout, ok := NumberArg(args, "timeout_ms", "block_until_ms"); ok {
+		out["timeout_ms"] = timeout
+	}
+	return canonicalContinuationJSON(out)
+}
+
+func canonicalContinuationLocalShellAction(raw any) string {
+	action, _ := raw.(map[string]any)
+	if action == nil {
+		return ""
+	}
+	out := map[string]any{}
+	if command := localShellActionCommand(action["command"]); command != "" {
+		out["command"] = command
+	}
+	if workdir := StringArg(action, "working_directory", "workdir", "cwd"); workdir != "" {
+		out["workdir"] = workdir
+	}
+	if timeout, ok := NumberArg(action, "timeout_ms", "block_until_ms"); ok {
+		out["timeout_ms"] = timeout
+	}
+	return canonicalContinuationJSON(out)
+}
+
+func localShellActionCommand(raw any) string {
+	switch v := raw.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case []any:
+		if len(v) >= 3 {
+			if flag, _ := v[len(v)-2].(string); flag == "-lc" {
+				if command, _ := v[len(v)-1].(string); strings.TrimSpace(command) != "" {
+					return strings.TrimSpace(command)
+				}
+			}
+		}
+		parts := make([]string, 0, len(v))
+		for _, part := range v {
+			if text, _ := part.(string); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.TrimSpace(strings.Join(parts, " "))
+	case []string:
+		if len(v) >= 3 && v[len(v)-2] == "-lc" {
+			return strings.TrimSpace(v[len(v)-1])
+		}
+		return strings.TrimSpace(strings.Join(v, " "))
+	default:
+		return ""
+	}
+}
+
+func canonicalContinuationJSON(raw any) string {
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return ""
 	}
 	return string(encoded)
 }

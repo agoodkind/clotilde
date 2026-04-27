@@ -225,6 +225,113 @@ func TestContinuationStoreAnchorsOnOutputItemsWhenCursorPreambleChanges(t *testi
 	}
 }
 
+func TestContinuationStoreAnchorsToolCallsByStableCallID(t *testing.T) {
+	store := NewContinuationStore()
+	first := ResponseCreateWsRequest{
+		Type:           "response.create",
+		Model:          "gpt-5.4",
+		Instructions:   "base",
+		PromptCacheKey: "cursor:conv-123",
+		Input: []map[string]any{
+			{"type": "message", "role": "user", "content": "inspect"},
+		},
+	}
+	store.Complete(ContinuationDecision{}, first, RunResult{
+		ResponseID: "resp-1",
+		OutputItems: []map[string]any{{
+			"id":        "fc-1",
+			"type":      "function_call",
+			"status":    "completed",
+			"call_id":   "call_pwd",
+			"name":      "shell_command",
+			"arguments": `{"command":"pwd","workdir":"/repo"}`,
+		}},
+	})
+
+	second := first
+	second.Input = []map[string]any{
+		{"type": "message", "role": "developer", "content": "reshaped cursor preamble"},
+		{"type": "message", "role": "user", "content": "inspect"},
+		{
+			"type":      "function_call",
+			"call_id":   "call_pwd",
+			"name":      "Shell",
+			"arguments": `{"working_directory":"/repo","command":"pwd","block_until_ms":1000}`,
+		},
+		{"type": "message", "role": "user", "content": "next"},
+	}
+	decision := store.Prepare(second)
+	if !decision.Hit {
+		t.Fatalf("expected continuation hit, miss_reason=%q", decision.MissReason)
+	}
+	if len(decision.IncrementalInput) != 1 || itemRole(decision.IncrementalInput[0]) != "user" {
+		t.Fatalf("incremental_input=%v", decision.IncrementalInput)
+	}
+}
+
+func TestContinuationStoreAnchorsNativeLocalShellCallsByStableCallID(t *testing.T) {
+	store := NewContinuationStore()
+	first := ResponseCreateWsRequest{
+		Type:           "response.create",
+		Model:          "gpt-5.4",
+		Instructions:   "base",
+		PromptCacheKey: "cursor:conv-123",
+		Input: []map[string]any{
+			{"type": "message", "role": "user", "content": "inspect"},
+		},
+	}
+	store.Complete(ContinuationDecision{}, first, RunResult{
+		ResponseID: "resp-1",
+		OutputItems: []map[string]any{{
+			"id":      "ls-1",
+			"type":    "local_shell_call",
+			"status":  "completed",
+			"call_id": "call_pwd",
+			"action": map[string]any{
+				"type":              "exec",
+				"command":           []any{"zsh", "-lc", "pwd"},
+				"working_directory": "/repo",
+			},
+		}},
+	})
+
+	second := first
+	second.Input = []map[string]any{
+		{"type": "message", "role": "developer", "content": "reshaped cursor preamble"},
+		{"type": "message", "role": "user", "content": "inspect"},
+		{
+			"type":      "function_call",
+			"call_id":   "call_pwd",
+			"name":      "Shell",
+			"arguments": `{"working_directory":"/repo","command":"pwd","block_until_ms":1000}`,
+		},
+		{"type": "message", "role": "user", "content": "next"},
+	}
+	decision := store.Prepare(second)
+	if !decision.Hit {
+		t.Fatalf("expected continuation hit, miss_reason=%q", decision.MissReason)
+	}
+	if len(decision.IncrementalInput) != 1 || itemRole(decision.IncrementalInput[0]) != "user" {
+		t.Fatalf("incremental_input=%v", decision.IncrementalInput)
+	}
+}
+
+func TestContinuationToolEventsCanonicalizeShellArgumentAliases(t *testing.T) {
+	a := map[string]any{
+		"type":      "function_call",
+		"name":      "shell_command",
+		"arguments": `{"command":"pwd","workdir":"/repo","timeout_ms":1000}`,
+	}
+	b := map[string]any{
+		"type":      "function_call",
+		"name":      "Shell",
+		"arguments": `{"working_directory":"/repo","command":"pwd","block_until_ms":1000}`,
+	}
+	if !continuationItemEqual(a, b) {
+		t.Fatalf("expected canonical shell calls to match")
+	}
+}
+
 func TestContinuationStoreUsesTailAfterAssistantForCursorReplay(t *testing.T) {
 	store := NewContinuationStore()
 	first := ResponseCreateWsRequest{
