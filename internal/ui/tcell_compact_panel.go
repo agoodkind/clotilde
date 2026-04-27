@@ -92,6 +92,9 @@ type CompactPanel struct {
 	busy       bool
 	busyAction string
 	status     string
+	logRect    Rect
+	logScroll  int
+	logLines   []string
 
 	iterationHistory []CompactIteration
 	latestIteration  *CompactIteration
@@ -124,6 +127,8 @@ func (p *CompactPanel) ApplyCompactEvent(ev CompactEvent) {
 	case "upfront":
 		if ev.Upfront != nil {
 			p.iterationHistory = nil
+			p.logLines = nil
+			p.logScroll = 0
 			p.latestIteration = nil
 			p.latestFinal = nil
 			p.latestUndo = nil
@@ -142,9 +147,15 @@ func (p *CompactPanel) ApplyCompactEvent(ev CompactEvent) {
 		if ev.Iteration != nil {
 			p.latestIteration = ev.Iteration
 			p.iterationHistory = append(p.iterationHistory, *ev.Iteration)
+			p.logLines = append(p.logLines, p.renderIterationLine(*ev.Iteration))
+			p.clampLogScroll()
 		}
 	case "final":
 		p.latestFinal = ev.Final
+		if ev.Final != nil {
+			p.logLines = append(p.logLines, p.renderFinalLine(*ev.Final))
+		}
+		p.clampLogScroll()
 	case "status":
 		if ev.Message != "" {
 			p.status = ev.Message
@@ -167,6 +178,10 @@ func (p *CompactPanel) SetUndoResult(res *CompactUndoResult, err error) {
 	}
 	p.latestUndo = res
 	p.status = "undo completed"
+	if res != nil {
+		p.logLines = append(p.logLines, "last undo at "+res.AppliedAt)
+		p.clampLogScroll()
+	}
 }
 
 func (p *CompactPanel) Draw(scr tcell.Screen, r Rect) {
@@ -195,31 +210,16 @@ func (p *CompactPanel) Draw(scr tcell.Screen, r Rect) {
 	drawString(scr, inner.X, y, StyleHeader, "Live Status", inner.W)
 	y++
 	drawString(scr, inner.X, y, StyleMuted, "status: "+p.status, inner.W)
-	y++
+	y += 2
 
-	actionsY := inner.Y + inner.H - 2
-	if actionsY < y+1 {
-		actionsY = y + 1
+	actionsLabelY := inner.Y + inner.H - 3
+	if actionsLabelY < y+4 {
+		actionsLabelY = y + 4
 	}
-	for _, line := range p.visibleIterationLines(actionsY - y) {
-		drawString(scr, inner.X, y, StyleDefault, line, inner.W)
-		y++
-	}
-	if p.latestFinal != nil {
-		total := p.latestFinal.StaticFloor + p.latestFinal.ReservedTokens + p.latestFinal.FinalTail
-		drawString(scr, inner.X, y, StyleDefault, fmt.Sprintf(
-			"final total %s  target %s",
-			formatWithCommas(total),
-			formatWithCommas(p.latestFinal.TargetTokens),
-		), inner.W)
-		y++
-	}
-	if p.latestUndo != nil {
-		drawString(scr, inner.X, y, StyleMuted, "last undo at "+p.latestUndo.AppliedAt, inner.W)
-		y++
-	}
+	progressH := imax(0, actionsLabelY-y-1)
+	p.drawProgressLog(scr, Rect{X: inner.X, Y: y, W: inner.W, H: progressH})
 
-	y = actionsY - 1
+	y = actionsLabelY
 	drawString(scr, inner.X, y, StyleHeader, "Actions", inner.W)
 	y++
 	p.drawActionButtons(scr, inner.X, y, inner.W)
@@ -238,6 +238,19 @@ func (p *CompactPanel) HandleEvent(ev tcell.Event) bool {
 	switch e := ev.(type) {
 	case *tcell.EventMouse:
 		x, y := e.Position()
+		if !p.Rect.Contains(x, y) {
+			return false
+		}
+		if p.logRect.Contains(x, y) {
+			if e.Buttons()&tcell.WheelUp != 0 {
+				p.scrollLog(-3)
+				return true
+			}
+			if e.Buttons()&tcell.WheelDown != 0 {
+				p.scrollLog(3)
+				return true
+			}
+		}
 		return p.Rect.Contains(x, y)
 	case *tcell.EventKey:
 		if e.Key() == tcell.KeyEscape || (e.Key() == tcell.KeyRune && (e.Rune() == 'q' || e.Rune() == 'Q')) {
@@ -518,12 +531,48 @@ func (p *CompactPanel) drawActionButtons(scr tcell.Screen, x, y, maxW int) {
 			break
 		}
 		style := StyleDefault
-		if p.focusGroup == 3 && p.actionIdx == i {
+		if p.busy {
+			style = StyleMuted.Dim(true)
+		} else if p.focusGroup == 3 && p.actionIdx == i {
 			style = StyleSelected
 			fillRow(scr, cursor, y, width, style)
 		}
 		drawString(scr, cursor, y, style, text, maxW-(cursor-x))
 		cursor += width
+	}
+}
+
+func (p *CompactPanel) drawProgressLog(scr tcell.Screen, r Rect) {
+	p.logRect = Rect{}
+	if r.W <= 2 || r.H <= 2 {
+		return
+	}
+	clearRect(scr, r)
+	drawBoxBorder(scr, r, ColorBorder)
+	drawString(scr, r.X+2, r.Y, StyleHeader, " Progress ", imax(0, r.W-4))
+
+	content := Rect{X: r.X + 2, Y: r.Y + 1, W: r.W - 4, H: r.H - 2}
+	p.logRect = content
+	if content.W <= 0 || content.H <= 0 {
+		return
+	}
+	lines := p.logLines
+	p.logScroll = clamp(p.logScroll, 0, imax(0, len(lines)-content.H))
+	if len(lines) == 0 {
+		drawString(scr, content.X, content.Y, StyleMuted, "(waiting for progress)", content.W)
+		return
+	}
+	start := imax(0, len(lines)-content.H-p.logScroll)
+	end := imin(len(lines), start+content.H)
+	contentW := content.W
+	if len(lines) > content.H {
+		contentW = imax(0, content.W-1)
+		drawScrollbar(scr, content.X+content.W-1, content.Y, content.H, content.H, len(lines), start)
+	}
+	y := content.Y
+	for _, line := range lines[start:end] {
+		drawString(scr, content.X, y, StyleDefault, line, contentW)
+		y++
 	}
 }
 
@@ -537,15 +586,37 @@ func (p *CompactPanel) visibleIterationLines(limit int) []string {
 	start := len(p.iterationHistory) - limit
 	lines := make([]string, 0, limit)
 	for _, iter := range p.iterationHistory[start:] {
-		lines = append(lines, fmt.Sprintf(
-			"iter %d  %s  total %s  %s",
-			iter.Iteration,
-			iter.Step,
-			formatWithCommas(iter.CtxTotal),
-			formatSignedWithCommas(iter.Delta),
-		))
+		lines = append(lines, p.renderIterationLine(iter))
 	}
 	return lines
+}
+
+func (p *CompactPanel) renderIterationLine(iter CompactIteration) string {
+	return fmt.Sprintf(
+		"iter %d  %s  total %s  %s",
+		iter.Iteration,
+		iter.Step,
+		formatWithCommas(iter.CtxTotal),
+		formatSignedWithCommas(iter.Delta),
+	)
+}
+
+func (p *CompactPanel) renderFinalLine(final CompactFinal) string {
+	total := final.StaticFloor + final.ReservedTokens + final.FinalTail
+	return fmt.Sprintf(
+		"final total %s  target %s",
+		formatWithCommas(total),
+		formatWithCommas(final.TargetTokens),
+	)
+}
+
+func (p *CompactPanel) scrollLog(delta int) {
+	maxScroll := imax(0, len(p.logLines)-p.logRect.H)
+	p.logScroll = clamp(p.logScroll-delta, 0, maxScroll)
+}
+
+func (p *CompactPanel) clampLogScroll() {
+	p.logScroll = clamp(p.logScroll, 0, imax(0, len(p.logLines)-p.logRect.H))
 }
 
 func (p *CompactPanel) renderSlider(width int) string {

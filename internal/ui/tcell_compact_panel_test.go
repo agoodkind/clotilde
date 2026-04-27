@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -244,6 +245,121 @@ func TestCompactPanelRenderActionsLooksLikeButtons(t *testing.T) {
 	}
 }
 
+func TestCompactPanelBusyDrawsDisabledActionButtons(t *testing.T) {
+	scr := tcell.NewSimulationScreen("UTF-8")
+	if err := scr.Init(); err != nil {
+		t.Fatalf("init simulation screen: %v", err)
+	}
+	defer scr.Fini()
+	scr.SetSize(90, 24)
+
+	panel := NewCompactPanel("demo")
+	panel.focusGroup = 3
+	panel.actionIdx = 1
+	panel.SetBusy("apply", true)
+	panel.Draw(scr, Rect{X: 0, Y: 0, W: 90, H: 24})
+	scr.Show()
+
+	x, y, ok := findStringCell(scr, "Apply")
+	if !ok {
+		t.Fatalf("expected Apply button to be drawn")
+	}
+	_, style, _ := scr.Get(x, y)
+	fg, bg, _ := style.Decompose()
+	if bg == ColorSelected {
+		t.Fatalf("expected busy Apply button to not use selected background")
+	}
+	if fg != ColorMuted {
+		t.Fatalf("expected busy Apply button to be muted, fg=%v", fg)
+	}
+}
+
+func TestCompactPanelProgressLogStaysAboveActions(t *testing.T) {
+	scr := tcell.NewSimulationScreen("UTF-8")
+	if err := scr.Init(); err != nil {
+		t.Fatalf("init simulation screen: %v", err)
+	}
+	defer scr.Fini()
+	scr.SetSize(90, 18)
+
+	panel := NewCompactPanel("demo")
+	for i := 1; i <= 12; i++ {
+		panel.ApplyCompactEvent(CompactEvent{
+			Kind: "iteration",
+			Iteration: &CompactIteration{
+				Iteration: i,
+				Step:      fmt.Sprintf("step-%02d", i),
+				CtxTotal:  900000 - i,
+				Delta:     -i,
+			},
+		})
+	}
+	panel.ApplyCompactEvent(CompactEvent{
+		Kind:  "final",
+		Final: &CompactFinal{FinalTail: 100, TargetTokens: 300000, StaticFloor: 200, ReservedTokens: 300},
+	})
+	panel.Draw(scr, Rect{X: 0, Y: 0, W: 90, H: 18})
+	scr.Show()
+
+	text := compactPanelScreenText(scr)
+	actionIdx := strings.Index(text, "Actions")
+	if actionIdx < 0 {
+		t.Fatalf("expected Actions row in render:\n%s", text)
+	}
+	if !strings.Contains(text, "Progress") {
+		t.Fatalf("expected progress log box title in render:\n%s", text)
+	}
+	afterActions := text[actionIdx:]
+	if strings.Contains(afterActions, "final total") || strings.Contains(afterActions, "step-") {
+		t.Fatalf("progress log leaked into action rows:\n%s", afterActions)
+	}
+}
+
+func TestCompactPanelMouseWheelScrollsProgressLog(t *testing.T) {
+	scr := tcell.NewSimulationScreen("UTF-8")
+	if err := scr.Init(); err != nil {
+		t.Fatalf("init simulation screen: %v", err)
+	}
+	defer scr.Fini()
+	scr.SetSize(90, 20)
+
+	panel := NewCompactPanel("demo")
+	for i := 1; i <= 20; i++ {
+		panel.ApplyCompactEvent(CompactEvent{
+			Kind: "iteration",
+			Iteration: &CompactIteration{
+				Iteration: i,
+				Step:      fmt.Sprintf("step-%02d", i),
+				CtxTotal:  900000 - i,
+				Delta:     -i,
+			},
+		})
+	}
+	panel.Draw(scr, Rect{X: 0, Y: 0, W: 90, H: 20})
+	scr.Show()
+	if panel.logRect.W == 0 || panel.logRect.H == 0 {
+		t.Fatalf("expected progress log rect to be tracked")
+	}
+
+	x := panel.logRect.X + 1
+	y := panel.logRect.Y + panel.logRect.H/2
+	handled := panel.HandleEvent(tcell.NewEventMouse(x, y, tcell.WheelUp, tcell.ModNone))
+	if !handled {
+		t.Fatalf("expected wheel over progress log to be handled")
+	}
+	if panel.logScroll <= 0 {
+		t.Fatalf("expected wheel up to scroll toward older progress lines")
+	}
+
+	handled = panel.HandleEvent(tcell.NewEventMouse(x, y, tcell.WheelDown, tcell.ModNone))
+	if !handled {
+		t.Fatalf("expected wheel down over progress log to be handled")
+	}
+	if panel.logScroll != 0 {
+		t.Fatalf("expected wheel down to return toward newest progress lines, got %d", panel.logScroll)
+	}
+}
+
 func TestCompactPanelVisibleIterationLinesShowsLatestSteps(t *testing.T) {
 	panel := NewCompactPanel("demo")
 	panel.iterationHistory = []CompactIteration{
@@ -299,4 +415,40 @@ func TestCompactPanelApplyCompactEventTracksIterationHistory(t *testing.T) {
 	if got := len(panel.iterationHistory); got != 2 {
 		t.Fatalf("expected 2 history rows, got %d", got)
 	}
+}
+
+func findStringCell(scr tcell.SimulationScreen, target string) (int, int, bool) {
+	cells, width, height := scr.GetContents()
+	for y := 0; y < height; y++ {
+		var row strings.Builder
+		for x := 0; x < width; x++ {
+			cell := cells[y*width+x]
+			if len(cell.Runes) == 0 || cell.Runes[0] == 0 {
+				row.WriteRune(' ')
+				continue
+			}
+			row.WriteRune(cell.Runes[0])
+		}
+		if x := strings.Index(row.String(), target); x >= 0 {
+			return x, y, true
+		}
+	}
+	return 0, 0, false
+}
+
+func compactPanelScreenText(scr tcell.SimulationScreen) string {
+	cells, width, height := scr.GetContents()
+	var b strings.Builder
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			cell := cells[y*width+x]
+			if len(cell.Runes) == 0 || cell.Runes[0] == 0 {
+				b.WriteRune(' ')
+				continue
+			}
+			b.WriteRune(cell.Runes[0])
+		}
+		b.WriteByte('\n')
+	}
+	return b.String()
 }

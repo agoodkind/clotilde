@@ -1,4 +1,4 @@
-// Sidecar panel for the live remote control session view.
+// Package ui implements the Clyde terminal user interface.
 //
 // The panel renders three regions stacked top to bottom: a header
 // strip with the session name and bridge URL, a scrolling message

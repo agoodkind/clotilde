@@ -45,6 +45,9 @@ type AppOptions struct {
 	// DashboardLaunchCWD is the process working directory when the dashboard
 	// started. It is the default for "new session" without opening the picker.
 	DashboardLaunchCWD string
+	// LaunchBasedir scopes the startup dashboard to sessions rooted at this
+	// basedir and routes "new session" directly to that directory.
+	LaunchBasedir string
 }
 
 // AppCallbacks provides hooks the TUI calls to perform actions.
@@ -81,6 +84,11 @@ type AppCallbacks struct {
 	// the Settings tab to flip the default for sessions that have no
 	// explicit per session value.
 	SetGlobalRemoteControl func(enabled bool) error
+	// LoadConfigControls returns daemon-owned config controls rendered by
+	// the Settings tab.
+	LoadConfigControls func() ([]ConfigControl, error)
+	// UpdateConfigControl persists one config control change via the daemon.
+	UpdateConfigControl func(key, value string) error
 	// ListSessions returns the daemon-owned dashboard snapshot.
 	ListSessions func() (SessionSnapshot, error)
 	// LoadStats returns asynchronously rendered dashboard-wide cache stats.
@@ -164,6 +172,25 @@ type SessionContextState struct {
 	Usage  SessionContextUsage
 	Loaded bool
 	Status string
+}
+
+type ConfigControl struct {
+	Key          string
+	Section      string
+	Label        string
+	Description  string
+	Type         string
+	Value        string
+	DefaultValue string
+	Options      []ConfigControlOption
+	Sensitive    bool
+	ReadOnly     bool
+}
+
+type ConfigControlOption struct {
+	Value       string
+	Label       string
+	Description string
 }
 
 // Bridge mirrors the daemon's notion of an active claude
@@ -308,13 +335,15 @@ type App struct {
 	// sidecar holds the live remote control panel. nil until the user
 	// pins a session by pressing S on a row. Recreated when the user
 	// pivots to a different session.
-	sidecar            *SidecarPanel
-	sidecarSessionID   string
-	sidecarSessionName string
-	sidecarTailPending bool
-	sidecarCancel      func() // cancels the daemon TailTranscript stream
-	compactCancel      func() // cancels in-flight compact preview/apply stream
-	reloadExecPath     string // set when the on-disk executable changed and Run should exec after teardown
+	sidecar             *SidecarPanel
+	sidecarSessionID    string
+	sidecarSessionName  string
+	sidecarTailPending  bool
+	sidecarCancel       func() // cancels the daemon TailTranscript stream
+	compactCancel       func() // cancels in-flight compact preview/apply stream
+	reloadExecPath      string // set when the on-disk executable changed and Run should exec after teardown
+	pendingReloadPath   string // deferred self-reload while an overlay is open
+	pendingReloadReason string
 
 	// Overlays (one at a time)
 	overlay Widget
@@ -348,6 +377,10 @@ type App struct {
 	messageCountCache   map[string]int
 	contextStateCache   map[string]SessionContextState
 	globalRemoteControl bool
+	configControls      []ConfigControl
+	configSelected      int
+	configLoading       bool
+	configErr           string
 	// bridges holds the daemon's view of active claude --remote-control
 	// bridges. Keyed by Claude session UUID. Updated on startup via
 	// ListBridges and on each BRIDGE_OPENED / BRIDGE_CLOSED event.
@@ -453,6 +486,11 @@ type App struct {
 
 	// dashboardLaunchCWD is cwd when clyde started the TUI; used for New chat default.
 	dashboardLaunchCWD string
+	// launchBasedir is set for `clyde <dir>` and scopes the session list to
+	// one workspace root. The handled flag prevents reopening the new-session
+	// modal after every refresh when no matching sessions exist.
+	launchBasedir        string
+	launchBasedirHandled bool
 
 	// Return flow trace state is used to stitch resume/prompt freeze
 	// paths across event-loop boundaries and make state transitions
@@ -513,6 +551,7 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 		returnPathState:    returnPathStateDashboardActive,
 		daemonOnline:       false,
 		startupLoading:     len(sessions) == 0,
+		configLoading:      cb.LoadConfigControls != nil,
 		appFocused:         true,
 		lastNonInterruptAt: time.Now(),
 		heartbeatStartedAt: time.Now(),
@@ -525,6 +564,7 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	// exercised without touching a real terminal.
 	a.suspendImpl = a.suspendAndRun
 	a.dashboardLaunchCWD = strings.TrimSpace(opt.DashboardLaunchCWD)
+	a.launchBasedir = session.CanonicalWorkspaceRoot(opt.LaunchBasedir)
 
 	// Seed visible indexes with all sessions, unsorted for now.
 	a.rebuildVisible()
@@ -545,6 +585,9 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	a.status = &StatusBarWidget{Mode: StatusBrowse}
 
 	a.populateTable()
+	if cb.LoadConfigControls != nil {
+		a.refreshConfigControls()
+	}
 
 	// If a ReturnTo session is provided, pre-select its row and set the
 	// banner. The row is located after any sorting or filtering so that
@@ -560,6 +603,11 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 			}
 		}
 		a.openReturnPrompt(opt.ReturnTo)
+	}
+	if a.launchBasedir != "" && len(a.visibleIdx) > 0 {
+		a.table.Active = true
+		a.table.SelectedRow = 0
+		a.openDetails(a.sessions[a.visibleIdx[0]])
 	}
 	return a
 }
@@ -863,7 +911,7 @@ func (a *App) Run() error {
 	reinitAttemptedAfterNil := false
 	for a.running {
 		if a.screen == nil {
-			slog.Error("tui.loop screen is nil, exiting")
+			slog.Error("tui.loop screen is nil, exiting", "err", "screen_nil")
 			return nil
 		}
 		pollStartedAt := time.Now()
@@ -896,19 +944,20 @@ func (a *App) Run() error {
 				slog.Warn("tui.loop attempting screen reinit after repeated nil events")
 				a.teardownScreen()
 				if err := a.initScreen(); err != nil {
-					slog.Error("tui.loop reinit failed after repeated nil events", "error", err)
+					slog.Error("tui.loop reinit failed after repeated nil events", "error", err, "err", err)
 					a.running = false
 					continue
 				}
 				nilEventStreak = 0
-				slog.Info("tui.loop reinit succeeded after repeated nil events", "screen", fmt.Sprintf("%p", a.screen))
+				slog.Debug("tui.loop reinit succeeded after repeated nil events", "screen", fmt.Sprintf("%p", a.screen))
 				a.draw()
 				continue
 			}
 
 			slog.Error("tui.loop repeated nil events with running=true; terminating",
 				"screen", fmt.Sprintf("%p", a.screen),
-				"nil_event_streak", nilEventStreak)
+				"nil_event_streak", nilEventStreak,
+				"err", "repeated_nil_events")
 			a.running = false
 			continue
 		}
@@ -943,7 +992,8 @@ func (a *App) Run() error {
 		handleDuration := time.Since(handleStartedAt)
 		drawDuration := time.Duration(0)
 		shouldDraw := a.running
-		if shouldDraw && isSpinnerInterrupt && !a.appFocused {
+		_, compactOverlay := a.overlay.(*CompactPanel)
+		if shouldDraw && isSpinnerInterrupt && !a.appFocused && !compactOverlay {
 			shouldDraw = false
 			slog.Debug("tui.loop.skip_draw.spinner_unfocused",
 				"component", "tui",
@@ -1163,6 +1213,11 @@ type sessionsLoaded struct {
 	reason   string
 }
 
+type configControlsLoaded struct {
+	controls []ConfigControl
+	err      error
+}
+
 type detailsLoaded struct {
 	name   string
 	detail SessionDetail
@@ -1198,11 +1253,34 @@ type executableSnapshot struct {
 
 const suspendTerminalPrepSequence = "\x1b[0m\x1b[2J\x1b[H"
 
+const terminalModeResetSequence = "" +
+	"\x1b[?2004l" + // disable bracketed paste
+	"\x1b[?1004l" + // disable focus reporting
+	"\x1b[?1000l" + // disable X10 mouse
+	"\x1b[?1002l" + // disable cell-motion mouse
+	"\x1b[?1003l" + // disable any-motion mouse
+	"\x1b[?1006l" + // disable SGR mouse
+	"\x1b[?1007l" + // disable alternate-scroll wheel translation
+	"\x1b[?1049l" + // exit alt screen
+	"\x1b[?25h" + //  show cursor
+	"\x1b[?7h" + //   re-enable autowrap
+	"\x1b[r" + //     reset scroll region to full screen
+	"\x1b[0m" + //    reset SGR attributes
+	"\x1b>" + //      keypad normal (DECKPNM)
+	"\x1b[!p" //      DECSTR soft reset (clears DECCKM, DECOM, DECAWM, etc)
+
 func writeSuspendTerminalPrep(w io.Writer) {
 	if w == nil {
 		return
 	}
 	_, _ = fmt.Fprint(w, suspendTerminalPrepSequence)
+}
+
+func enableAppMouse(scr tcell.Screen) {
+	if scr == nil {
+		return
+	}
+	scr.EnableMouse(tcell.MouseButtonEvents | tcell.MouseDragEvents | tcell.MouseMotionEvents)
 }
 
 func (a *App) runSessionRefreshTicker(stop <-chan struct{}) {
@@ -1229,6 +1307,17 @@ func (a *App) requestSessionsAsync(reason string) {
 			"duration_ms", time.Since(started).Milliseconds(),
 			"err", err)
 		a.postInterrupt(sessionsLoaded{snapshot: snapshot, err: err, reason: reason})
+	}()
+}
+
+func (a *App) refreshConfigControls() {
+	if a.cb.LoadConfigControls == nil {
+		return
+	}
+	a.configLoading = true
+	go func() {
+		controls, err := a.cb.LoadConfigControls()
+		a.postInterrupt(configControlsLoaded{controls: controls, err: err})
 	}()
 }
 
@@ -1271,6 +1360,7 @@ func (a *App) applySessionSnapshot(snapshot SessionSnapshot) {
 	if a.selected != nil {
 		a.populateDetails()
 	}
+	a.maybeEnterLaunchBasedirFlow()
 }
 
 func (a *App) applySessionEvent(ev SessionEvent) {
@@ -1325,7 +1415,9 @@ func (a *App) applySessionEvent(ev SessionEvent) {
 			a.sidecar.BridgeURL = ""
 		}
 	case "GLOBAL_SETTINGS_UPDATED":
-		// Global defaults already applied above.
+		// Global defaults already applied above. Refresh the generic
+		// descriptor view so Settings stays daemon-authoritative.
+		a.refreshConfigControls()
 	}
 
 	a.sortSessions()
@@ -1345,6 +1437,27 @@ func (a *App) applySessionEvent(ev SessionEvent) {
 	}
 	if a.selected != nil {
 		a.populateDetails()
+	}
+}
+
+func (a *App) maybeEnterLaunchBasedirFlow() {
+	if a.launchBasedir == "" || a.overlay != nil {
+		return
+	}
+	if len(a.visibleIdx) == 0 {
+		if a.launchBasedirHandled {
+			return
+		}
+		a.launchBasedirHandled = true
+		a.openNewSessionTypeModal(a.launchBasedir)
+		return
+	}
+	if !a.table.Active {
+		a.table.Active = true
+		a.table.SelectedRow = 0
+	}
+	if a.selected == nil && a.table.SelectedRow >= 0 && a.table.SelectedRow < len(a.visibleIdx) {
+		a.openDetails(a.sessions[a.visibleIdx[a.table.SelectedRow]])
 	}
 }
 
@@ -1529,7 +1642,7 @@ func (a *App) runRegistrySupervisor(stop <-chan struct{}) {
 	for {
 		select {
 		case <-stop:
-			slog.Info("tui.registry_supervisor.stopped", "component", "tui")
+			slog.Debug("tui.registry_supervisor.stopped", "component", "tui")
 			return
 		default:
 		}
@@ -1555,7 +1668,7 @@ func (a *App) runRegistrySupervisor(stop <-chan struct{}) {
 		}
 
 		a.setDaemonOnline("subscribe_ok")
-		slog.Info("tui.registry_supervisor.subscribe_ok",
+		slog.Debug("tui.registry_supervisor.subscribe_ok",
 			"component", "tui",
 			"subscribe_ms", subscribeDuration.Milliseconds())
 		a.requestSessionsAsync("registry.resubscribe")
@@ -1571,7 +1684,7 @@ func (a *App) runRegistrySupervisor(stop <-chan struct{}) {
 		case <-stop:
 			cancel()
 			<-done
-			slog.Info("tui.registry_supervisor.cancelled", "component", "tui")
+			slog.Debug("tui.registry_supervisor.cancelled", "component", "tui")
 			return
 		case <-done:
 			cancel()
@@ -1601,7 +1714,7 @@ func (a *App) runProviderStatsSupervisor(stop <-chan struct{}) {
 	for {
 		select {
 		case <-stop:
-			slog.Info("tui.provider_stats_supervisor.stopped", "component", "tui")
+			slog.Debug("tui.provider_stats_supervisor.stopped", "component", "tui")
 			return
 		default:
 		}
@@ -1997,21 +2110,7 @@ func (a *App) teardownScreen() {
 
 	// Reset escape sequences, emitted in a single write so a
 	// ctrl-c mid-sequence cannot leave the terminal half-reset.
-	const reset = "" +
-		"\x1b[?2004l" + // disable bracketed paste
-		"\x1b[?1004l" + // disable focus reporting
-		"\x1b[?1000l" + // disable X10 mouse
-		"\x1b[?1002l" + // disable cell-motion mouse
-		"\x1b[?1003l" + // disable any-motion mouse
-		"\x1b[?1006l" + // disable SGR mouse
-		"\x1b[?1049l" + // exit alt screen
-		"\x1b[?25h" + //  show cursor
-		"\x1b[?7h" + //   re-enable autowrap
-		"\x1b[r" + //     reset scroll region to full screen
-		"\x1b[0m" + //    reset SGR attributes
-		"\x1b>" + //      keypad normal (DECKPNM)
-		"\x1b[!p" //      DECSTR soft reset (clears DECCKM, DECOM, DECAWM, etc)
-	fmt.Fprint(os.Stdout, reset)
+	fmt.Fprint(os.Stdout, terminalModeResetSequence)
 }
 
 // initScreen allocates a tcell screen and enables mouse + focus.
@@ -2024,7 +2123,7 @@ func (a *App) initScreen() error {
 	if err := scr.Init(); err != nil {
 		return fmt.Errorf("tcell Init: %w", err)
 	}
-	scr.EnableMouse(tcell.MouseButtonEvents | tcell.MouseDragEvents)
+	enableAppMouse(scr)
 	scr.EnableFocus()
 	scr.Clear()
 	a.screenMu.Lock()
@@ -2217,6 +2316,17 @@ func (a *App) handleEvent(ev tcell.Event) {
 			}
 			a.startupLoading = false
 			a.applySessionSnapshot(d.snapshot)
+		case configControlsLoaded:
+			a.configLoading = false
+			if d.err != nil {
+				a.configErr = d.err.Error()
+				break
+			}
+			a.configErr = ""
+			a.configControls = d.controls
+			if a.configSelected >= len(a.configControls) {
+				a.configSelected = max(0, len(a.configControls)-1)
+			}
 		case detailsLoaded:
 			a.detailMu.Lock()
 			if d.err != nil {
@@ -2295,6 +2405,17 @@ func (a *App) handleEvent(ev tcell.Event) {
 				"component", "tui",
 				"path", d.path,
 				"reason", d.reason)
+			if a.overlay != nil {
+				a.pendingReloadPath = d.path
+				a.pendingReloadReason = d.reason
+				if panel, ok := a.overlay.(*CompactPanel); ok {
+					panel.ApplyCompactEvent(CompactEvent{
+						Kind:    "status",
+						Message: "clyde update available; close compact panel to reload",
+					})
+				}
+				break
+			}
 			a.reloadExecPath = d.path
 			a.running = false
 		case compactStreamEvent:
@@ -2470,6 +2591,41 @@ func (a *App) handleKey(e *tcell.EventKey) {
 	}
 
 	// Mode-specific shortcuts that must fire before the table consumes keys.
+	if a.activeTab == tabSettings && a.overlay == nil && !a.detailsHasFocus() {
+		switch e.Key() {
+		case tcell.KeyUp:
+			a.stepConfigSelection(-1)
+			return
+		case tcell.KeyDown:
+			a.stepConfigSelection(1)
+			return
+		case tcell.KeyEnter:
+			a.activateSelectedConfigControl()
+			return
+		case tcell.KeyRight:
+			a.cycleSelectedConfigControl(1)
+			return
+		case tcell.KeyLeft:
+			a.cycleSelectedConfigControl(-1)
+			return
+		case tcell.KeyRune:
+			switch e.Rune() {
+			case 'j':
+				a.stepConfigSelection(1)
+				return
+			case 'k':
+				a.stepConfigSelection(-1)
+				return
+			case 'l':
+				a.cycleSelectedConfigControl(1)
+				return
+			case 'h':
+				a.cycleSelectedConfigControl(-1)
+				return
+			}
+		}
+	}
+
 	switch e.Key() {
 	case tcell.KeyTab, tcell.KeyBacktab:
 		// When the details pane is open, Tab cycles focus:
@@ -2497,6 +2653,10 @@ func (a *App) handleKey(e *tcell.EventKey) {
 	case tcell.KeyRune:
 		switch e.Rune() {
 		case ' ':
+			if a.activeTab == tabSettings {
+				a.activateSelectedConfigControl()
+				return
+			}
 			if len(a.visibleIdx) > 0 {
 				a.table.Active = true
 				a.openDetails(a.currentSession())
@@ -2581,6 +2741,9 @@ func (a *App) handleKey(e *tcell.EventKey) {
 				return
 			}
 			a.refreshSessions()
+			if a.activeTab == tabSettings {
+				a.refreshConfigControls()
+			}
 			return
 		case 'B':
 			if sess := a.rowSession(); sess != nil {
@@ -2608,11 +2771,8 @@ func (a *App) handleKey(e *tcell.EventKey) {
 				return
 			}
 		case 'G':
-			if a.activeTab == tabSettings && a.cb.SetGlobalRemoteControl != nil {
-				cur := a.globalRemoteControl
-				_ = a.cb.SetGlobalRemoteControl(!cur)
-				a.globalRemoteControl = !cur
-				a.refreshSessions()
+			if a.activeTab == tabSettings {
+				a.activateSelectedConfigControl()
 				return
 			}
 		case 'v':
@@ -2973,26 +3133,29 @@ func (a *App) draw() {
 		drawString(a.screen, sx, 0, StyleTabBar, stampText, rightX-sx)
 	}
 
-	switch a.activeTab {
-	case tabSessions:
-		switch {
-		case a.showStartupLoadingState():
-			a.drawSessionsLoadingState(a.tableRect)
-		case a.showSessionsEmptyState():
-			a.drawSessionsEmptyState(a.tableRect)
-		default:
-			a.table.Draw(a.screen, a.tableRect)
-			if a.selected != nil {
-				a.details.Draw(a.screen, a.detailRect)
+	_, compactOverlay := a.overlay.(*CompactPanel)
+	if !compactOverlay {
+		switch a.activeTab {
+		case tabSessions:
+			switch {
+			case a.showStartupLoadingState():
+				a.drawSessionsLoadingState(a.tableRect)
+			case a.showSessionsEmptyState():
+				a.drawSessionsEmptyState(a.tableRect)
+			default:
+				a.table.Draw(a.screen, a.tableRect)
+				if a.selected != nil {
+					a.details.Draw(a.screen, a.detailRect)
+				}
 			}
+		case tabStats:
+			a.requestStatsAsync("draw")
+			a.drawStatsTab(a.tableRect)
+		case tabSidecar:
+			a.drawSidecarTab(a.tableRect)
+		default:
+			a.drawSettingsTab(a.tableRect)
 		}
-	case tabStats:
-		a.requestStatsAsync("draw")
-		a.drawStatsTab(a.tableRect)
-	case tabSidecar:
-		a.drawSidecarTab(a.tableRect)
-	default:
-		a.drawSettingsTab(a.tableRect)
 	}
 	bodyDuration := time.Since(clearStartedAt) - clearDuration
 
@@ -3021,7 +3184,9 @@ func (a *App) draw() {
 	// the terminal default, which visually stands out against the
 	// darkened backdrop.
 	if a.overlay != nil {
-		dimBackground(a.screen)
+		if !compactOverlay {
+			dimBackground(a.screen)
+		}
 		ww, hh := a.screen.Size()
 		a.overlay.Draw(a.screen, Rect{X: 0, Y: 0, W: ww, H: hh})
 	}
@@ -3308,6 +3473,9 @@ func (a *App) rebuildVisible() {
 	a.hiddenCount = 0
 	f := strings.ToLower(a.filter)
 	for i, sess := range a.sessions {
+		if a.launchBasedir != "" && session.CanonicalWorkspaceRoot(sess.Metadata.WorkspaceRoot) != a.launchBasedir {
+			continue
+		}
 		if !a.showEphemeral && isEphemeralSession(sess) {
 			a.hiddenCount++
 			continue
@@ -3688,6 +3856,10 @@ func (a *App) resumeRow(row int) {
 }
 
 func (a *App) newSession() {
+	if a.launchBasedir != "" {
+		a.openNewSessionTypeModal(a.launchBasedir)
+		return
+	}
 	a.openNewStarterModal()
 }
 
@@ -4446,6 +4618,100 @@ func formatCostMicrocents(n int64) string {
 	return fmt.Sprintf("$%.4f", float64(n)/100000000.0)
 }
 
+func (a *App) stepConfigSelection(delta int) {
+	if len(a.configControls) == 0 {
+		return
+	}
+	a.configSelected += delta
+	if a.configSelected < 0 {
+		a.configSelected = 0
+	}
+	if a.configSelected >= len(a.configControls) {
+		a.configSelected = len(a.configControls) - 1
+	}
+}
+
+func (a *App) selectedConfigControl() *ConfigControl {
+	if len(a.configControls) == 0 || a.configSelected < 0 || a.configSelected >= len(a.configControls) {
+		return nil
+	}
+	return &a.configControls[a.configSelected]
+}
+
+func (a *App) cycleSelectedConfigControl(delta int) {
+	control := a.selectedConfigControl()
+	if control == nil || control.ReadOnly || a.cb.UpdateConfigControl == nil {
+		return
+	}
+	switch control.Type {
+	case "bool":
+		next := "true"
+		if strings.EqualFold(control.Value, "true") {
+			next = "false"
+		}
+		a.persistConfigControl(control.Key, next)
+	case "enum":
+		if len(control.Options) == 0 {
+			return
+		}
+		idx := 0
+		for i, opt := range control.Options {
+			if opt.Value == control.Value {
+				idx = i
+				break
+			}
+		}
+		idx = (idx + delta + len(control.Options)) % len(control.Options)
+		a.persistConfigControl(control.Key, control.Options[idx].Value)
+	}
+}
+
+func (a *App) activateSelectedConfigControl() {
+	control := a.selectedConfigControl()
+	if control == nil || control.ReadOnly {
+		return
+	}
+	switch control.Type {
+	case "bool", "enum":
+		a.cycleSelectedConfigControl(1)
+	case "path", "string":
+		a.openConfigControlEditor(*control)
+	}
+}
+
+func (a *App) persistConfigControl(key, value string) {
+	if a.cb.UpdateConfigControl == nil {
+		return
+	}
+	a.configLoading = true
+	go func() {
+		err := a.cb.UpdateConfigControl(key, value)
+		if err != nil {
+			a.postInterrupt(configControlsLoaded{err: err})
+			return
+		}
+		if key == "defaults.remote_control" {
+			a.refreshSessions()
+		}
+		a.refreshConfigControls()
+	}()
+}
+
+func (a *App) openConfigControlEditor(control ConfigControl) {
+	input := NewTextInput("")
+	input.Text = control.Value
+	input.CursorX = len([]rune(control.Value))
+	input.OnSubmit = func(value string) {
+		a.closeOverlay()
+		a.persistConfigControl(control.Key, value)
+	}
+	input.OnCancel = func() { a.closeOverlay() }
+	a.overlay = &InputOverlay{
+		Title: "Edit " + control.Label,
+		Input: input,
+	}
+}
+
 func (a *App) drawSettingsTab(r Rect) {
 	if r.W <= 0 || r.H <= 0 {
 		return
@@ -4470,20 +4736,52 @@ func (a *App) drawSettingsTab(r Rect) {
 		{label: "Daemon log", value: filepath.Join(home, ".local", "state", "clyde", "clyde.jsonl"), style: StyleSubtext},
 		{label: "Sessions root", value: filepath.Join(home, ".local", "share", "clyde", "sessions"), style: StyleSubtext},
 		{},
-		{label: "Remote control default", value: a.globalRCStateLabel(), style: StyleSubtext},
-		{},
-		{label: "Actions", style: StyleDefault.Foreground(ColorAccent).Bold(true)},
-		{label: "  e  edit global config in $EDITOR", style: StyleSubtext},
-		{label: "  E  edit project config in $EDITOR", style: StyleSubtext},
-		{label: "  G  toggle remote control default for new sessions", style: StyleSubtext},
-		{label: "  R  reload config (or restart daemon when offline)", style: StyleSubtext},
-		{label: "  1  Sessions  2  Stats  4  Sidecar", style: StyleSubtext},
-		{},
-		{label: "Tip", style: StyleDefault.Foreground(ColorAccent).Bold(true)},
-		{label: "  The daemon watches ~/.claude/settings.json and syncs across", style: StyleSubtext},
-		{label: "  active sessions. Edit the file from any editor; the dashboard", style: StyleSubtext},
-		{label: "  picks up changes automatically.", style: StyleSubtext},
+		{label: "Controls", style: StyleDefault.Foreground(ColorAccent).Bold(true)},
 	}
+	if a.configLoading {
+		rows = append(rows, row{label: "Loading", value: "fetching daemon-backed controls...", style: StyleSubtext})
+	}
+	if a.configErr != "" {
+		rows = append(rows, row{label: "Error", value: a.configErr, style: StyleSubtext})
+	}
+	section := ""
+	for i, control := range a.configControls {
+		if control.Section != "" && control.Section != section {
+			section = control.Section
+			rows = append(rows, row{}, row{label: section, style: StyleMuted.Bold(true)})
+		}
+		prefix := "  "
+		style := StyleSubtext
+		if i == a.configSelected {
+			prefix = "> "
+			style = StyleDefault.Foreground(ColorAccent)
+		}
+		value := control.Value
+		if value == "" {
+			value = control.DefaultValue
+		}
+		rows = append(rows, row{
+			label: prefix + control.Label,
+			value: value,
+			style: style,
+		})
+	}
+	rows = append(rows,
+		row{},
+		row{label: "Actions", style: StyleDefault.Foreground(ColorAccent).Bold(true)},
+		row{label: "  e  edit global config in $EDITOR", style: StyleSubtext},
+		row{label: "  E  edit project config in $EDITOR", style: StyleSubtext},
+		row{label: "  Enter/Space toggle or edit selected control", style: StyleSubtext},
+		row{label: "  h/l or ←/→ cycle enum and bool controls", style: StyleSubtext},
+		row{label: "  j/k or ↑/↓ move between controls", style: StyleSubtext},
+		row{label: "  R  reload config (or restart daemon when offline)", style: StyleSubtext},
+		row{label: "  1  Sessions  2  Stats  4  Sidecar", style: StyleSubtext},
+		row{},
+		row{label: "Tip", style: StyleDefault.Foreground(ColorAccent).Bold(true)},
+		row{label: "  TUI controls write ~/.config/clyde/config.toml through the daemon.", style: StyleSubtext},
+		row{label: "  Use e/E as escape hatches when you need to inspect or edit the", style: StyleSubtext},
+		row{label: "  backing files directly.", style: StyleSubtext},
+	)
 
 	for i, ln := range rows {
 		text := ln.label
@@ -4570,7 +4868,8 @@ func (a *App) openHelpModal() {
 		{Label: "Settings tab only", Disabled: true},
 		{Label: "  e            edit global config in $EDITOR", Disabled: true},
 		{Label: "  E            edit project config in $EDITOR", Disabled: true},
-		{Label: "  G            toggle global remote control default", Disabled: true},
+		{Label: "  G            activate selected config control", Disabled: true},
+		{Label: "  h/l          cycle enum and bool config controls", Disabled: true},
 		{Label: "Compact form", Disabled: true},
 		{Label: "  Up/Down      move focus between rows", Disabled: true},
 		{Label: "  Space        toggle focused checkbox", Disabled: true},
@@ -4743,7 +5042,7 @@ func (a *App) openSessionOptionsFor(sess *session.Session) {
 }
 
 func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []OptionsModalEntry {
-	return []OptionsModalEntry{
+	entries := []OptionsModalEntry{
 		{
 			Label: "Resume",
 			Hint:  "load this session",
@@ -4842,6 +5141,18 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []Optio
 			Disabled: a.cb.DeleteSession == nil,
 		},
 	}
+	if a.launchBasedir != "" {
+		create := OptionsModalEntry{
+			Label: "New session here",
+			Hint:  shortPath(a.launchBasedir),
+			Action: func() {
+				close()
+				a.openNewSessionTypeModal(a.launchBasedir)
+			},
+		}
+		entries = append([]OptionsModalEntry{create}, entries...)
+	}
+	return entries
 }
 
 // openRenamePrompt asks for the new session name via an inline input
@@ -5101,6 +5412,16 @@ func (a *App) closeOverlay() {
 		"selected", a.selectedSessionName(),
 		"active_tab", a.activeTab,
 		"mode", int(a.mode))
+	if a.pendingReloadPath != "" {
+		slog.Info("tui.self_reload.deferred_resume",
+			"component", "tui",
+			"path", a.pendingReloadPath,
+			"reason", a.pendingReloadReason)
+		a.reloadExecPath = a.pendingReloadPath
+		a.pendingReloadPath = ""
+		a.pendingReloadReason = ""
+		a.running = false
+	}
 }
 
 func (a *App) openNoticeModal(title, body string) {
@@ -5220,7 +5541,7 @@ func (a *App) suspendAndRun(fn func()) {
 		slog.Warn("tui.suspend no_screen running fn directly")
 		defer func() {
 			if r := recover(); r != nil {
-				slog.Error("tui.suspend fn panic", "recover", fmt.Sprint(r))
+				slog.Error("tui.suspend fn panic", "recover", fmt.Sprint(r), "err", "panic")
 			}
 		}()
 		fn()
@@ -5261,7 +5582,7 @@ func (a *App) suspendAndRun(fn func()) {
 		defer close(callbackDone)
 		defer func() {
 			if r := recover(); r != nil {
-				slog.Error("tui.suspend fn panic", "recover", fmt.Sprint(r))
+				slog.Error("tui.suspend fn panic", "recover", fmt.Sprint(r), "err", "panic")
 			}
 		}()
 		fn()
@@ -5271,7 +5592,7 @@ func (a *App) suspendAndRun(fn func()) {
 	slog.Info("tui.suspend reinit")
 	reinitStartedAt := time.Now()
 	if err := a.initScreen(); err != nil {
-		slog.Error("tui.suspend reinit failed", "error", err)
+		slog.Error("tui.suspend reinit failed", "error", err, "err", err)
 		// Mark the loop dead and bail. Without a screen the main loop
 		// would panic on the next PollEvent. Better to exit cleanly so
 		// the user sees their shell prompt and can relaunch clyde.
@@ -5281,7 +5602,7 @@ func (a *App) suspendAndRun(fn func()) {
 	reinitDuration := time.Since(reinitStartedAt)
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Error("tui.suspend draw panic", "recover", fmt.Sprint(r))
+			slog.Error("tui.suspend draw panic", "recover", fmt.Sprint(r), "err", "panic")
 			a.running = false
 		}
 	}()
@@ -5420,10 +5741,7 @@ func isEphemeralSession(sess *session.Session) bool {
 			return true
 		}
 	}
-	if strings.Contains(ws, "/ginkgo") {
-		return true
-	}
-	return false
+	return strings.Contains(ws, "/ginkgo")
 }
 
 // sessionMessageCount returns the daemon-provided visible message count

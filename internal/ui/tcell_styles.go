@@ -2,15 +2,16 @@ package ui
 
 import "github.com/gdamore/tcell/v2"
 
-// Dark theme color palette using standard 256 color values for broad
-// terminal support. Used exclusively by the raw tcell TUI (app.go and
-// its widget files). The lipgloss palette in styles.go is still used by
-// output.go and the legacy subcommand UIs.
+// Terminal-adaptive palette using default foreground/background for core
+// text so the TUI follows both dark and light terminal themes. Fixed
+// 256-color values are reserved for accents, badges, and structural bars.
+// The lipgloss palette in styles.go is still used by output.go and the
+// legacy subcommand UIs.
 var (
 	// Text
-	ColorText    = tcell.Color255 // bright white
-	ColorSubtext = tcell.Color252 // light gray (readable)
-	ColorMuted   = tcell.Color245 // medium gray (headers, hints)
+	ColorText    = tcell.ColorDefault // terminal theme foreground
+	ColorSubtext = tcell.ColorGray    // readable secondary text on dark/light
+	ColorMuted   = tcell.ColorGray    // headers, hints, disabled controls
 
 	// Accents
 	ColorAccent  = tcell.Color75  // light blue
@@ -30,16 +31,16 @@ var (
 	ColorModelHaiku  = tcell.Color114 // soft green
 
 	// Table
-	ColorHeaderBg   = tcell.Color61  // muted purple body header band
-	ColorHeaderFg   = tcell.Color231 // bright white text on the header
-	ColorTabBg      = tcell.Color99  // bright purple for the tab strip
-	ColorTabFg      = tcell.Color231 // bright white text on tabs
-	ColorTabActive  = tcell.Color231 // active tab background (inverted)
-	ColorTabActiveF = tcell.Color99  // active tab text matches strip color
-	ColorSelected   = tcell.Color237 // subtle selection highlight
-	ColorSelectedFg = tcell.Color255 // bright white
-	ColorBorder     = tcell.Color238 // thin border color
-	ColorStatusBg   = tcell.Color236 // status bar background
+	ColorHeaderBg   = tcell.Color61      // muted purple body header band
+	ColorHeaderFg   = tcell.Color231     // bright white text on the header
+	ColorTabBg      = tcell.Color99      // bright purple for the tab strip
+	ColorTabFg      = tcell.Color231     // bright white text on tabs
+	ColorTabActive  = tcell.ColorDefault // active tab follows terminal background
+	ColorTabActiveF = tcell.Color99      // active tab text matches strip color
+	ColorSelected   = tcell.ColorGray    // neutral selection highlight
+	ColorSelectedFg = tcell.ColorDefault
+	ColorBorder     = tcell.ColorGray // thin border color
+	ColorStatusBg   = tcell.Color236  // status bar background
 
 	// Mode badge colors
 	ColorModeBrowse  = tcell.Color114 // green

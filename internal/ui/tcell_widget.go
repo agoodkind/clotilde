@@ -1,6 +1,12 @@
 package ui
 
 import (
+	"os"
+	"os/exec"
+	"runtime"
+	"strconv"
+	"strings"
+
 	"github.com/gdamore/tcell/v2"
 	"github.com/mattn/go-runewidth"
 	"github.com/rivo/uniseg"
@@ -89,10 +95,21 @@ func clearRect(scr tcell.Screen, r Rect) {
 	}
 }
 
-// ColorDimOverlay is the full-screen fill applied by dimBackground behind
-// modals. Use a dark gray (not a light gray like 251) so the terminal keeps
-// contrast: a light overlay washes out white text on dark backgrounds.
-var ColorDimOverlay = tcell.Color234
+type terminalTheme int
+
+const (
+	terminalThemeDark terminalTheme = iota
+	terminalThemeLight
+)
+
+var detectedTerminalTheme = detectTerminalTheme()
+
+// ColorDimOverlay is the dark-theme full-screen fill applied by
+// dimBackground behind modals. Light terminals use ColorDimOverlayLight.
+var (
+	ColorDimOverlay      = tcell.Color234
+	ColorDimOverlayLight = tcell.Color252
+)
 
 // dimBackground paints a darker background over every cell in the
 // screen so the pane on top reads as a lifted panel. Cells are
@@ -101,14 +118,22 @@ var ColorDimOverlay = tcell.Color234
 // holds the cell buffer in memory.
 func dimBackground(scr tcell.Screen) {
 	w, h := scr.Size()
+	backdrop := dimOverlayColor()
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
-			r, _, style, _ := scr.GetContent(x, y)
+			str, style, _ := scr.Get(x, y)
 			fg, _, attr := style.Decompose()
-			newStyle := tcell.StyleDefault.Foreground(dimForeground(fg)).Background(ColorDimOverlay).Attributes(attr)
-			scr.SetContent(x, y, r, nil, newStyle)
+			newStyle := tcell.StyleDefault.Foreground(dimForeground(fg)).Background(backdrop).Attributes(attr)
+			scr.Put(x, y, str, newStyle)
 		}
 	}
+}
+
+func dimOverlayColor() tcell.Color {
+	if detectedTerminalTheme == terminalThemeLight {
+		return ColorDimOverlayLight
+	}
+	return ColorDimOverlay
 }
 
 // dimForeground softens a foreground tone so the dimmed backdrop does
@@ -117,6 +142,58 @@ func dimBackground(scr tcell.Screen) {
 // every defined color get nudged into the subtext band.
 func dimForeground(fg tcell.Color) tcell.Color {
 	return ColorMuted
+}
+
+func detectTerminalTheme() terminalTheme {
+	return terminalThemeFromSignals(os.Getenv("CLYDE_TUI_THEME"), os.Getenv("COLORFGBG"), macOSAppearance())
+}
+
+func terminalThemeFromSignals(explicit, colorfgbg, appleAppearance string) terminalTheme {
+	switch strings.ToLower(strings.TrimSpace(explicit)) {
+	case "light":
+		return terminalThemeLight
+	case "dark":
+		return terminalThemeDark
+	}
+	if theme, ok := terminalThemeFromColorFGBG(colorfgbg); ok {
+		return theme
+	}
+	if !strings.EqualFold(strings.TrimSpace(appleAppearance), "dark") && strings.TrimSpace(appleAppearance) != "" {
+		return terminalThemeLight
+	}
+	return terminalThemeDark
+}
+
+func terminalThemeFromColorFGBG(value string) (terminalTheme, bool) {
+	parts := strings.Split(strings.TrimSpace(value), ";")
+	if len(parts) == 0 {
+		return terminalThemeDark, false
+	}
+	bgText := strings.TrimSpace(parts[len(parts)-1])
+	if bgText == "" {
+		return terminalThemeDark, false
+	}
+	bg, err := strconv.Atoi(bgText)
+	if err != nil {
+		return terminalThemeDark, false
+	}
+	switch {
+	case bg == 7 || bg == 15 || bg >= 230:
+		return terminalThemeLight, true
+	default:
+		return terminalThemeDark, true
+	}
+}
+
+func macOSAppearance() string {
+	if runtime.GOOS != "darwin" {
+		return ""
+	}
+	out, err := exec.Command("defaults", "read", "-g", "AppleInterfaceStyle").Output()
+	if err != nil {
+		return "light"
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // stripMarkup removes inline tview-style tags like [color:bg:flags] from s.

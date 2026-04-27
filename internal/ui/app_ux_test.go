@@ -56,6 +56,20 @@ func TestUX_WriteSuspendTerminalPrepSequence(t *testing.T) {
 	}
 }
 
+func TestUX_TerminalModeResetSequenceDisablesAlternateScroll(t *testing.T) {
+	for _, seq := range []string{
+		"\x1b[?1000l", // X10 mouse
+		"\x1b[?1002l", // drag mouse
+		"\x1b[?1003l", // motion mouse
+		"\x1b[?1006l", // SGR mouse
+		"\x1b[?1007l", // alternate-scroll wheel translation
+	} {
+		if !strings.Contains(terminalModeResetSequence, seq) {
+			t.Fatalf("terminalModeResetSequence missing %q", seq)
+		}
+	}
+}
+
 func TestUX_NewSessionRemoteControlChoiceIsForwarded(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 2)
 	defer cleanup()
@@ -100,6 +114,73 @@ func TestUX_NewSessionRemoteControlChoiceIsForwarded(t *testing.T) {
 	}
 	if calls[1] {
 		t.Fatalf("second call enableRC = true, want false")
+	}
+}
+
+func TestUX_BasedirLaunchFiltersSessions(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 3)
+	defer cleanup()
+
+	target := session.CanonicalWorkspaceRoot("/Users/test/Sites/ws-1")
+	a.launchBasedir = target
+	a.rebuildVisible()
+	a.populateTable()
+
+	if len(a.visibleIdx) != 1 {
+		t.Fatalf("visible sessions = %d, want 1", len(a.visibleIdx))
+	}
+	got := a.sessions[a.visibleIdx[0]]
+	if got.Name != "test-session-01" {
+		t.Fatalf("visible session = %q, want test-session-01", got.Name)
+	}
+}
+
+func TestUX_BasedirLaunchEnterOpensOptionsWithCreateNew(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 2)
+	defer cleanup()
+	a.launchBasedir = session.CanonicalWorkspaceRoot("/Users/test/Sites/ws-0")
+	a.rebuildVisible()
+	a.populateTable()
+
+	a.openSessionOptions(0)
+	modal, ok := a.overlay.(*OptionsModal)
+	if !ok {
+		t.Fatalf("overlay = %T, want *OptionsModal", a.overlay)
+	}
+	if findModalAction(modal, "Resume") == nil {
+		t.Fatalf("basedir options missing Resume")
+	}
+	create := findModalAction(modal, "New session here")
+	if create == nil {
+		t.Fatalf("basedir options missing New session here")
+	}
+
+	create()
+	next, ok := a.overlay.(*OptionsModal)
+	if !ok {
+		t.Fatalf("overlay after create = %T, want *OptionsModal", a.overlay)
+	}
+	if findModalAction(next, "New tracked session") == nil {
+		t.Fatalf("create action did not open new-session type modal")
+	}
+}
+
+func TestUX_BasedirLaunchNoMatchesOpensNewSessionTypeModal(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 0)
+	defer cleanup()
+	a.launchBasedir = session.CanonicalWorkspaceRoot("/Users/test/Sites/no-existing-sessions")
+
+	a.applySessionSnapshot(SessionSnapshot{Sessions: nil})
+
+	modal, ok := a.overlay.(*OptionsModal)
+	if !ok {
+		t.Fatalf("overlay = %T, want *OptionsModal", a.overlay)
+	}
+	if findModalAction(modal, "New tracked session") == nil {
+		t.Fatalf("no-match basedir launch did not open new-session type modal")
+	}
+	if !a.launchBasedirHandled {
+		t.Fatalf("launchBasedirHandled = false, want true")
 	}
 }
 
@@ -404,11 +485,8 @@ func TestUX_FirstDownArmsFirstRow(t *testing.T) {
 	if a.table.SelectedRow != 0 {
 		t.Fatalf("initial SelectedRow = %d, want 0  --  first-launch should not skip", a.table.SelectedRow)
 	}
-	if !a.table.Active && len(a.visibleIdx) > 0 {
-		// Active gets set by any navigation. Before first Down it
-		// may be false; the highlight shouldn't show until the user
-		// interacts. That's fine.
-	}
+	// Active gets set by any navigation. Before first Down it may be false;
+	// the highlight should not show until the user interacts.
 
 	// ONE Down. First movement key should arm/highlight row 0.
 	a.table.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
@@ -777,4 +855,34 @@ func TestUX_OpenDetailsSpaceRequiresOneTap(t *testing.T) {
 		t.Errorf("one Space did not open details pane")
 	}
 	// Counting proof: exactly one tap was enough.
+}
+
+func TestSelfReloadDefersWhileOverlayOpen(t *testing.T) {
+	panel := NewCompactPanel("demo")
+	a := &App{
+		overlay: panel,
+		running: true,
+	}
+
+	a.handleEvent(tcell.NewEventInterrupt(selfReloadAvailable{path: "/tmp/clyde", reason: "mtime_changed"}))
+	if !a.running {
+		t.Fatalf("self reload should not stop the app while overlay is open")
+	}
+	if a.reloadExecPath != "" {
+		t.Fatalf("reloadExecPath set before overlay close: %q", a.reloadExecPath)
+	}
+	if a.pendingReloadPath == "" {
+		t.Fatalf("expected pending reload to be recorded")
+	}
+	if !strings.Contains(panel.status, "update available") {
+		t.Fatalf("expected compact panel status to mention deferred reload, got %q", panel.status)
+	}
+
+	a.closeOverlay()
+	if a.running {
+		t.Fatalf("expected deferred reload to stop app after overlay close")
+	}
+	if a.reloadExecPath != "/tmp/clyde" {
+		t.Fatalf("reloadExecPath=%q want /tmp/clyde", a.reloadExecPath)
+	}
 }

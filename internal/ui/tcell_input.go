@@ -45,7 +45,7 @@ func (ti *TextInput) Draw(scr tcell.Screen, r Rect) {
 	// Draw cursor as a reversed cell at CursorX.
 	cursorCol := x + imin(ti.CursorX, len(runes))
 	if cursorCol < r.X+r.W {
-		var cursorRune rune = ' '
+		cursorRune := ' '
 		if ti.CursorX < len(runes) {
 			cursorRune = runes[ti.CursorX]
 		}

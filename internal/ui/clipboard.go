@@ -1,4 +1,4 @@
-// Cross platform clipboard helper used by the options popup for the
+// Package ui implements the Clyde terminal user interface.
 // "Copy bridge URL" action. The helper picks the first clipboard tool
 // that matches the host OS. Callers get a single error return so they
 // can surface a message when the clipboard is unreachable.

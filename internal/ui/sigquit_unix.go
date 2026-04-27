@@ -35,9 +35,10 @@ func installSIGQUITDumpHandler() func() {
 					_, _ = fmt.Fprintf(os.Stderr, "clyde SIGQUIT goroutine dump failed: %v\n", err)
 					continue
 				}
-				slog.Error("tui.signal.sigquit.dump_written",
-					"component", "tui",
-					"path", path)
+					slog.Error("tui.signal.sigquit.dump_written",
+						"component", "tui",
+						"path", path,
+						"err", "sigquit_dump")
 				_, _ = fmt.Fprintf(os.Stderr, "clyde SIGQUIT goroutine dump written to %s\n", path)
 			}
 		}
