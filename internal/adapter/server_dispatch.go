@@ -175,7 +175,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	model, effort, err := s.registry.Resolve(req.Model, req.ReasoningEffort)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "unknown_model", err.Error())
+		attrs := []slog.Attr{
+			slog.String("request_id", reqID),
+			slog.String("model", req.Model),
+			slog.String("err", err.Error()),
+		}
+		attrs = append(attrs, adaptercursor.BoundaryLogAttrs(cursorReq, cursorReq.OpenAI.Model, nil)...)
+		s.log.LogAttrs(r.Context(), slog.LevelWarn, "adapter.model.resolve_failed", attrs...)
+		writeModelResolutionError(w, err.Error())
 		return
 	}
 

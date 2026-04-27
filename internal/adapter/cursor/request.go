@@ -18,6 +18,7 @@ type Request struct {
 	ConversationID  string
 	WorkspacePath   string
 	NormalizedModel string
+	Metadata        map[string]any
 	RawToolNames    []string
 	Mode            Mode
 	CanSwitchMode   bool
@@ -35,6 +36,7 @@ func TranslateRequest(req adapteropenai.ChatRequest) Request {
 		ConversationID:  metadataString(req.Metadata, "cursorConversationId"),
 		WorkspacePath:   workspacePath(req),
 		NormalizedModel: NormalizeModelAlias(req.Model),
+		Metadata:        metadataMap(req.Metadata),
 	}
 	translated.RawToolNames = rawToolNames(req)
 	translated.Mode = requestMode(translated.RawToolNames)
@@ -54,11 +56,8 @@ func (r Request) Context() Context {
 }
 
 func metadataString(raw json.RawMessage, keys ...string) string {
-	if len(raw) == 0 || string(raw) == "null" {
-		return ""
-	}
-	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil {
+	m := metadataMap(raw)
+	if len(m) == 0 {
 		return ""
 	}
 	for _, key := range keys {
@@ -69,6 +68,45 @@ func metadataString(raw json.RawMessage, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func metadataMap(raw json.RawMessage) map[string]any {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil
+	}
+	return m
+}
+
+func metadataHasAny(m map[string]any, keys ...string) bool {
+	for _, key := range keys {
+		v, ok := m[key]
+		if !ok {
+			continue
+		}
+		switch typed := v.(type) {
+		case bool:
+			if typed {
+				return true
+			}
+		case string:
+			if strings.TrimSpace(typed) != "" && strings.TrimSpace(typed) != "false" {
+				return true
+			}
+		case float64:
+			if typed != 0 {
+				return true
+			}
+		default:
+			if typed != nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func rawToolNames(req adapteropenai.ChatRequest) []string {

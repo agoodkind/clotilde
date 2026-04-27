@@ -253,6 +253,74 @@ func TestResolveRoutesCodexModelPrefixes(t *testing.T) {
 	}
 }
 
+func TestResolveRoutesNativeCodexByDefaultWhenCodexEnabled(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Codex.Enabled = true
+	cfg.Codex.ModelPrefixes = []string{"gpt-", "o"}
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	m, effort, err := r.Resolve("gpt-5.4", "medium")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if m.Backend != BackendCodex {
+		t.Fatalf("backend = %q want %q", m.Backend, BackendCodex)
+	}
+	if m.ClaudeModel != "gpt-5.4" {
+		t.Fatalf("ClaudeModel = %q want gpt-5.4", m.ClaudeModel)
+	}
+	if m.Context != 1000000 {
+		t.Fatalf("Context = %d want 1000000", m.Context)
+	}
+	if effort != "medium" {
+		t.Fatalf("effort = %q want medium", effort)
+	}
+}
+
+func TestResolveRejectsNativeCodexWhenRoutingExplicitlyOff(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Codex.Enabled = true
+	cfg.Codex.NativeModelRouting = "off"
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	if _, _, err := r.Resolve("gpt-5.4", ""); err == nil {
+		t.Fatalf("expected native gpt alias to be rejected when routing is off")
+	} else if !strings.Contains(err.Error(), "native model routing is off") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestListIncludesNativeCodexModelsWhenRoutable(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Codex.Enabled = true
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	var gpt54 *ResolvedModel
+	for _, m := range r.List() {
+		if m.Alias == "gpt-5.4" {
+			copy := m
+			gpt54 = &copy
+			break
+		}
+	}
+	if gpt54 == nil {
+		t.Fatalf("gpt-5.4 missing from model list")
+	}
+	if gpt54.Backend != BackendCodex {
+		t.Fatalf("backend = %q want %q", gpt54.Backend, BackendCodex)
+	}
+	if gpt54.Context != 1000000 {
+		t.Fatalf("Context = %d want 1000000", gpt54.Context)
+	}
+}
+
 func TestResolveRoutesClydeCodexAliases(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Codex.Enabled = true

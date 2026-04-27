@@ -3,6 +3,8 @@ package cursor
 import (
 	"log/slog"
 	"strings"
+
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
 type RequestPathKind string
@@ -15,21 +17,28 @@ const (
 )
 
 func NormalizeModelAlias(rawModel string) string {
-	model := strings.TrimSpace(rawModel)
-	lower := strings.ToLower(model)
-
-	if strings.HasPrefix(lower, "clyde-codex-") {
-		for _, suffix := range []string{"-low", "-medium", "-high", "-xhigh"} {
-			if strings.HasSuffix(lower, suffix) {
-				return model[:len(model)-len(suffix)]
-			}
-		}
-	}
-
-	return model
+	return strings.TrimSpace(rawModel)
 }
 
 func RequestPath(req Request) RequestPathKind {
+	if metadataHasAny(req.Metadata, "cursorResumeTaskId", "resumeTaskId", "resume", "isResume") {
+		return RequestPathResume
+	}
+	if metadataHasAny(req.Metadata, "cursorSubagentId", "subagentId", "subagent", "isSubagent") {
+		return RequestPathSubagent
+	}
+	if metadataHasAny(req.Metadata, "cursorBackgroundTaskId", "backgroundTaskId", "background", "isBackground", "runInBackground") {
+		return RequestPathBackground
+	}
+	if requestTextContains(req.OpenAI, "you are the forked subagent") {
+		return RequestPathSubagent
+	}
+	if requestTextContains(req.OpenAI, "resume after background task", "background task completed") {
+		return RequestPathResume
+	}
+	if requestTextContains(req.OpenAI, "background task") {
+		return RequestPathBackground
+	}
 	return RequestPathForeground
 }
 
@@ -67,6 +76,32 @@ func hasRawToolName(toolNames []string, want string) bool {
 	want = strings.TrimSpace(want)
 	for _, name := range toolNames {
 		if strings.TrimSpace(name) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func requestTextContains(req adapteropenai.ChatRequest, needles ...string) bool {
+	if len(needles) == 0 {
+		return false
+	}
+	haystack := strings.Builder{}
+	for _, msg := range req.Messages {
+		if text := adapteropenai.FlattenContent(msg.Content); text != "" {
+			haystack.WriteString(text)
+			haystack.WriteByte('\n')
+		}
+	}
+	if len(req.Input) > 0 {
+		haystack.Write(req.Input)
+	}
+	text := strings.ToLower(haystack.String())
+	if text == "" {
+		return false
+	}
+	for _, needle := range needles {
+		if strings.Contains(text, strings.ToLower(needle)) {
 			return true
 		}
 	}

@@ -127,14 +127,14 @@ type ResolvedModel struct {
 // NewRegistry rejects an AdapterConfig that omits families,
 // client_identity fields, or default_model.
 type Registry struct {
-	models       map[string]ResolvedModel
-	shunts       map[string]config.AdapterShunt
-	def          string
-	fallbackShnt string
-	codexEnabled bool
-	codexPrefix  []string
+	models             map[string]ResolvedModel
+	shunts             map[string]config.AdapterShunt
+	def                string
+	fallbackShnt       string
+	codexEnabled       bool
+	codexPrefix        []string
 	codexNativeRouting string
-	codexNativeShunt string
+	codexNativeShunt   string
 }
 
 // NewRegistry builds the registry from a loaded AdapterConfig. It
@@ -234,17 +234,21 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 	}
 
 	r := &Registry{
-		models:       models,
-		shunts:       map[string]config.AdapterShunt{},
-		def:          cfg.DefaultModel,
-		fallbackShnt: strings.ToLower(cfg.FallbackShunt),
-		codexEnabled: cfg.Codex.Enabled,
-		codexPrefix:  append([]string(nil), cfg.Codex.ModelPrefixes...),
+		models:             models,
+		shunts:             map[string]config.AdapterShunt{},
+		def:                cfg.DefaultModel,
+		fallbackShnt:       strings.ToLower(cfg.FallbackShunt),
+		codexEnabled:       cfg.Codex.Enabled,
+		codexPrefix:        append([]string(nil), cfg.Codex.ModelPrefixes...),
 		codexNativeRouting: strings.ToLower(strings.TrimSpace(cfg.Codex.NativeModelRouting)),
-		codexNativeShunt: strings.ToLower(strings.TrimSpace(cfg.Codex.NativeModelShunt)),
+		codexNativeShunt:   strings.ToLower(strings.TrimSpace(cfg.Codex.NativeModelShunt)),
 	}
 	if r.codexNativeRouting == "" {
-		r.codexNativeRouting = "off"
+		if r.codexEnabled {
+			r.codexNativeRouting = "codex"
+		} else {
+			r.codexNativeRouting = "off"
+		}
 	}
 	switch r.codexNativeRouting {
 	case "off", "codex", "shunt":
@@ -735,8 +739,24 @@ func (r *Registry) Shunt(name string) (config.AdapterShunt, bool) {
 // undefined; callers that care should sort by Alias.
 func (r *Registry) List() []ResolvedModel {
 	out := make([]ResolvedModel, 0, len(r.models))
+	seen := make(map[string]struct{}, len(r.models))
 	for _, m := range r.models {
 		out = append(out, m)
+		seen[strings.ToLower(strings.TrimSpace(m.Alias))] = struct{}{}
+	}
+	if r.codexEnabled && r.codexNativeRouting == "codex" {
+		for _, alias := range []string{"gpt-5.4", "gpt-5.5", "gpt-5.3-codex", "gpt-5.3-codex-spark", "o3"} {
+			if _, ok := seen[alias]; ok {
+				continue
+			}
+			out = append(out, ResolvedModel{
+				Alias:       alias,
+				Backend:     BackendCodex,
+				ClaudeModel: normalizeCodexModelAlias(alias),
+				Context:     codexAliasContext(alias),
+				Efforts:     []string{EffortLow, EffortMedium, EffortHigh, EffortXHigh},
+			})
+		}
 	}
 	return out
 }

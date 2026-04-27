@@ -8,11 +8,11 @@ import (
 
 func TestNormalizeModelAliasPreservesForegroundAliasParity(t *testing.T) {
 	testCases := map[string]string{
-		"clyde-gpt-5.4-1m-medium":  "clyde-gpt-5.4-1m-medium",
-		"clyde-gpt-5.5-1m-xhigh":   "clyde-gpt-5.5-1m-xhigh",
-		"clyde-codex-gpt-5.4-high": "clyde-codex-gpt-5.4",
-		"clyde-gpt-5.4":            "clyde-gpt-5.4",
-		"gpt-5.4":                  "gpt-5.4",
+		"clyde-gpt-5.4-1m-medium":   "clyde-gpt-5.4-1m-medium",
+		"clyde-gpt-5.5-1m-xhigh":    "clyde-gpt-5.5-1m-xhigh",
+		"clyde-codex-gpt-5.4-high":  "clyde-codex-gpt-5.4-high",
+		"clyde-gpt-5.4":             "clyde-gpt-5.4",
+		"gpt-5.4":                   "gpt-5.4",
 		" clyde-gpt-5.4-1m-medium ": "clyde-gpt-5.4-1m-medium",
 	}
 
@@ -67,6 +67,57 @@ func TestRequestPathDefaultsToForeground(t *testing.T) {
 
 	if req.PathKind != RequestPathForeground {
 		t.Fatalf("PathKind=%q want %q", req.PathKind, RequestPathForeground)
+	}
+}
+
+func TestRequestPathUsesCursorMetadata(t *testing.T) {
+	testCases := []struct {
+		name     string
+		metadata string
+		want     RequestPathKind
+	}{
+		{
+			name:     "resume",
+			metadata: `{"cursorResumeTaskId":"task-123"}`,
+			want:     RequestPathResume,
+		},
+		{
+			name:     "subagent",
+			metadata: `{"cursorSubagentId":"agent-123"}`,
+			want:     RequestPathSubagent,
+		},
+		{
+			name:     "background",
+			metadata: `{"runInBackground":true}`,
+			want:     RequestPathBackground,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := TranslateRequest(adapteropenai.ChatRequest{
+				Model:    "gpt-5.4",
+				Metadata: []byte(tc.metadata),
+			})
+
+			if req.PathKind != tc.want {
+				t.Fatalf("PathKind=%q want %q", req.PathKind, tc.want)
+			}
+		})
+	}
+}
+
+func TestRequestPathFallsBackToObservedPromptMarkers(t *testing.T) {
+	req := TranslateRequest(adapteropenai.ChatRequest{
+		Model: "gpt-5.4",
+		Messages: []adapteropenai.ChatMessage{{
+			Role:    "system",
+			Content: []byte(`"You are the forked subagent; continue executing your task."`),
+		}},
+	})
+
+	if req.PathKind != RequestPathSubagent {
+		t.Fatalf("PathKind=%q want %q", req.PathKind, RequestPathSubagent)
 	}
 }
 

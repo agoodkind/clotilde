@@ -36,6 +36,7 @@ const DefaultHost = "[::1]"
 
 // DefaultMaxConcurrent caps the number of in flight claude
 // subprocesses when the config omits a value.
+// TODO remove this ? we dont need a max
 const DefaultMaxConcurrent = 4
 const defaultCodexBaseURL = "https://chatgpt.com/backend-api/codex/responses"
 
@@ -347,4 +348,13 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func writeError(w http.ResponseWriter, code int, kind, msg string) {
 	writeJSON(w, code, ErrorResponse{Error: ErrorBody{Message: msg, Type: kind}})
+}
+
+func writeModelResolutionError(w http.ResponseWriter, msg string) {
+	writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: ErrorBody{
+		Message: msg,
+		Type:    "invalid_request_error",
+		Code:    "model_not_found",
+		Param:   "model",
+	}})
 }
