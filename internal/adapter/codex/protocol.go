@@ -190,7 +190,7 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 			state.IdentityEmitted = true
 		}
 		return EmitRendered(renderer, adapterrender.Event{
-			Kind: adapterrender.EventToolCallDelta,
+			Kind:      adapterrender.EventToolCallDelta,
 			ToolCalls: []adapteropenai.ToolCall{tc},
 		}, emit, nil)
 	}
@@ -275,9 +275,6 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 			if eventNameLocal == "response.output_item.added" || eventNameLocal == "response.output_item.done" {
 				item, _ := raw["item"].(map[string]any)
 				itemType, _ := item["type"].(string)
-				if eventNameLocal == "response.output_item.done" && item != nil {
-					out.OutputItems = append(out.OutputItems, cloneMap(item))
-				}
 				if itemType == "function_call" {
 					itemID := strings.TrimSpace(mapString(item, "id"))
 					callID := strings.TrimSpace(mapString(item, "call_id"))
@@ -301,6 +298,13 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 					}
 					if state.Name == "" && name != "" {
 						state.Name = InboundToolName(name)
+					}
+					if eventNameLocal == "response.output_item.done" && item != nil {
+						completed := cloneMap(item)
+						if strings.TrimSpace(mapString(completed, "arguments")) == "" && state.Arguments.Len() > 0 {
+							completed["arguments"] = state.Arguments.String()
+						}
+						out.OutputItems = append(out.OutputItems, completed)
 					}
 					out.SetFinishReason("tool_calls")
 					if eventNameLocal == "response.output_item.done" && state.NativeName == "shell_command" {
@@ -328,6 +332,9 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 						state.ArgumentsEmitted = true
 					}
 				} else if itemType == "local_shell_call" {
+					if eventNameLocal == "response.output_item.done" && item != nil {
+						out.OutputItems = append(out.OutputItems, cloneMap(item))
+					}
 					itemID := strings.TrimSpace(mapString(item, "id"))
 					callID := strings.TrimSpace(mapString(item, "call_id"))
 					state, created := getToolState(itemID, callID, "Shell")
@@ -350,6 +357,9 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 						)
 					}
 				} else if itemType == "custom_tool_call" {
+					if eventNameLocal == "response.output_item.done" && item != nil {
+						out.OutputItems = append(out.OutputItems, cloneMap(item))
+					}
 					itemID := strings.TrimSpace(mapString(item, "id"))
 					callID := strings.TrimSpace(mapString(item, "call_id"))
 					name := mapString(item, "name")
@@ -380,6 +390,8 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 							slog.String("tool_name", cursorName),
 						)
 					}
+				} else if eventNameLocal == "response.output_item.done" && item != nil {
+					out.OutputItems = append(out.OutputItems, cloneMap(item))
 				}
 				continue
 			}
@@ -390,9 +402,9 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 				state := toolCallsByItemID[itemID]
 				if state != nil && delta != "" {
 					state.ArgumentDeltaSeen = true
+					state.Arguments.WriteString(delta)
 					out.SetFinishReason("tool_calls")
 					if state.NativeName == "shell_command" {
-						state.Arguments.WriteString(delta)
 						continue
 					}
 					if err := emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: delta}); err != nil {

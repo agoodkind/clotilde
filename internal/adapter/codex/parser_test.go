@@ -81,6 +81,37 @@ func TestParseSSECapturesCompletedOutputItems(t *testing.T) {
 	}
 }
 
+func TestParseSSEStoresReconstructedFunctionCallArguments(t *testing.T) {
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.output_item.added",
+		`data: {"item":{"id":"fc_1","type":"function_call","call_id":"call_shell","name":"shell_command","arguments":""}}`,
+		"",
+		"event: response.function_call_arguments.delta",
+		`data: {"item_id":"fc_1","delta":"{\"command\":\"pwd\","}`,
+		"",
+		"event: response.function_call_arguments.delta",
+		`data: {"item_id":"fc_1","delta":"\"workdir\":\"/private/tmp/clyde-cursor-smoke-ws\"}"}`,
+		"",
+		"event: response.output_item.done",
+		`data: {"item":{"id":"fc_1","type":"function_call","call_id":"call_shell","name":"shell_command","arguments":""}}`,
+		"",
+		"event: response.completed",
+		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}},"sequence_number":10}`,
+		"",
+	}, "\n") + "\n")
+	_, res, err := collectSSE(stream)
+	if err != nil {
+		t.Fatalf("ParseSSE: %v", err)
+	}
+	if len(res.OutputItems) != 1 {
+		t.Fatalf("output_items len=%d want 1: %#v", len(res.OutputItems), res.OutputItems)
+	}
+	args, _ := res.OutputItems[0]["arguments"].(string)
+	if !strings.Contains(args, `"command":"pwd"`) || !strings.Contains(args, `"workdir":"/private/tmp/clyde-cursor-smoke-ws"`) {
+		t.Fatalf("arguments=%q", args)
+	}
+}
+
 func TestParseSSERetainsResponseIDFromCreatedEvent(t *testing.T) {
 	stream := strings.NewReader(strings.Join([]string{
 		"event: response.created",
