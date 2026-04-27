@@ -67,6 +67,7 @@ type toolCallState struct {
 	Name              string
 	NativeName        string
 	Type              string
+	IdentityEmitted   bool
 	ArgumentDeltaSeen bool
 	ArgumentsEmitted  bool
 	Arguments         strings.Builder
@@ -179,14 +180,18 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 		if state == nil {
 			return nil
 		}
+		tc := adapteropenai.ToolCall{
+			Index:    state.Index,
+			Function: fn,
+		}
+		if !state.IdentityEmitted {
+			tc.ID = state.CallID
+			tc.Type = state.Type
+			state.IdentityEmitted = true
+		}
 		return EmitRendered(renderer, adapterrender.Event{
 			Kind: adapterrender.EventToolCallDelta,
-			ToolCalls: []adapteropenai.ToolCall{{
-				Index:    state.Index,
-				ID:       state.CallID,
-				Type:     state.Type,
-				Function: fn,
-			}},
+			ToolCalls: []adapteropenai.ToolCall{tc},
 		}, emit, nil)
 	}
 	getToolState := func(itemID, callID, name string) (*toolCallState, bool) {

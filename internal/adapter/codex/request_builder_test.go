@@ -1068,6 +1068,42 @@ func TestParseCodexSSEDoesNotDuplicateToolArgumentsOnDoneAfterDelta(t *testing.T
 	}
 }
 
+func TestParseCodexSSEEmitsToolIdentityOnlyOnce(t *testing.T) {
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.output_item.added",
+		`data: {"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"read_file","arguments":""}}`,
+		"",
+		"event: response.function_call_arguments.delta",
+		`data: {"item_id":"fc_1","delta":"{\"path\":\"go.mod\"}"}`,
+		"",
+		"event: response.completed",
+		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}},"sequence_number":10}`,
+		"",
+	}, "\n") + "\n")
+	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
+	var got []adapteropenai.StreamChunk
+	_, err := ParseSSE(stream, r, func(ch adapteropenai.StreamChunk) error {
+		got = append(got, ch)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ParseSSE: %v", err)
+	}
+	calls := collectToolCalls(got)
+	if len(calls) != 2 {
+		t.Fatalf("tool call chunks=%d want 2: %#v", len(calls), calls)
+	}
+	if calls[0].ID != "call_1" || calls[0].Type != "function" || calls[0].Function.Name != "ReadFile" {
+		t.Fatalf("identity chunk=%#v", calls[0])
+	}
+	if calls[1].ID != "" || calls[1].Type != "" || calls[1].Function.Name != "" {
+		t.Fatalf("argument chunk repeated identity: %#v", calls[1])
+	}
+	if calls[1].Function.Arguments != `{"path":"go.mod"}` {
+		t.Fatalf("argument chunk args=%q", calls[1].Function.Arguments)
+	}
+}
+
 func TestParseCodexSSEMapsToolAliasesBackToCursorNames(t *testing.T) {
 	stream := strings.NewReader(strings.Join([]string{
 		"event: response.output_item.added",
