@@ -25,10 +25,10 @@ type ShapeOptions struct {
 }
 
 var (
-	conversationOnlyExactDrops = map[string]struct{}{
-		"No response requested.":                     {},
-		"[Request interrupted by user]":              {},
-		"[Request interrupted by user for tool use]": {},
+	conversationOnlyExactDrops = map[string]bool{
+		"No response requested.":                     true,
+		"[Request interrupted by user]":              true,
+		"[Request interrupted by user for tool use]": true,
 	}
 	conversationOnlyImageLineRe = regexp.MustCompile(`^\[Image(?::| #).*\]$`)
 )
@@ -153,7 +153,7 @@ func toolFullDetailText(tools []ToolCall) string {
 	}
 	lines := make([]string, 0, len(tools))
 	for _, tool := range tools {
-		if len(tool.Input) == 0 {
+		if tool.Input.Len() == 0 {
 			lines = append(lines, "[tool: "+tool.Name+"]")
 			continue
 		}

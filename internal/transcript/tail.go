@@ -1,4 +1,4 @@
-// Tailing primitives for live transcript streaming.
+// Package transcript parses and tails Claude transcript files.
 //
 // The Tailer opens a JSONL transcript file at a given byte offset,
 // emits one TailLine per JSONL line written after that offset, and
@@ -31,6 +31,10 @@ type TailLine struct {
 	Timestamp  time.Time
 }
 
+type tailerSignal struct {
+	Triggered bool
+}
+
 // Tailer streams new lines from a JSONL transcript.
 type Tailer struct {
 	path   string
@@ -39,8 +43,8 @@ type Tailer struct {
 	notif *fsnotify.Watcher
 	out   chan TailLine
 
-	stopCh chan struct{}
-	doneCh chan struct{}
+	stopCh chan tailerSignal
+	doneCh chan tailerSignal
 	once   sync.Once
 }
 
@@ -66,8 +70,8 @@ func OpenTailer(path string, startOffset int64) (*Tailer, error) {
 		path:   path,
 		notif:  notif,
 		out:    make(chan TailLine, 64),
-		stopCh: make(chan struct{}),
-		doneCh: make(chan struct{}),
+		stopCh: make(chan tailerSignal),
+		doneCh: make(chan tailerSignal),
 	}
 	if startOffset < 0 {
 		if info, err := os.Stat(path); err == nil {

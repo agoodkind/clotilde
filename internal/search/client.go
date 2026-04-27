@@ -100,7 +100,7 @@ func (c *localClient) Complete(ctx context.Context, prompt string) (string, erro
 		log.Error("llm request failed",
 			"model", c.model,
 			"duration", elapsed.Round(time.Millisecond),
-			slog.Any("err", err),
+			"err", err,
 		)
 		return "", fmt.Errorf("local LLM request failed: %w", err)
 	}

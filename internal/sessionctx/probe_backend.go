@@ -62,7 +62,7 @@ func (p *probeBackend) Fetch(ctx context.Context) (compact.ContextUsage, error) 
 			"subcomponent", "probe",
 			"session_id", p.sessionID,
 			"duration_ms", duration.Milliseconds(),
-			slog.Any("err", err),
+			"err", err,
 		)
 		return compact.ContextUsage{}, err
 	}

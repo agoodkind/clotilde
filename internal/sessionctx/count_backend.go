@@ -69,7 +69,7 @@ func (c *countBackend) Count(ctx context.Context, content []compact.OutputBlock,
 			"session_id", c.sessionID,
 			"model", effectiveModel,
 			"duration_ms", duration.Milliseconds(),
-			slog.Any("err", err),
+			"err", err,
 		)
 		return 0, err
 	}

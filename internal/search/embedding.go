@@ -79,7 +79,7 @@ func (e *embeddingFilter) filterChunks(ctx context.Context, query string, chunks
 	queryEmbStart := time.Now()
 	queryEmb, err := e.embed(ctx, []string{query})
 	if err != nil {
-		log.Warn("embedding query failed, skipping pre-filter", slog.Any("err", err))
+		log.Warn("embedding query failed, skipping pre-filter", "err", err)
 		return chunks, nil // fall back to no filtering
 	}
 	log.Debug("embedding: query embedded", "duration", time.Since(queryEmbStart).Round(time.Millisecond))
@@ -88,7 +88,7 @@ func (e *embeddingFilter) filterChunks(ctx context.Context, query string, chunks
 	chunksEmbStart := time.Now()
 	chunkEmbs, err := e.embed(ctx, chunkTexts)
 	if err != nil {
-		log.Warn("embedding chunks failed, skipping pre-filter", slog.Any("err", err))
+		log.Warn("embedding chunks failed, skipping pre-filter", "err", err)
 		return chunks, nil
 	}
 	log.Debug("embedding: chunks embedded", "chunks", len(chunkTexts), "duration", time.Since(chunksEmbStart).Round(time.Millisecond))

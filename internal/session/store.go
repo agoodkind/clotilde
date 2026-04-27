@@ -138,7 +138,7 @@ func NewGlobalFileStore() (*FileStore, error) {
 		slog.Warn("session.store.home_dir_failed",
 			"component", "session",
 			"subcomponent", "store",
-			slog.Any("err", err),
+			"err", err,
 		)
 	}
 	return fs, nil
@@ -152,6 +152,36 @@ func NewGlobalFileStoreReadOnly() (*FileStore, error) {
 		return nil, fmt.Errorf("failed to create global sessions directory: %w", err)
 	}
 	return &FileStore{clydeRoot: config.GlobalDataDir(), noAdopt: true}, nil
+}
+
+// CanonicalWorkspaceRoot normalizes a workspace path for equality checks.
+// Existing directories are resolved through EvalSymlinks so clyde <dir>,
+// hook-adopted metadata, and user-edited basedirs compare against the same
+// stable representation. Missing paths still normalize to an absolute clean
+// path so callers can handle stale metadata deterministically.
+func CanonicalWorkspaceRoot(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if strings.HasPrefix(path, "~") {
+		if home, err := os.UserHomeDir(); err == nil {
+			switch {
+			case path == "~":
+				path = home
+			case strings.HasPrefix(path, "~/"):
+				path = filepath.Join(home, strings.TrimPrefix(path, "~/"))
+			}
+		}
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	path = filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return path
 }
 
 // List returns all sessions, sorted by lastAccessed (most recent first).
@@ -231,9 +261,10 @@ func (fs *FileStore) ListForWorkspace(workspaceRoot string) ([]*Session, error) 
 		return nil, err
 	}
 
+	canonicalRoot := CanonicalWorkspaceRoot(workspaceRoot)
 	var result []*Session
 	for _, sess := range all {
-		if sess.Metadata.WorkspaceRoot == workspaceRoot {
+		if CanonicalWorkspaceRoot(sess.Metadata.WorkspaceRoot) == canonicalRoot {
 			result = append(result, sess)
 		}
 	}
@@ -314,7 +345,7 @@ func (fs *FileStore) Resolve(query string) (*Session, error) {
 			"component", "session",
 			"subcomponent", "resolve",
 			"query", query,
-			slog.Any("err", err),
+			"err", err,
 		)
 		return nil, nil
 	}
@@ -537,7 +568,7 @@ func (fs *FileStore) findByUUID(uuid string) *Session {
 			"component", "session",
 			"subcomponent", "resolve",
 			"uuid", uuid,
-			slog.Any("err", err),
+			"err", err,
 		)
 		return nil
 	}
@@ -576,7 +607,7 @@ func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult
 				"subcomponent", "resolve",
 				"session", existing.Name,
 				"session_id", existing.Metadata.SessionID,
-				slog.Any("err", err),
+				"err", err,
 			)
 		} else {
 			slog.Info("session.resolve.display_title_backfilled",
@@ -610,7 +641,7 @@ func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult
 		slog.Warn("session.resolve.reconcile_name_set_failed",
 			"component", "session",
 			"subcomponent", "resolve",
-			slog.Any("err", err),
+			"err", err,
 		)
 		return existing, nil
 	}
@@ -627,7 +658,7 @@ func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult
 			"old_name", existing.Name,
 			"new_name", target,
 			"session_id", existing.Metadata.SessionID,
-			slog.Any("err", err),
+			"err", err,
 		)
 		return existing, nil
 	}

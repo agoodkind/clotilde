@@ -86,7 +86,7 @@ func (c *discoveryCache) Get() ([]DiscoveryResult, error) {
 			"subcomponent", "resolve_cache",
 			"projects_dir", c.projectsDir,
 			"duration_ms", elapsedMs,
-			slog.Any("err", err),
+			"err", err,
 		)
 		c.results = nil
 		c.loaded = time.Time{}

@@ -58,7 +58,7 @@ func preloadLmdEmbedding(ctx context.Context, cfg config.SearchLocal, model stri
 	log.InfoContext(ctx, "search.embed.preload_lmd.invoked", "model", model)
 	base := cfg.ResolvedEmbeddingURL()
 	if base == "" {
-		log.ErrorContext(ctx, "search.embed.preload_lmd.failed", "model", model)
+		log.ErrorContext(ctx, "search.embed.preload_lmd.failed", "model", model, "err", "embedding_url_missing")
 		return fmt.Errorf("search.local embedding_url and url are both empty")
 	}
 	u := base + "/swiftlmd/preload"

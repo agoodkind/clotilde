@@ -87,7 +87,7 @@ func (l *defaultLayer) Usage(ctx context.Context, opts UsageOptions) (Usage, err
 				"component", "sessionctx",
 				"subcomponent", "disk_cache",
 				"session_id", l.sessionID,
-				slog.Any("err", err),
+				"err", err,
 			)
 		} else if hit != nil {
 			slog.Debug("session.context.usage.cache_hit",
@@ -159,7 +159,9 @@ func reasonForMiss(opts UsageOptions) string {
 // nullLayer is returned by NewDefault when the session is nil. Every
 // call fails with a stable error so callers can test for this without
 // nil-checking the Layer value itself.
-type nullLayer struct{}
+type nullLayer struct {
+	Unavailable bool
+}
 
 func (n *nullLayer) Usage(ctx context.Context, opts UsageOptions) (Usage, error) {
 	return Usage{}, errNullLayer

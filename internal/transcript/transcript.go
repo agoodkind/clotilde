@@ -24,13 +24,41 @@ type Message struct {
 	Tools     []ToolCall // parsed tool calls with inputs
 }
 
+// ToolInputJSON keeps the transcript's tool_use.input payload opaque at the
+// parse boundary. Claude tool inputs vary by tool and mirror the upstream
+// transcript content-block shape documented in research/claude-code-source-code-full/src/services/api/claude.ts.
+// The transcript package only stores and re-renders this JSON; business logic
+// should decode a concrete schema at a narrower call site when it needs one.
+type ToolInputJSON struct {
+	Raw json.RawMessage
+}
+
+func (j *ToolInputJSON) UnmarshalJSON(data []byte) error {
+	if j == nil {
+		return nil
+	}
+	j.Raw = append(j.Raw[:0], data...)
+	return nil
+}
+
+func (j ToolInputJSON) MarshalJSON() ([]byte, error) {
+	if len(j.Raw) == 0 {
+		return []byte("null"), nil
+	}
+	return j.Raw, nil
+}
+
+func (j ToolInputJSON) Len() int {
+	return len(j.Raw)
+}
+
 // ToolCall represents a single tool invocation within an assistant message.
 type ToolCall struct {
-	ID      string         // tool_use_id (links to tool_result in next user message)
-	Name    string         // e.g. "Bash", "Edit", "Read"
-	Input   map[string]any // tool input parameters
-	Output  string         // tool result text (loaded on demand, empty by default)
-	IsError bool           // true if tool result was an error
+	ID      string        // tool_use_id (links to tool_result in next user message)
+	Name    string        // e.g. "Bash", "Edit", "Read"
+	Input   ToolInputJSON // opaque tool input payload, preserved verbatim
+	Output  string        // tool result text (loaded on demand, empty by default)
+	IsError bool          // true if tool result was an error
 }
 
 // ToolNames returns the names of all tools used in this message.
@@ -56,19 +84,19 @@ type rawMessage struct {
 }
 
 type contentBlock struct {
-	Type     string         `json:"type"`
-	Text     string         `json:"text"`
-	Thinking string         `json:"thinking"`
-	ID       string         `json:"id"`
-	Name     string         `json:"name"`
-	Input    map[string]any `json:"input"`
+	Type     string        `json:"type"`
+	Text     string        `json:"text"`
+	Thinking string        `json:"thinking"`
+	ID       string        `json:"id"`
+	Name     string        `json:"name"`
+	Input    ToolInputJSON `json:"input"`
 }
 
 type toolResultBlock struct {
-	Type      string `json:"type"`
-	ToolUseID string `json:"tool_use_id"`
-	Content   any    `json:"content"`
-	IsError   bool   `json:"is_error"`
+	Type      string          `json:"type"`
+	ToolUseID string          `json:"tool_use_id"`
+	Content   json.RawMessage `json:"content"`
+	IsError   bool            `json:"is_error"`
 }
 
 var systemTagRe = regexp.MustCompile(`<(?:system-reminder|local-command[^>]*|command-name|command-message|command-args|local-command-stdout|local-command-caveat)[^>]*>[\s\S]*?</(?:system-reminder|local-command[^>]*|command-name|command-message|command-args|local-command-stdout|local-command-caveat)>`)

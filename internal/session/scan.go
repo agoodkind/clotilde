@@ -116,7 +116,7 @@ func ScanProjects(claudeProjectsDir string) ([]DiscoveryResult, error) {
 			"component", "session",
 			"subcomponent", "scan",
 			"projects_dir", claudeProjectsDir,
-			slog.Any("err", err),
+			"err", err,
 		)
 		return nil, err
 	}
@@ -169,7 +169,7 @@ func readTranscriptHeader(path string) (DiscoveryResult, bool) {
 		// and carry the auto-name prompt as their content. They never
 		// have a cwd or entrypoint so they cannot stand alone.
 		if h.Type == "queue-operation" {
-			if dr.IsAutoName == false && looksLikeAutoNamePrompt(h.Content) {
+			if !dr.IsAutoName && looksLikeAutoNamePrompt(h.Content) {
 				dr.IsAutoName = true
 			}
 			continue
@@ -243,7 +243,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 		slog.Warn("session.adopt.known_uuids_failed",
 			"component", "session",
 			"subcomponent", "adopt",
-			slog.Any("err", err),
+			"err", err,
 		)
 		return nil, err
 	}
@@ -252,7 +252,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 		slog.Warn("session.adopt.existing_names_failed",
 			"component", "session",
 			"subcomponent", "adopt",
-			slog.Any("err", err),
+			"err", err,
 		)
 		return nil, err
 	}
@@ -356,11 +356,11 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 				"session", name,
 				"session_id", r.SessionID,
 				"transcript", r.TranscriptPath,
-				slog.Any("err", err),
+				"err", err,
 			)
 			continue
 		}
-		slog.Info("session.adopt.created",
+			slog.Debug("session.adopt.created",
 			"component", "session",
 			"subcomponent", "adopt",
 			"session", name,

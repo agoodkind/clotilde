@@ -98,26 +98,26 @@ func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript
 	// Layer 2+: rerank/deep passes with progressively smarter models
 	for i := 1; i < len(pipeline); i++ {
 		if len(matched) == 0 {
-			log.Info("no matches, skipping remaining layers")
+			log.Debug("no matches, skipping remaining layers")
 			break
 		}
 		layer := pipeline[i]
 
 		// Skip rerank if only 1 result (nothing to filter), but still run deep
 		if len(matched) <= 1 && layer.Name != "deep" {
-			log.Info("skipping rerank layer (single result)", "layer", layer.Name)
+				log.Debug("skipping rerank layer (single result)", "layer", layer.Name)
 			continue
 		}
 
 		// Swap model if this layer uses a different one
 		if cfg.Backend == "local" && layer.Model != currentModel {
-			log.Info("swapping model", "from", currentModel, "to", layer.Model, "layer", layer.Name)
+				log.Debug("swapping model", "from", currentModel, "to", layer.Model, "layer", layer.Name)
 			if err := lmctl.EnsureLoaded(ctx, layer.Model,
 				lmctl.WithContextLength(cfg.Local.ContextLength),
 				lmctl.WithMaxMemoryGB(cfg.Local.MaxMemoryGB),
 				lmctl.WithWarmup(cfg.Local.URL, cfg.Local.Token),
 			); err != nil {
-				log.Warn("model load failed, skipping layer", "model", layer.Model, slog.Any("err", err))
+				log.Warn("model load failed, skipping layer", "model", layer.Model, "err", err)
 				continue
 			}
 			currentModel = layer.Model
@@ -133,7 +133,7 @@ func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript
 		default:
 			matched = rerankResults(ctx, layerClient, matched, query)
 		}
-		log.Info("layer complete",
+			log.Debug("layer complete",
 			"layer", layer.Name,
 			"model", layer.Model,
 			"before", beforeCount,
@@ -264,26 +264,30 @@ func sweepChunks(ctx context.Context, log *slog.Logger, client Client, messages 
 		}
 	}
 
-	type chunkResult struct {
-		idx    int
-		result *Result
-		err    error
-	}
+type chunkResult struct {
+	idx    int
+	result *Result
+	err    error
+}
 
-	maxConc := cfg.Local.MaxConcurrent
+type searchConcurrencyPermit struct {
+	Acquired bool
+}
+
+maxConc := cfg.Local.MaxConcurrent
 	if maxConc <= 0 {
 		maxConc = defaultMaxConcurrent
 	}
 
 	results := make([]chunkResult, len(chunks))
-	sem := make(chan struct{}, maxConc)
+	sem := make(chan searchConcurrencyPermit, maxConc)
 	var wg sync.WaitGroup
 
 	for i, chunk := range chunks {
 		wg.Add(1)
 		go func(idx int, msgs []transcript.Message) {
 			defer wg.Done()
-			sem <- struct{}{}
+			sem <- searchConcurrencyPermit{Acquired: true}
 			defer func() { <-sem }()
 
 			chunkStart := time.Now()

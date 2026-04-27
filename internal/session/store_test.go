@@ -1,6 +1,7 @@
 package session_test
 
 import (
+	"os"
 	"path/filepath"
 	"time"
 
@@ -203,6 +204,40 @@ var _ = Describe("FileStore", func() {
 			Expect(sessions).To(HaveLen(1))
 			Expect(sessions[0].Name).To(Equal("unified-session-resolution"))
 			Expect(sessions[0].Metadata.SessionID).To(Equal("uuid-shared"))
+		})
+	})
+
+	Describe("ListForWorkspace", func() {
+		It("matches canonical workspace roots", func() {
+			workspace := filepath.Join(tempDir, "workspace")
+			Expect(os.MkdirAll(workspace, 0o755)).To(Succeed())
+
+			s := session.NewSession("workspace-session", "uuid-workspace")
+			s.Metadata.WorkspaceRoot = filepath.Join(workspace, ".")
+			Expect(store.Create(s)).To(Succeed())
+
+			matches, err := store.ListForWorkspace(workspace)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(matches).To(HaveLen(1))
+			Expect(matches[0].Name).To(Equal("workspace-session"))
+		})
+
+		It("matches symlinked workspace roots", func() {
+			workspace := filepath.Join(tempDir, "real-workspace")
+			link := filepath.Join(tempDir, "workspace-link")
+			Expect(os.MkdirAll(workspace, 0o755)).To(Succeed())
+			if err := os.Symlink(workspace, link); err != nil {
+				Skip("symlink unavailable: " + err.Error())
+			}
+
+			s := session.NewSession("symlink-session", "uuid-symlink")
+			s.Metadata.WorkspaceRoot = link
+			Expect(store.Create(s)).To(Succeed())
+
+			matches, err := store.ListForWorkspace(workspace)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(matches).To(HaveLen(1))
+			Expect(matches[0].Name).To(Equal("symlink-session"))
 		})
 	})
 

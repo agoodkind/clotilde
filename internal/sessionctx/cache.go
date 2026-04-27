@@ -152,7 +152,7 @@ func (d *diskCache) write(payload *cachedUsage) {
 			"component", "sessionctx",
 			"subcomponent", "disk_cache",
 			"path", d.path,
-			slog.Any("err", err),
+			"err", err,
 		)
 		return
 	}
@@ -161,7 +161,7 @@ func (d *diskCache) write(payload *cachedUsage) {
 		slog.Warn("session.context.disk_cache.encode_failed",
 			"component", "sessionctx",
 			"subcomponent", "disk_cache",
-			slog.Any("err", err),
+			"err", err,
 		)
 		return
 	}
@@ -171,7 +171,7 @@ func (d *diskCache) write(payload *cachedUsage) {
 			"component", "sessionctx",
 			"subcomponent", "disk_cache",
 			"path", tmp,
-			slog.Any("err", err),
+			"err", err,
 		)
 		return
 	}
@@ -181,7 +181,7 @@ func (d *diskCache) write(payload *cachedUsage) {
 			"component", "sessionctx",
 			"subcomponent", "disk_cache",
 			"path", d.path,
-			slog.Any("err", err),
+			"err", err,
 		)
 		return
 	}
@@ -199,7 +199,7 @@ func (d *diskCache) invalidate() {
 			"component", "sessionctx",
 			"subcomponent", "disk_cache",
 			"path", d.path,
-			slog.Any("err", err),
+			"err", err,
 		)
 		return
 	}
