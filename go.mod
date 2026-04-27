@@ -262,6 +262,7 @@ replace goodkind.io/gklog => ../../gklog
 tool (
 	github.com/fzipp/gocyclo/cmd/gocyclo
 	github.com/golangci/golangci-lint/v2/cmd/golangci-lint
+	goodkind.io/clyde/cmd/clyde-staticcheck
 	golang.org/x/tools/cmd/deadcode
 	golang.org/x/vuln/cmd/govulncheck
 )

@@ -1,4 +1,4 @@
-.PHONY: help build build-tui-qa tui-qa test test-watch install deploy install-launch-agent install-hook clean lint fmt coverage setup-hooks deadcode govulncheck audit sign notarize uninstall-launch-agent uninstall-hook slog-audit
+.PHONY: help build build-tui-qa tui-qa test test-watch install deploy install-launch-agent install-hook clean lint staticcheck install-build-guard uninstall-build-guard fmt coverage setup-hooks deadcode govulncheck audit sign notarize uninstall-launch-agent uninstall-hook slog-audit
 
 # Optional local overrides (signing creds, never committed). Copy config.mk.example.
 -include config.mk
@@ -119,6 +119,16 @@ clean: ## Remove build artifacts
 lint: ## Run golangci-lint
 	@echo "Running linter..."
 	@go tool golangci-lint run ./... && echo "✓ Lint passed"
+
+staticcheck: ## Run Clyde's staticcheck bundle and custom architecture analyzers
+	@echo "Running Clyde staticcheck..."
+	@go tool clyde-staticcheck ./... && echo "✓ Staticcheck passed"
+
+install-build-guard: ## Enforce repo staticcheck on direct go build via GOFLAGS toolexec
+	@./scripts/install-go-build-guard.sh
+
+uninstall-build-guard: ## Remove the repo staticcheck toolexec from GOFLAGS
+	@./scripts/install-go-build-guard.sh --uninstall
 
 fmt: ## Format code with gofumpt and goimports
 	@echo "Formatting code..."
