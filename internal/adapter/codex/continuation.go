@@ -110,11 +110,14 @@ func incrementalContinuationInput(previous, outputItems, current []map[string]an
 		return nil, "empty_input"
 	}
 	if len(outputItems) > 0 {
-		baseline := make([]map[string]any, 0, len(previous)+len(outputItems))
-		baseline = append(baseline, previous...)
-		baseline = append(baseline, outputItems...)
-		if len(current) > len(baseline) && inputPrefixEqual(baseline, current) {
-			return cloneInput(current[len(baseline):]), ""
+		if len(current) > len(previous)+len(outputItems) && inputPrefixEqual(previous, current) {
+			tailStart, ok := continuationOutputPrefixOffset(outputItems, current[len(previous):])
+			if ok {
+				return cloneInput(current[len(previous)+tailStart+len(outputItems):]), ""
+			}
+		}
+		if end, ok := continuationOutputSequenceEnd(outputItems, current); ok && end < len(current) {
+			return cloneInput(current[end:]), ""
 		}
 		return nil, "output_item_baseline_mismatch"
 	}
@@ -139,6 +142,139 @@ func inputPrefixEqual(previous, current []map[string]any) bool {
 		}
 	}
 	return true
+}
+
+func continuationOutputPrefixOffset(outputItems, current []map[string]any) (int, bool) {
+	if len(outputItems) > len(current) {
+		return 0, false
+	}
+	if continuationOutputPrefixEqual(outputItems, current) {
+		return 0, true
+	}
+	for offset := 0; offset < len(current); offset++ {
+		if itemRole(current[offset]) != "assistant" {
+			return 0, false
+		}
+		if len(outputItems) > len(current[offset+1:]) {
+			return 0, false
+		}
+		if continuationOutputPrefixEqual(outputItems, current[offset+1:]) {
+			return offset + 1, true
+		}
+	}
+	return 0, false
+}
+
+func continuationOutputSequenceEnd(outputItems, current []map[string]any) (int, bool) {
+	if len(outputItems) == 0 || len(outputItems) > len(current) {
+		return 0, false
+	}
+	for start := len(current) - len(outputItems); start >= 0; start-- {
+		if continuationOutputPrefixEqual(outputItems, current[start:]) {
+			return start + len(outputItems), true
+		}
+	}
+	return 0, false
+}
+
+func continuationOutputPrefixEqual(outputItems, current []map[string]any) bool {
+	if len(outputItems) > len(current) {
+		return false
+	}
+	for i := range outputItems {
+		if !continuationItemEqual(outputItems[i], current[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func continuationItemEqual(a, b map[string]any) bool {
+	return jsonEqual(canonicalContinuationItem(a), canonicalContinuationItem(b))
+}
+
+func canonicalContinuationItem(item map[string]any) map[string]any {
+	itemType := strings.TrimSpace(mapString(item, "type"))
+	out := map[string]any{"type": itemType}
+	switch itemType {
+	case "message":
+		out["role"] = strings.ToLower(strings.TrimSpace(mapString(item, "role")))
+		out["text"] = continuationContentText(item["content"])
+	case "function_call":
+		out["call_id"] = strings.TrimSpace(mapString(item, "call_id"))
+		out["name"] = InboundToolName(mapString(item, "name"))
+		out["arguments"] = canonicalContinuationString(mapString(item, "arguments"))
+	case "function_call_output":
+		out["call_id"] = strings.TrimSpace(mapString(item, "call_id"))
+		out["output"] = continuationOutputText(item["output"])
+	case "custom_tool_call":
+		out["call_id"] = strings.TrimSpace(mapString(item, "call_id"))
+		out["name"] = InboundToolName(mapString(item, "name"))
+		out["input"] = rawString(item, "input")
+	case "custom_tool_call_output":
+		out["call_id"] = strings.TrimSpace(mapString(item, "call_id"))
+		out["name"] = InboundToolName(mapString(item, "name"))
+		out["output"] = continuationOutputText(item["output"])
+	case "local_shell_call":
+		out["call_id"] = strings.TrimSpace(mapString(item, "call_id"))
+		out["action"] = item["action"]
+	default:
+		for k, v := range item {
+			switch k {
+			case "id", "status":
+				continue
+			default:
+				out[k] = v
+			}
+		}
+	}
+	return out
+}
+
+func continuationContentText(raw any) string {
+	if text := responsesContentText(raw); text != "" {
+		return text
+	}
+	switch v := raw.(type) {
+	case []map[string]any:
+		parts := make([]string, 0, len(v))
+		for _, part := range v {
+			switch strings.TrimSpace(mapString(part, "type")) {
+			case "text", "input_text", "output_text":
+				if text := rawString(part, "text"); text != "" {
+					parts = append(parts, text)
+				}
+			}
+		}
+		return SanitizeForUpstreamCache(strings.Join(parts, "\n"))
+	}
+	return ""
+}
+
+func continuationOutputText(raw any) string {
+	if text := responsesOutputText(raw); text != "" {
+		return text
+	}
+	if text := continuationContentText(raw); text != "" {
+		return text
+	}
+	return ""
+}
+
+func canonicalContinuationString(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var decoded any
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return raw
+	}
+	encoded, err := json.Marshal(decoded)
+	if err != nil {
+		return raw
+	}
+	return string(encoded)
 }
 
 func itemRole(item map[string]any) string {

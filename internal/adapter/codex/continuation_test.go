@@ -86,7 +86,7 @@ func TestContinuationStoreReusesPreviousResponseWithOutputItemBaseline(t *testin
 	}
 }
 
-func TestContinuationStoreMissesWhenOutputItemBaselineMissing(t *testing.T) {
+func TestContinuationStoreReusesPreviousResponseWithCursorReplayedAssistantMessage(t *testing.T) {
 	store := NewContinuationStore()
 	first := ResponseCreateWsRequest{
 		Type:           "response.create",
@@ -109,15 +109,119 @@ func TestContinuationStoreMissesWhenOutputItemBaselineMissing(t *testing.T) {
 
 	second := first
 	second.Input = append(cloneInput(first.Input),
-		map[string]any{"type": "message", "role": "assistant", "content": "assistant output"},
+		map[string]any{
+			"type":    "message",
+			"role":    "assistant",
+			"content": []map[string]any{{"type": "output_text", "text": "assistant output"}},
+		},
 		map[string]any{"type": "message", "role": "user", "content": "follow up"},
 	)
 	decision := store.Prepare(second)
-	if decision.Hit {
-		t.Fatalf("unexpected continuation hit")
+	if !decision.Hit {
+		t.Fatalf("expected continuation hit, miss_reason=%q", decision.MissReason)
 	}
-	if decision.MissReason != "output_item_baseline_mismatch" {
-		t.Fatalf("miss_reason=%q want output_item_baseline_mismatch", decision.MissReason)
+	if len(decision.IncrementalInput) != 1 || itemRole(decision.IncrementalInput[0]) != "user" {
+		t.Fatalf("incremental_input=%v", decision.IncrementalInput)
+	}
+}
+
+func TestContinuationStoreReusesPreviousResponseWithCursorReplayedToolCall(t *testing.T) {
+	store := NewContinuationStore()
+	first := ResponseCreateWsRequest{
+		Type:           "response.create",
+		Model:          "gpt-5.4",
+		Instructions:   "base",
+		PromptCacheKey: "cursor:conv-123",
+		Input: []map[string]any{
+			{"type": "message", "role": "user", "content": "inspect"},
+		},
+	}
+	store.Complete(ContinuationDecision{}, first, RunResult{
+		ResponseID: "resp-1",
+		OutputItems: []map[string]any{{
+			"id":        "fc-1",
+			"type":      "function_call",
+			"status":    "completed",
+			"call_id":   "call_read",
+			"name":      "read_file",
+			"arguments": `{"path":"README.md"}`,
+		}},
+	})
+
+	second := first
+	second.Input = append(cloneInput(first.Input),
+		map[string]any{
+			"type":    "message",
+			"role":    "assistant",
+			"content": []map[string]any{{"type": "output_text", "text": "I will read the file."}},
+		},
+		map[string]any{
+			"type":      "function_call",
+			"call_id":   "call_read",
+			"name":      "read_file",
+			"arguments": `{"path":"README.md"}`,
+		},
+		map[string]any{
+			"type":    "function_call_output",
+			"call_id": "call_read",
+			"output":  "contents",
+		},
+	)
+	decision := store.Prepare(second)
+	if !decision.Hit {
+		t.Fatalf("expected continuation hit, miss_reason=%q", decision.MissReason)
+	}
+	if len(decision.IncrementalInput) != 1 || mapString(decision.IncrementalInput[0], "type") != "function_call_output" {
+		t.Fatalf("incremental_input=%v", decision.IncrementalInput)
+	}
+}
+
+func TestContinuationStoreAnchorsOnOutputItemsWhenCursorPreambleChanges(t *testing.T) {
+	store := NewContinuationStore()
+	first := ResponseCreateWsRequest{
+		Type:           "response.create",
+		Model:          "gpt-5.4",
+		Instructions:   "base",
+		PromptCacheKey: "cursor:conv-123",
+		Input: []map[string]any{
+			{"type": "message", "role": "user", "content": "inspect"},
+		},
+	}
+	store.Complete(ContinuationDecision{}, first, RunResult{
+		ResponseID: "resp-1",
+		OutputItems: []map[string]any{{
+			"id":        "fc-1",
+			"type":      "function_call",
+			"status":    "completed",
+			"call_id":   "call_pwd",
+			"name":      "shell_command",
+			"arguments": `{"command":"pwd","workdir":"/repo"}`,
+		}},
+	})
+
+	second := first
+	second.Input = []map[string]any{
+		{"type": "message", "role": "developer", "content": "reshaped cursor preamble"},
+		{"type": "message", "role": "user", "content": "inspect"},
+		{"type": "message", "role": "assistant", "content": []map[string]any{{"type": "output_text", "text": "I will inspect."}}},
+		{
+			"type":      "function_call",
+			"call_id":   "call_pwd",
+			"name":      "shell_command",
+			"arguments": `{"workdir":"/repo","command":"pwd"}`,
+		},
+		{
+			"type":    "function_call_output",
+			"call_id": "call_pwd",
+			"output":  "repo",
+		},
+	}
+	decision := store.Prepare(second)
+	if !decision.Hit {
+		t.Fatalf("expected continuation hit, miss_reason=%q", decision.MissReason)
+	}
+	if len(decision.IncrementalInput) != 1 || mapString(decision.IncrementalInput[0], "type") != "function_call_output" {
+		t.Fatalf("incremental_input=%v", decision.IncrementalInput)
 	}
 }
 
