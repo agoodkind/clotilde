@@ -42,6 +42,10 @@ type Event struct {
 	Bridge Bridge
 }
 
+type watchSignal struct {
+	Requested bool
+}
+
 // Watcher tracks the set of active bridges and emits Events on the
 // returned channel for every change. Callers should drain the channel
 // to keep the watcher responsive. Close() releases all resources.
@@ -53,8 +57,8 @@ type Watcher struct {
 	current map[string]Bridge // pid file name to Bridge
 
 	out  chan Event
-	stop chan struct{}
-	done chan struct{}
+	stop chan watchSignal
+	done chan watchSignal
 }
 
 // Start opens the watcher rooted at dir (typically
@@ -79,8 +83,8 @@ func Start(dir string) (*Watcher, error) {
 		notif:   notif,
 		current: make(map[string]Bridge),
 		out:     make(chan Event, 64),
-		stop:    make(chan struct{}),
-		done:    make(chan struct{}),
+		stop:    make(chan watchSignal),
+		done:    make(chan watchSignal),
 	}
 	go w.loop()
 	go w.initialScan()

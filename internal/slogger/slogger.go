@@ -152,6 +152,8 @@ func fileForRole(role ProcessRole) string {
 	return defaultTUIFile
 }
 
-type nopCloser struct{}
+type nopCloser struct {
+	Closed bool
+}
 
 func (nopCloser) Close() error { return nil }

@@ -342,7 +342,7 @@ func handleSearchConversation(ctx context.Context, req mcp.CallToolRequest) (*mc
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "result_id: %s (pass to clyde_analyze_results for follow-up analysis)\n\n", resultID)
-	sb.WriteString(fmt.Sprintf("Use clyde_get_context with session_name=%q and message_index=N to expand around any result.\n\n", name))
+	fmt.Fprintf(&sb, "Use clyde_get_context with session_name=%q and message_index=N to expand around any result.\n\n", name)
 	for _, r := range results {
 		if r.Summary != "" {
 			fmt.Fprintf(&sb, "**Found:** %s\n\n", r.Summary)
@@ -489,9 +489,7 @@ func loadMessages(name string) ([]transcript.Message, error) {
 
 func claudeTranscriptPath(homeDir, clydeRoot, sessionID string) string {
 	projectRoot := clydeRoot
-	if strings.HasSuffix(projectRoot, "/.claude/clyde") {
-		projectRoot = strings.TrimSuffix(projectRoot, "/.claude/clyde")
-	}
+	projectRoot = strings.TrimSuffix(projectRoot, "/.claude/clyde")
 	encoded := strings.ReplaceAll(projectRoot, "/", "-")
 	encoded = strings.ReplaceAll(encoded, ".", "-")
 	return homeDir + "/.claude/projects/" + encoded + "/" + sessionID + ".jsonl"

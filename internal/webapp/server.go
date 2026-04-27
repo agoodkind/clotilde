@@ -65,6 +65,8 @@ type Server struct {
 
 	mu       sync.Mutex
 	starting []startedSession
+	connMu   sync.Mutex
+	conns    map[net.Conn]http.ConnState
 }
 
 type startedSession struct {
@@ -115,7 +117,15 @@ func (s *Server) Start(ctx context.Context) error {
 // Daemon reload uses this to inherit the existing dashboard socket
 // without creating a bind gap.
 func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
-	srv := &http.Server{Addr: lis.Addr().String(), Handler: s.mux, ReadHeaderTimeout: 5 * time.Second}
+	s.connMu.Lock()
+	s.conns = make(map[net.Conn]http.ConnState)
+	s.connMu.Unlock()
+	srv := &http.Server{
+		Addr:              lis.Addr().String(),
+		Handler:           s.mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ConnState:         s.trackConnState,
+	}
 	s.srv = srv
 	s.log.Info("webapp listening", "addr", lis.Addr().String())
 	errCh := make(chan error, 1)
@@ -142,7 +152,53 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	s.srv.SetKeepAlivesEnabled(false)
+	s.closeTrackedConns(http.StateIdle)
 	return s.srv.Shutdown(ctx)
+}
+
+// Close force-closes all dashboard HTTP connections. Reload uses this
+// after a bounded drain so held keepalive connections cannot keep the
+// old daemon generation reachable indefinitely.
+func (s *Server) Close() error {
+	if s.srv == nil {
+		return nil
+	}
+	s.closeTrackedConns(http.StateNew, http.StateActive, http.StateIdle, http.StateHijacked)
+	return s.srv.Close()
+}
+
+func (s *Server) trackConnState(conn net.Conn, state http.ConnState) {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	if s.conns == nil {
+		s.conns = make(map[net.Conn]http.ConnState)
+	}
+	if state == http.StateClosed {
+		delete(s.conns, conn)
+		return
+	}
+	s.conns[conn] = state
+}
+
+func (s *Server) closeTrackedConns(states ...http.ConnState) {
+	if len(states) == 0 {
+		return
+	}
+	wanted := make(map[http.ConnState]bool, len(states))
+	for _, state := range states {
+		wanted[state] = true
+	}
+	var toClose []net.Conn
+	s.connMu.Lock()
+	for conn, state := range s.conns {
+		if wanted[state] {
+			toClose = append(toClose, conn)
+		}
+	}
+	s.connMu.Unlock()
+	for _, conn := range toClose {
+		_ = conn.Close()
+	}
 }
 
 func (s *Server) routes() *http.ServeMux {

@@ -41,9 +41,9 @@ func DirExists(path string) bool {
 	return pathInfo.IsDir()
 }
 
-// ReadJSON reads a JSON file and unmarshals it into the provided interface.
+// ReadJSON reads a JSON file and unmarshals it into the provided value.
 // Returns an error if reading or unmarshaling fails.
-func ReadJSON(path string, v any) error {
+func ReadJSON[T any](path string, v *T) error {
 	data, err := ReadFile(path)
 	if err != nil {
 		return err
@@ -51,11 +51,11 @@ func ReadJSON(path string, v any) error {
 	return json.Unmarshal(data, v)
 }
 
-// WriteJSON marshals the provided interface to JSON and writes it to a file.
+// WriteJSON marshals the provided value to JSON and writes it to a file.
 // Creates parent directories if they don't exist.
 // Uses indented formatting for readability.
 // Returns an error if marshaling or writing fails.
-func WriteJSON(path string, v any) error {
+func WriteJSON[T any](path string, v T) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
