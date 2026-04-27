@@ -35,6 +35,7 @@ type (
 	BodySummary         = adapteropenai.BodySummary
 	MsgSummary          = adapteropenai.MsgSummary
 	ToolSummary         = adapteropenai.ToolSummary
+	RequestDiscovery    = adapteropenai.RequestDiscovery
 )
 
 const (
@@ -48,4 +49,6 @@ var (
 	NormalizeContent    = adapteropenai.NormalizeContent
 	SummarizeChatBody   = adapteropenai.SummarizeChatBody
 	SummarizeChatRequest = adapteropenai.SummarizeChatRequest
+	DiscoverRequest     = adapteropenai.DiscoverRequest
+	HeaderNames         = adapteropenai.HeaderNames
 )
