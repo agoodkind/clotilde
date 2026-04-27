@@ -1,6 +1,11 @@
 package cmd
 
-import "log/slog"
+import (
+	"log/slog"
+	"os"
+
+	"goodkind.io/clyde/internal/session"
+)
 
 // InvocationMode describes how clyde should handle a given set of CLI args.
 type InvocationMode int
@@ -20,6 +25,10 @@ const (
 	// ModeResumeNoArgDashboard: bare -r, --resume, or `resume` with no target.
 	// main.go strips argv so the root Run opens the TUI (same as plain clyde).
 	ModeResumeNoArgDashboard
+
+	// ModeBasedirLaunch: user called `clyde <existing-directory>`.
+	// main.go opens a basedir-scoped dashboard instead of forwarding to claude.
+	ModeBasedirLaunch
 )
 
 // clydeSubcommands is the set of subcommand names that clyde owns.
@@ -52,6 +61,7 @@ var passthroughSubcommands = map[string]bool{
 //	<known clyde subcommand>             → ModeClyde       (no rewrite)
 //	<claude-internal subcommand>         → ModePassthrough (forward verbatim)
 //	--print / -p                         → ModePassthrough (non-interactive query)
+//	<single existing directory>          → ModeBasedirLaunch (basedir picker / new session)
 //	anything else (unknown flags/cmds)   → ModeClyde       (cobra; unknown → ForwardToClaudeThenDashboard)
 //
 // TTY versus pipe for forwarded invocations is not decided here; see
@@ -168,6 +178,21 @@ func ClassifyArgs(args []string) (mode InvocationMode, rewritten []string) {
 		return ModeClyde, args
 	}
 
+	if len(args) == 1 && isExistingDirectoryArg(first) {
+		canonical := session.CanonicalWorkspaceRoot(first)
+		slog.Info("cli.args.classify.decided",
+			"component", "cli",
+			"subcomponent", "dispatch",
+			"argc", len(args),
+			"first_arg", first,
+			"mode", "basedir_launch",
+			"decision", "single_existing_directory",
+			"basedir", canonical,
+			"rewritten_argc", 1,
+		)
+		return ModeBasedirLaunch, []string{canonical}
+	}
+
 	// ── Everything else ────────────────────────────────────────────────────────
 	// Includes unknown flags (--debug, --model used at top level, etc.) and
 	// unknown subcommands. Hand to cobra; Execute()'s unknown-command handler
@@ -185,4 +210,16 @@ func ClassifyArgs(args []string) (mode InvocationMode, rewritten []string) {
 		"is_resume", isResume,
 	)
 	return ModeClyde, args
+}
+
+func isExistingDirectoryArg(arg string) bool {
+	if arg == "" {
+		return false
+	}
+	canonical := session.CanonicalWorkspaceRoot(arg)
+	info, err := os.Stat(canonical)
+	if err != nil {
+		return false
+	}
+	return info.IsDir()
 }

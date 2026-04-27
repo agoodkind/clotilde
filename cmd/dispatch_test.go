@@ -1,20 +1,23 @@
 package cmd
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"goodkind.io/clyde/internal/session"
 )
 
 func TestClassifyArgs(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name            string
-		args            []string
-		wantMode        InvocationMode
-		wantRewritten   []string
-		rewrittenIsNil  bool
+		name           string
+		args           []string
+		wantMode       InvocationMode
+		wantRewritten  []string
+		rewrittenIsNil bool
 	}{
 		{
 			name:          "empty",
@@ -23,9 +26,9 @@ func TestClassifyArgs(t *testing.T) {
 			wantRewritten: nil,
 		},
 		{
-			name:          "bare_resume_subcommand",
-			args:          []string{"resume"},
-			wantMode:      ModeResumeNoArgDashboard,
+			name:           "bare_resume_subcommand",
+			args:           []string{"resume"},
+			wantMode:       ModeResumeNoArgDashboard,
 			rewrittenIsNil: true,
 		},
 		{
@@ -35,15 +38,15 @@ func TestClassifyArgs(t *testing.T) {
 			wantRewritten: []string{"resume", "my-session"},
 		},
 		{
-			name:          "bare_r_flag",
-			args:          []string{"-r"},
-			wantMode:      ModeResumeNoArgDashboard,
+			name:           "bare_r_flag",
+			args:           []string{"-r"},
+			wantMode:       ModeResumeNoArgDashboard,
 			rewrittenIsNil: true,
 		},
 		{
-			name:          "bare_resume_long_flag",
-			args:          []string{"--resume"},
-			wantMode:      ModeResumeNoArgDashboard,
+			name:           "bare_resume_long_flag",
+			args:           []string{"--resume"},
+			wantMode:       ModeResumeNoArgDashboard,
 			rewrittenIsNil: true,
 		},
 		{
@@ -83,4 +86,22 @@ func TestClassifyArgs(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestClassifyArgsBasedirLaunch(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	dirty := filepath.Join(dir, ".")
+	mode, rewritten := ClassifyArgs([]string{dirty})
+	require.Equal(t, ModeBasedirLaunch, mode)
+	require.Equal(t, []string{session.CanonicalWorkspaceRoot(dir)}, rewritten)
+}
+
+func TestClassifyArgsNonDirectoryStaysClydeFallback(t *testing.T) {
+	t.Parallel()
+
+	mode, rewritten := ClassifyArgs([]string{"some prompt"})
+	require.Equal(t, ModeClyde, mode)
+	require.Equal(t, []string{"some prompt"}, rewritten)
 }
