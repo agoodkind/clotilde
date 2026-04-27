@@ -27,7 +27,7 @@ anything else               -> cobra; unknown -> ForwardToClaudeThenDashboard (T
 
 `compact`, `daemon`, and `mcp` are **clyde-owned** names; the real `claude` binary also defines `compact`, `daemon`, and `mcp` with different behavior, so users who need the stock subcommands should invoke `claude` directly. After forward, `cmd/root.go` skips the post-claude TUI for `api`, `-p`/`--print`, and a set of common one-shot first-arg subcommands (aligned with Claude Code `cli.tsx` / `main.tsx`).
 
-Developer tooling: **`cmd/clyde-tui-qa`** drives the real TUI for QA (see the section near the end of this file). It is not part of the default user surface.
+Developer tooling: `**cmd/clyde-tui-qa`** drives the real TUI for QA (see the section near the end of this file). It is not part of the default user surface.
 
 The TUI is read-mostly with management actions wired via direct Go
 calls into the daemon: resume, delete, rename, view content, send-to,
@@ -53,7 +53,22 @@ Treat the TUI as a dumb renderer over daemon-owned and domain-owned state.
 - The TUI should consume already-shaped data models. If a screen needs “cleaner” or “smarter” data, fix the upstream producer and keep the renderer simple.
 - Prefer one canonical pipeline for conversation/plain-text views and reuse it everywhere: daemon details, MCP/session export, search snippets, and TUI transcript panes.
 
-## Architecture
+### Strict Type Hygiene
+
+This repo is pre-alpha. Do not preserve loose compatibility at the cost
+of type safety. When a boundary is vague, do the full faithful refactor
+and update callers instead of adding another escape hatch.
+
+- Do not introduce `any`, `interface{}`, `map[string]any`, `[]any`, or equivalent open-ended payloads in production code.
+- Do not use empty marker structs such as `struct{}` or empty JSON payloads such as `{}` to represent protocol messages, request params, response params, config sections, or domain state.
+- All wire, config, RPC, logging, and domain payload types must be deeply and fully enumerated with named structs, typed fields, typed slices, typed maps, and explicit enum-like string types where applicable.
+- If upstream data is a union, model the variants explicitly. If only some variants are currently supported, enumerate the supported variants and reject or ignore unsupported ones intentionally at the boundary.
+- If JSON must remain partially opaque for a real external contract, isolate that opacity at the smallest possible edge with a named type and a comment that cites the source contract. Do not let raw/dynamic values leak into business logic.
+- Prefer generated or researched source-of-truth schemas when available. For Codex, look under `research/codex/` and mirror the fully qualified app-server or Responses protocol types instead of inventing local loose maps.
+- Tests should assert the typed shape. Do not build test fixtures with `map[string]any` when the production code has or should have a concrete type.
+- Existing loose types are technical debt, not precedent. When touching a loose surface, either replace it with enumerated types in the same change or leave a narrow, explicit follow-up note if the refactor is larger than the active task.
+
+## Architecture 
 
 ### Core Concept
 
@@ -122,9 +137,9 @@ Each session is a folder in `.claude/clyde/sessions/<name>/`:
 }
 ```
 
-**Global config** (`internal/config/load.go`, `LoadGlobalOrDefault`): read from `$XDG_CONFIG_HOME/clyde/` (default `~/.config/clyde/`). **`config.toml` is preferred; `config.json` is used if TOML is absent.** `SaveGlobal` writes TOML only.
+**Global config** (`internal/config/load.go`, `LoadGlobalOrDefault`): read from `$XDG_CONFIG_HOME/clyde/` (default `~/.config/clyde/`). `**config.toml` is preferred; `config.json` is used if TOML is absent.** `SaveGlobal` writes TOML only.
 
-The `Config` struct in `internal/config/config.go` includes `defaults`, `profiles`, `logging`, `adapter`, `search`, and other sections. **`profiles` exists in the on-disk schema. No production code path reads `cfg.Profiles` outside config tests today**, so do not document a `clyde` CLI that applies a profile by name until that wiring lands.
+The `Config` struct in `internal/config/config.go` includes `defaults`, `profiles`, `logging`, `adapter`, `search`, and other sections. `**profiles` exists in the on-disk schema. No production code path reads `cfg.Profiles` outside config tests today**, so do not document a `clyde` CLI that applies a profile by name until that wiring lands.
 
 **Example profile-shaped fields** (for reference when authoring JSON or TOML by hand):
 
@@ -204,10 +219,10 @@ No matcher field - the single hook handles all sources (startup, resume, compact
 
 **Source-based dispatch:**
 
-- **`startup`**: New sessions. Outputs session name and context, saves transcript path.
-- **`resume`**: Resuming or fork flows. Outputs context when metadata has it.
-- **`compact`**: Session compaction. Defensive handler (Claude Code does not currently create a new UUID for `/compact`, but we handle it anyway in case behavior changes).
-- **`clear`**: Session clear. Updates metadata with new UUID and preserves old UUID in `previousSessionIds`.
+- `**startup`**: New sessions. Outputs session name and context, saves transcript path.
+- `**resume**`: Resuming or fork flows. Outputs context when metadata has it.
+- `**compact**`: Session compaction. Defensive handler (Claude Code does not currently create a new UUID for `/compact`, but we handle it anyway in case behavior changes).
+- `**clear**`: Session clear. Updates metadata with new UUID and preserves old UUID in `previousSessionIds`.
 
 **Forking with Claude Code (no `clyde fork` verb):**
 
@@ -225,12 +240,12 @@ No matcher field - the single hook handles all sources (startup, resume, compact
 - Priority 2: Read from `CLAUDE_ENV_FILE` (persisted by previous hook)
 - Priority 3: Reverse UUID lookup in sessions (searches current and previous IDs)
 
-4. Hook calls `session.AddPreviousSessionID()` to update metadata:
+1. Hook calls `session.AddPreviousSessionID()` to update metadata:
 
 - Appends current UUID to `previousSessionIds` array (idempotent)
 - Updates `sessionId` to new UUID
 
-5. Session name persists across multiple `/clear` operations
+1. Session name persists across multiple `/clear` operations
 
 **Note on `/compact`:** Currently, Claude Code does NOT create a new session UUID when `/compact` is run (only `/clear` does). However, the hook defensively handles `source: "compact"` identically to `source: "clear"` in case Claude Code's behavior changes in the future.
 
@@ -267,7 +282,7 @@ When deleting a session, remove:
 
 This ensures complete cleanup even after multiple `/clear` operations (and `/compact`, if Claude Code's behavior changes to create new UUIDs for compaction).
 
-### OpenAI compatible adapter
+### OpenAI compatible adapter ***IN FLUX THIS SECTION IS STALE****
 
 The daemon optionally hosts an OpenAI Chat Completions v1 HTTP surface under `internal/adapter/`. Incoming `model` strings resolve through a registry built from `[adapter]` and `[adapter.models]` in config (`internal/adapter/models.go`). Backends include direct Claude, Anthropic HTTP, configured shunts, and the local `claude` CLI fallback (`BackendFallback`). See `reasoning_effort` and family `efforts` in the adapter packages for how effort maps to wire format. Streaming and non streaming paths exist; tool calling, images, and embeddings policies are enforced in the dispatcher. There is no checked in `docs/openai-adapter.md`; read the code and config schema as the source of truth.
 
@@ -278,33 +293,50 @@ blind process restart. Keep these semantics intact when changing
 `internal/daemon/run.go`, `internal/adapter/`, or `internal/webapp/`:
 
 - Reload always re-execs the daemon's current `os.Executable()` path.
-  The client does not send an executable path.
+The client does not send an executable path.
 - The old daemon passes daemon-owned listener file descriptors to the
-  child with `exec.Cmd.ExtraFiles`: gRPC Unix socket, adapter TCP
-  listener when enabled, and webapp TCP listener when enabled.
+child with `exec.Cmd.ExtraFiles`: gRPC Unix socket, adapter TCP
+listener when enabled, and webapp TCP listener when enabled.
 - Listener addresses are part of the handoff contract. If adapter or
-  webapp host/port changed, reload must reject with a clear "full
-  restart required" error rather than rebinding.
+webapp host/port changed, reload must reject with a clear "full
+restart required" error rather than rebinding.
 - The child starts public listeners from inherited FDs first, reports
   readiness over the reload pipe, then waits to acquire
   `daemon.process.lock` before running exclusive background loops.
+- A reload child may serve the inherited daemon socket before it owns
+  `daemon.process.lock`, but it must not be allowed to initiate
+  another reload during that window. `ReloadDaemon` must reject with
+  `FailedPrecondition` until the generation owns the process lock, or
+  repeated reload calls can create a parent/child/child generation
+  chain.
 - After the child is healthy, the old daemon immediately stops
   accepting public traffic: adapter and webapp listener references
   are closed, keepalives are disabled, idle keepalive connections are
-  closed, and active HTTP handlers may finish until the drain
-  deadline. This is intentional. Existing TCP keepalive connections
-  cannot be transferred to the new Go HTTP server state, and leaving
-  them reusable lets clients such as Cloudflare Tunnel/Cursor keep
-  sending new requests to stale code. New TCP connections after reload
-  completion must be accepted only by the child generation.
+  closed, and active HTTP handlers may finish until the short HTTP
+  drain deadline. After that deadline, the old generation force-closes
+  any remaining adapter/webapp HTTP connections. This is intentional.
+  Existing TCP keepalive connections cannot be transferred to the new
+  Go HTTP server state, and leaving them reusable lets clients such as
+  Cloudflare Tunnel/Cursor keep sending new requests to stale code. New
+  TCP connections after reload completion must be accepted only by the
+  child generation.
 - Existing gRPC streams stay on the old process until they finish
   because reload uses `grpc.Server.GracefulStop()`. This includes
-  in-flight compaction preview/apply streams.
+  in-flight compaction preview/apply streams. The gRPC drain still has
+  a long hard cap so stale streaming clients cannot keep old daemon
+  generations and `daemon.process.lock` alive indefinitely.
+- After child readiness, the old generation stops exclusive subsystems
+  and releases `daemon.process.lock` before continuing gRPC drain. This
+  lets the child become the reload-capable owner while old accepted
+  streams finish. Reload clients keep `daemon.reload.lock` and retry
+  `FailedPrecondition` by reconnecting, so concurrent reload calls
+  serialize and the newest lock-owning generation performs the next
+  reload.
 - Preserve active session runtime dirs while the old process drains so
-  wrappers and remote-control sockets can reacquire against the child.
+wrappers and remote-control sockets can reacquire against the child.
 - Concurrent reloads should remain serialized by the reload lock; a
-  queued reload reconnects to the latest daemon generation, giving
-  last-writer-wins behavior.
+queued reload reconnects to the latest daemon generation, giving
+last-writer-wins behavior.
 
 ### Remote Control (`--remote-control`)
 
@@ -439,7 +471,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 
 `gklog.WithLogger(ctx, log)` stores the logger on the context. `gklog.LoggerFromContext(ctx)` returns that logger, or `slog.Default()` when none was stored. `gklog.L(ctx)` is a short alias.
 
-### What to log
+### What to log **THIS LIST IS NON-EXHAUSTIVE**
 
 Prefer events at these points:
 
@@ -452,21 +484,23 @@ Prefer events at these points:
 
 Prefer fields that make those events queryable and comparable:
 
-| Key | Meaning |
-| --- | --- |
-| `component` | Top-level subsystem (`api`, `worker`, `store`, `adapter`) |
-| `subcomponent` | Narrower emitter inside that subsystem |
-| `request_id` | Correlation id for one incoming request or job |
-| `trace_id` | Distributed trace or upstream correlation id when available |
-| `session` | Human-oriented session, tenant, or job name when relevant |
-| `session_id` | Stable UUID or internal identifier when relevant |
-| `model` | Resolved model or backend choice when applicable |
-| `duration_ms` | Elapsed latency in milliseconds |
-| `attempt` | Retry number or delivery attempt |
-| `count` | Item count for batch work |
-| `path` | File or route involved in the operation |
-| `status` | Outcome summary (`ok`, `retry`, `timeout`, `dropped`) |
-| `err` | Error value on `Warn` or `Error` events |
+
+| Key            | Meaning                                                     |
+| -------------- | ----------------------------------------------------------- |
+| `component`    | Top-level subsystem (`api`, `worker`, `store`, `adapter`)   |
+| `subcomponent` | Narrower emitter inside that subsystem                      |
+| `request_id`   | Correlation id for one incoming request or job              |
+| `trace_id`     | Distributed trace or upstream correlation id when available |
+| `session`      | Human-oriented session, tenant, or job name when relevant   |
+| `session_id`   | Stable UUID or internal identifier when relevant            |
+| `model`        | Resolved model or backend choice when applicable            |
+| `duration_ms`  | Elapsed latency in milliseconds                             |
+| `attempt`      | Retry number or delivery attempt                            |
+| `count`        | Item count for batch work                                   |
+| `path`         | File or route involved in the operation                     |
+| `status`       | Outcome summary (`ok`, `retry`, `timeout`, `dropped`)       |
+| `err`          | Error value on `Warn` or `Error` events                     |
+
 
 Use the event message as the event name. Prefer a stable dot-separated form such as `http.request.completed`, `worker.job.retried`, or `store.snapshot.loaded`.
 
@@ -515,7 +549,7 @@ Do not bypass the structured logger for production diagnostics.
 Reject or avoid:
 
 - `fmt.Print`, `fmt.Println`, `fmt.Printf` for operational logging
-- `log.Print*`, `log.Fatal*`, `log.Panic*` from the stdlib `log` package for operational logging
+- `log.Print`*, `log.Fatal*`, `log.Panic*` from the stdlib `log` package for operational logging
 
 Allowed:
 
@@ -535,35 +569,3 @@ The audit should check at least:
 - hot paths keep verbose detail behind `Debug` or a similar gate
 
 A clean audit is not proof that observability is complete. Use incident retrospectives, failing tests, and real debugging sessions to decide where the next fields or events should go.
-
-## TUI QA harness (`clyde-tui-qa`)
-
-The **`cmd/clyde-tui-qa`** binary drives the **real** `clyde` TUI (not the in-memory `SimulationScreen` tests). Use it to iterate on UX and flows the way a user would: launch, read the screen, send keys or mouse bytes, repeat.
-
-### Drivers
-
-| Driver  | Role                                                                                                                              |
-| ------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `tmux`  | Fast; `tmux` must be on `PATH`. Good default for agents and CI-style smoke.                                                       |
-| `pty`   | In-process PTY plus `vt10x` parsing; canonical terminal semantics; use the **`repl`** subcommand (single long-lived process).     |
-| `iterm` | Real iTerm2 via AppleScript (macOS only). Multi-invocation subcommands need **`--iterm-session-id`** from `session-start` stdout. |
-
-### Typical agent loop
-
-1. Build: `make tui-qa` or `make build build-tui-qa`.
-2. Optional hermetic tree: `dist/clyde-tui-qa env-print --isolated /tmp/clyde-tuiqa-$$` and `source` / export those lines, or pass **`--isolated`** on **`repl`** / **`session-start`** (sets XDG and `HOME` under that root).
-3. Optional **`--seed`** with **`--isolated`** to create one demo session row (`tuiqa-demo-01`).
-4. Run **`repl`** with **`--disable-daemon`** (default) unless you intentionally test the daemon.
-5. In **`repl`**, use **`capture`** to dump the pane, **`send`** with tmux-style tokens (`Enter`, `Tab`, `C-c`, etc.), **`raw`** with hex for SGR mouse or escapes, **`sleep MS`**, **`quit`**.
-
-### One-shot tmux workflow
-
-`session-start` prints the tmux session name. Pass **`--session`** to **`session-capture`**, **`session-send`**, **`session-stop`** in follow-up invocations.
-
-### iTerm follow-up invocations
-
-`session-start` prints the **iTerm session id** (AppleScript). Pass **`--iterm-session-id`** (or **`CLYDE_TUIQA_ITERM_ID`**) to **`session-capture`** / **`session-send`** / **`session-stop`**.
-
-### Regression tests
-
-Keep structural UI regression in **`internal/ui/*_test.go`** (standard `testing` tests and `tcell.SimulationScreen`). The harness is for **live** subprocess and terminal behavior.
