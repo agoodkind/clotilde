@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
@@ -90,11 +91,21 @@ func FunctionToolSpec(name, description string, parameters json.RawMessage, stri
 func ShellToolMode(modelName string) string {
 	modelName = strings.ToLower(strings.TrimSpace(modelName))
 	switch {
+	case strings.HasPrefix(modelName, "gpt-"):
+		return "shell_command"
 	case strings.Contains(modelName, "shell-command"):
 		return "shell_command"
 	default:
 		return "local_shell"
 	}
+}
+
+func ShellToolModeForModel(model adaptermodel.ResolvedModel) string {
+	modelName := strings.TrimSpace(model.ClaudeModel)
+	if modelName == "" {
+		modelName = model.Alias
+	}
+	return ShellToolMode(modelName)
 }
 
 func NativeApplyPatchSpec() map[string]any {

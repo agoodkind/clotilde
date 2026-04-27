@@ -482,12 +482,12 @@ func TestBuildCodexRequestUsesNativeCodexToolsForShellAndApplyPatch(t *testing.T
 	}
 
 	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
-	var sawLocalShell, sawApplyPatch, sawReadFile bool
+	var sawShellCommand, sawApplyPatch, sawReadFile bool
 	for _, raw := range out.Tools {
 		tool, _ := raw.(map[string]any)
 		switch {
-		case tool["type"] == "local_shell":
-			sawLocalShell = true
+		case tool["type"] == "function" && tool["name"] == "shell_command":
+			sawShellCommand = true
 		case tool["type"] == "custom" && tool["name"] == "apply_patch":
 			sawApplyPatch = true
 			format, _ := tool["format"].(map[string]any)
@@ -503,8 +503,8 @@ func TestBuildCodexRequestUsesNativeCodexToolsForShellAndApplyPatch(t *testing.T
 			t.Fatalf("native tool was also emitted as generic function: %v", tool)
 		}
 	}
-	if !sawLocalShell || !sawApplyPatch || !sawReadFile {
-		t.Fatalf("native tools local_shell=%v apply_patch=%v read_file=%v tools=%v", sawLocalShell, sawApplyPatch, sawReadFile, out.Tools)
+	if !sawShellCommand || !sawApplyPatch || !sawReadFile {
+		t.Fatalf("native tools shell_command=%v apply_patch=%v read_file=%v tools=%v", sawShellCommand, sawApplyPatch, sawReadFile, out.Tools)
 	}
 }
 
@@ -603,24 +603,14 @@ func TestBuildCodexRequestReplaysNativeShellAndApplyPatchHistory(t *testing.T) {
 	var sawShellCall, sawShellOutput, sawPatchCall, sawPatchOutput bool
 	for _, item := range out.Input {
 		switch codexItemTypeString(item) {
-		case "local_shell_call":
-			action, _ := item["action"].(map[string]any)
-			if action["type"] != "exec" {
-				t.Fatalf("shell action=%v", action)
-			}
-			command, _ := action["command"].([]string)
-			if len(command) != 3 || command[2] != "pwd" {
-				t.Fatalf("shell command=%v", command)
-			}
-			if action["working_directory"] != "/repo" {
-				t.Fatalf("shell action=%v", action)
-			}
-			sawShellCall = true
 		case "function_call":
 			if item["name"] != "shell_command" {
 				continue
 			}
-			t.Fatalf("shell replay used generic function call: %v", item)
+			if !strings.Contains(item["arguments"].(string), `"command":"pwd"`) {
+				t.Fatalf("shell command call=%v", item)
+			}
+			sawShellCall = true
 		case "function_call_output":
 			if item["call_id"] == "call_shell" {
 				sawShellOutput = true
@@ -725,14 +715,11 @@ func TestBuildCodexRequestPreservesResponsesInputToolHistory(t *testing.T) {
 				}
 			case "call_shell":
 				sawShellCommand = true
-				t.Fatalf("shell replay used generic function call: %v", item)
-			}
-		case "local_shell_call":
-			if item["call_id"] == "call_shell" {
-				sawShellCommand = true
-				action, _ := item["action"].(map[string]any)
-				if action["working_directory"] != "/repo" {
-					t.Fatalf("shell action=%v", action)
+				if item["name"] != "shell_command" {
+					t.Fatalf("shell call name=%v", item["name"])
+				}
+				if !strings.Contains(item["arguments"].(string), `"command":"pwd"`) {
+					t.Fatalf("shell arguments=%v", item["arguments"])
 				}
 			}
 		case "function_call_output":

@@ -18,24 +18,23 @@ import (
 type ResponseCreateClientMetadata map[string]string
 
 type ResponseCreateWsRequest struct {
-	Type                 string                       `json:"type"`
-	Model                string                       `json:"model,omitempty"`
-	Instructions         string                       `json:"instructions,omitempty"`
-	Input                []map[string]any             `json:"input,omitempty"`
-	Tools                []any                        `json:"tools,omitempty"`
-	ToolChoice           string                       `json:"tool_choice,omitempty"`
-	ParallelToolCalls    bool                         `json:"parallel_tool_calls,omitempty"`
-	Reasoning            *Reasoning                   `json:"reasoning,omitempty"`
-	Include              []string                     `json:"include,omitempty"`
-	ServiceTier          string                       `json:"service_tier,omitempty"`
-	PromptCacheKey       string                       `json:"prompt_cache_key,omitempty"`
-	PromptCacheRetention string                       `json:"prompt_cache_retention,omitempty"`
-	Text                 any                          `json:"text,omitempty"`
-	Truncation           string                       `json:"truncation,omitempty"`
-	ClientMetadata       ResponseCreateClientMetadata `json:"client_metadata,omitempty"`
-	PreviousResponseID   string                       `json:"previous_response_id,omitempty"`
-	Generate             *bool                        `json:"generate,omitempty"`
-	MaxCompletion        *int                         `json:"max_completion_tokens,omitempty"`
+	Type               string                       `json:"type"`
+	Model              string                       `json:"model,omitempty"`
+	Instructions       string                       `json:"instructions,omitempty"`
+	Input              []map[string]any             `json:"input,omitempty"`
+	Tools              []any                        `json:"tools,omitempty"`
+	ToolChoice         string                       `json:"tool_choice,omitempty"`
+	ParallelToolCalls  bool                         `json:"parallel_tool_calls,omitempty"`
+	Reasoning          *Reasoning                   `json:"reasoning,omitempty"`
+	Store              bool                         `json:"store"`
+	Stream             bool                         `json:"stream"`
+	Include            []string                     `json:"include,omitempty"`
+	ServiceTier        string                       `json:"service_tier,omitempty"`
+	PromptCacheKey     string                       `json:"prompt_cache_key,omitempty"`
+	Text               any                          `json:"text,omitempty"`
+	ClientMetadata     ResponseCreateClientMetadata `json:"client_metadata,omitempty"`
+	PreviousResponseID string                       `json:"previous_response_id,omitempty"`
+	Generate           *bool                        `json:"generate,omitempty"`
 }
 
 var ErrWebsocketFallbackToHTTP = errors.New("codex websocket fallback to http")
@@ -44,22 +43,21 @@ const defaultWebsocketPrewarmTimeout = 1500 * time.Millisecond
 
 func ResponseCreateRequestFromHTTP(req HTTPTransportRequest) ResponseCreateWsRequest {
 	return ResponseCreateWsRequest{
-		Type:                 "response.create",
-		Model:                req.Model,
-		Instructions:         req.Instructions,
-		Input:                req.Input,
-		Tools:                req.Tools,
-		ToolChoice:           req.ToolChoice,
-		ParallelToolCalls:    req.ParallelToolCalls,
-		Reasoning:            req.Reasoning,
-		Include:              req.Include,
-		ServiceTier:          req.ServiceTier,
-		PromptCacheKey:       req.PromptCache,
-		PromptCacheRetention: req.PromptCacheRetention,
-		Text:                 req.Text,
-		Truncation:           req.Truncation,
-		ClientMetadata:       ResponseCreateClientMetadata(req.ClientMetadata),
-		MaxCompletion:        req.MaxCompletion,
+		Type:              "response.create",
+		Model:             req.Model,
+		Instructions:      req.Instructions,
+		Input:             req.Input,
+		Tools:             req.Tools,
+		ToolChoice:        req.ToolChoice,
+		ParallelToolCalls: req.ParallelToolCalls,
+		Reasoning:         req.Reasoning,
+		Store:             req.Store,
+		Stream:            req.Stream,
+		Include:           req.Include,
+		ServiceTier:       req.ServiceTier,
+		PromptCacheKey:    req.PromptCache,
+		Text:              req.Text,
+		ClientMetadata:    ResponseCreateClientMetadata(req.ClientMetadata),
 	}
 }
 
@@ -120,6 +118,15 @@ func websocketMessageToSyntheticSSE(message []byte) ([]byte, error) {
 	kind, _ := raw["type"].(string)
 	if kind == "" {
 		return nil, fmt.Errorf("codex websocket message missing type")
+	}
+	if kind == "error" {
+		msg := "codex websocket error"
+		if errObj, _ := raw["error"].(map[string]any); errObj != nil {
+			if m, _ := errObj["message"].(string); strings.TrimSpace(m) != "" {
+				msg = m
+			}
+		}
+		return nil, fmt.Errorf("%s", msg)
 	}
 	var b bytes.Buffer
 	_, _ = fmt.Fprintf(&b, "event: %s\n", kind)
@@ -203,7 +210,6 @@ func logWebsocketPrepared(ctx context.Context, cfg WebsocketTransportConfig, pay
 	telemetry.UpstreamModel = payload.Model
 	telemetry.Transport = "responses_websocket"
 	telemetry.ServiceTier = payload.ServiceTier
-	telemetry.MaxCompletion = payload.MaxCompletion
 	telemetry.PromptCacheKey = payload.PromptCacheKey
 	telemetry.ClientMetadata = map[string]string(payload.ClientMetadata)
 	telemetry.InputCount = len(payload.Input)

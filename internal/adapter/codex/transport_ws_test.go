@@ -17,7 +17,6 @@ import (
 )
 
 func TestResponseCreateRequestFromHTTPUsesResponseCreateShape(t *testing.T) {
-	maxCompletion := 2048
 	req := HTTPTransportRequest{
 		Model:             "gpt-5.4",
 		Instructions:      "base instructions",
@@ -30,7 +29,8 @@ func TestResponseCreateRequestFromHTTPUsesResponseCreateShape(t *testing.T) {
 		ServiceTier:       "priority",
 		PromptCache:       "cursor:conv-123",
 		ClientMetadata:    map[string]string{"x-codex-installation-id": "acct-123"},
-		MaxCompletion:     &maxCompletion,
+		Store:             false,
+		Stream:            true,
 	}
 
 	ws := ResponseCreateRequestFromHTTP(req)
@@ -40,8 +40,11 @@ func TestResponseCreateRequestFromHTTPUsesResponseCreateShape(t *testing.T) {
 	if ws.ServiceTier != "priority" {
 		t.Fatalf("service_tier=%q want priority", ws.ServiceTier)
 	}
-	if ws.MaxCompletion == nil || *ws.MaxCompletion != maxCompletion {
-		t.Fatalf("max_completion_tokens=%v want %d", ws.MaxCompletion, maxCompletion)
+	if ws.Store {
+		t.Fatalf("store=%v want false", ws.Store)
+	}
+	if !ws.Stream {
+		t.Fatalf("stream=%v want true", ws.Stream)
 	}
 
 	encoded, err := MarshalResponseCreateWsRequest(ws)
@@ -58,8 +61,11 @@ func TestResponseCreateRequestFromHTTPUsesResponseCreateShape(t *testing.T) {
 	if got, _ := payload["service_tier"].(string); got != "priority" {
 		t.Fatalf("serialized service_tier=%q want priority", got)
 	}
-	if got, _ := payload["max_completion_tokens"].(float64); int(got) != maxCompletion {
-		t.Fatalf("serialized max_completion_tokens=%v want %d", payload["max_completion_tokens"], maxCompletion)
+	if got, ok := payload["store"].(bool); !ok || got {
+		t.Fatalf("serialized store=%v want false", payload["store"])
+	}
+	if got, ok := payload["stream"].(bool); !ok || !got {
+		t.Fatalf("serialized stream=%v want true", payload["stream"])
 	}
 }
 
@@ -242,6 +248,48 @@ func TestRunWebsocketTransportParsesTextAndCompletion(t *testing.T) {
 	}
 	if got := content.String(); got != "hello world" {
 		t.Fatalf("content=%q want hello world", got)
+	}
+}
+
+func TestRunWebsocketTransportReturnsTopLevelErrorFrame(t *testing.T) {
+	t.Parallel()
+
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade: %v", err)
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Fatalf("read request: %v", err)
+		}
+		payload, err := json.Marshal(map[string]any{
+			"type": "error",
+			"error": map[string]any{
+				"message": "Unsupported parameter: prompt_cache_retention",
+				"type":    "invalid_request_error",
+			},
+		})
+		if err != nil {
+			t.Fatalf("marshal error frame: %v", err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+			t.Fatalf("write error frame: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	_, err := RunWebsocketTransport(context.Background(), WebsocketTransportConfig{
+		URL:       "ws" + strings.TrimPrefix(server.URL, "http"),
+		Token:     "test-token",
+		RequestID: "req-ws",
+		Alias:     "gpt-5.4",
+	}, ResponseCreateWsRequest{Type: "response.create"}, func(adapteropenai.StreamChunk) error {
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "Unsupported parameter: prompt_cache_retention") {
+		t.Fatalf("err=%v want upstream websocket error", err)
 	}
 }
 
@@ -545,6 +593,8 @@ func TestCodexTransportParityMatrixSerialization(t *testing.T) {
 		ToolChoice:           "auto",
 		ParallelToolCalls:    true,
 		Reasoning:            &Reasoning{Effort: "medium"},
+		Store:                false,
+		Stream:               true,
 		Include:              []string{"reasoning.encrypted_content"},
 		ServiceTier:          "priority",
 		PromptCache:          "cursor:conv-123",
@@ -599,14 +649,16 @@ func TestCodexTransportParityMatrixSerialization(t *testing.T) {
 	if got, _ := wsPayload["service_tier"].(string); got != "priority" {
 		t.Fatalf("ws service_tier=%q want priority", got)
 	}
-	if got, _ := wsPayload["max_completion_tokens"].(float64); int(got) != maxCompletion {
-		t.Fatalf("ws max_completion_tokens=%v want %d", wsPayload["max_completion_tokens"], maxCompletion)
+	for _, key := range []string{"max_completion_tokens", "prompt_cache_retention", "truncation"} {
+		if _, ok := wsPayload[key]; ok {
+			t.Fatalf("ws payload included HTTP-only key %q: %v", key, wsPayload)
+		}
 	}
-	if got, _ := wsPayload["prompt_cache_retention"].(string); got != "24h" {
-		t.Fatalf("ws prompt_cache_retention=%q want 24h", got)
+	if got, ok := wsPayload["store"].(bool); !ok || got {
+		t.Fatalf("ws store=%v want false", wsPayload["store"])
 	}
-	if got, _ := wsPayload["truncation"].(string); got != "auto" {
-		t.Fatalf("ws truncation=%q want auto", got)
+	if got, ok := wsPayload["stream"].(bool); !ok || !got {
+		t.Fatalf("ws stream=%v want true", wsPayload["stream"])
 	}
 	text, _ = wsPayload["text"].(map[string]any)
 	if text["verbosity"] != "high" {

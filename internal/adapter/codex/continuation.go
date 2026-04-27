@@ -159,7 +159,6 @@ func continuationConfigFingerprint(req ResponseCreateWsRequest) string {
 		PromptCacheKey    string                       `json:"prompt_cache_key,omitempty"`
 		Text              any                          `json:"text,omitempty"`
 		ClientMetadata    ResponseCreateClientMetadata `json:"client_metadata,omitempty"`
-		MaxCompletion     *int                         `json:"max_completion_tokens,omitempty"`
 	}
 	raw, _ := json.Marshal(fingerprintRequest{
 		Type:              req.Type,
@@ -174,7 +173,6 @@ func continuationConfigFingerprint(req ResponseCreateWsRequest) string {
 		PromptCacheKey:    req.PromptCacheKey,
 		Text:              req.Text,
 		ClientMetadata:    req.ClientMetadata,
-		MaxCompletion:     req.MaxCompletion,
 	})
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:16])

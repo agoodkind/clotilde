@@ -36,6 +36,10 @@ func RunDirect(
 	}
 	transportPayload := BuildRequest(req, model, effort)
 	if cfg.WebsocketEnabled {
+		conversationID := strings.TrimSpace(transportPayload.PromptCache)
+		if conversationID != "" {
+			transportPayload.ClientMetadata = ClientMetadata(cfg.AccountID, CodexWindowID(conversationID))
+		}
 		wsReq := ResponseCreateRequestFromHTTP(transportPayload)
 		fullWSReq := wsReq
 		turnState := NewTurnState()
@@ -63,7 +67,7 @@ func RunDirect(
 			AccountID:      cfg.AccountID,
 			RequestID:      cfg.RequestID,
 			Alias:          model.Alias,
-			ConversationID: strings.TrimSpace(transportPayload.PromptCache),
+			ConversationID: conversationID,
 			TurnState:      turnState,
 			Prewarm:        strings.TrimSpace(wsReq.PreviousResponseID) == "",
 		}, wsReq, emit)

@@ -65,6 +65,7 @@ func BuildRequest(req adapteropenai.ChatRequest, model adaptermodel.ResolvedMode
 	if modelName == "" {
 		modelName = model.Alias
 	}
+	shellMode := ShellToolModeForModel(model)
 	lastUserIdx := -1
 	for i, msg := range req.Messages {
 		if strings.EqualFold(msg.Role, "user") {
@@ -87,7 +88,7 @@ func BuildRequest(req adapteropenai.ChatRequest, model adaptermodel.ResolvedMode
 		}
 		return contextual
 	}
-	if rawInput, ok := inputFromResponsesInput(req.Input, modelName, workspacePath, &systemSections, buildContextual); ok {
+	if rawInput, ok := inputFromResponsesInput(req.Input, shellMode, workspacePath, &systemSections, buildContextual); ok {
 		input = rawInput
 	} else {
 		insertedContext := false
@@ -109,7 +110,7 @@ func BuildRequest(req adapteropenai.ChatRequest, model adaptermodel.ResolvedMode
 						callID = fmt.Sprintf("call_%d", tc.Index)
 					}
 					toolCallNames[callID] = ToolCallName(tc)
-					input = append(input, FunctionCallItem(tc, ShellToolMode(modelName)))
+					input = append(input, FunctionCallItem(tc, shellMode))
 				}
 				if text != "" {
 					input = append(input, MessageContent("assistant", "output_text", text))
@@ -170,7 +171,7 @@ func BuildRequest(req adapteropenai.ChatRequest, model adaptermodel.ResolvedMode
 		Text:                 outputControls.Text,
 		Truncation:           outputControls.Truncation,
 		Input:                input,
-		Tools:                toolSpecs(req, modelName),
+		Tools:                toolSpecs(req, shellMode),
 		ToolChoice:           "auto",
 		ParallelToolCalls:    parallelToolCalls(req),
 	}
@@ -226,7 +227,7 @@ func requestTools(req adapteropenai.ChatRequest) []adapteropenai.Tool {
 	return tools
 }
 
-func toolSpecs(req adapteropenai.ChatRequest, modelName string) []any {
+func toolSpecs(req adapteropenai.ChatRequest, shellMode string) []any {
 	tools := requestTools(req)
 	if len(tools) == 0 {
 		return nil
@@ -234,7 +235,6 @@ func toolSpecs(req adapteropenai.ChatRequest, modelName string) []any {
 	out := make([]any, 0, len(tools))
 	emittedNativeShell := false
 	emittedNativeApplyPatch := false
-	shellMode := ShellToolMode(modelName)
 	for _, tool := range tools {
 		toolName := strings.TrimSpace(tool.Function.Name)
 		if IsShellToolName(toolName) {
@@ -360,7 +360,7 @@ func FunctionCallOutputItem(callID, text string) map[string]any {
 	}
 }
 
-func functionCallFromResponsesItem(item map[string]any, modelName, workspacePath string) (map[string]any, string) {
+func functionCallFromResponsesItem(item map[string]any, shellMode, workspacePath string) (map[string]any, string) {
 	callID := mapString(item, "call_id")
 	name := mapString(item, "name")
 	args := rewriteWorkspacePath(rawString(item, "arguments"), workspacePath)
@@ -372,12 +372,12 @@ func functionCallFromResponsesItem(item map[string]any, modelName, workspacePath
 			Arguments: args,
 		},
 	}
-	return functionCallItem(tc, ShellToolMode(modelName)), tc.Function.Name
+	return functionCallItem(tc, shellMode), tc.Function.Name
 }
 
 func inputFromResponsesInput(
 	raw json.RawMessage,
-	modelName string,
+	shellMode string,
 	workspacePath string,
 	developerSections *[]string,
 	buildContextual func() []map[string]any,
@@ -421,7 +421,7 @@ func inputFromResponsesInput(
 				input = append(input, MessageContent("assistant", "output_text", text))
 			}
 		case itemType == "function_call":
-			call, toolName := functionCallFromResponsesItem(item, modelName, workspacePath)
+			call, toolName := functionCallFromResponsesItem(item, shellMode, workspacePath)
 			if callID := mapString(item, "call_id"); callID != "" {
 				toolCallNames[callID] = toolName
 			}
