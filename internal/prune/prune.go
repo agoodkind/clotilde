@@ -129,7 +129,7 @@ func deleteTrackedSession(
 			"component", "prune",
 			"session", sess.Name,
 			"session_id", sess.Metadata.SessionID,
-			slog.Any("err", err),
+			"err", err,
 		)
 	} else {
 		allDeletedFiles.Transcript = append(allDeletedFiles.Transcript, deleted.Transcript...)
@@ -145,7 +145,7 @@ func deleteTrackedSession(
 				"component", "prune",
 				"session", sess.Name,
 				"previous_session_id", previousSessionID,
-				slog.Any("err", err),
+				"err", err,
 			)
 		} else {
 			allDeletedFiles.Transcript = append(allDeletedFiles.Transcript, deleted.Transcript...)
@@ -156,14 +156,14 @@ func deleteTrackedSession(
 	if ok, derr := daemon.DeleteSessionViaDaemon(ctx, sess.Name); ok {
 		_ = derr
 	} else if err := store.Delete(sess.Name); err != nil {
-		log.Error("prune.delete.folder_failed", "component", "prune", "session", sess.Name, slog.Any("err", err))
+		log.Error("prune.delete.folder_failed", "component", "prune", "session", sess.Name, "err", err)
 		return fmt.Errorf("failed to delete session: %w", err)
 	}
 
 	if sess.Metadata.HasCustomOutputStyle {
 		if err := outputstyle.DeleteCustomStyleFile(config.GlobalOutputStyleRoot(), sess.Name); err != nil {
 			_, _ = fmt.Fprintln(out, ui.Warning(fmt.Sprintf("Failed to delete output style file: %v", err)))
-			log.Error("prune.delete.style_failed", "component", "prune", "session", sess.Name, slog.Any("err", err))
+			log.Error("prune.delete.style_failed", "component", "prune", "session", sess.Name, "err", err)
 		}
 	}
 

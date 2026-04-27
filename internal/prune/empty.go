@@ -111,7 +111,7 @@ func PruneEmpty(
 
 	hits, reasons, err := findEmptySessions(store, settings)
 	if err != nil {
-		log.Error("prune.empty.list_failed", "component", "prune", slog.Any("err", err))
+		log.Error("prune.empty.list_failed", "component", "prune", "err", err)
 		return Result{}, err
 	}
 
@@ -157,15 +157,15 @@ func PruneEmpty(
 	var failures []DeleteFailure
 	pruned := 0
 	for _, sess := range hits {
-		log.Info("prune.empty.deleting", "component", "prune", "session", sess.Name)
+		log.Debug("prune.empty.deleting", "component", "prune", "session", sess.Name)
 		if err := deleteTrackedSession(ctx, log, out, sess, store); err != nil {
 			_, _ = fmt.Fprintf(out, "  FAIL %s: %v\n", sess.Name, err)
-			log.Error("prune.empty.delete_failed", "component", "prune", "session", sess.Name, slog.Any("err", err))
+			log.Error("prune.empty.delete_failed", "component", "prune", "session", sess.Name, "err", err)
 			failures = append(failures, DeleteFailure{Target: sess.Name, Err: err})
 			continue
 		}
 		pruned++
-		log.Info("prune.empty.deleted", "component", "prune", "session", sess.Name)
+		log.Debug("prune.empty.deleted", "component", "prune", "session", sess.Name)
 	}
 
 	_, _ = fmt.Fprintf(out, "\nDeleted %d of %d empty sessions.\n", pruned, len(hits))

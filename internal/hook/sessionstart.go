@@ -53,7 +53,7 @@ func ProcessSessionStart(
 		log.Error("hook.sessionstart.read_failed",
 			"component", "hook",
 			"subject", "sessionstart",
-			slog.Any("err", err),
+			"err", err,
 		)
 		return Result{}, fmt.Errorf("failed to read hook input: %w", err)
 	}
@@ -63,7 +63,7 @@ func ProcessSessionStart(
 		log.Error("hook.sessionstart.parse_failed",
 			"component", "hook",
 			"subject", "sessionstart",
-			slog.Any("err", err),
+			"err", err,
 		)
 		return Result{}, fmt.Errorf("failed to parse hook input: %w", err)
 	}
@@ -81,7 +81,7 @@ func ProcessSessionStart(
 			"component", "hook",
 			"subject", "sessionstart",
 			"session_id", hookData.SessionID,
-			slog.Any("err", err),
+			"err", err,
 		)
 		_, _ = fmt.Fprintf(errOut, "Warning: failed to log event: %v\n", err)
 	}
@@ -137,7 +137,7 @@ func ProcessSessionStart(
 			log.Error("hook.sessionstart.compact_failed",
 				"component", "hook",
 				"subject", "sessionstart",
-				slog.Any("err", err),
+				"err", err,
 			)
 			return res, err
 		}
@@ -146,7 +146,7 @@ func ProcessSessionStart(
 			log.Error("hook.sessionstart.clear_failed",
 				"component", "hook",
 				"subject", "sessionstart",
-				slog.Any("err", err),
+				"err", err,
 			)
 			return res, err
 		}

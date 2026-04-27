@@ -60,19 +60,19 @@ func PruneAutoname(
 
 	home, err := os.UserHomeDir()
 	if err != nil {
-		log.Error("prune.autoname.home_failed", "component", "prune", slog.Any("err", err))
+		log.Error("prune.autoname.home_failed", "component", "prune", "err", err)
 		return Result{}, err
 	}
 	projectsDir := config.ClaudeProjectsRoot(home)
 	results, err := session.ScanProjects(projectsDir)
 	if err != nil {
-		log.Error("prune.autoname.scan_failed", "component", "prune", slog.Any("err", err))
+		log.Error("prune.autoname.scan_failed", "component", "prune", "err", err)
 		return Result{}, err
 	}
 
 	knownPaths, err := buildKnownTranscriptPaths(store)
 	if err != nil {
-		log.Error("prune.autoname.known_paths_failed", "component", "prune", slog.Any("err", err))
+		log.Error("prune.autoname.known_paths_failed", "component", "prune", "err", err)
 		return Result{}, err
 	}
 
@@ -119,15 +119,15 @@ func PruneAutoname(
 	var failures []DeleteFailure
 	pruned := 0
 	for _, match := range matches {
-		log.Info("prune.autoname.removing", "component", "prune", "transcript", match.TranscriptPath)
+		log.Debug("prune.autoname.removing", "component", "prune", "transcript", match.TranscriptPath)
 		if err := os.Remove(match.TranscriptPath); err != nil {
 			_, _ = fmt.Fprintf(out, "  FAIL %s: %v\n", match.TranscriptPath, err)
-			log.Error("prune.autoname.remove_failed", "component", "prune", "transcript", match.TranscriptPath, slog.Any("err", err))
+			log.Error("prune.autoname.remove_failed", "component", "prune", "transcript", match.TranscriptPath, "err", err)
 			failures = append(failures, DeleteFailure{Target: match.TranscriptPath, Err: err})
 			continue
 		}
 		pruned++
-		log.Info("prune.autoname.deleted", "component", "prune", "transcript", match.TranscriptPath)
+		log.Debug("prune.autoname.deleted", "component", "prune", "transcript", match.TranscriptPath)
 	}
 
 	_, _ = fmt.Fprintf(out, "\nDeleted %d of %d transcripts.\n", pruned, len(matches))

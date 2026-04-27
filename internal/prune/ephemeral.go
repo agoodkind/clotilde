@@ -44,7 +44,7 @@ func PruneEphemeral(
 
 	all, err := store.List()
 	if err != nil {
-		log.Error("prune.ephemeral.list_failed", "component", "prune", slog.Any("err", err))
+		log.Error("prune.ephemeral.list_failed", "component", "prune", "err", err)
 		return Result{}, fmt.Errorf("listing sessions: %w", err)
 	}
 
@@ -95,15 +95,15 @@ func PruneEphemeral(
 	var failures []DeleteFailure
 	pruned := 0
 	for _, sess := range targets {
-		log.Info("prune.ephemeral.deleting", "component", "prune", "session", sess.Name)
+		log.Debug("prune.ephemeral.deleting", "component", "prune", "session", sess.Name)
 		if err := deleteTrackedSession(ctx, log, out, sess, store); err != nil {
 			_, _ = fmt.Fprintf(out, "  FAILED %s: %v\n", sess.Name, err)
-			log.Error("prune.ephemeral.delete_failed", "component", "prune", "session", sess.Name, slog.Any("err", err))
+			log.Error("prune.ephemeral.delete_failed", "component", "prune", "session", sess.Name, "err", err)
 			failures = append(failures, DeleteFailure{Target: sess.Name, Err: err})
 			continue
 		}
 		pruned++
-		log.Info("prune.ephemeral.deleted", "component", "prune", "session", sess.Name)
+		log.Debug("prune.ephemeral.deleted", "component", "prune", "session", sess.Name)
 	}
 
 	_, _ = fmt.Fprintf(out, "\nDeleted %d of %d ephemeral sessions.\n", pruned, len(targets))

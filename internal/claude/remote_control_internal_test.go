@@ -15,15 +15,10 @@ func TestRemoteControlEnabled(t *testing.T) {
 	dir := t.TempDir()
 
 	// Empty path means no per session file. Falls through to global.
-	if remoteControlEnabled("") {
-		// Global default is unlikely to be on by default in test env;
-		// if it is the test would pass here too. Either result is OK.
-	}
+	_ = remoteControlEnabled("")
 
 	// Non existent path also falls through to global default.
-	if remoteControlEnabled(filepath.Join(dir, "missing.json")) {
-		// Same caveat as above.
-	}
+	_ = remoteControlEnabled(filepath.Join(dir, "missing.json"))
 
 	// Per session settings.json with remoteControl=true forces true
 	// regardless of the global default.

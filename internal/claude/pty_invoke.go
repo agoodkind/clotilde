@@ -1,4 +1,4 @@
-// PTY wrapper for sessions launched with remote control.
+// Package claude wraps Claude CLI invocation behavior.
 //
 // When a session opts into remote control, clyde owns claude's
 // stdio so external clients (the dashboard sidecar, the daemon's
@@ -48,6 +48,7 @@ func StartHeadlessRemoteWorker(env map[string]string, settingsFile string, workD
 	if sessionID != "" {
 		args = append(args, "--session-id", sessionID)
 	}
+	applyMITMEnv(env)
 	return invokePTY(args, env, workDir, sessionID, false)
 }
 

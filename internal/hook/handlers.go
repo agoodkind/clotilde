@@ -38,7 +38,7 @@ func handleStartupOrResume(
 				"component", "hook",
 				"subject", "sessionstart",
 				"key", "CLYDE_SESSION",
-				slog.Any("err", err),
+				"err", err,
 			)
 			_, _ = fmt.Fprintf(errOut, "Warning: failed to write session name to env: %v\n", err)
 		}
@@ -49,7 +49,7 @@ func handleStartupOrResume(
 					"component", "hook",
 					"subject", "sessionstart",
 					"session", sessionName,
-					slog.Any("err", err),
+					"err", err,
 				)
 				_, _ = fmt.Fprintf(errOut, "Warning: failed to save transcript path: %v\n", err)
 			} else {
@@ -77,7 +77,16 @@ func autoAdoptSession(
 	sess := session.NewSession(name, hookData.SessionID)
 	sess.Metadata.TranscriptPath = hookData.TranscriptPath
 
-	if wd, err := launchWorkDir(deps); err == nil {
+	var header session.DiscoveryResult
+	var headerOK bool
+	if hookData.TranscriptPath != "" {
+		header, headerOK = session.ReadTranscriptHeader(hookData.TranscriptPath)
+	}
+
+	if headerOK && strings.TrimSpace(header.WorkspaceRoot) != "" {
+		sess.Metadata.WorkDir = header.WorkspaceRoot
+		sess.Metadata.WorkspaceRoot = header.WorkspaceRoot
+	} else if wd, err := launchWorkDir(deps); err == nil {
 		sess.Metadata.WorkDir = wd
 		sess.Metadata.WorkspaceRoot = wd
 	} else if root, err := deps.findProjectRoot(); err == nil {
@@ -88,32 +97,30 @@ func autoAdoptSession(
 	// the transcript so the TUI surfaces the user-given chat name. The
 	// hook handles the pre-named path (CLYDE_SESSION_NAME set), so Name
 	// stays authoritative; DisplayTitle is purely decorative.
-	if hookData.TranscriptPath != "" {
-		if dr, ok := session.ReadTranscriptHeader(hookData.TranscriptPath); ok {
-			if dr.CustomTitle != "" {
-				sess.Metadata.DisplayTitle = dr.CustomTitle
-				log.Debug("hook.sessionstart.display_title_captured",
-					"component", "hook",
-					"subject", "sessionstart",
-					"session", name,
-					"display_title", dr.CustomTitle,
-				)
-			}
-			if dr.IsForked {
-				sess.Metadata.IsForkedSession = true
-				if dr.ForkParentID != "" {
-					if parentName, err := findSessionByUUID(store, dr.ForkParentID); err == nil {
-						sess.Metadata.ParentSession = parentName
-					}
+	if headerOK {
+		if header.CustomTitle != "" {
+			sess.Metadata.DisplayTitle = header.CustomTitle
+			log.Debug("hook.sessionstart.display_title_captured",
+				"component", "hook",
+				"subject", "sessionstart",
+				"session", name,
+				"display_title", header.CustomTitle,
+			)
+		}
+		if header.IsForked {
+			sess.Metadata.IsForkedSession = true
+			if header.ForkParentID != "" {
+				if parentName, err := findSessionByUUID(store, header.ForkParentID); err == nil {
+					sess.Metadata.ParentSession = parentName
 				}
-				log.Debug("hook.sessionstart.fork_lineage_captured",
-					"component", "hook",
-					"subject", "sessionstart",
-					"session", name,
-					"parent_session", sess.Metadata.ParentSession,
-					"parent_session_id", dr.ForkParentID,
-				)
 			}
+			log.Debug("hook.sessionstart.fork_lineage_captured",
+				"component", "hook",
+				"subject", "sessionstart",
+				"session", name,
+				"parent_session", sess.Metadata.ParentSession,
+				"parent_session_id", header.ForkParentID,
+			)
 		}
 	}
 
@@ -122,7 +129,7 @@ func autoAdoptSession(
 			"component", "hook",
 			"subject", "sessionstart",
 			"session", name,
-			slog.Any("err", err),
+			"err", err,
 		)
 		_, _ = fmt.Fprintf(errOut, "Warning: auto-adopt failed for '%s': %v\n", name, err)
 		return
@@ -162,7 +169,7 @@ func handleCompact(
 			"component", "hook",
 			"subject", "sessionstart",
 			"reason", "compact",
-			slog.Any("err", err),
+			"err", err,
 		)
 		_, _ = fmt.Fprintf(errOut, "Warning: unable to resolve session name for compact: %v\n", err)
 		return nil
@@ -179,7 +186,7 @@ func handleCompact(
 			"subject", "sessionstart",
 			"reason", "compact",
 			"session", sessionName,
-			slog.Any("err", err),
+			"err", err,
 		)
 		_, _ = fmt.Fprintf(errOut, "Warning: session '%s' not found: %v\n", sessionName, err)
 		return nil
@@ -194,7 +201,7 @@ func handleCompact(
 			"component", "hook",
 			"subject", "sessionstart",
 			"session", sessionName,
-			slog.Any("err", err),
+			"err", err,
 		)
 		_, _ = fmt.Fprintf(errOut, "Warning: failed to update session metadata: %v\n", err)
 	}
@@ -205,7 +212,7 @@ func handleCompact(
 			"subject", "sessionstart",
 			"key", "CLYDE_SESSION",
 			"session", sessionName,
-			slog.Any("err", err),
+			"err", err,
 		)
 		_, _ = fmt.Fprintf(errOut, "Warning: failed to write session name to env: %v\n", err)
 	}

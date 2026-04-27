@@ -14,6 +14,7 @@ import (
 
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/daemon"
+	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/session"
 	"goodkind.io/clyde/internal/util"
 )
@@ -80,6 +81,7 @@ func Resume(
 	for key, value := range extraEnvironment {
 		env[key] = value
 	}
+	applyMITMEnv(env)
 
 	if sess.Metadata.IsIncognito {
 		return invokeWithCleanup(clydeRoot, sess, args, env, sess.Metadata.WorkDir)
@@ -102,10 +104,26 @@ func StartNewInteractive(env map[string]string, settingsFile string, workDir str
 	if sessionID != "" {
 		args = append(args, "--session-id", sessionID)
 	}
+	applyMITMEnv(env)
 	if forceRemoteControl || remoteControlEnabled(settingsFile) {
 		return invokeInteractivePTY(args, env, workDir, sessionID)
 	}
 	return invokeInteractive(args, env, workDir)
+}
+
+func applyMITMEnv(env map[string]string) {
+	cfg, err := config.LoadGlobalOrDefault()
+	if err != nil {
+		return
+	}
+	extra, err := mitm.ClaudeEnv(context.Background(), cfg.MITM, slog.Default())
+	if err != nil {
+		slog.Warn("wrapper.mitm.claude_env_failed", "component", "wrapper", "err", err)
+		return
+	}
+	for key, value := range extra {
+		env[key] = value
+	}
 }
 
 // ClaudeBinaryPathFunc is a function that returns the path to the claude binary.
@@ -252,7 +270,7 @@ func monitorDaemon(
 			if acqErr == nil && state.sawConnectionError {
 				state.reloadRequested.Store(true)
 				state.sawConnectionError = false
-				slog.Info("wrapper.self_reload.requested",
+					slog.Debug("wrapper.self_reload.requested",
 					"component", "wrapper",
 					"session", sessionName,
 					"wrapper_id", wrapperID,
@@ -304,7 +322,7 @@ func invokeWithCleanup(clydeRoot string, sess *session.Session, args []string, e
 	defer func() {
 		deleted, err := cleanupIncognitoSession(clydeRoot, sess)
 		if err != nil {
-			slog.Warn("claude.incognito.cleanup.failed", "session", sess.Name, slog.Any("err", err))
+			slog.Warn("claude.incognito.cleanup.failed", "session", sess.Name, "err", err)
 		} else {
 			slog.Info("claude.incognito.deleted", "session", sess.Name, "transcript_count", len(deleted.Transcript), "agent_log_count", len(deleted.AgentLogs))
 
@@ -354,7 +372,7 @@ func cleanupIncognitoSession(clydeRoot string, sess *session.Session) (*DeletedF
 	return deleted, nil
 }
 
-// defaultSessionUsed checks if a Claude Code session was actually used by looking
+// DefaultSessionUsed checks if a Claude Code session was actually used by looking
 // for a transcript file. Sessions with no ID are considered unused.
 func DefaultSessionUsed(globalRoot string, sess *session.Session) bool {
 	sessionID := sess.Metadata.SessionID
