@@ -445,34 +445,37 @@ func summarizeToolArgs(b ContentBlock) string {
 	if len(b.ToolInput) == 0 {
 		return ""
 	}
-	keys := make([]string, 0, len(b.ToolInput))
-	for k := range b.ToolInput {
+	var input map[string]json.RawMessage
+	if err := json.Unmarshal(b.ToolInput, &input); err != nil || len(input) == 0 {
+		return summarizeRawJSON(b.ToolInput)
+	}
+	keys := make([]string, 0, len(input))
+	for k := range input {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
-		parts = append(parts, fmt.Sprintf("%s=%s", k, summarizeArgValue(b.ToolInput[k])))
+		parts = append(parts, fmt.Sprintf("%s=%s", k, summarizeRawJSON(input[k])))
 	}
 	return strings.Join(parts, ", ")
 }
 
-func summarizeArgValue(v any) string {
-	switch x := v.(type) {
-	case string:
-		if len(x) > 80 {
-			return fmt.Sprintf("%q...", x[:77])
-		}
-		return fmt.Sprintf("%q", x)
-	case bool, float64, int, int64:
-		return fmt.Sprintf("%v", x)
-	case []any:
-		return fmt.Sprintf("[%d items]", len(x))
-	case map[string]any:
-		return "{...}"
-	default:
-		return fmt.Sprintf("%v", x)
+func summarizeRawJSON(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "<value>"
 	}
+	var asString string
+	if json.Unmarshal(raw, &asString) == nil {
+		if len(asString) > 80 {
+			return fmt.Sprintf("%q...", asString[:77])
+		}
+		return fmt.Sprintf("%q", asString)
+	}
+	if len(raw) > 80 {
+		return string(raw[:77]) + "..."
+	}
+	return string(raw)
 }
 
 // flattenToolResult concatenates a tool_result.content array into one

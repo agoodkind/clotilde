@@ -53,7 +53,7 @@ both work.`,
 		ValidArgsFunction: func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 			store, err := f.Store()
 			if err != nil {
-				slog.Error("cli.compact.completion_store_failed", slog.Any("err", err))
+				slog.Error("cli.compact.completion_store_failed", "err", err)
 				return nil, cobra.ShellCompDirectiveNoFileComp
 			}
 			var sessions []*session.Session
@@ -87,7 +87,7 @@ both work.`,
 	cmd.Flags().Bool("list-backups", false, "Print the per-session backup ledger and exit")
 	cmd.Flags().Int("reserved", DefaultReservedBuffer, "Reserved buffer included in /context total (default matches autocompact)")
 	cmd.Flags().String("model", DefaultModel, "Model name passed to count_tokens; must match the live session's model")
-	cmd.Flags().Bool("force", false, "Bypass the fresh-mtime concurrency guard during --apply")
+	cmd.Flags().Bool("force", false, "Bypass the open-session concurrency guard during --apply")
 	cmd.Flags().Bool("refresh", false, "Force a fresh context probe; bust both the in-process and on-disk cache tiers")
 	cmd.Flags().String("target", "", "Compaction target token count (e.g. 200k, 120,000, 1.2m). Overrides the positional [target] arg when both are present.")
 	cmd.Flags().Bool("summarize", true, "On --apply, generate an LLM recap of dropped content via `claude -p` and inject it into the synthetic header. Use --summarize=false to skip.")

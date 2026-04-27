@@ -20,7 +20,7 @@ func runListBackups(out io.Writer, sess *session.Session) error {
 		slog.Error("cli.compact.ledger.failed",
 			"session", sess.Name,
 			"session_id", sess.Metadata.SessionID,
-			slog.Any("err", err),
+			"err", err,
 		)
 		return err
 	}

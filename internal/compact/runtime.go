@@ -35,7 +35,7 @@ func ResolveModelForCounting(store session.Store, sess *session.Session, fallbac
 	if store != nil && sess != nil && strings.TrimSpace(sess.Name) != "" {
 		settings, err := store.LoadSettings(sess.Name)
 		if err == nil && settings != nil && strings.TrimSpace(settings.Model) != "" {
-			settingsModel := adaptercursor.NormalizeModelAlias(strings.TrimSpace(settings.Model))
+			settingsModel := adaptercursor.NormalizeSessionSettingsModel(strings.TrimSpace(settings.Model))
 			slog.Debug("compact.runtime.model_resolved",
 				"component", "compact",
 				"subcomponent", "runtime",
@@ -54,9 +54,9 @@ func ResolveModelForCounting(store session.Store, sess *session.Session, fallbac
 	return fallback, fallback, "fallback"
 }
 
-func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender string) (RuntimeUpfront, int, error) {
+func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender string) (RuntimeUpfront, int, *Slice, error) {
 	if req.Session == nil {
-		return RuntimeUpfront{}, 0, fmt.Errorf("nil session")
+		return RuntimeUpfront{}, 0, nil, fmt.Errorf("nil session")
 	}
 	if req.Reserved <= 0 {
 		req.Reserved = 13_000
@@ -71,7 +71,7 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 			"transcript", req.Session.Metadata.TranscriptPath,
 			"err", err.Error(),
 		)
-		return RuntimeUpfront{}, 0, err
+		return RuntimeUpfront{}, 0, nil, err
 	}
 	thinking, images, toolPairs, chatTurns := categoryCounts(slice)
 	upfront := RuntimeUpfront{
@@ -107,7 +107,7 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 				"session_id", req.Session.Metadata.SessionID,
 				"err", calErr.Error(),
 			)
-			return RuntimeUpfront{}, 0, calErr
+			return RuntimeUpfront{}, 0, nil, calErr
 		}
 		if ok {
 			staticOverhead = cal.StaticOverhead
@@ -126,7 +126,7 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 		"static_floor", upfront.StaticFloor,
 		"reserved", upfront.Reserved,
 	)
-	return upfront, staticOverhead, nil
+	return upfront, staticOverhead, slice, nil
 }
 
 func RunRuntime(
@@ -147,9 +147,19 @@ func RunRuntime(
 		modelForCount, modelForRender, _ = ResolveModelForCounting(req.Store, req.Session, req.Model)
 	}
 
-	upfront, staticOverhead, err := BuildRuntimeUpfront(ctx, req, modelForRender)
-	if err != nil {
-		return nil, err
+	var upfront RuntimeUpfront
+	var staticOverhead int
+	var slice *Slice
+	var err error
+	if req.PreparedUpfront != nil && req.PreparedSlice != nil {
+		upfront = *req.PreparedUpfront
+		staticOverhead = req.PreparedStaticOverhead
+		slice = req.PreparedSlice
+	} else {
+		upfront, staticOverhead, slice, err = BuildRuntimeUpfront(ctx, req, modelForRender)
+		if err != nil {
+			return nil, err
+		}
 	}
 	slog.Info("compact.runtime.run_started",
 		"component", "compact",
@@ -160,19 +170,6 @@ func RunRuntime(
 		"model", modelForCount,
 		"target", req.TargetTokens,
 	)
-	slice, err := LoadSlice(req.Session.Metadata.TranscriptPath)
-	if err != nil {
-		slog.Error("compact.runtime.load_slice_failed",
-			"component", "compact",
-			"subcomponent", "runtime",
-			"session", req.Session.Name,
-			"session_id", req.Session.Metadata.SessionID,
-			"transcript", req.Session.Metadata.TranscriptPath,
-			"err", err.Error(),
-		)
-		return nil, err
-	}
-
 	var counter Counter
 	if req.TargetTokens > 0 {
 		key, keyErr := AnthropicAPIKey()
@@ -234,7 +231,6 @@ func RunRuntime(
 			Target:        req.TargetTokens,
 			BoundaryTail:  planRes.BoundaryTail,
 			PreCompactTok: planRes.BaselineTail,
-			Force:         req.Force,
 		}
 		applyRes, applyErr := Apply(in)
 		if applyErr != nil {

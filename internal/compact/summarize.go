@@ -96,7 +96,7 @@ func SummarizeDropped(ctx context.Context, slice *Slice, opts SynthOptions, sopt
 			"subcomponent", "summarize",
 			"duration_ms", time.Since(started).Milliseconds(),
 			"stderr_tail", tail,
-			slog.Any("err", err),
+			"err", err,
 		)
 		return "", fmt.Errorf("summarize: %w", err)
 	}
@@ -116,7 +116,7 @@ func SummarizeDropped(ctx context.Context, slice *Slice, opts SynthOptions, sopt
 func renderDroppedForSummary(slice *Slice, opts SynthOptions) string {
 	var sb strings.Builder
 
-	if opts.DroppedChatEntries != nil && len(opts.DroppedChatEntries) > 0 {
+	if len(opts.DroppedChatEntries) > 0 {
 		sb.WriteString("# Dropped chat turns\n\n")
 		for ei, e := range slice.PostBoundary {
 			if !opts.DroppedChatEntries[ei] {
@@ -129,11 +129,11 @@ func renderDroppedForSummary(slice *Slice, opts SynthOptions) string {
 			if text == "" {
 				continue
 			}
-			fmt.Fprintf(&sb, "## %s (%s)\n\n%s\n\n", strings.Title(e.Type), e.Timestamp.UTC().Format(time.RFC3339), text)
+			fmt.Fprintf(&sb, "## %s (%s)\n\n%s\n\n", titleCaseASCII(e.Type), e.Timestamp.UTC().Format(time.RFC3339), text)
 		}
 	}
 
-	if opts.DroppedSummaryChunks != nil && len(opts.DroppedSummaryChunks) > 0 {
+	if len(opts.DroppedSummaryChunks) > 0 {
 		indexes := make([]int, 0, len(opts.DroppedSummaryChunks))
 		for ei := range opts.DroppedSummaryChunks {
 			indexes = append(indexes, ei)
@@ -196,4 +196,19 @@ func renderDroppedForSummary(slice *Slice, opts SynthOptions) string {
 	}
 
 	return sb.String()
+}
+
+// titleCaseASCII upper-cases the first byte of an ASCII identifier such as
+// "user" or "assistant". It exists to avoid the deprecated strings.Title
+// (deprecated since Go 1.18 due to Unicode word-boundary issues) for inputs
+// that are guaranteed lowercase ASCII.
+func titleCaseASCII(s string) string {
+	if s == "" {
+		return s
+	}
+	c := s[0]
+	if c >= 'a' && c <= 'z' {
+		return string(c-32) + s[1:]
+	}
+	return s
 }

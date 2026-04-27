@@ -215,7 +215,7 @@ func ProbeContextUsage(ctx context.Context, opts ProbeOptions) (ContextUsage, er
 		slog.Debug("compact.probe.stdin_close_warn",
 			"component", "compact",
 			"subcomponent", "probe",
-			slog.Any("err", err),
+			"err", err,
 		)
 	}
 

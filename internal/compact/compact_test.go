@@ -171,6 +171,35 @@ func TestLoadSlice_BoundaryDiscovery(t *testing.T) {
 	}
 }
 
+func TestApplyAllowsRecentlyModifiedTranscript(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
+	t0 := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	path := writeTranscript(t, []string{
+		userText("u1", "", "fresh", t0),
+	})
+	slice, err := LoadSlice(path)
+	if err != nil {
+		t.Fatalf("LoadSlice: %v", err)
+	}
+
+	res, err := Apply(ApplyInput{
+		Slice:         slice,
+		SessionID:     "session-fresh",
+		Cwd:           tmp,
+		Version:       "test",
+		Target:        100,
+		BoundaryTail:  []OutputBlock{{Text: "surviving context"}},
+		PreCompactTok: 1000,
+	})
+	if err != nil {
+		t.Fatalf("Apply on fresh transcript: %v", err)
+	}
+	if res.PreApplyOffset <= 0 || res.PostApplyOffset <= res.PreApplyOffset {
+		t.Fatalf("unexpected apply offsets: pre=%d post=%d", res.PreApplyOffset, res.PostApplyOffset)
+	}
+}
+
 // TestLoadSlice_PairIndex confirms tool_use/tool_result blocks in
 // the post-boundary slice link up by id.
 func TestLoadSlice_PairIndex(t *testing.T) {

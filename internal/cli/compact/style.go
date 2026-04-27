@@ -223,8 +223,12 @@ type progressView struct {
 	finalApplied  bool
 
 	// Ticker goroutine lifecycle channels.
-	stop chan struct{}
-	done chan struct{}
+	stop chan progressSignal
+	done chan progressSignal
+}
+
+type progressSignal struct {
+	Triggered bool
 }
 
 // spinnerFPS is the animation rate. 16 frames per second keeps the
@@ -241,8 +245,8 @@ func newProgressView(w io.Writer, target int, mode Mode, isTTY bool, upfront Upf
 		isTTY:     isTTY,
 		startedAt: time.Now(),
 		upfront:   upfront,
-		stop:      make(chan struct{}),
-		done:      make(chan struct{}),
+		stop:      make(chan progressSignal),
+		done:      make(chan progressSignal),
 	}
 	if isTTY {
 		go p.animate()
@@ -781,7 +785,7 @@ func RenderUndoResult(
 		kv("snapshot", snapshot),
 		"",
 		kv("transcript bytes", fmt.Sprintf("%s → %s", humanInt(int(preBytes)), humanInt(int(postBytes)))),
-		kv("bytes delta", fmt.Sprintf("%s", humanInt(int(postBytes-preBytes)))),
+		kv("bytes delta", humanInt(int(postBytes-preBytes))),
 	}
 	fmt.Fprintln(w, styleUndoBox.Render(strings.Join(rows, "\n")))
 }

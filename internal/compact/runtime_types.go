@@ -22,6 +22,10 @@ type RuntimeRequest struct {
 	Summarize     bool
 	Force         bool
 	Mode          RuntimeMode
+
+	PreparedUpfront        *RuntimeUpfront
+	PreparedStaticOverhead int
+	PreparedSlice          *Slice
 }
 
 type RuntimeUpfront struct {

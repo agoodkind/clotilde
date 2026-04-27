@@ -21,7 +21,7 @@ func runUndo(out io.Writer, sess *session.Session, path string) error {
 			"session", sess.Name,
 			"session_id", sess.Metadata.SessionID,
 			"transcript", path,
-			slog.Any("err", err),
+			"err", err,
 		)
 		return err
 	}

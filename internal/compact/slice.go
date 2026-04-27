@@ -50,7 +50,7 @@ type ContentBlock struct {
 	// type=tool_use
 	ToolUseID   string
 	ToolName    string
-	ToolInput   map[string]any
+	ToolInput   json.RawMessage
 
 	// type=tool_result
 	ToolUseRefID string
@@ -255,9 +255,9 @@ func decodeBlock(raw json.RawMessage) ContentBlock {
 		}
 	case "tool_use":
 		var v struct {
-			ID    string         `json:"id"`
-			Name  string         `json:"name"`
-			Input map[string]any `json:"input"`
+			ID    string          `json:"id"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
 		}
 		if err := json.Unmarshal(raw, &v); err == nil {
 			block.ToolUseID = v.ID
@@ -274,10 +274,11 @@ func decodeBlock(raw json.RawMessage) ContentBlock {
 			block.ToolUseRefID = v.ToolUseID
 			block.ToolIsError = v.IsError
 			if len(v.Content) > 0 {
-				if v.Content[0] == '[' {
+				switch v.Content[0] {
+				case '[':
 					sub, _ := decodeContent(v.Content)
 					block.ToolContent = sub
-				} else if v.Content[0] == '"' {
+				case '"':
 					var s string
 					if json.Unmarshal(v.Content, &s) == nil {
 						block.ToolContent = []ContentBlock{{Type: "text", Text: s}}

@@ -36,7 +36,7 @@ func runAutoCalibrate(ctx context.Context, out io.Writer, sess *session.Session,
 		slog.Error("cli.compact.auto_calibrate.probe_failed",
 			"session", sess.Name,
 			"session_id", sess.Metadata.SessionID,
-			slog.Any("err", err),
+			"err", err,
 		)
 		return fmt.Errorf("auto-calibrate probe: %w", err)
 	}
@@ -65,7 +65,7 @@ func runAutoCalibrate(ctx context.Context, out io.Writer, sess *session.Session,
 		slog.Error("cli.compact.auto_calibrate.save_failed",
 			"session", sess.Name,
 			"session_id", sess.Metadata.SessionID,
-			slog.Any("err", err),
+			"err", err,
 		)
 		return err
 	}
@@ -100,7 +100,7 @@ func runCalibrate(out io.Writer, sess *session.Session, n int, model string) err
 		slog.Error("cli.compact.calibrate.failed",
 			"session", sess.Name,
 			"session_id", sess.Metadata.SessionID,
-			slog.Any("err", err),
+			"err", err,
 		)
 		return err
 	}

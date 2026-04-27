@@ -33,14 +33,13 @@ func runApply(
 		Target:        target,
 		BoundaryTail:  planRes.BoundaryTail,
 		PreCompactTok: planRes.BaselineTail,
-		Force:         force,
 	}
 	res, err := compactengine.Apply(in)
 	if err != nil {
 		slog.Error("cli.compact.apply.failed",
 			"session", sess.Name,
 			"session_id", sess.Metadata.SessionID,
-			slog.Any("err", err),
+			"err", err,
 		)
 		return err
 	}

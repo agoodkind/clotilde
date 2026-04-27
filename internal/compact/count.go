@@ -61,18 +61,20 @@ const maxRateLimitRetries = 6
 // backoff) and retries up to maxRateLimitRetries.
 func (c *TokenCounter) CountSyntheticUser(ctx context.Context, contentArray []OutputBlock) (int, error) {
 	log := gklog.LoggerFromContext(ctx).With("component", "compact", "subcomponent", "count_tokens")
-	if c.APIKey == "" {
-		log.ErrorContext(ctx, "compact.count_tokens.skipped",
-			"reason", "missing_api_key",
-		)
-		return 0, fmt.Errorf("count_tokens: missing API key")
-	}
-	if c.Model == "" {
-		log.ErrorContext(ctx, "compact.count_tokens.skipped",
-			"reason", "missing_model",
-		)
-		return 0, fmt.Errorf("count_tokens: missing model")
-	}
+		if c.APIKey == "" {
+			log.ErrorContext(ctx, "compact.count_tokens.skipped",
+				"reason", "missing_api_key",
+				"err", "missing_api_key",
+			)
+			return 0, fmt.Errorf("count_tokens: missing API key")
+		}
+		if c.Model == "" {
+			log.ErrorContext(ctx, "compact.count_tokens.skipped",
+				"reason", "missing_model",
+				"err", "missing_model",
+			)
+			return 0, fmt.Errorf("count_tokens: missing model")
+		}
 	type countMessage struct {
 		Role    string        `json:"role"`
 		Content []OutputBlock `json:"content"`
@@ -124,12 +126,13 @@ func (c *TokenCounter) CountSyntheticUser(ctx context.Context, contentArray []Ou
 		resp.Body.Close()
 
 		if resp.StatusCode == http.StatusTooManyRequests {
-			if attempt >= maxRateLimitRetries {
-				log.ErrorContext(ctx, "compact.count_tokens.rate_limited_giving_up",
-					"model", c.Model,
-					"attempt", attempt,
-					"body_excerpt", truncateForError(respBody),
-				)
+				if attempt >= maxRateLimitRetries {
+					log.ErrorContext(ctx, "compact.count_tokens.rate_limited_giving_up",
+						"model", c.Model,
+						"attempt", attempt,
+						"body_excerpt", truncateForError(respBody),
+						"err", "rate_limited",
+					)
 				return 0, fmt.Errorf("count_tokens: status 429 after %d retries: %s", attempt, truncateForError(respBody))
 			}
 			wait := parseRetryAfter(resp.Header.Get("Retry-After"))
@@ -175,7 +178,7 @@ func (c *TokenCounter) CountSyntheticUser(ctx context.Context, contentArray []Ou
 			)
 			return 0, fmt.Errorf("count_tokens: zero input_tokens in response")
 		}
-		log.InfoContext(ctx, "compact.count_tokens.completed",
+			log.DebugContext(ctx, "compact.count_tokens.completed",
 			"model", c.Model,
 			"tokens_in", parsed.InputTokens,
 			"duration_ms", time.Since(started).Milliseconds(),

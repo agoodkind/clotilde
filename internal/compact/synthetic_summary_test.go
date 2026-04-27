@@ -51,6 +51,16 @@ func sampleLegacySyntheticSummaryBlocks() []string {
 	}
 }
 
+func sampleLargeSyntheticSummaryBlocks() []string {
+	return []string{
+		"## Context continuity notice\n\nsame agent\n\n## Surviving transcript\n\n",
+		"**User:** large-part-a " + strings.Repeat("a ", 2500) + "\n\n" +
+			"large-part-b " + strings.Repeat("b ", 2500) + "\n\n" +
+			"large-part-c " + strings.Repeat("c ", 2500) + "\n\n",
+		"## Continue from here.\n",
+	}
+}
+
 func TestParseSyntheticSummary_AllSections(t *testing.T) {
 	t0 := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	line := syntheticSummaryLine("s1", "b1", t0, sampleSyntheticSummaryBlocks())
@@ -162,6 +172,35 @@ func TestParseSyntheticSummary_OptionalSections(t *testing.T) {
 	}
 }
 
+func TestParseSyntheticSummary_AllowsNestedPriorSummaryBlocks(t *testing.T) {
+	blocks := []string{
+		"## Context continuity notice\n\nouter summary\n\n## Surviving transcript\n\n",
+	}
+	blocks = append(blocks, sampleSyntheticSummaryBlocks()...)
+	blocks = append(blocks, "## Continue from here.\n")
+
+	summary, err := parseSyntheticSummaryBlocks(blocks)
+	if err != nil {
+		t.Fatalf("parseSyntheticSummaryBlocks: %v", err)
+	}
+	if got := len(summary.TranscriptTurns); got < 4 {
+		t.Fatalf("len(TranscriptTurns) = %d, want nested blocks retained", got)
+	}
+	if !summary.HasContinue {
+		t.Fatalf("outer continue block should still be recognized")
+	}
+	order := summary.DropOrder()
+	if len(order) == 0 {
+		t.Fatalf("DropOrder empty")
+	}
+	for _, key := range order {
+		if strings.HasPrefix(key, "surviving_turn:") {
+			return
+		}
+	}
+	t.Fatalf("DropOrder missing surviving nested chunks: %#v", order)
+}
+
 func TestParseSyntheticSummary_MalformedOrderFallsBack(t *testing.T) {
 	blocks := []string{
 		"## Context continuity notice\n\nsame agent\n\n## Surviving transcript\n\n",
@@ -225,6 +264,29 @@ func (syntheticSummaryCounter) CountSyntheticUser(_ context.Context, content []O
 		{"### Summary of dropped content", 40},
 		{"### What was dropped", 40},
 		{"## Context continuity notice", 50},
+	} {
+		if strings.Contains(text, marker.needle) {
+			score += marker.value
+		}
+	}
+	return score, nil
+}
+
+type largeSyntheticSummaryCounter struct{}
+
+func (largeSyntheticSummaryCounter) CountSyntheticUser(_ context.Context, content []OutputBlock) (int, error) {
+	text := joinOutputText(content)
+	score := 0
+	for _, marker := range []struct {
+		needle string
+		value  int
+	}{
+		{"recent-user-turn", 100},
+		{"recent-assistant-turn", 100},
+		{"## Continue from here.", 10},
+		{"large-part-a", 100},
+		{"large-part-b", 100},
+		{"large-part-c", 100},
 	} {
 		if strings.Contains(text, marker.needle) {
 			score += marker.value
@@ -334,6 +396,58 @@ func TestRunPlan_RecompactsLegacySyntheticSummaryByChunk(t *testing.T) {
 	}
 	if !strings.Contains(text, "## Context continuity notice") {
 		t.Fatalf("canonical continuity header missing: %q", text)
+	}
+}
+
+func TestRunPlan_RecompactsLargeSyntheticTurnByPart(t *testing.T) {
+	t0 := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	lines := []string{
+		boundaryLine("b1", "", t0),
+		syntheticSummaryLine("s1", "b1", t0.Add(time.Second), sampleLargeSyntheticSummaryBlocks()),
+		userText("u1", "s1", "recent-user-turn", t0.Add(2*time.Second)),
+		assistantBlocks("a1", "u1", t0.Add(3*time.Second), []map[string]any{
+			{"type": "text", "text": "recent-assistant-turn"},
+		}),
+	}
+	slice, err := LoadSlice(writeTranscript(t, lines))
+	if err != nil {
+		t.Fatalf("LoadSlice: %v", err)
+	}
+
+	res, err := RunPlan(context.Background(), PlanInput{
+		Slice:         slice,
+		Strippers:     Strippers{Chat: true},
+		Target:        410,
+		Counter:       largeSyntheticSummaryCounter{},
+		ChatBatchSize: 1,
+	})
+	if err != nil {
+		t.Fatalf("RunPlan: %v", err)
+	}
+
+	if !res.HitTarget {
+		t.Fatalf("HitTarget = false, final=%d", res.FinalTail)
+	}
+	if res.Options.DroppedChatEntries[0] {
+		t.Fatalf("large prior synthetic summary should not be dropped as a whole entry")
+	}
+	dropped := res.Options.DroppedSummaryChunks[0]
+	if !dropped[summaryChunkContinue] {
+		t.Fatalf("continue chunk should be dropped first")
+	}
+	if !dropped["surviving_turn:0:part:0"] {
+		t.Fatalf("large surviving turn should expose droppable part chunks: %#v", dropped)
+	}
+	if dropped["surviving_turn:0"] {
+		t.Fatalf("large surviving turn should not need whole-turn drop")
+	}
+
+	text := joinOutputText(res.BoundaryTail)
+	if strings.Contains(text, "large-part-a") {
+		t.Fatalf("dropped part still rendered")
+	}
+	if !strings.Contains(text, "**User:**") || !strings.Contains(text, "large-part-b") || !strings.Contains(text, "large-part-c") {
+		t.Fatalf("remaining parts should render with speaker label: %q", text[:minInt(len(text), 200)])
 	}
 }
 

@@ -86,19 +86,19 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 	slog.Info("cli.compact.invoked", "session", name)
 
 	if _, err := f.Config(); err != nil {
-		slog.Error("cli.compact.config_failed", "session", name, slog.Any("err", err))
+		slog.Error("cli.compact.config_failed", "session", name, "err", err)
 		return err
 	}
 
 	out := f.IOStreams.Out
 	store, err := f.Store()
 	if err != nil {
-		slog.Error("cli.compact.store_failed", "session", name, slog.Any("err", err))
+		slog.Error("cli.compact.store_failed", "session", name, "err", err)
 		return err
 	}
 	sess, err := store.Resolve(name)
 	if err != nil {
-		slog.Error("cli.compact.resolve_failed", "session", name, slog.Any("err", err))
+		slog.Error("cli.compact.resolve_failed", "session", name, "err", err)
 		return err
 	}
 	if sess == nil {
@@ -111,7 +111,7 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 		return fmt.Errorf("session %q has no transcript path", name)
 	}
 	if _, err := os.Stat(path); err != nil {
-		slog.Error("cli.compact.transcript_stat_failed", "session", name, "transcript", path, slog.Any("err", err))
+		slog.Error("cli.compact.transcript_stat_failed", "session", name, "transcript", path, "err", err)
 		return fmt.Errorf("transcript not found: %s", path)
 	}
 
@@ -183,7 +183,7 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 		strippers.SetAll()
 	}
 	if err := mergeTypeFlag(&strippers, flagTypes); err != nil {
-		slog.Warn("cli.compact.type_flag_invalid", "session", name, slog.Any("err", err))
+		slog.Warn("cli.compact.type_flag_invalid", "session", name, "err", err)
 		return err
 	}
 	if !strippers.Any() && target == 0 {
@@ -230,7 +230,7 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 
 	slice, err := compactengine.LoadSlice(path)
 	if err != nil {
-		slog.Error("cli.compact.load_slice_failed", "session", name, "transcript", path, slog.Any("err", err))
+		slog.Error("cli.compact.load_slice_failed", "session", name, "transcript", path, "err", err)
 		return err
 	}
 
@@ -250,7 +250,7 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 			slog.Info("cli.compact.calibration_auto_probe", "session", name, "session_id", sess.Metadata.SessionID)
 			_, _ = fmt.Fprintf(out, "no calibration on file; probing claude /context for static overhead (30-60 seconds)...\n")
 			if err := runAutoCalibrate(cmd.Context(), out, sess, model); err != nil {
-				slog.Error("cli.compact.calibration_auto_probe_failed", "session", name, "session_id", sess.Metadata.SessionID, slog.Any("err", err))
+				slog.Error("cli.compact.calibration_auto_probe_failed", "session", name, "session_id", sess.Metadata.SessionID, "err", err)
 				return err
 			}
 			cal, ok, calErr = compactengine.LoadCalibration(sess.Metadata.SessionID)
@@ -286,8 +286,8 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 		calibDate := ""
 		layer := sessionctx.NewDefault(sess, model, "")
 		if u, uerr := layer.Usage(ctx, sessionctx.UsageOptions{MaxAge: 24 * time.Hour}); uerr == nil {
-			currentTotal = u.ContextUsage.TotalTokens
-			maxTokens = u.ContextUsage.MaxTokens
+			currentTotal = u.TotalTokens
+			maxTokens = u.MaxTokens
 		}
 		if cal, ok, _ := compactengine.LoadCalibration(sess.Metadata.SessionID); ok {
 			calibDate = cal.CapturedAt.UTC().Format("2006-01-02")
@@ -349,7 +349,7 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 		progress.Finish()
 	}
 	if err != nil {
-		slog.Error("cli.compact.preview.run_plan.failed", "session", name, slog.Any("err", err))
+		slog.Error("cli.compact.preview.run_plan.failed", "session", name, "err", err)
 		return err
 	}
 	slog.Info("cli.compact.preview.run_plan.completed", "session", name, "hit_target", planRes.HitTarget)

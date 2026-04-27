@@ -22,7 +22,6 @@ type ApplyInput struct {
 	Target        int
 	BoundaryTail  []OutputBlock
 	PreCompactTok int
-	Force         bool // bypass the fresh-mtime concurrency guard
 }
 
 // ApplyResult summarises what apply did. Returned for preview and
@@ -54,9 +53,6 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 	stat, err := os.Stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("stat transcript: %w", err)
-	}
-	if !in.Force && time.Since(stat.ModTime()) < 60*time.Second {
-		return nil, fmt.Errorf("transcript modified within last 60s; Claude Code may be running this session, exit it first or pass --force")
 	}
 	preOffset := stat.Size()
 

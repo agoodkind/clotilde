@@ -11,6 +11,9 @@ const (
 	summaryChunkSummary    = "summary_of_dropped_content"
 	summaryChunkWhat       = "what_was_dropped"
 	summaryChunkContinuity = "context_continuity_notice"
+
+	syntheticTurnPartPrefix      = ":part:"
+	syntheticTurnPartApproxBytes = 4096
 )
 
 type syntheticSummary struct {
@@ -57,7 +60,7 @@ func parseSyntheticSummary(e Entry) (*syntheticSummary, bool) {
 			"component", "compact",
 			"subcomponent", "synthetic_summary",
 			"entry_line", e.LineIndex,
-			slog.Any("err", err),
+			"err", err,
 		)
 		return nil, false
 	}
@@ -92,10 +95,21 @@ func parseSyntheticSummaryBlocks(blocks []string) (*syntheticSummary, error) {
 	}
 
 	phase := "transcript"
+	nestedSummary := false
 	for i := 1; i < len(blocks); i++ {
 		block := blocks[i]
 		switch {
+		case isSyntheticSummaryHeaderBlock(block):
+			if phase != "transcript" {
+				return nil, fmt.Errorf("nested summary out of order")
+			}
+			nestedSummary = true
+			summary.TranscriptTurns = append(summary.TranscriptTurns, block)
 		case strings.HasPrefix(block, "## Tool activity\n\n"):
+			if nestedSummary {
+				summary.TranscriptTurns = append(summary.TranscriptTurns, block)
+				continue
+			}
 			if phase != "transcript" {
 				return nil, fmt.Errorf("tool activity out of order")
 			}
@@ -110,6 +124,10 @@ func parseSyntheticSummaryBlocks(blocks []string) (*syntheticSummary, error) {
 			phase = "tools"
 		case strings.TrimSpace(block) == "## Continue from here.":
 			if i != len(blocks)-1 {
+				if nestedSummary {
+					summary.TranscriptTurns = append(summary.TranscriptTurns, block)
+					continue
+				}
 				return nil, fmt.Errorf("continue block must be final")
 			}
 			summary.HasContinue = true
@@ -125,6 +143,11 @@ func parseSyntheticSummaryBlocks(blocks []string) (*syntheticSummary, error) {
 	}
 
 	return summary, nil
+}
+
+func isSyntheticSummaryHeaderBlock(block string) bool {
+	return strings.HasPrefix(block, "## Context continuity notice\n\n") ||
+		block == "## Continued from prior session (transcript below)\n\n"
 }
 
 type parsedSyntheticHeader struct {
@@ -279,7 +302,11 @@ func (s *syntheticSummary) DropOrder() []string {
 	for i := range s.ToolItems {
 		order = append(order, fmt.Sprintf("tool_item:%d", i))
 	}
-	for i := range s.TranscriptTurns {
+	for i, turn := range s.TranscriptTurns {
+		_, parts := splitSyntheticTranscriptTurn(turn)
+		for part := range parts {
+			order = append(order, fmt.Sprintf("surviving_turn:%d%s%d", i, syntheticTurnPartPrefix, part))
+		}
 		order = append(order, fmt.Sprintf("surviving_turn:%d", i))
 	}
 	if s.DroppedSummary != "" {
@@ -302,7 +329,11 @@ func (s *syntheticSummary) Render(dropped map[string]bool) []OutputBlock {
 		if dropped[fmt.Sprintf("surviving_turn:%d", i)] {
 			continue
 		}
-		out = append(out, textBlock(turn))
+		rendered := renderSyntheticTranscriptTurn(i, turn, dropped)
+		if strings.TrimSpace(rendered) == "" {
+			continue
+		}
+		out = append(out, textBlock(rendered))
 	}
 	toolBlock := s.renderToolActivity(dropped)
 	if toolBlock != "" {
@@ -352,9 +383,12 @@ func (s *syntheticSummary) renderToolActivity(dropped map[string]bool) string {
 }
 
 func (s *syntheticSummary) hasTranscriptTurnsRemaining(dropped map[string]bool) bool {
-	for i := range s.TranscriptTurns {
+	for i, turn := range s.TranscriptTurns {
 		if !dropped[fmt.Sprintf("surviving_turn:%d", i)] {
-			return true
+			rendered := renderSyntheticTranscriptTurn(i, turn, dropped)
+			if strings.TrimSpace(rendered) != "" {
+				return true
+			}
 		}
 	}
 	return false
@@ -378,6 +412,13 @@ func (s *syntheticSummary) DroppedText(dropped map[string]bool) string {
 	for i, turn := range s.TranscriptTurns {
 		if dropped[fmt.Sprintf("surviving_turn:%d", i)] {
 			turns = append(turns, strings.TrimSpace(turn))
+			continue
+		}
+		_, parts := splitSyntheticTranscriptTurn(turn)
+		for partIdx, part := range parts {
+			if dropped[fmt.Sprintf("surviving_turn:%d%s%d", i, syntheticTurnPartPrefix, partIdx)] {
+				turns = append(turns, strings.TrimSpace(part))
+			}
 		}
 	}
 	if len(turns) > 0 {
@@ -404,4 +445,85 @@ func summarizeBlock(block string) string {
 		return block[:61] + "..."
 	}
 	return block
+}
+
+func renderSyntheticTranscriptTurn(turnIdx int, turn string, dropped map[string]bool) string {
+	prefix, parts := splitSyntheticTranscriptTurn(turn)
+	if len(parts) <= 1 {
+		return turn
+	}
+	var kept []string
+	for partIdx, part := range parts {
+		if dropped[fmt.Sprintf("surviving_turn:%d%s%d", turnIdx, syntheticTurnPartPrefix, partIdx)] {
+			continue
+		}
+		kept = append(kept, part)
+	}
+	if len(kept) == 0 {
+		return ""
+	}
+	return prefix + strings.Join(kept, "")
+}
+
+func splitSyntheticTranscriptTurn(turn string) (string, []string) {
+	if len(turn) <= syntheticTurnPartApproxBytes {
+		return "", nil
+	}
+	prefix, body := splitSyntheticTranscriptTurnPrefix(turn)
+	paragraphs := strings.SplitAfter(body, "\n\n")
+	if len(paragraphs) > 1 {
+		parts := coalesceSyntheticTurnParts(paragraphs)
+		if len(parts) > 1 {
+			return prefix, parts
+		}
+	}
+	parts := splitSyntheticTurnByBytes(body)
+	if len(parts) <= 1 {
+		return "", nil
+	}
+	return prefix, parts
+}
+
+func splitSyntheticTranscriptTurnPrefix(turn string) (string, string) {
+	idx := strings.Index(turn, ":**")
+	if idx < 0 {
+		return "", turn
+	}
+	bodyStart := idx + len(":**")
+	for bodyStart < len(turn) && turn[bodyStart] == ' ' {
+		bodyStart++
+	}
+	return turn[:bodyStart], turn[bodyStart:]
+}
+
+func coalesceSyntheticTurnParts(paragraphs []string) []string {
+	var parts []string
+	var current strings.Builder
+	for _, paragraph := range paragraphs {
+		if current.Len() > 0 && current.Len()+len(paragraph) > syntheticTurnPartApproxBytes {
+			parts = append(parts, current.String())
+			current.Reset()
+		}
+		current.WriteString(paragraph)
+	}
+	if current.Len() > 0 {
+		parts = append(parts, current.String())
+	}
+	return parts
+}
+
+func splitSyntheticTurnByBytes(turn string) []string {
+	var parts []string
+	for len(turn) > syntheticTurnPartApproxBytes {
+		cut := syntheticTurnPartApproxBytes
+		if next := strings.LastIndexAny(turn[:cut], " \n\t"); next > 0 {
+			cut = next + 1
+		}
+		parts = append(parts, turn[:cut])
+		turn = turn[cut:]
+	}
+	if turn != "" {
+		parts = append(parts, turn)
+	}
+	return parts
 }

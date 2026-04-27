@@ -27,7 +27,7 @@ func runMetricsDashboard(ctx context.Context, out io.Writer, sess *session.Sessi
 		slog.Error("cli.compact.preview.metrics.failed",
 			"session", sess.Name,
 			"transcript", path,
-			slog.Any("err", err),
+			"err", err,
 		)
 		return err
 	}
@@ -36,7 +36,7 @@ func runMetricsDashboard(ctx context.Context, out io.Writer, sess *session.Sessi
 		slog.Error("cli.compact.preview.metrics.failed",
 			"session", sess.Name,
 			"transcript", path,
-			slog.Any("err", err),
+			"err", err,
 		)
 		return err
 	}
