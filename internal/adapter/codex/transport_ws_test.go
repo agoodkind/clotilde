@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -440,6 +441,95 @@ func TestRunWebsocketTransportReconnectsAfterPrewarmFailure(t *testing.T) {
 	}
 	if got := content.String(); got != "recovered" {
 		t.Fatalf("content=%q want recovered", got)
+	}
+}
+
+func TestRunWebsocketTransportTimesOutHungPrewarmAndRunsGeneratedRequest(t *testing.T) {
+	t.Parallel()
+
+	upgrader := websocket.Upgrader{}
+	var handshakes atomic.Int32
+	requestsCh := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connNumber := handshakes.Add(1)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade: %v", err)
+		}
+		defer conn.Close()
+
+		_, requestBody, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("read request: %v", err)
+		}
+		var request map[string]any
+		if err := json.Unmarshal(requestBody, &request); err != nil {
+			t.Fatalf("unmarshal request: %v", err)
+		}
+		if connNumber == 1 {
+			if got, ok := request["generate"].(bool); !ok || got {
+				t.Fatalf("warmup generate=%v want false", request["generate"])
+			}
+			time.Sleep(100 * time.Millisecond)
+			return
+		}
+		requestsCh <- request
+		for _, event := range []map[string]any{
+			{"type": "response.created", "response": map[string]any{"id": "resp-1"}},
+			{"type": "response.output_text.delta", "delta": "after-timeout"},
+			{"type": "response.completed", "response": map[string]any{"id": "resp-1", "usage": map[string]any{"input_tokens": 10, "output_tokens": 1, "total_tokens": 11, "input_tokens_details": map[string]any{"cached_tokens": 0}, "output_tokens_details": map[string]any{"reasoning_tokens": 0}}}},
+		} {
+			payload, err := json.Marshal(event)
+			if err != nil {
+				t.Fatalf("marshal event: %v", err)
+			}
+			if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+				t.Fatalf("write event: %v", err)
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	var chunks []adapteropenai.StreamChunk
+	result, err := RunWebsocketTransport(context.Background(), WebsocketTransportConfig{
+		URL:            wsURL,
+		Token:          "test-token",
+		RequestID:      "req-ws",
+		Alias:          "gpt-5.4",
+		ConversationID: "cursor:conv-123",
+		TurnState:      NewTurnState(),
+		Prewarm:        true,
+		PrewarmTimeout: 20 * time.Millisecond,
+	}, ResponseCreateWsRequest{
+		Type:  "response.create",
+		Model: "gpt-5.4",
+		Input: []map[string]any{{"type": "message", "role": "user", "content": "hello"}},
+	}, func(ch adapteropenai.StreamChunk) error {
+		chunks = append(chunks, ch)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunWebsocketTransport: %v", err)
+	}
+	if result.ResponseID != "resp-1" {
+		t.Fatalf("response_id=%q want resp-1", result.ResponseID)
+	}
+	if handshakes.Load() != 2 {
+		t.Fatalf("handshakes=%d want 2", handshakes.Load())
+	}
+	request := <-requestsCh
+	if _, ok := request["previous_response_id"]; ok {
+		t.Fatalf("generated request after timed-out prewarm should not use previous_response_id: %v", request)
+	}
+	var content strings.Builder
+	for _, ch := range chunks {
+		if len(ch.Choices) > 0 {
+			content.WriteString(ch.Choices[0].Delta.Content)
+		}
+	}
+	if got := content.String(); got != "after-timeout" {
+		t.Fatalf("content=%q want after-timeout", got)
 	}
 }
 

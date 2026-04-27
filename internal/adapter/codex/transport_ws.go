@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gorilla/websocket"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
@@ -38,6 +39,8 @@ type ResponseCreateWsRequest struct {
 }
 
 var ErrWebsocketFallbackToHTTP = errors.New("codex websocket fallback to http")
+
+const defaultWebsocketPrewarmTimeout = 1500 * time.Millisecond
 
 func ResponseCreateRequestFromHTTP(req HTTPTransportRequest) ResponseCreateWsRequest {
 	return ResponseCreateWsRequest{
@@ -106,6 +109,7 @@ type WebsocketTransportConfig struct {
 	ConversationID string
 	TurnState      *TurnState
 	Prewarm        bool
+	PrewarmTimeout time.Duration
 }
 
 func websocketMessageToSyntheticSSE(message []byte) ([]byte, error) {
@@ -232,9 +236,15 @@ func RunWebsocketTransport(
 		warmup := WithWarmupGenerateFalse(payload)
 		warmup.Tools = []any{}
 		logWebsocketPrepared(ctx, cfg, warmup, TransportTelemetry{WebsocketWarmup: true})
+		prewarmTimeout := cfg.PrewarmTimeout
+		if prewarmTimeout <= 0 {
+			prewarmTimeout = defaultWebsocketPrewarmTimeout
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(prewarmTimeout))
 		warmupResult, warmupErr := writeAndParseWebsocketRequest(conn, cfg, warmup, func(adapteropenai.StreamChunk) error {
 			return nil
 		})
+		_ = conn.SetReadDeadline(time.Time{})
 		if warmupErr == nil && strings.TrimSpace(warmupResult.ResponseID) != "" {
 			payload = WithPreviousResponseID(payload, warmupResult.ResponseID, []map[string]any{})
 			prewarmUsed = true
