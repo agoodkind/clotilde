@@ -110,6 +110,17 @@ type WebsocketTransportConfig struct {
 	Prewarm        bool
 	PrewarmTimeout time.Duration
 	BodyLog        BodyLogConfig
+
+	// SessionCache enables persistent ws session reuse when set. The
+	// transport takes the cached session for ConversationID, sends a
+	// delta payload referencing the cached LastResponseID, then puts
+	// the session back on success. When nil or ConversationID is
+	// empty, the transport falls back to the legacy fresh-dial path
+	// that warms up and closes per call.
+	SessionCache *WebsocketSessionCache
+	// Log carries ws_session telemetry events. Optional; falls back
+	// to slog.Default().
+	Log *slog.Logger
 }
 
 // Mirrors the observed Responses websocket envelope from
@@ -279,6 +290,22 @@ func RunWebsocketTransport(
 	payload ResponseCreateWsRequest,
 	emit func(adapteropenai.StreamChunk) error,
 ) (RunResult, error) {
+	if cfg.SessionCache != nil && strings.TrimSpace(cfg.ConversationID) != "" {
+		return runWebsocketWithCache(ctx, cfg, payload, emit)
+	}
+	return runWebsocketFreshDial(ctx, cfg, payload, emit)
+}
+
+// runWebsocketFreshDial is the legacy path. Dial a fresh websocket,
+// optionally warm up, send one frame, close. Preserved so tests and
+// non-cache callers do not break. Tagged for removal once all
+// callers route through runWebsocketWithCache.
+func runWebsocketFreshDial(
+	ctx context.Context,
+	cfg WebsocketTransportConfig,
+	payload ResponseCreateWsRequest,
+	emit func(adapteropenai.StreamChunk) error,
+) (RunResult, error) {
 	conn, resp, err := dialResponsesWebsocket(ctx, cfg)
 	if resp != nil && resp.StatusCode == http.StatusUpgradeRequired {
 		logWebsocketPrepared(ctx, cfg, payload, TransportTelemetry{FallbackToHTTP: true})
@@ -334,4 +361,158 @@ func RunWebsocketTransport(
 	})
 
 	return writeAndParseWebsocketRequest(conn, cfg, payload, emit, false)
+}
+
+// runWebsocketWithCache implements the parity-superset path. The
+// transport takes a cached session keyed on ConversationID, computes
+// a delta of the input items relative to the prior baseline, sets
+// previous_response_id from the cache entry, sends one frame, and
+// returns the session to the cache on success. On any error the
+// session is invalidated. Reference: codex-rs/core/src/client.rs
+// stream_responses().
+func runWebsocketWithCache(
+	ctx context.Context,
+	cfg WebsocketTransportConfig,
+	payload ResponseCreateWsRequest,
+	emit func(adapteropenai.StreamChunk) error,
+) (RunResult, error) {
+	log := cfg.Log
+	if log == nil {
+		log = slog.Default()
+	}
+	conv := strings.TrimSpace(cfg.ConversationID)
+	fullInput := payload.Input
+
+	session, hit := cfg.SessionCache.Take(conv)
+	if hit {
+		log.InfoContext(ctx, "adapter.codex.ws_session.taken",
+			"component", "adapter",
+			"subcomponent", "codex",
+			"conversation_id", conv,
+			"last_response_id", session.LastResponseID,
+			"frame_count", session.FrameCount,
+			"age_ms", time.Since(session.OpenedAt).Milliseconds(),
+		)
+	}
+	if hit {
+		delta := ComputeDelta(session.LastInputItems, fullInput)
+		switch {
+		case delta.Ok:
+			payload = WithPreviousResponseID(payload, session.LastResponseID, delta.Items)
+		case delta.Reason == "no_extension":
+			cfg.SessionCache.Invalidate(conv, "no_extension")
+			session = nil
+			hit = false
+		default:
+			cfg.SessionCache.Invalidate(conv, delta.Reason)
+			session = nil
+			hit = false
+		}
+	}
+
+	if !hit {
+		opened, err := openSessionAndWarmup(ctx, cfg, payload, log)
+		if err != nil {
+			return NewRunResult("stop"), err
+		}
+		session = opened
+		if strings.TrimSpace(session.LastResponseID) != "" {
+			payload = WithPreviousResponseID(payload, session.LastResponseID, fullInput)
+		}
+	}
+
+	logWebsocketPrepared(ctx, cfg, payload, TransportTelemetry{
+		WebsocketConnectionReuse: hit,
+	})
+	log.InfoContext(ctx, "adapter.codex.frame.sent",
+		"component", "adapter",
+		"subcomponent", "codex",
+		"conversation_id", conv,
+		"request_id", cfg.RequestID,
+		"prev_response_id", payload.PreviousResponseID,
+		"delta_input_count", len(payload.Input),
+		"full_input_count", len(fullInput),
+		"is_warmup", false,
+	)
+
+	result, err := writeAndParseWebsocketRequest(session.Conn, cfg, payload, emit, false)
+	if err != nil {
+		cfg.SessionCache.Invalidate(conv, "ws_io_error")
+		return result, err
+	}
+
+	session.LastResponseID = strings.TrimSpace(result.ResponseID)
+	if session.LastResponseID == "" {
+		// Server completed without an id. Drop the connection rather
+		// than re-cache without a chain anchor.
+		cfg.SessionCache.Invalidate(conv, "missing_response_id")
+		return result, nil
+	}
+	session.LastInputItems = cloneInputItems(fullInput)
+	session.FrameCount++
+	cfg.SessionCache.Put(session)
+	log.InfoContext(ctx, "adapter.codex.ws_session.put",
+		"component", "adapter",
+		"subcomponent", "codex",
+		"conversation_id", conv,
+		"last_response_id", session.LastResponseID,
+		"frame_count", session.FrameCount,
+	)
+	return result, nil
+}
+
+// openSessionAndWarmup dials a fresh websocket, sends the warmup
+// frame (generate=false, empty input, no prev), captures the
+// response_id, and returns a populated WebsocketSession ready to
+// carry a real frame. The caller is responsible for installing the
+// session in the cache after the first real frame succeeds.
+func openSessionAndWarmup(
+	ctx context.Context,
+	cfg WebsocketTransportConfig,
+	payload ResponseCreateWsRequest,
+	log *slog.Logger,
+) (*WebsocketSession, error) {
+	conv := strings.TrimSpace(cfg.ConversationID)
+	conn, resp, err := dialResponsesWebsocket(ctx, cfg)
+	if resp != nil && resp.StatusCode == http.StatusUpgradeRequired {
+		return nil, ErrWebsocketFallbackToHTTP
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	warmup := WithWarmupGenerateFalse(payload)
+	warmup.Tools = []any{}
+	warmup.Input = []map[string]any{}
+	warmup.PreviousResponseID = ""
+	prewarmTimeout := cfg.PrewarmTimeout
+	if prewarmTimeout <= 0 {
+		prewarmTimeout = defaultWebsocketPrewarmTimeout
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(prewarmTimeout))
+	warmupResult, warmupErr := writeAndParseWebsocketRequest(conn, cfg, warmup, func(adapteropenai.StreamChunk) error {
+		return nil
+	}, true)
+	_ = conn.SetReadDeadline(time.Time{})
+	if warmupErr != nil || strings.TrimSpace(warmupResult.ResponseID) == "" {
+		_ = conn.Close()
+		return nil, fmt.Errorf("codex websocket warmup failed: %w", warmupErr)
+	}
+	now := time.Now()
+	session := &WebsocketSession{
+		Conn:           conn,
+		ConversationID: conv,
+		LastResponseID: warmupResult.ResponseID,
+		OpenedAt:       now,
+		LastUsed:       now,
+	}
+	if log != nil {
+		log.InfoContext(ctx, "adapter.codex.ws_session.opened",
+			"component", "adapter",
+			"subcomponent", "codex",
+			"conversation_id", conv,
+			"warmup_response_id", warmupResult.ResponseID,
+		)
+	}
+	return session, nil
 }

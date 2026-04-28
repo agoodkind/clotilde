@@ -302,6 +302,128 @@ func TestRunWebsocketTransportReturnsTopLevelErrorFrame(t *testing.T) {
 	}
 }
 
+func TestRunWebsocketTransportCacheReusesConnectionAndChainsResponseIDs(t *testing.T) {
+	t.Parallel()
+
+	upgrader := websocket.Upgrader{}
+	var handshakes atomic.Int32
+	requestsCh := make(chan []map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handshakes.Add(1)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade: %v", err)
+		}
+		defer conn.Close()
+		var requests []map[string]any
+		respIDs := []string{"warmup-1", "resp-1", "resp-2", "resp-3"}
+		// Server expects 4 frames: warmup + 3 real turns. Each
+		// completion carries the matching response_id so the client
+		// can chain previous_response_id.
+		for idx := 0; idx < 4; idx++ {
+			_, body, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var req map[string]any
+			if err := json.Unmarshal(body, &req); err != nil {
+				t.Fatalf("unmarshal request %d: %v", idx, err)
+			}
+			requests = append(requests, req)
+			events := []map[string]any{
+				{"type": "response.created", "response": map[string]any{"id": respIDs[idx]}},
+				{"type": "response.completed", "response": map[string]any{"id": respIDs[idx], "usage": map[string]any{"input_tokens": 1, "output_tokens": 0, "total_tokens": 1, "input_tokens_details": map[string]any{"cached_tokens": 0}, "output_tokens_details": map[string]any{"reasoning_tokens": 0}}}},
+			}
+			for _, event := range events {
+				payload, err := json.Marshal(event)
+				if err != nil {
+					t.Fatalf("marshal event: %v", err)
+				}
+				if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+					return
+				}
+			}
+		}
+		requestsCh <- requests
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cache := NewWebsocketSessionCache(nil, time.Minute)
+	cfg := WebsocketTransportConfig{
+		URL:            wsURL,
+		Token:          "test-token",
+		RequestID:      "req-cache",
+		Alias:          "gpt-5.4",
+		ConversationID: "cursor:conv-cache",
+		SessionCache:   cache,
+		TurnState:      NewTurnState(),
+	}
+
+	turn := func(items []map[string]any) {
+		_, err := RunWebsocketTransport(context.Background(), cfg, ResponseCreateWsRequest{
+			Type:  "response.create",
+			Model: "gpt-5.4",
+			Input: items,
+		}, func(adapteropenai.StreamChunk) error { return nil })
+		if err != nil {
+			t.Fatalf("turn: %v", err)
+		}
+	}
+
+	turn1 := []map[string]any{{"type": "message", "role": "user", "content": []map[string]any{{"type": "input_text", "text": "first"}}}}
+	turn2 := append([]map[string]any{}, turn1...)
+	turn2 = append(turn2, map[string]any{"type": "message", "role": "assistant", "content": []map[string]any{{"type": "output_text", "text": "ack-1"}}})
+	turn2 = append(turn2, map[string]any{"type": "message", "role": "user", "content": []map[string]any{{"type": "input_text", "text": "second"}}})
+	turn3 := append([]map[string]any{}, turn2...)
+	turn3 = append(turn3, map[string]any{"type": "message", "role": "assistant", "content": []map[string]any{{"type": "output_text", "text": "ack-2"}}})
+	turn3 = append(turn3, map[string]any{"type": "message", "role": "user", "content": []map[string]any{{"type": "input_text", "text": "third"}}})
+
+	turn(turn1)
+	turn(turn2)
+	turn(turn3)
+
+	if got := handshakes.Load(); got != 1 {
+		t.Fatalf("expected 1 ws handshake across 3 turns, got %d", got)
+	}
+	requests := <-requestsCh
+	if len(requests) != 4 {
+		t.Fatalf("expected 4 frames (warmup + 3 turns), got %d", len(requests))
+	}
+
+	// Frame 0: warmup. generate=false, no prev, empty input.
+	if got, _ := requests[0]["generate"].(bool); got {
+		t.Errorf("warmup generate=%v want false", requests[0]["generate"])
+	}
+	if got, ok := requests[0]["previous_response_id"].(string); ok && got != "" {
+		t.Errorf("warmup previous_response_id=%q want empty", got)
+	}
+
+	// Frame 1: turn 1 real. prev=warmup-1, full input (1 item).
+	if got, _ := requests[1]["previous_response_id"].(string); got != "warmup-1" {
+		t.Errorf("turn1 prev=%q want warmup-1", got)
+	}
+	if input, _ := requests[1]["input"].([]any); len(input) != 1 {
+		t.Errorf("turn1 input count=%d want 1 (full)", len(input))
+	}
+
+	// Frame 2: turn 2 real. prev=resp-1, delta input (2 new items).
+	if got, _ := requests[2]["previous_response_id"].(string); got != "resp-1" {
+		t.Errorf("turn2 prev=%q want resp-1", got)
+	}
+	if input, _ := requests[2]["input"].([]any); len(input) != 2 {
+		t.Errorf("turn2 input count=%d want 2 (delta)", len(input))
+	}
+
+	// Frame 3: turn 3 real. prev=resp-2, delta input (2 new items).
+	if got, _ := requests[3]["previous_response_id"].(string); got != "resp-2" {
+		t.Errorf("turn3 prev=%q want resp-2", got)
+	}
+	if input, _ := requests[3]["input"].([]any); len(input) != 2 {
+		t.Errorf("turn3 input count=%d want 2 (delta)", len(input))
+	}
+}
+
 func TestRunWebsocketTransportPrewarmsAndReusesConnection(t *testing.T) {
 	t.Parallel()
 
