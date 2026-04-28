@@ -88,6 +88,46 @@ func (s *Server) trackConnState(conn net.Conn, state http.ConnState) {
 	s.conns[conn] = state
 }
 
+// ActiveRequestCount returns the number of HTTP connections currently
+// serving a request (http.StateActive). Cloudflare-style keep-alive
+// connections sit in StateIdle and are excluded so reload drain logic
+// can distinguish "stream still streaming" from "tunnel is alive but
+// nothing in flight". Concurrent-safe.
+func (s *Server) ActiveRequestCount() int {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	n := 0
+	for _, state := range s.conns {
+		if state == http.StateActive {
+			n++
+		}
+	}
+	return n
+}
+
+// WaitForIdle polls ActiveRequestCount until it drops to zero or the
+// supplied context is canceled. The polling cadence is fixed at 50ms
+// which is well under the wall-time of any meaningful upstream call
+// while keeping the busy loop bounded. Returns the final count when
+// the context fires.
+func (s *Server) WaitForIdle(ctx context.Context) int {
+	if s.ActiveRequestCount() == 0 {
+		return 0
+	}
+	t := time.NewTicker(50 * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return s.ActiveRequestCount()
+		case <-t.C:
+			if s.ActiveRequestCount() == 0 {
+				return 0
+			}
+		}
+	}
+}
+
 func (s *Server) closeTrackedConns(states ...http.ConnState) {
 	if len(states) == 0 {
 		return

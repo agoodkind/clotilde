@@ -39,7 +39,14 @@ type ExtraLoop func(log *slog.Logger) func()
 
 const adapterConfigReloadDebounce = 250 * time.Millisecond
 const adapterShutdownWait = 4 * time.Second
-const reloadHTTPDrainWait = 500 * time.Millisecond
+// reloadHTTPDrainWait caps how long the reload waits for in-flight
+// adapter requests to finish before force-closing. The drain polls
+// active-request count rather than a flat sleep, so a tunnel that sits
+// idle (Cloudflare keep-alive with no Cursor traffic) returns
+// immediately. A live agent turn can run for a minute or more, so the
+// max wait is generous; it only matters when a real stream is in
+// flight.
+const reloadHTTPDrainWait = 10 * time.Minute
 const reloadGRPCDrainWait = 10 * time.Minute
 const envDaemonReloadChild = "CLYDE_DAEMON_RELOAD_CHILD"
 const envDaemonInheritedListeners = "CLYDE_DAEMON_INHERITED_LISTENERS"

@@ -73,6 +73,19 @@ func (s *ContinuationStore) RecordHitRate(conversationKey string, hit bool) (flo
 	return s.hitRates.Record(conversationKey, hit)
 }
 
+// Size returns the number of stored continuation entries. Used by
+// the upstream-expired-response recovery path to log store size
+// before and after Forget so caching regressions are visible from
+// logs alone.
+func (s *ContinuationStore) Size() int {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.entries)
+}
+
 func (s *ContinuationStore) Prepare(req ResponseCreateWsRequest) ContinuationDecision {
 	key := strings.TrimSpace(req.PromptCacheKey)
 	if key == "" {
