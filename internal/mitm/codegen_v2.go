@@ -66,8 +66,7 @@ func buildWireFlavorsSource(snap SnapshotV2, opts CodegenOptions) string {
 	}
 	b.WriteString("\n// Upstream: ")
 	b.WriteString(snap.Upstream.Name)
-	b.WriteString("\n// Flavors observed: ")
-	b.WriteString(fmt.Sprintf("%d", len(snap.Flavors)))
+	fmt.Fprintf(&b, "\n// Flavors observed: %d", len(snap.Flavors))
 	b.WriteString("\n//\n// Run `clyde mitm codegen --package ")
 	b.WriteString(opts.PackageName)
 	b.WriteString(" <reference.toml>` to regenerate.\n\n")

@@ -139,7 +139,7 @@ filters apply only to v2.`,
 				caCert = defaultCACert()
 			}
 			if driftLogPath == "" {
-				driftLogPath = defaultDriftLogPath()
+				driftLogPath = defaultDriftLogPath(upstream)
 			}
 			ctx, cancel := context.WithCancel(cmd.Context())
 			defer cancel()
@@ -215,7 +215,7 @@ filters apply only to v2.`,
 	cmd.Flags().StringVar(&referencePath, "reference", "", "path to the committed reference.toml")
 	cmd.Flags().StringVar(&captureRoot, "capture-dir", "", "root directory for transcripts")
 	cmd.Flags().StringVar(&caCert, "ca-cert", "", "path to mitmproxy CA cert")
-	cmd.Flags().StringVar(&driftLogPath, "drift-log", "", "path for the structured drift JSONL log (default: ~/.local/state/clyde/mitm-drift.jsonl)")
+	cmd.Flags().StringVar(&driftLogPath, "drift-log", "", "path for the structured drift JSONL log (default: ~/.local/state/clyde/mitm-drift/<upstream>.jsonl)")
 	cmd.Flags().StringSliceVar(&includeUA, "include-ua", nil, "v2 only: include records whose User-Agent contains one of these substrings")
 	cmd.Flags().StringSliceVar(&excludeUA, "exclude-ua", nil, "v2 only: drop records whose User-Agent contains one of these substrings")
 	cmd.Flags().StringSliceVar(&requireKeys, "require-body-key", nil, "v2 only: require these top-level body keys")
@@ -225,15 +225,23 @@ filters apply only to v2.`,
 	return cmd
 }
 
-func defaultDriftLogPath() string {
+// defaultDriftLogPath returns ~/.local/state/clyde/mitm-drift/<upstream>.jsonl.
+// One file per upstream keeps each log small enough to grep, tail, or hand
+// to a smaller LLM context without truncation. Cross-upstream patterns are
+// still recoverable by globbing or jq across files.
+func defaultDriftLogPath(upstream string) string {
+	name := strings.TrimSpace(upstream)
+	if name == "" {
+		name = "default"
+	}
 	if base := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); base != "" {
-		return filepath.Join(base, "clyde", "mitm-drift.jsonl")
+		return filepath.Join(base, "clyde", "mitm-drift", name+".jsonl")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "mitm-drift.jsonl"
+		return filepath.Join("mitm-drift", name+".jsonl")
 	}
-	return filepath.Join(home, ".local", "state", "clyde", "mitm-drift.jsonl")
+	return filepath.Join(home, ".local", "state", "clyde", "mitm-drift", name+".jsonl")
 }
 
 func out2(f *cli.Factory) io.Writer {
