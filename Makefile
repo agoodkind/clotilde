@@ -29,6 +29,8 @@ LDFLAGS := -X '$(GKLOG_VPKG).Commit=$(COMMIT)' \
            -X '$(GKLOG_VPKG).BuildTime=$(DATE)' \
            -X '$(GKLOG_VPKG).BinHash='
 
+GO_SRC := $(shell find . -name '*.go' -not -path './vendor/*')
+
 # ---------------------------------------------------------------------------
 # macOS install paths
 # ---------------------------------------------------------------------------
@@ -55,7 +57,9 @@ help: ## Show this help message
 # Build
 # ---------------------------------------------------------------------------
 
-build: ## Build the clyde binary
+build: dist/clyde ## Build the clyde binary
+
+dist/clyde: $(GO_SRC) go.mod go.sum
 	@echo "Building clyde..."
 	@mkdir -p dist
 	@go build -ldflags "$(LDFLAGS)" -o dist/clyde ./cmd/clyde
