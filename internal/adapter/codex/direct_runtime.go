@@ -19,6 +19,15 @@ type DirectConfig struct {
 	Token            string
 	AccountID        string
 	RequestID        string
+	// WorkspacePath is the absolute path to the Cursor-active
+	// workspace, used to populate the `workspaces` block in
+	// `x-codex-turn-metadata`. Empty when Cursor did not supply a
+	// workspace.
+	WorkspacePath string
+	// WorkspaceProbe runs the small git probe (origin / HEAD /
+	// has_changes). Optional. When nil, the workspace block is
+	// emitted with the path only and no git fields.
+	WorkspaceProbe *WorkspaceProbe
 	// SessionCache enables persistent ws session reuse with chained
 	// previous_response_id and delta input. Constructed once per
 	// Provider. Required: RunDirect refuses to run without it.
@@ -46,6 +55,13 @@ func RunDirect(
 	if conversationID != "" {
 		installationID, _ := LoadInstallationID()
 		turnMeta := NewTurnMetadata(conversationID, "")
+		if ws := strings.TrimSpace(cfg.WorkspacePath); ws != "" {
+			entry := TurnMetadataWorkspace{}
+			if cfg.WorkspaceProbe != nil {
+				entry = cfg.WorkspaceProbe.Probe(ws)
+			}
+			turnMeta = turnMeta.WithWorkspace(ws, entry)
+		}
 		turnMetaJSON, _ := turnMeta.MarshalCompact()
 		transportPayload.ClientMetadata = ClientMetadataWithTurn(installationID, CodexWindowID(conversationID), turnMetaJSON)
 	}

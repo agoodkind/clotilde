@@ -22,14 +22,15 @@ import (
 // stitches the websocket transport, the continuation ledger, and the
 // normalized event emission together.
 type Provider struct {
-	cfg          config.AdapterCodex
-	auth         adapterprovider.AuthLookup
-	log          *slog.Logger
-	httpClient   *http.Client
-	now          func() time.Time
-	sessionCache *WebsocketSessionCache
-	accountID    string
-	bodyLog      BodyLogConfig
+	cfg            config.AdapterCodex
+	auth           adapterprovider.AuthLookup
+	log            *slog.Logger
+	httpClient     *http.Client
+	now            func() time.Time
+	sessionCache   *WebsocketSessionCache
+	workspaceProbe *WorkspaceProbe
+	accountID      string
+	bodyLog        BodyLogConfig
 }
 
 // ProviderOptions extends the generic provider.Deps with Codex-only
@@ -63,14 +64,15 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 		idleTTL = defaultWsSessionIdleTTL
 	}
 	return &Provider{
-		cfg:          deps.Config.Codex,
-		auth:         deps.Auth,
-		log:          log,
-		httpClient:   httpClient,
-		now:          now,
-		sessionCache: NewWebsocketSessionCache(log, idleTTL),
-		accountID:    strings.TrimSpace(opts.AccountID),
-		bodyLog:      opts.BodyLog,
+		cfg:            deps.Config.Codex,
+		auth:           deps.Auth,
+		log:            log,
+		httpClient:     httpClient,
+		now:            now,
+		sessionCache:   NewWebsocketSessionCache(log, idleTTL),
+		workspaceProbe: NewWorkspaceProbe(),
+		accountID:      strings.TrimSpace(opts.AccountID),
+		bodyLog:        opts.BodyLog,
 	}
 }
 
@@ -126,6 +128,8 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		Token:            token,
 		AccountID:        p.accountID,
 		RequestID:        req.Cursor.RequestID,
+		WorkspacePath:    req.Cursor.WorkspacePath,
+		WorkspaceProbe:   p.workspaceProbe,
 		SessionCache:     p.sessionCache,
 		Log:              p.log,
 		BodyLog:          p.bodyLog,
