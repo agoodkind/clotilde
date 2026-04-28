@@ -86,8 +86,13 @@ func Start(dir string) (*Watcher, error) {
 		stop:    make(chan watchSignal),
 		done:    make(chan watchSignal),
 	}
+	// Seed the current map synchronously before the watcher is
+	// returned. This guarantees Snapshot() and external callers
+	// observe the initial state without racing against the scan
+	// goroutine. The fsnotify loop runs in its own goroutine so it
+	// can pick up subsequent changes.
+	w.initialScan()
 	go w.loop()
-	go w.initialScan()
 	return w, nil
 }
 
