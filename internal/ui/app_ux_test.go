@@ -184,6 +184,42 @@ func TestUX_BasedirLaunchNoMatchesOpensNewSessionTypeModal(t *testing.T) {
 	}
 }
 
+func TestUX_SnapshotRefreshKeepsHighlightedRowBySessionID(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 3)
+	defer cleanup()
+
+	a.table.Active = true
+	a.table.SelectedRow = 1
+	highlighted := a.sessions[a.visibleIdx[1]]
+	renamed := *highlighted
+	renamed.Name = "renamed-highlight"
+	renamed.Metadata.Name = "renamed-highlight"
+	renamed.Metadata.LastAccessed = time.Now().Add(10 * time.Minute)
+
+	a.applySessionSnapshot(SessionSnapshot{
+		Sessions: []*session.Session{a.sessions[a.visibleIdx[0]], &renamed, a.sessions[a.visibleIdx[2]]},
+		Models: map[string]string{
+			a.sessions[a.visibleIdx[0]].Name: "opus",
+			renamed.Name:                     "opus",
+			a.sessions[a.visibleIdx[2]].Name: "opus",
+		},
+	})
+
+	if !a.table.Active {
+		t.Fatalf("table highlight inactive after snapshot refresh")
+	}
+	got := a.currentSession()
+	if got == nil {
+		t.Fatalf("no current session after snapshot refresh")
+	}
+	if got.Metadata.SessionID != highlighted.Metadata.SessionID {
+		t.Fatalf("highlighted session ID = %q, want %q", got.Metadata.SessionID, highlighted.Metadata.SessionID)
+	}
+	if got.Name != "renamed-highlight" {
+		t.Fatalf("highlighted session name = %q, want renamed-highlight", got.Name)
+	}
+}
+
 func TestUX_SidecarRemoteLaunchPinsCanonicalSession(t *testing.T) {
 	a, scr, cleanup := mkAppWithSessions(t, 2)
 	defer cleanup()

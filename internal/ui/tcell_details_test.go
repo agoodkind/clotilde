@@ -124,6 +124,30 @@ func TestDetailsView_TranscriptSectionSeparatesHeuristicsFromContext(t *testing.
 	}
 }
 
+func TestDetailsView_ConversationShowsLoadingSpinner(t *testing.T) {
+	view := NewDetailsView()
+	sess := &session.Session{
+		Name: "demo",
+		Metadata: session.Metadata{
+			Name:          "demo",
+			SessionID:     "1234",
+			WorkspaceRoot: "/Users/test/Sites/demo",
+			Created:       time.Date(2026, 4, 24, 9, 0, 0, 0, time.UTC),
+			LastAccessed:  time.Date(2026, 4, 24, 9, 5, 0, 0, time.UTC),
+		},
+	}
+
+	lines := flattenSegments(view.buildRight(sess, SessionDetail{ConversationLoading: true}))
+	joined := strings.Join(lines, "\n")
+
+	if !strings.Contains(joined, "loading conversation") {
+		t.Fatalf("conversation pane missing loading state:\n%s", joined)
+	}
+	if strings.Contains(joined, "no visible messages") {
+		t.Fatalf("conversation pane should not show empty state while loading:\n%s", joined)
+	}
+}
+
 func TestFormatCompactTokens(t *testing.T) {
 	cases := map[int]string{
 		44:      "44",

@@ -19,6 +19,15 @@ type Result struct {
 	// dispatcher does not synthesize one if the provider leaves it
 	// empty.
 	SystemFingerprint string
+	// ReasoningSignaled reports whether the provider produced any
+	// reasoning content during the turn (i.e. extended thinking
+	// fired). Drives the adapter.chat.completed reasoning_signaled
+	// telemetry attribute.
+	ReasoningSignaled bool
+	// ReasoningVisible reports whether the reasoning content
+	// surfaced to the client (some efforts hide reasoning). Drives
+	// the adapter.chat.completed reasoning_visible attribute.
+	ReasoningVisible bool
 	// ReasoningSummary is the surfaced reasoning text (or its
 	// summary) when the provider supports reasoning. Empty when the
 	// turn produced no reasoning trace.

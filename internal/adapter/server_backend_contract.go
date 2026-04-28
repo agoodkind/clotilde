@@ -7,6 +7,8 @@ import (
 
 	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
+	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
+	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 )
 
 // applyBackendOverride keeps backend selection in the root adapter so request
@@ -48,6 +50,9 @@ func (s *Server) dispatchResolvedChat(
 	effort string,
 	reqID string,
 	body []byte,
+	cursorReq adaptercursor.Request,
+	resolvedReq adapterresolver.ResolvedRequest,
+	resolverErr error,
 ) {
 	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.backend.dispatching",
 		slog.String("request_id", reqID),
@@ -76,6 +81,10 @@ func (s *Server) dispatchResolvedChat(
 		}, w, r, req, model, effort, reqID, body)
 		return
 	case BackendCodex:
+		if s.codexProvider != nil && resolverErr == nil && resolvedReq.Provider == adapterresolver.ProviderCodex {
+			s.dispatchCodexProvider(w, r, req, model, reqID, cursorReq, resolvedReq)
+			return
+		}
 		if err := adaptercodex.Dispatch(s, w, r, req, model, effort, reqID); err != nil {
 			writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
 		}

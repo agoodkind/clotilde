@@ -333,6 +333,9 @@ func (d *DetailsView) buildRight(sess *session.Session, detail SessionDetail) []
 	}
 
 	if len(src) == 0 {
+		if detail.ConversationLoading {
+			return [][]TextSegment{{{Text: "  " + formatLoadingValue("loading conversation..."), Style: StyleMuted}}}
+		}
 		return [][]TextSegment{{{Text: "  (no visible messages)", Style: StyleMuted}}}
 	}
 

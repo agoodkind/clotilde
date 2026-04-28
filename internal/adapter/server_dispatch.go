@@ -276,8 +276,6 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			slog.Int("mcp_tool_count", len(cursorReq.MCPToolNames)),
 		)
 	}
-	_ = resolvedReq
-
 	var ok bool
 	model, ok = s.applyBackendOverride(w, r, req, model, reqID)
 	if !ok {
@@ -317,7 +315,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.dispatchResolvedChat(w, r, req, model, effort, reqID, body)
+	s.dispatchResolvedChat(w, r, req, model, effort, reqID, body, cursorReq, resolvedReq, resolverErr)
 }
 
 func truncateBody(body []byte, maxBytes int) (string, bool) {

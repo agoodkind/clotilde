@@ -13,7 +13,6 @@ import (
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
-	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	"goodkind.io/clyde/internal/config"
 )
 
@@ -118,7 +117,9 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 	}
 
 	model := resolvedModelFromRequest(req)
-	emit := chunkToEventBridge(w)
+	emit := func(chunk adapteropenai.StreamChunk) error {
+		return w.WriteStreamChunk(chunk)
+	}
 
 	runResult, runErr := RunDirect(ctx, directCfg, req.OpenAI, model, req.Effort.String(), emit)
 	if runErr != nil {
@@ -130,6 +131,8 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 	return adapterprovider.Result{
 		Usage:                      runResult.Usage,
 		FinishReason:               runResult.FinishReason,
+		ReasoningSignaled:          runResult.ReasoningSignaled,
+		ReasoningVisible:           runResult.ReasoningVisible,
 		DerivedCacheCreationTokens: runResult.DerivedCacheCreationTokens,
 	}, nil
 }
@@ -148,39 +151,6 @@ func resolvedModelFromRequest(req adapterresolver.ResolvedRequest) adaptermodel.
 		MaxOutputTokens: req.ContextBudget.OutputTokens,
 		FamilySlug:      req.Family,
 	}
-}
-
-// chunkToEventBridge produces the StreamChunk emit closure used by
-// the existing transport. Each chunk maps to a single render.Event
-// with kind EventAssistantTextDelta carrying the chunk's content
-// payload. The bridge intentionally does not interpret tool call or
-// reasoning deltas here; downstream readers see them as opaque text
-// deltas until Plan 6 adds a typed parser.
-func chunkToEventBridge(w adapterprovider.EventWriter) func(adapteropenai.StreamChunk) error {
-	return func(chunk adapteropenai.StreamChunk) error {
-		text := chunkPrimaryText(chunk)
-		if text == "" {
-			return nil
-		}
-		return w.WriteEvent(adapterrender.Event{
-			Kind: adapterrender.EventAssistantTextDelta,
-			Text: text,
-		})
-	}
-}
-
-// chunkPrimaryText pulls the most useful text payload from a stream
-// chunk. The full StreamChunk shape carries delta content, role, and
-// tool calls; this helper covers the text-delta path. Other shapes
-// fall through to empty so the bridge stays a no-op rather than
-// emitting a malformed event.
-func chunkPrimaryText(chunk adapteropenai.StreamChunk) string {
-	for _, choice := range chunk.Choices {
-		if text := strings.TrimSpace(choice.Delta.Content); text != "" {
-			return text
-		}
-	}
-	return ""
 }
 
 // codexBaseURL applies the documented default for the Codex Responses

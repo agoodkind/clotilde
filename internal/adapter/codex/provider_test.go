@@ -21,8 +21,14 @@ func (f fakeAuth) Token(_ context.Context) (string, error) {
 }
 
 type capturingWriter struct {
-	events []adapterrender.Event
+	chunks  []adapteropenai.StreamChunk
+	events  []adapterrender.Event
 	flushed bool
+}
+
+func (c *capturingWriter) WriteStreamChunk(chunk adapteropenai.StreamChunk) error {
+	c.chunks = append(c.chunks, chunk)
+	return nil
 }
 
 func (c *capturingWriter) WriteEvent(ev adapterrender.Event) error {
@@ -97,72 +103,6 @@ func TestCodexWebsocketURLConversion(t *testing.T) {
 	}
 }
 
-func TestChunkPrimaryTextExtraction(t *testing.T) {
-	cases := []struct {
-		name string
-		in   adapteropenai.StreamChunk
-		want string
-	}{
-		{
-			name: "empty chunk",
-			in:   adapteropenai.StreamChunk{},
-			want: "",
-		},
-		{
-			name: "first choice carries text",
-			in: adapteropenai.StreamChunk{Choices: []adapteropenai.StreamChoice{
-				{Delta: adapteropenai.StreamDelta{Content: "hello"}},
-			}},
-			want: "hello",
-		},
-		{
-			name: "trims whitespace-only deltas",
-			in: adapteropenai.StreamChunk{Choices: []adapteropenai.StreamChoice{
-				{Delta: adapteropenai.StreamDelta{Content: "   "}},
-				{Delta: adapteropenai.StreamDelta{Content: "world"}},
-			}},
-			want: "world",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := chunkPrimaryText(tc.in); got != tc.want {
-				t.Errorf("chunkPrimaryText() = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestChunkToEventBridgeEmitsTextDelta(t *testing.T) {
-	w := &capturingWriter{}
-	emit := chunkToEventBridge(w)
-	chunk := adapteropenai.StreamChunk{Choices: []adapteropenai.StreamChoice{
-		{Delta: adapteropenai.StreamDelta{Content: "hi"}},
-	}}
-	if err := emit(chunk); err != nil {
-		t.Fatalf("emit() err = %v", err)
-	}
-	if len(w.events) != 1 {
-		t.Fatalf("got %d events, want 1", len(w.events))
-	}
-	if w.events[0].Kind != adapterrender.EventAssistantTextDelta {
-		t.Errorf("event kind = %v, want EventAssistantTextDelta", w.events[0].Kind)
-	}
-	if w.events[0].Text != "hi" {
-		t.Errorf("event text = %q, want hi", w.events[0].Text)
-	}
-}
-
-func TestChunkToEventBridgeSkipsEmptyText(t *testing.T) {
-	w := &capturingWriter{}
-	emit := chunkToEventBridge(w)
-	if err := emit(adapteropenai.StreamChunk{}); err != nil {
-		t.Fatalf("emit() err = %v", err)
-	}
-	if len(w.events) != 0 {
-		t.Errorf("got %d events, want 0 (empty chunks are dropped)", len(w.events))
-	}
-}
 
 func TestResolvedModelFromRequestPopulatesCodexFields(t *testing.T) {
 	req := adapterresolver.ResolvedRequest{
