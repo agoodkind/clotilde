@@ -240,25 +240,62 @@ func diffContinuationOutputBaseline(outputItems, current []map[string]any) conti
 		out.Reason = "output_item_baseline_without_events"
 		return out
 	}
-	if len(actual) < len(expected) {
-		out.Reason = "output_item_baseline_mismatch"
-		out.Diagnostics.Mismatch = continuationMismatchAt(expected, actual, 0, 0)
-		return out
-	}
-	for start := len(actual) - len(expected); start >= 0; start-- {
-		if continuationEventSequenceEqual(expected, actual[start:start+len(expected)]) {
-			last := actual[start+len(expected)-1]
-			tailStart := last.ItemIndex + 1
-			out.Diagnostics.MatchStart = actual[start].ItemIndex
-			out.Diagnostics.MatchEnd = tailStart
-			if tailStart < len(current) {
-				out.IncrementalInput = cloneInput(current[tailStart:])
+
+	// Strict path: try to find the entire stored output sequence as a
+	// contiguous subsequence in current. This is the safest match
+	// when the client preserves every item we emitted.
+	if len(actual) >= len(expected) {
+		for start := len(actual) - len(expected); start >= 0; start-- {
+			if continuationEventSequenceEqual(expected, actual[start:start+len(expected)]) {
+				last := actual[start+len(expected)-1]
+				tailStart := last.ItemIndex + 1
+				out.Diagnostics.MatchStart = actual[start].ItemIndex
+				out.Diagnostics.MatchEnd = tailStart
+				if tailStart < len(current) {
+					out.IncrementalInput = cloneInput(current[tailStart:])
+					return out
+				}
+				out.Reason = "no_incremental_input_after_output_baseline"
 				return out
 			}
-			out.Reason = "no_incremental_input_after_output_baseline"
-			return out
 		}
 	}
+
+	// Permissive path: clients (Cursor in particular) prune
+	// intermediate reasoning items between turns. The upstream
+	// previous_response_id pins the prior thread on the server, so
+	// the adapter does not need every output item to survive in the
+	// new input. Anchor on the LAST identity-bearing item we stored
+	// and treat everything after it in current as the incremental
+	// delta. Reasoning items have an `id`; tool calls and outputs
+	// carry `call_id`. Plain text messages have no identity and are
+	// skipped here.
+	for i := len(expected) - 1; i >= 0; i-- {
+		identity := expected[i].Event.Identity
+		if identity == "" {
+			continue
+		}
+		anchor := -1
+		for j := len(actual) - 1; j >= 0; j-- {
+			if continuationEventsEqual(expected[i].Event, actual[j].Event) {
+				anchor = j
+				break
+			}
+		}
+		if anchor < 0 {
+			continue
+		}
+		tailStart := actual[anchor].ItemIndex + 1
+		out.Diagnostics.MatchStart = actual[anchor].ItemIndex
+		out.Diagnostics.MatchEnd = tailStart
+		if tailStart < len(current) {
+			out.IncrementalInput = cloneInput(current[tailStart:])
+			return out
+		}
+		out.Reason = "no_incremental_input_after_output_baseline"
+		return out
+	}
+
 	out.Reason = "output_item_baseline_mismatch"
 	bestStart, matched := continuationBestEventPrefix(expected, actual)
 	out.Diagnostics.Mismatch = continuationMismatchAt(expected, actual, matched, bestStart+matched)
