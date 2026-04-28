@@ -22,6 +22,8 @@ import (
 	"goodkind.io/clyde/internal/adapter/anthropic/fallback"
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	"goodkind.io/clyde/internal/adapter/oauth"
+	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
+	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/config"
 )
 
@@ -115,8 +117,10 @@ type Server struct {
 	fbSem         chan struct{}
 	httpClient    *http.Client
 	ctxUsage      *contextUsageTracker
-	codexSessions *codexSessionManager
-	codexContinue *adaptercodex.ContinuationStore
+	codexSessions    *codexSessionManager
+	codexContinue    *adaptercodex.ContinuationStore
+	providerRegistry *adapterprovider.Registry
+	codexProvider    *adaptercodex.Provider
 }
 
 // New constructs a Server from the given adapter config. The deps
@@ -166,6 +170,21 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 		s.codexSessions = newCodexSessionManager(log.With("subcomponent", "codex_session"), func(spec codexSessionSpec) (codexManagedTransport, error) {
 			return newCodexAppTransport(s.codexAppServerPath(), spec)
 		})
+		s.providerRegistry = adapterprovider.NewRegistry()
+		s.codexProvider = adaptercodex.NewProvider(adapterprovider.Deps{
+			Config:     cfg,
+			Auth:       codexAuthLookup{server: s},
+			Logger:     log.With("subcomponent", "codex_provider"),
+			HTTPClient: s.httpClient,
+		}, adaptercodex.ProviderOptions{
+			Continuation: s.codexContinue,
+			BodyLog:      adaptercodex.BodyLogConfig{Mode: logging.Body.Mode, MaxKB: logging.Body.MaxKB},
+		})
+		s.providerRegistry.Register(s.codexProvider)
+		log.LogAttrs(context.Background(), slog.LevelInfo, "adapter.provider_registry.registered",
+			slog.String("provider", string(adapterresolver.ProviderCodex)),
+			slog.Int("registered_count", len(s.providerRegistry.IDs())),
+		)
 	}
 	if cfg.DirectOAuth {
 		s.oauthMgr = oauth.NewManager(cfg.OAuth, "")
@@ -290,6 +309,20 @@ func (s *Server) readCodexAccessToken() (string, error) {
 		return "", errors.New("codex auth file missing tokens.access_token")
 	}
 	return doc.Tokens.AccessToken, nil
+}
+
+// codexAuthLookup adapts the Server's existing auth-file reader to
+// the provider.AuthLookup interface so the Codex Provider can ask for
+// a fresh token without depending on the daemon's internals.
+type codexAuthLookup struct {
+	server *Server
+}
+
+func (a codexAuthLookup) Token(_ context.Context) (string, error) {
+	if a.server == nil {
+		return "", errors.New("codex auth lookup: nil server")
+	}
+	return a.server.readCodexAccessToken()
 }
 
 func (s *Server) readCodexAccountID() string {
