@@ -71,6 +71,24 @@ func (s *Server) dispatchResolvedChat(
 		_ = s.HandleFallback(w, r, req, model, reqID, false)
 		return
 	case BackendAnthropic:
+		// Plan 4 step 1: try the registry path first. The Anthropic
+		// Provider is currently a registry shim that returns
+		// ErrLegacyDispatchPath; when that fires we fall through to
+		// the legacy anthropicbackend.Dispatch chain. The shim is in
+		// place so future symmetry-aware code paths can look up the
+		// provider by ResolvedRequest.Provider the same way Codex
+		// does. The internal rewrite (Provider.Execute owns the wire
+		// path, fallback/ deletion) is a follow-up slice.
+		if s.anthropicProvider != nil && resolverErr == nil &&
+			resolvedReq.Provider == adapterresolver.ProviderAnthropic {
+			if registered, lookupErr := s.providerRegistry.Lookup(adapterresolver.ProviderAnthropic); lookupErr == nil {
+				_ = registered
+				// Intentional placeholder. We look up to assert
+				// registry presence under the correct ID. Today
+				// Execute returns ErrLegacyDispatchPath, so we still
+				// fall through to the legacy dispatch path below.
+			}
+		}
 		anthropicbackend.Dispatch(s, anthropicbackend.FallbackConfig{
 			Enabled:            s.cfg.Fallback.Enabled,
 			Trigger:            s.cfg.Fallback.Trigger,

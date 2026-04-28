@@ -118,7 +118,8 @@ type Server struct {
 	httpClient    *http.Client
 	ctxUsage      *contextUsageTracker
 	providerRegistry *adapterprovider.Registry
-	codexProvider    *adaptercodex.Provider
+	codexProvider     *adaptercodex.Provider
+	anthropicProvider *anthropic.Provider
 }
 
 // New constructs a Server from the given adapter config. The deps
@@ -163,8 +164,8 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 		},
 		ctxUsage: newContextUsageTracker(),
 	}
+	s.providerRegistry = adapterprovider.NewRegistry()
 	if cfg.Codex.Enabled {
-		s.providerRegistry = adapterprovider.NewRegistry()
 		s.codexProvider = adaptercodex.NewProvider(adapterprovider.Deps{
 			Config:     cfg,
 			Auth:       codexAuthLookup{server: s},
@@ -205,6 +206,14 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 			CCVersion:               id.CCVersion,
 			CCEntrypoint:            id.CCEntrypoint,
 		})
+		s.anthropicProvider = anthropic.NewProvider(anthropic.ProviderOptions{
+			Log: log.With("subcomponent", "anthropic_provider"),
+		})
+		s.providerRegistry.Register(s.anthropicProvider)
+		s.log.LogAttrs(context.Background(), slog.LevelInfo, "adapter.provider_registry.registered",
+			slog.String("provider", string(adapterresolver.ProviderAnthropic)),
+			slog.Int("registered_count", len(s.providerRegistry.IDs())),
+		)
 		s.log.LogAttrs(context.Background(), slog.LevelInfo, "adapter.oauth.enabled",
 			slog.Int("max_concurrent", max),
 		)
