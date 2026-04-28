@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -13,11 +14,23 @@ import (
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
+// Function-pointer defaults that callers (notably tests) may swap.
+// Defaults are sensible for production: real wall clock, real working
+// directory, and the user's $SHELL when set.
 var (
 	NowFunc     = time.Now
-	GetwdFn     = func() (string, error) { return "", fmt.Errorf("codex GetwdFn not initialized") }
-	ShellNameFn = func() string { return "sh" }
+	GetwdFn     = os.Getwd
+	ShellNameFn = defaultShellName
 )
+
+func defaultShellName() string {
+	shell := strings.TrimSpace(os.Getenv("SHELL"))
+	if shell == "" {
+		return "sh"
+	}
+	parts := strings.Split(shell, "/")
+	return parts[len(parts)-1]
+}
 
 func EnvironmentContextText(workspacePath string) (string, bool) {
 	cwd := strings.TrimSpace(workspacePath)
