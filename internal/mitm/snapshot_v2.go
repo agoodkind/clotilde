@@ -35,6 +35,14 @@ type SnapshotV2Options struct {
 	// matches any listed substring (case-insensitive). Applied after
 	// IncludeUserAgentSubstrings.
 	ExcludeUserAgentSubstrings []string
+	// RequireBodyKeys drops records whose top-level request body is
+	// missing any of these keys. Useful to demand canonical fields
+	// (e.g. metadata, context_management for claude-code).
+	RequireBodyKeys []string
+	// ForbidBodyKeys drops records whose top-level request body
+	// contains any of these keys. Useful to reject non-canonical
+	// shapes (e.g. tool_choice for claude-code).
+	ForbidBodyKeys []string
 }
 
 const (
@@ -165,6 +173,9 @@ func buildSnapshotV2(rawLines [][]byte, records []CaptureRecord, opts SnapshotV2
 		if !uaMatches(sig.UserAgent, opts.IncludeUserAgentSubstrings, opts.ExcludeUserAgentSubstrings) {
 			continue
 		}
+		if !bodyKeyConstraintsMatch(sig.BodyKeys, opts.RequireBodyKeys, opts.ForbidBodyKeys) {
+			continue
+		}
 		slug := sig.FlavorSlug()
 		flavored[slug] = append(flavored[slug], rawRequest{raw: raw, record: rec})
 		flavorSigs[slug] = sig
@@ -199,6 +210,32 @@ func buildSnapshotV2(rawLines [][]byte, records []CaptureRecord, opts SnapshotV2
 	}
 
 	return snap, nil
+}
+
+// bodyKeyConstraintsMatch enforces the require/forbid lists against
+// the observed top-level body keys for a single record.
+func bodyKeyConstraintsMatch(observed, require, forbid []string) bool {
+	have := make(map[string]bool, len(observed))
+	for _, k := range observed {
+		have[k] = true
+	}
+	for _, k := range require {
+		if k == "" {
+			continue
+		}
+		if !have[k] {
+			return false
+		}
+	}
+	for _, k := range forbid {
+		if k == "" {
+			continue
+		}
+		if have[k] {
+			return false
+		}
+	}
+	return true
 }
 
 // uaMatches applies include/exclude substring filters to a User-Agent.
