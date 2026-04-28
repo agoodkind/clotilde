@@ -143,6 +143,7 @@ require (
 	github.com/karamaru-alpha/copyloopvar v1.2.2 // indirect
 	github.com/kisielk/errcheck v1.10.0 // indirect
 	github.com/kkHAIKE/contextcheck v1.1.6 // indirect
+	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/kulti/thelper v0.7.1 // indirect
 	github.com/kunwardeep/paralleltest v1.0.15 // indirect
 	github.com/lasiar/canonicalheader v1.1.2 // indirect
@@ -262,7 +263,7 @@ replace goodkind.io/gklog => ../../gklog
 tool (
 	github.com/fzipp/gocyclo/cmd/gocyclo
 	github.com/golangci/golangci-lint/v2/cmd/golangci-lint
-	goodkind.io/clyde/cmd/clyde-staticcheck
 	golang.org/x/tools/cmd/deadcode
 	golang.org/x/vuln/cmd/govulncheck
+	goodkind.io/clyde/cmd/clyde-staticcheck
 )

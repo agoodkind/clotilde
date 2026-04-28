@@ -7,6 +7,8 @@ import (
 	"compress/zlib"
 	"io"
 	"strings"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // decodeForCapture transparently decompresses captured response
@@ -45,6 +47,17 @@ func decodeForCapture(raw []byte, contentEncoding string) ([]byte, bool) {
 		fr := flate.NewReader(bytes.NewReader(raw))
 		defer fr.Close()
 		out, err := io.ReadAll(fr)
+		if err != nil {
+			return raw, false
+		}
+		return out, true
+	case "zstd", "zstandard":
+		dec, err := zstd.NewReader(bytes.NewReader(raw))
+		if err != nil {
+			return raw, false
+		}
+		defer dec.Close()
+		out, err := io.ReadAll(dec)
 		if err != nil {
 			return raw, false
 		}

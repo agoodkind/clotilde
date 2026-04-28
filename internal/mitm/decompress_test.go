@@ -6,7 +6,30 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"testing"
+
+	"github.com/klauspost/compress/zstd"
 )
+
+func zstdBytes(t *testing.T, payload []byte) []byte {
+	t.Helper()
+	enc, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatalf("zstd writer: %v", err)
+	}
+	defer enc.Close()
+	return enc.EncodeAll(payload, nil)
+}
+
+func TestDecodeForCaptureZstd(t *testing.T) {
+	want := []byte(`{"alpha":"beta","gamma":42}`)
+	got, decoded := decodeForCapture(zstdBytes(t, want), "zstd")
+	if !decoded {
+		t.Fatal("expected decoded=true")
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q want %q", got, want)
+	}
+}
 
 func gzipBytes(t *testing.T, payload []byte) []byte {
 	t.Helper()
