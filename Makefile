@@ -106,6 +106,42 @@ staticcheck: ## Run Clyde's staticcheck bundle and custom architecture analyzers
 	@echo "Running Clyde staticcheck..."
 	@go tool clyde-staticcheck ./... && echo "✓ Staticcheck passed"
 
+# CLYDE-125 MITM capture targets. Each target spawns the named
+# upstream through the local mitm proxy and writes a JSONL
+# transcript under ~/.local/state/clyde/mitm/<upstream>/<timestamp>/.
+# Run mitmproxy once first to seed ~/.mitmproxy/mitmproxy-ca-cert.pem.
+capture-codex-cli: build
+	@dist/clyde mitm capture --upstream codex-cli
+
+capture-codex-desktop: build
+	@dist/clyde mitm capture --upstream codex-desktop
+
+capture-claude-code: build
+	@dist/clyde mitm capture --upstream claude-code
+
+capture-claude-desktop: build
+	@dist/clyde mitm capture --upstream claude-desktop
+
+# wire-snapshot-check diffs every committed reference snapshot
+# under research/<upstream>/snapshots/latest/reference.toml against
+# the live capture. Fails when any upstream has drifted. Run this
+# in CI after capturing fresh transcripts.
+wire-snapshot-check: build
+	@for upstream in codex-cli codex-desktop claude-code claude-desktop; do \
+		ref="research/$$upstream/snapshots/latest/reference.toml"; \
+		[ -f "$$ref" ] || continue; \
+		live="$$(ls -t ~/.local/state/clyde/mitm/$$upstream 2>/dev/null | head -1)"; \
+		if [ -z "$$live" ]; then \
+			echo "no live capture for $$upstream; skipping"; \
+			continue; \
+		fi; \
+		live_transcript="$$HOME/.local/state/clyde/mitm/$$upstream/$$live/capture.jsonl"; \
+		live_ref="$$HOME/.local/state/clyde/mitm/$$upstream/$$live/reference.toml"; \
+		dist/clyde mitm snapshot --upstream $$upstream --output-dir "$$HOME/.local/state/clyde/mitm/$$upstream/$$live" "$$live_transcript" >/dev/null && \
+		dist/clyde mitm diff "$$ref" "$$live_ref" || exit 1; \
+	done
+	@echo "✓ Wire snapshot parity clean"
+
 deadcode: build ## Check for unreachable functions
 	@if ! output=$$(go tool deadcode ./...); then \
 		echo "go tool deadcode failed"; \
@@ -132,6 +168,11 @@ audit: ## Run complexity and vulnerability checks (informational)
 	@echo ""
 	@echo "=== Vulnerability check ==="
 	@go tool govulncheck ./... || true
+
+install: build ## Install the clyde binary to ~/.local/bin
+	@mkdir -p "$(HOME)/.local/bin"
+	@cp dist/clyde "$(CLYDE_BIN)"
+	@echo "✓ Installed to $(CLYDE_BIN)"
 
 install-build-guard: ## Enforce repo staticcheck on direct go build via GOFLAGS toolexec
 	@./scripts/install-go-build-guard.sh
