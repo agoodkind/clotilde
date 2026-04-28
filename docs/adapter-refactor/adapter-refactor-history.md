@@ -147,6 +147,68 @@ Event renderer audit underway. All call sites now import types directly from `in
 
 Codex tests relocated to package files. Root tests narrowed to routing and auth concerns.
 
+## 2026-04-27. Codex parity superset (CLYDE-126).
+
+A MITM investigation against `codex` CLI (interactive plus `codex exec`) and
+Codex Desktop established the wire contract our adapter was missing. Captures
+live in `research/codex/captures/2026-04-27/`.
+
+Three empirical findings drove the work:
+
+1. Codex CLI, Codex Desktop, and codex-rs all reuse a single websocket
+   connection across many `response.create` rounds and chain
+   `previous_response_id` across every frame, with `store: false`. The
+   constraint is same-connection lifetime, not `store=true`.
+2. Our adapter dialed a fresh ws per Cursor HTTP request and `defer Close`d
+   it. We replayed the full ~500 KB Cursor conversation every turn.
+3. Both clients send identity headers we were missing: `originator`,
+   `x-codex-turn-metadata` (with a `workspaces` block on Desktop), and
+   `x-codex-installation-id` from `~/.codex/installation_id`.
+
+Implementation across five commits on main:
+
+- `6cdab8f` Identity headers (`originator: clyde`, typed `TurnMetadata`,
+  `LoadInstallationID` reading `~/.codex/installation_id` or persisting a
+  clyde uuid).
+- `b16a648` `WebsocketSessionCache` with Take/Put/Invalidate/CloseAll
+  lifecycle, race-tested.
+- `0050745` Cache-aware `RunWebsocketTransport` plus `ComputeDelta`
+  suffix-extension matcher. Replaces the cross-process fingerprint approach.
+  New telemetry events `adapter.codex.ws_session.*` and
+  `adapter.codex.frame.sent`.
+- `5e9fe96` Wire the cache into `codex.Provider` with a shutdown hook so
+  cached connections do not leak across reload boundaries.
+- `a6f4c81` Marshal helper sends `input: []` on warmup (live-discovered
+  upstream rejection of the omitted field).
+
+Live verification result on a 3-turn Cursor agent session
+(`gpt-5.4`, conversation `e8ab0f01...`):
+
+| metric | gate | observed |
+|---|---|---|
+| ws_session.opened per conversation | 1 | 1 |
+| Chained `previous_response_id` | yes | warmup ... 425fec ... 42a150 ... 4fe254 ... 5531ac |
+| Delta input rate turn 2 | < 80% of full | 24% (5/21) |
+| Delta input rate turn 3 | < 80% of full | 12% (3/24) |
+| Prompt cache hit rate turn 2 | high | 96.5% (cache_read 36864 / prompt 38198) |
+| Prompt cache hit rate turn 3 | high | 98.2% (cache_read 37888 / prompt 38572) |
+| `Previous response with id ... not found.` errors | 0 | 0 |
+| `adapter.request.failed` events | 0 | 0 |
+
+Plan 5b (the fingerprint matcher) is superseded. CLYDE-123 closes as
+"superseded by CLYDE-126; cross-process `previous_response_id` reuse with
+`store: false` is structurally not supported by the upstream; the persistent
+ws session cache plus delta-input matcher is the correct fix."
+
+Follow-ups (not blocking):
+
+- CLYDE-125 MITM harness still open. Captures from this session seed it.
+- `ContinuationStore` remains in tree on the legacy fresh-dial path; remove
+  once that path also routes through the cache.
+- The `workspaces` block in `x-codex-turn-metadata` is empty for Cursor
+  traffic. Populate from the resolved request when Cursor's
+  `WorkspacePath` plus git origin and HEAD are available.
+
 ## Source documents
 
 - [adapter-refactor.md](/docs/adapter-refactor/adapter-refactor.md): Live plan with phase definitions, detailed todos, and implementation notes.
