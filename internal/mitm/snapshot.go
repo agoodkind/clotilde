@@ -132,9 +132,9 @@ func buildSnapshot(records []CaptureRecord, opts SnapshotOptions) (Snapshot, err
 	frameType := ""
 	warmupSeen := false
 	chainsPrev := false
-	var realInputMin, realInputMax int = -1, 0
-	var realToolsMin, realToolsMax int = -1, 0
-	var warmupInputMin, warmupInputMax int = -1, 0
+	realInputMin, realInputMax := -1, 0
+	realToolsMin, realToolsMax := -1, 0
+	warmupInputMin, warmupInputMax := -1, 0
 
 	for _, msg := range wsMsgs {
 		if !msg.FromClient || msg.Text == "" {

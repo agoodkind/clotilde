@@ -5,6 +5,8 @@
 // research/codex/captures/2026-04-27/.
 package mitm
 
+import "encoding/json"
+
 // CaptureRecordKind enumerates the JSONL record kinds produced by
 // the proxy. New kinds extend this enum, never spill into untyped
 // fields.
@@ -32,7 +34,16 @@ type CaptureRecord struct {
 	Status   int               `json:"status,omitempty"`
 	Headers  map[string]string `json:"headers,omitempty"`
 	BodyLen  int               `json:"body_len,omitempty"`
-	BodyText string            `json:"body,omitempty"`
+	// Body is the captured payload. Shape varies by BodyMode in
+	// the producing proxy: raw mode writes a string, summary mode
+	// writes a structured object (e.g. {"keys": [...], "messages":
+	// 1, "model": "..."}). Consumers branch on UnmarshalKind /
+	// custom logic when they need to interpret it.
+	Body json.RawMessage `json:"body,omitempty"`
+	// BodyText is the legacy name kept for backward compat with
+	// callers that read raw-mode bodies as plain strings. Populated
+	// by AsBodyText().
+	BodyText string `json:"-"`
 
 	// ws_start fields.
 	RequestHeaders  map[string]string `json:"request_headers,omitempty"`

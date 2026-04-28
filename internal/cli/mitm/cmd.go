@@ -191,21 +191,42 @@ func newSnapshotCmd(f *cli.Factory) *cobra.Command {
 		upstream   string
 		version    string
 		outputDir  string
+		useV2      bool
 	)
 	cmd := &cobra.Command{
 		Use:   "snapshot <transcript>",
 		Short: "Convert a JSONL transcript into a reference.toml",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if outputDir == "" {
+				outputDir = filepath.Dir(args[0])
+			}
+			if useV2 {
+				snap, err := mitmpkg.ExtractSnapshotV2(args[0], mitmpkg.SnapshotV2Options{
+					UpstreamName:    upstream,
+					UpstreamVersion: version,
+				})
+				if err != nil {
+					return err
+				}
+				path, err := mitmpkg.WriteSnapshotV2TOML(snap, outputDir)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintln(out(f), "reference (v2):", path)
+				fmt.Fprintln(out(f), "  flavors observed:", len(snap.Flavors))
+				for _, fl := range snap.Flavors {
+					fmt.Fprintln(out(f), "  -", fl.Slug, fmt.Sprintf("(%d records, %d headers, %d body fields)",
+						fl.RecordCount, len(fl.Headers), len(fl.Body.Fields)))
+				}
+				return nil
+			}
 			snap, err := mitmpkg.ExtractSnapshot(args[0], mitmpkg.SnapshotOptions{
 				UpstreamName:    upstream,
 				UpstreamVersion: version,
 			})
 			if err != nil {
 				return err
-			}
-			if outputDir == "" {
-				outputDir = filepath.Dir(args[0])
 			}
 			path, err := mitmpkg.WriteSnapshotTOML(snap, outputDir)
 			if err != nil {
@@ -218,6 +239,7 @@ func newSnapshotCmd(f *cli.Factory) *cobra.Command {
 	cmd.Flags().StringVar(&upstream, "upstream", "", "upstream name to record in the snapshot")
 	cmd.Flags().StringVar(&version, "version", "", "upstream version string to record in the snapshot")
 	cmd.Flags().StringVar(&outputDir, "output-dir", "", "directory to write reference.toml (default: transcript dir)")
+	cmd.Flags().BoolVar(&useV2, "v2", false, "emit per-flavor SnapshotV2 with classified headers and nested body shapes")
 	_ = cmd.MarkFlagRequired("upstream")
 	return cmd
 }
