@@ -132,6 +132,26 @@ capture-claude-code: build
 capture-claude-desktop: build
 	@dist/clyde mitm capture --upstream claude-desktop
 
+# mitm-launcher-* targets scaffold a dock-pinnable wrapper .app that
+# runs `clyde mitm launch <upstream>` on click. The wrapper ensures
+# the MITM proxy is running and spawns the real Electron app with
+# the LaunchProfile env + Chromium flags applied. Pin the resulting
+# .app to your Dock instead of the original; clicking it routes the
+# upstream through clyde automatically.
+mitm-launcher-codex-desktop: build install
+	@bash packaging/macos/launchers/build-launcher.sh codex-desktop \
+		"$(HOME)/Applications/Codex (via clyde).app"
+
+mitm-launcher-claude-desktop: build install
+	@bash packaging/macos/launchers/build-launcher.sh claude-desktop \
+		"$(HOME)/Applications/Claude (via clyde).app"
+
+mitm-launcher-vscode: build install
+	@bash packaging/macos/launchers/build-launcher.sh vscode \
+		"$(HOME)/Applications/VS Code (via clyde).app"
+
+mitm-launchers: mitm-launcher-codex-desktop mitm-launcher-claude-desktop mitm-launcher-vscode
+
 # wire-snapshot-check diffs every committed reference snapshot
 # under research/<upstream>/snapshots/latest/reference.toml against
 # the live capture. Fails when any upstream has drifted. Run this

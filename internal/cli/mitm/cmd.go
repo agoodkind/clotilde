@@ -46,6 +46,7 @@ Subcommands:
 Supported upstreams: claude-code, claude-desktop, codex-cli, codex-desktop.`,
 	}
 	cmd.AddCommand(newCaptureCmd(f))
+	cmd.AddCommand(newLaunchCmd(f))
 	cmd.AddCommand(newSnapshotCmd(f))
 	cmd.AddCommand(newDiffCmd(f))
 	cmd.AddCommand(newCodegenCmd(f))
@@ -196,6 +197,46 @@ func defaultDriftLogPath(upstream string) string {
 
 func out2(f *cli.Factory) io.Writer {
 	return out(f)
+}
+
+// newLaunchCmd is the dock-pinnable variant of capture: it ensures
+// the proxy is up, spawns the upstream client with LaunchProfile env
+// + Chromium flags, then returns immediately. The child runs
+// detached. Suitable for a wrapper .app whose dock click invokes
+// `clyde mitm launch codex-desktop`.
+func newLaunchCmd(f *cli.Factory) *cobra.Command {
+	var (
+		upstream string
+		caCert   string
+	)
+	cmd := &cobra.Command{
+		Use:   "launch",
+		Short: "Spawn an upstream client through the MITM proxy and detach (dock-pinnable)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			profile, err := mitmpkg.LookupLaunchProfile(upstream)
+			if err != nil {
+				return err
+			}
+			if caCert == "" {
+				caCert = defaultCACert()
+			}
+			ctx, cancel := context.WithCancel(cmd.Context())
+			defer cancel()
+			if err := mitmpkg.LaunchUpstream(ctx, mitmpkg.LaunchUpstreamOptions{
+				Profile:    profile,
+				CACertPath: caCert,
+				Log:        f.Logger,
+			}); err != nil {
+				return err
+			}
+			fmt.Fprintln(out(f), "launched:", upstream)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&upstream, "upstream", "", "upstream name (claude-desktop|codex-desktop|vscode|claude-code|codex-cli)")
+	cmd.Flags().StringVar(&caCert, "ca-cert", "", "path to mitmproxy CA cert (default ~/.mitmproxy/mitmproxy-ca-cert.pem)")
+	_ = cmd.MarkFlagRequired("upstream")
+	return cmd
 }
 
 func newCaptureCmd(f *cli.Factory) *cobra.Command {
