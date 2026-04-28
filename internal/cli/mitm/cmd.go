@@ -245,6 +245,7 @@ func newCaptureCmd(f *cli.Factory) *cobra.Command {
 		captureDir string
 		caCert     string
 		proxyAddr  string
+		extraArgs  []string
 	)
 	cmd := &cobra.Command{
 		Use:   "capture",
@@ -267,6 +268,7 @@ func newCaptureCmd(f *cli.Factory) *cobra.Command {
 				CaptureRoot: captureDir,
 				CACertPath:  caCert,
 				ProxyHost:   proxyAddr,
+				ExtraArgs:   extraArgs,
 				Log:         f.Logger,
 			})
 			if err != nil {
@@ -280,6 +282,7 @@ func newCaptureCmd(f *cli.Factory) *cobra.Command {
 	cmd.Flags().StringVar(&captureDir, "capture-dir", "", "root directory for transcripts (default ~/.local/state/clyde/mitm)")
 	cmd.Flags().StringVar(&caCert, "ca-cert", "", "path to mitmproxy CA cert (default ~/.mitmproxy/mitmproxy-ca-cert.pem)")
 	cmd.Flags().StringVar(&proxyAddr, "proxy-addr", "127.0.0.1:0", "host:port the proxy listens on")
+	cmd.Flags().StringArrayVar(&extraArgs, "args", nil, "extra args appended to the upstream command (e.g. --args=exec --args='hello' for codex)")
 	_ = cmd.MarkFlagRequired("upstream")
 	return cmd
 }
