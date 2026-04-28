@@ -1258,17 +1258,6 @@ func darwinLaunchAgentProgramArguments() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	runScriptCandidates := []string{
-		filepath.Join(filepath.Dir(self), "run.sh"),
-		filepath.Join(filepath.Dir(filepath.Dir(self)), "run.sh"),
-	}
-	for _, candidate := range runScriptCandidates {
-		info, err := os.Stat(candidate)
-		if err != nil || info.IsDir() {
-			continue
-		}
-		return []string{candidate, "daemon"}, nil
-	}
 	return []string{self, "daemon"}, nil
 }
 
