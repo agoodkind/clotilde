@@ -78,14 +78,21 @@ func RunCaptureSession(ctx context.Context, opts CaptureSessionOptions) (Capture
 	defer proxy.Shutdown()
 	proxyURL := proxy.URL()
 
-	// Compose env vars per profile.
+	// Compose env vars per profile. We deliberately do NOT set
+	// SSL_CERT_FILE / NODE_EXTRA_CA_CERTS even when CACertPath is
+	// non-empty: our Go proxy never intercepts TLS. Direct-routed
+	// upstreams (claude-cli via ANTHROPIC_BASE_URL) talk plain HTTP
+	// to the proxy, and tunneled upstreams (codex-cli via CONNECT)
+	// run TLS end-to-end with the upstream's real certificate. Setting
+	// SSL_CERT_FILE to a CA that does not include the public roots
+	// would break verification of those real certs. The CACertPath
+	// option remains in the API for future TLS-intercept modes.
+	_ = opts.CACertPath
 	envOverrides := map[string]string{
-		"HTTPS_PROXY":         proxyURL,
-		"HTTP_PROXY":          proxyURL,
-		"ALL_PROXY":           proxyURL,
-		"NO_PROXY":            "",
-		"SSL_CERT_FILE":       opts.CACertPath,
-		"NODE_EXTRA_CA_CERTS": opts.CACertPath,
+		"HTTPS_PROXY": proxyURL,
+		"HTTP_PROXY":  proxyURL,
+		"ALL_PROXY":   proxyURL,
+		"NO_PROXY":    "",
 	}
 	env := opts.Profile.ComposeEnv(os.Environ(), envOverrides)
 

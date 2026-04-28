@@ -99,6 +99,10 @@ func (p *Proxy) CodexChatGPTBaseURL() string { return p.base + "/backend-api" }
 func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	cfg := p.config()
+	if r.Method == http.MethodConnect {
+		p.handleConnect(w, r)
+		return
+	}
 	provider, upstream := classifyRoute(r.URL.Path)
 	if provider == "" {
 		http.Error(w, "unsupported mitm route", http.StatusNotFound)

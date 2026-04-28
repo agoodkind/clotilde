@@ -62,15 +62,15 @@ func LaunchUpstream(ctx context.Context, opts LaunchUpstreamOptions) error {
 	if binary == "" {
 		return fmt.Errorf("upstream %s has no resolved binary path", opts.Profile.Name)
 	}
-	caCert := strings.TrimSpace(opts.CACertPath)
+	// Deliberately omit SSL_CERT_FILE / NODE_EXTRA_CA_CERTS. Our
+	// proxy never intercepts TLS; tunneled upstreams verify real
+	// certs end-to-end, and direct-routed upstreams talk plain HTTP
+	// to the proxy. See capture_session.go for the longer note.
+	_ = opts.CACertPath
 	envOverrides := map[string]string{
 		"HTTPS_PROXY": proxyURL,
 		"HTTP_PROXY":  proxyURL,
 		"ALL_PROXY":   proxyURL,
-	}
-	if caCert != "" {
-		envOverrides["SSL_CERT_FILE"] = caCert
-		envOverrides["NODE_EXTRA_CA_CERTS"] = caCert
 	}
 	env := opts.Profile.ComposeEnv(os.Environ(), envOverrides)
 
