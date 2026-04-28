@@ -181,7 +181,7 @@ func (h *captureProxyHandle) Shutdown() {
 
 func startCaptureProxy(addr string, cfg config.MITMConfig, log *slog.Logger) (*captureProxyHandle, error) {
 	if addr == "" {
-		addr = "127.0.0.1:0"
+		addr = "[::1]:0"
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {

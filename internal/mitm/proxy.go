@@ -59,7 +59,7 @@ func EnsureStarted(cfg config.MITMConfig, log *slog.Logger) (*Proxy, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", "[::1]:0")
 	if err != nil {
 		return nil, err
 	}
@@ -133,10 +133,24 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	copyHeaders(w.Header(), resp.Header)
+	// Forward upstream response headers, but drop hop-by-hop and
+	// length-related headers that the http.Server will recompute.
+	// Content-Length is unsafe for streaming responses (SSE), and
+	// Go's http.Transport already strips Content-Encoding when it
+	// auto-decompresses gzip/deflate, so anything left is honest.
+	for key, values := range resp.Header {
+		switch strings.ToLower(key) {
+		case "content-length", "transfer-encoding", "connection":
+			continue
+		}
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
 	w.WriteHeader(resp.StatusCode)
 	capture := &limitedBuffer{limit: 16 * 1024}
-	_, copyErr := io.Copy(io.MultiWriter(w, capture), resp.Body)
+	flusher, _ := w.(http.Flusher)
+	copyErr := streamWithFlush(w, capture, resp.Body, flusher)
 	duration := time.Since(started)
 	if copyErr != nil {
 		p.log.Warn("mitm.proxy.copy_failed", "provider", provider, "path", r.URL.Path, "err", copyErr)
@@ -331,6 +345,35 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 
 func (b *limitedBuffer) Bytes() []byte {
 	return b.buf.Bytes()
+}
+
+// streamWithFlush copies upstream response bytes to the client and
+// the capture buffer in chunks, flushing after each successful read
+// so SSE deltas reach the client in real time. Without the per-read
+// flush, Go's http.Server buffers up to its internal threshold and
+// stream consumers (claude-cli, Cursor) see batched deltas or hang
+// waiting for the first byte.
+func streamWithFlush(client io.Writer, capture io.Writer, src io.Reader, flusher http.Flusher) error {
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := src.Read(buf)
+		if n > 0 {
+			chunk := buf[:n]
+			if _, werr := client.Write(chunk); werr != nil {
+				return werr
+			}
+			_, _ = capture.Write(chunk)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
 }
 
 // expandHome rewrites a leading "~" or "~/" in a path to the user's
