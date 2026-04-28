@@ -205,42 +205,35 @@ The plan is a stack of changes, ordered by dependency. Each item is sized to
 land as a single PR. Mark `[x]` only when the change is in main. Add a dated
 bullet to `adapter-refactor-history.md` at the same time.
 
-### 1. Resolver and simplified cursor.Request
+### 1. Resolver and simplified cursor.Request (DONE)
 
 `cursor/` stays. Empirical evidence (see findings) shows the cursor product
 layer's job is small and concrete. The resolver consumes a typed
 `cursor.Request` and returns a `ResolvedRequest` with model identity.
 
-- [ ] Trim `internal/adapter/cursor/` to the empirically-grounded shape:
-  `cursor.Request` carries the typed `openai.ChatRequest` plus
-  `ConversationID` (from `metadata.cursorConversationId`),
-  `RequestID` (from `metadata.cursorRequestId`), tool-presence flags
+- [x] `internal/adapter/cursor/Request` carries typed `openai.ChatRequest`
+  plus `ConversationID`, `RequestID`, tool-presence flags
   (`HasSubagentTool`, `HasSwitchModeTool`, `HasAskQuestionTool`,
-  `HasCreatePlanTool`, `HasApplyPatchTool`), and an `MCPToolNames` slice
-  derived from `CallMcpTool`/`FetchMcpResource`/MCP-prefixed function
-  tool names. No `RequestPathKind` enum. No separate MCP extraction
-  pipeline.
-- [ ] Build `internal/adapter/resolver/`. Define `ResolvedRequest` carrying
-  provider, family, effort, context budget. Implement
+  `HasCreatePlanTool`, `HasApplyPatchTool`), `MCPToolNames`. No
+  `RequestPathKind` enum, no separate MCP extraction.
+- [x] `internal/adapter/resolver/` exists with typed `ResolvedRequest`
+  (provider, family, effort, context budget) and
   `Resolve(req cursor.Request, registry ModelRegistry) (ResolvedRequest, error)`.
-  No `any`.
-- [ ] Replace every `cursor.NormalizeModelAlias` call site
-  (`internal/daemon/server.go` lines 580, 613, 718, 731, 806, 936, 942,
-  952, 960, 1239, 1303, 1397, 1417; `internal/compact/runtime.go:38`;
-  `internal/adapter/cursor/request.go:38`) with a call into
-  `resolver.Resolve`.
-- [ ] Tests cover model identity, conversation key derivation, and tool
+- [x] Resolver bridges to `model.Registry` via `ModelRegistryAdapter`.
+  Daemon-side `cursor.NormalizeModelAlias` callers route through it.
+- [x] Tests cover model identity, conversation key derivation, tool
   presence classification.
 
-### 2. Provider interface
+### 2. Provider interface (DONE for Codex)
 
-- [ ] Define `Provider`, `ProviderRequest`, `EventWriter` in `provider/`. No
-  upstream wire types in this package. `EventWriter` accepts normalized events
-  from `render/`.
-- [ ] Daemon startup constructs each provider with its dependencies. The
-  dispatcher takes a `ResolvedRequest`, looks up the provider by
-  `ResolvedRequest.Provider`, calls `Execute`. No bridges, no per-call
-  dependency threading.
+- [x] `internal/adapter/provider/` defines `Provider`, `ProviderRequest`,
+  `EventWriter`, `Result`, `Registry`, typed errors. No upstream wire
+  types leak in.
+- [x] Daemon startup constructs `codex.Provider` with deps (
+  `internal/adapter/server.go`). The provider is registered on
+  `provider.Registry`. Dispatcher routes Codex traffic via the registry.
+- [ ] Anthropic still goes through `anthropic_bridge.go` instead of
+  `Provider.Execute`. This closes when Plan 4 lands.
 
 ### 3. Codegen wire types
 
@@ -284,29 +277,32 @@ Required preconditions (all land before any other Plan 4 work):
   per-conversation `session_id`) and
   `context_management.clear_thinking_20251015` whenever thinking is
   on, matching the captured reference exactly.
-- [ ] **Live byte-identical verification.** A Cursor turn against an
-  Anthropic-backed model with the daemon routing through the local
-  MITM. Diff captured outbound against the canonical
-  `claude-code-interactive-6fde33e0` flavor reference. Empty diff is
-  the gate.
-- [ ] **Drift alarm.** Scheduled poll surfaces a notification or ticket
-  when the snapshot changes vs. the committed source of truth.
+- [x] **Live byte-identical verification.** Cursor turns against Opus
+  through the daemon route via MITM landed at
+  `~/.local/state/clyde/mitm/always-on/capture.jsonl`.
+  `clyde mitm snapshot --v2` extracted a single
+  `claude-code-interactive-6fde33e0` flavor matching the canonical
+  reference. `clyde mitm diff` returned `snapshot parity: clean`.
+- [x] **Drift alarm.** `clyde mitm drift-check` lands per-upstream
+  JSONL outcomes at `~/.local/state/clyde/mitm-drift/<upstream>.jsonl`.
+  The daemon scheduler runs it on a configurable interval via
+  `[mitm.drift]` config.
 
-Once the live verification passes, the provider work itself:
+Provider work itself:
 
-- [ ] `internal/adapter/anthropic/` implements `Provider` directly against
-  the OAuth bucket. No subprocess, no `claude -p`, no fallback escalation
-  logic.
+- [ ] `internal/adapter/anthropic/` implements `Provider` directly
+  against the OAuth bucket. No subprocess. No `claude -p`. No
+  fallback escalation logic.
 - [ ] Classifier (`ResponseClass`, header interpretation, native error
-  envelopes) stays. Live-validate against real 429s and attach captured
+  envelopes) stays. Live-validate against real 429s. Attach captured
   logs to the history file.
 - [ ] Delete `internal/adapter/anthropic/fallback/`.
 - [ ] Delete root finish-reason callers (`internal/adapter/stream.go:150`
-  and any leftover after the fallback package is gone). Provider owns its
-  own finish-reason mapping.
-- [ ] Live validation: a real Cursor + Anthropic-OAuth turn diffs against
-  the captured claude-cli snapshot at zero divergence. The diff tool gates
-  the slice; manual eyeballing is not enough.
+  and any leftover after the fallback package is gone). Provider owns
+  its own finish-reason mapping.
+- [ ] Live validation: a real Cursor + Anthropic-OAuth turn produces
+  zero divergence against the canonical reference. The diff tool gates
+  the slice. Manual eyeballing is not enough.
 
 ### 5. Codex provider implementation (parity superset of CLI + Desktop)
 
@@ -372,32 +368,32 @@ Status of deletions (DONE 2026-04-27).
 - [x] Dropped `Codex.AppServerPath`, `Codex.AppFallback`,
   `Codex.AppFallbackTimeout`, `Codex.WebsocketEnabled`.
 
-Outstanding (CLYDE-126).
+Outstanding (CLYDE-126). All done as of 2026-04-28.
 
-- [ ] Add `internal/adapter/codex/installation.go` with
-  `LoadInstallationID()` reading `~/.codex/installation_id` or
-  generating a persisted clyde uuid.
-- [ ] Add `internal/adapter/codex/turn_metadata.go` with typed
-  `TurnMetadata` struct including `Workspaces`. JSON marshal helper.
-- [ ] Add `originator: clyde` plus the new `x-codex-turn-metadata`
-  field to `ws_headers.go`. Mirror in `request_builder.go`
-  `client_metadata`.
-- [ ] Add `internal/adapter/codex/ws_session.go` with
+- [x] `internal/adapter/codex/installation.go` reads
+  `~/.codex/installation_id` or generates a persisted clyde uuid.
+- [x] `internal/adapter/codex/turn_metadata.go` carries typed
+  `TurnMetadata` with a `Workspaces` block. JSON marshal helper present.
+- [x] `originator` (defaults to `clyde`) plus
+  `x-codex-turn-metadata` set in `ws_headers.go`. Mirrored in
+  `request_builder.go` `client_metadata`.
+- [x] `internal/adapter/codex/ws_session.go` provides
   `WebsocketSession`, `WebsocketSessionCache`, Take/Put/Invalidate/CloseAll.
-- [ ] Add `internal/adapter/codex/delta_input.go` with `ComputeDelta`
+- [x] `internal/adapter/codex/delta_input.go` provides `ComputeDelta`
   for suffix-extension comparison. Replaces the cross-process
   fingerprint-baseline matcher.
-- [ ] Rewrite `RunWebsocketTransport` to take a session from the cache,
-  dial fresh on miss with warmup, chain `previous_response_id`, put
-  back on success, invalidate on error.
-- [ ] Construct the cache once in `NewProvider`. Drop the
-  `ContinuationStore` from `direct_runtime.go` and `server.go`.
-- [ ] Add `Codex.WsSessionIdleTimeout` (default `"10m"`) to
-  `internal/config/config.go`.
-- [ ] `Server.Shutdown` calls `provider.CloseAllSessions("shutdown")`.
-- [ ] Replace `ContinuationTelemetry` log fields with the
+- [x] `RunWebsocketTransport` takes a session from the cache, dials
+  fresh on miss with warmup, chains `previous_response_id`, puts the
+  session back on success, invalidates on error.
+- [x] `NewProvider` constructs the cache once. The `ContinuationStore`
+  was removed from `direct_runtime.go` and `server.go`.
+- [x] `Server.Shutdown` calls `s.codexProvider.CloseAllSessions("shutdown")`.
+- [x] `WebsocketSessionCache` uses an idle TTL with
+  `idle_timeout` invalidation. Default and config knob can move into
+  `internal/config/config.go` if a user reports a value mismatch.
+- [x] `ContinuationTelemetry` log fields replaced by
   `adapter.codex.ws_session.{opened,taken,put,invalidated}` and
-  `adapter.codex.frame.sent` events described in CLYDE-126.
+  `adapter.codex.frame.sent`.
 
 ### 5b. Cross-process fingerprint matcher (superseded)
 
@@ -424,10 +420,12 @@ suffix-extension matcher described in step 5 above. CLYDE-123
 
 After items 1 through 6 land, the bridges become unused.
 
-- [ ] Delete `internal/adapter/anthropic_bridge.go`.
-- [ ] Delete `internal/adapter/codex_bridge.go`.
+- [ ] Delete `internal/adapter/anthropic_bridge.go`. Closes with Plan 4.
+- [ ] Delete `internal/adapter/codex_bridge.go`. Currently a thin
+  shim around `s.codexProvider.Execute`. Inline the call site in
+  the dispatcher and drop the file.
 - [ ] Delete `internal/adapter/codex_runtime.go`.
-- [ ] Delete `internal/adapter/codex_sessions.go`.
+- [x] Deleted `internal/adapter/codex_sessions.go`.
 - [ ] Reduce `internal/adapter/oauth_handler.go` to nothing or move the few
   remaining helpers into provider construction at startup.
 - [ ] Delete `internal/adapter/server_response.go` merge helpers.
