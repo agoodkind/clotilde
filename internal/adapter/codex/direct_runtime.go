@@ -99,9 +99,12 @@ func RunDirect(
 			}
 			return res, nil
 		}
-		if cfg.Continuation != nil {
-			cfg.Continuation.Forget(continuation.Key)
-		}
+		// Do not Forget on transport error. The prior response entry is
+		// still valid on the upstream thread; clearing it here causes a
+		// false `no_prior_response` on the next turn from a sibling
+		// request that shares the same conversation key. The next
+		// successful Complete on this key overwrites the entry, so
+		// stale data cannot persist beyond one good turn.
 		return NewRunResult("stop"), wsErr
 	}
 	// Codex is websocket-only after Plan 5 + Step H. The HTTPS/SSE
