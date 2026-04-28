@@ -146,12 +146,10 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 	if cfg.DefaultModel == "" {
 		return nil, fmt.Errorf("adapter: default_model must be set in [adapter]")
 	}
-	if cfg.ClientIdentity.BetaHeader == "" {
-		return nil, fmt.Errorf("adapter: [adapter.client_identity].beta_header must be set")
-	}
-	if cfg.ClientIdentity.UserAgent == "" {
-		return nil, fmt.Errorf("adapter: [adapter.client_identity].user_agent must be set")
-	}
+	// beta_header and user_agent are optional. When empty, the
+	// adapter falls through to the captured WireFlavor in
+	// internal/adapter/anthropic/wire_flavors_gen.go (CLYDE-124).
+	// Setting either is an explicit operator override.
 	if cfg.ClientIdentity.SystemPromptPrefix == "" {
 		return nil, fmt.Errorf("adapter: [adapter.client_identity].system_prompt_prefix must be set")
 	}

@@ -132,7 +132,11 @@ func TestBuildRequestAddsJSONPromptWithoutDuplicatingPrefix(t *testing.T) {
 	}
 }
 
-func TestBuildRequestAddsFineGrainedToolStreamingBeta(t *testing.T) {
+func TestBuildRequestOmitsFineGrainedToolStreamingBeta(t *testing.T) {
+	// CLYDE-124: claude-cli does NOT send fine-grained-tool-streaming
+	// even on streaming + tools requests. The captured reference at
+	// research/claude-code/snapshots/latest/reference.toml proves this.
+	// Sending it diverges our wire fingerprint from claude-cli's.
 	req := requestBuilderChatRequest()
 	req.Stream = true
 	req.Tools = []adapteropenai.Tool{{
@@ -153,13 +157,9 @@ func TestBuildRequestAddsFineGrainedToolStreamingBeta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-	var found bool
 	for _, beta := range out.ExtraBetas {
 		if beta == FineGrainedToolStreamingBeta {
-			found = true
+			t.Fatalf("ExtraBetas=%v unexpectedly contains %q (claude-cli does not send it)", out.ExtraBetas, FineGrainedToolStreamingBeta)
 		}
-	}
-	if !found {
-		t.Fatalf("ExtraBetas=%v missing %q", out.ExtraBetas, FineGrainedToolStreamingBeta)
 	}
 }

@@ -93,9 +93,10 @@ func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, model adap
 		LogMicrocompact(cfg.Logger, "", model.Alias, cleared, bytes, cfg.MicrocompactKeepRecent)
 	}
 	out.ExtraBetas = DerivePerRequestBetas(model, cfg.PerContextBetas)
-	if req.Stream && len(out.Tools) > 0 {
-		out.ExtraBetas = append(out.ExtraBetas, FineGrainedToolStreamingBeta)
-	}
+	// Note: claude-cli does NOT send fine-grained-tool-streaming-2025-05-14
+	// (verified against the captured reference at
+	// research/claude-code/snapshots/latest/reference.toml). The flavor's
+	// beta header is the canonical set; do not append it here.
 	if effort != "" && len(model.Efforts) > 0 {
 		out.OutputConfig = &anthropic.OutputConfig{Effort: effort}
 	}
