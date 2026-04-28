@@ -13,6 +13,7 @@ import (
 
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
+	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 )
 
@@ -245,6 +246,37 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	resolveAttrs = append(resolveAttrs, adaptercursor.BoundaryLogAttrs(cursorReq, cursorReq.OpenAI.Model, nil)...)
 	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.model.resolved", resolveAttrs...)
+
+	// Step D: build the typed resolver.ResolvedRequest alongside the
+	// legacy resolution. Backends still use model.ResolvedModel for now;
+	// this call validates the resolver in production traffic and emits a
+	// telemetry event so we can confirm provider+effort+budget mapping is
+	// consistent before flipping the dispatcher to use it.
+	resolvedReq, resolverErr := adapterresolver.Resolve(cursorReq, adapterresolver.NewModelRegistryAdapter(s.registry))
+	if resolverErr != nil {
+		s.log.LogAttrs(r.Context(), slog.LevelDebug, "adapter.resolver.unresolved",
+			slog.String("request_id", reqID),
+			slog.String("alias", req.Model),
+			slog.String("err", resolverErr.Error()),
+		)
+	} else {
+		s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.resolver.resolved",
+			slog.String("request_id", reqID),
+			slog.String("alias", req.Model),
+			slog.String("provider", resolvedReq.Provider.String()),
+			slog.String("family", resolvedReq.Family),
+			slog.String("model", resolvedReq.Model),
+			slog.String("effort", resolvedReq.Effort.String()),
+			slog.Int("input_tokens_budget", resolvedReq.ContextBudget.InputTokens),
+			slog.Int("output_tokens_budget", resolvedReq.ContextBudget.OutputTokens),
+			slog.String("conversation_id", cursorReq.ConversationID),
+			slog.Bool("has_subagent_tool", cursorReq.HasSubagentTool),
+			slog.Bool("has_create_plan_tool", cursorReq.HasCreatePlanTool),
+			slog.Bool("has_apply_patch_tool", cursorReq.HasApplyPatchTool),
+			slog.Int("mcp_tool_count", len(cursorReq.MCPToolNames)),
+		)
+	}
+	_ = resolvedReq
 
 	var ok bool
 	model, ok = s.applyBackendOverride(w, r, req, model, reqID)
