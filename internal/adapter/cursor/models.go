@@ -16,6 +16,13 @@ const (
 	RequestPathSubagent   RequestPathKind = "subagent"
 )
 
+// NormalizeModelAlias is the legacy whitespace-trim helper used by
+// daemon and TUI logging to produce a stable `cursor_normalized_model`
+// attribute. New adapter code should resolve full model identity via
+// internal/adapter/resolver.Resolve, which returns the typed
+// ResolvedRequest with provider, family, effort, and budget. This
+// helper stays as a slim shim until the remaining daemon log call
+// sites migrate.
 func NormalizeModelAlias(rawModel string) string {
 	return strings.TrimSpace(rawModel)
 }
