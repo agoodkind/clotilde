@@ -81,8 +81,18 @@ func MarshalResponseCreateWsRequest(req ResponseCreateWsRequest) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	forceEmptyInput := req.PreviousResponseID != "" && req.Input != nil && len(req.Input) == 0
-	forceEmptyTools := req.Generate != nil && !*req.Generate && req.Tools != nil && len(req.Tools) == 0
+	// Force `input: []` whenever the request semantically carries an
+	// empty input but the field would otherwise be omitted by
+	// json:omitempty. The upstream rejects the frame with
+	// "Missing required parameter: 'input'" when the field is
+	// absent. Cases:
+	//   - Warmup (Generate == false): always sends empty input.
+	//   - Continuation (PreviousResponseID set, no new items): the
+	//     prior response's items are server-side; we send no delta.
+	isWarmup := req.Generate != nil && !*req.Generate
+	forceEmptyInput := req.Input != nil && len(req.Input) == 0 &&
+		(isWarmup || req.PreviousResponseID != "")
+	forceEmptyTools := isWarmup && req.Tools != nil && len(req.Tools) == 0
 	if !forceEmptyInput && !forceEmptyTools {
 		return raw, nil
 	}
