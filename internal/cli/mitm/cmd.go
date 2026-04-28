@@ -112,10 +112,21 @@ func newDriftCheckCmd(f *cli.Factory) *cobra.Command {
 		referencePath string
 		captureRoot   string
 		caCert        string
+		driftLogPath  string
+		includeUA     []string
+		excludeUA     []string
+		requireKeys   []string
+		forbidKeys    []string
 	)
 	cmd := &cobra.Command{
 		Use:   "drift-check",
-		Short: "Capture, snapshot, diff, and exit non-zero on drift (suitable for CI/cron)",
+		Short: "Capture, snapshot, diff, append to drift log, exit non-zero on drift",
+		Long: `Capture one upstream session, extract a snapshot, diff against
+the committed reference, append the structured outcome to the drift
+log, and exit non-zero on divergence. Suitable for cron / CI.
+
+Auto-detects v1 vs v2 reference shape. Body-key and User-Agent
+filters apply only to v2.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			profile, err := mitmpkg.LookupLaunchProfile(upstream)
 			if err != nil {
@@ -126,6 +137,9 @@ func newDriftCheckCmd(f *cli.Factory) *cobra.Command {
 			}
 			if caCert == "" {
 				caCert = defaultCACert()
+			}
+			if driftLogPath == "" {
+				driftLogPath = defaultDriftLogPath()
 			}
 			ctx, cancel := context.WithCancel(cmd.Context())
 			defer cancel()
@@ -138,19 +152,59 @@ func newDriftCheckCmd(f *cli.Factory) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("capture: %w", err)
 			}
-			snap, err := mitmpkg.ExtractSnapshot(result.TranscriptPath, mitmpkg.SnapshotOptions{
-				UpstreamName: upstream,
-				UpstreamVersion: "live-" + result.StartedAt.Format("20060102T150405"),
-			})
-			if err != nil {
-				return fmt.Errorf("extract: %w", err)
+
+			outcome := mitmpkg.DriftOutcome{
+				Upstream:       upstream,
+				ReferencePath:  referencePath,
+				TranscriptPath: result.TranscriptPath,
+				StartedAt:      result.StartedAt,
+			}
+			if isV2Snapshot(referencePath) {
+				ref, err := mitmpkg.LoadSnapshotV2TOML(referencePath)
+				if err != nil {
+					return fmt.Errorf("load v2 reference: %w", err)
+				}
+				cand, err := mitmpkg.ExtractSnapshotV2(result.TranscriptPath, mitmpkg.SnapshotV2Options{
+					UpstreamName:               upstream,
+					UpstreamVersion:            "live-" + result.StartedAt.Format("20060102T150405"),
+					IncludeUserAgentSubstrings: includeUA,
+					ExcludeUserAgentSubstrings: excludeUA,
+					RequireBodyKeys:            requireKeys,
+					ForbidBodyKeys:             forbidKeys,
+				})
+				if err != nil {
+					return fmt.Errorf("extract v2: %w", err)
+				}
+				report := mitmpkg.DiffSnapshotsV2(ref, cand)
+				outcome.SchemaVersion = "v2"
+				outcome.V2 = &report
+				fmt.Fprintln(out2(f), report.SummaryString())
+				if err := mitmpkg.AppendDriftOutcome(driftLogPath, outcome); err != nil {
+					f.Logger.Warn("mitm.drift.log_append_failed", "path", driftLogPath, "err", err)
+				}
+				if report.HasDiverged() {
+					return fmt.Errorf("wire shape drift detected for %s", upstream)
+				}
+				return nil
 			}
 			ref, err := mitmpkg.LoadSnapshotTOML(referencePath)
 			if err != nil {
 				return fmt.Errorf("load reference: %w", err)
 			}
-			report := mitmpkg.DiffSnapshots(ref, snap)
+			cand, err := mitmpkg.ExtractSnapshot(result.TranscriptPath, mitmpkg.SnapshotOptions{
+				UpstreamName:    upstream,
+				UpstreamVersion: "live-" + result.StartedAt.Format("20060102T150405"),
+			})
+			if err != nil {
+				return fmt.Errorf("extract: %w", err)
+			}
+			report := mitmpkg.DiffSnapshots(ref, cand)
+			outcome.SchemaVersion = "v1"
+			outcome.V1 = &report
 			fmt.Fprintln(out2(f), report.SummaryString())
+			if err := mitmpkg.AppendDriftOutcome(driftLogPath, outcome); err != nil {
+				f.Logger.Warn("mitm.drift.log_append_failed", "path", driftLogPath, "err", err)
+			}
 			if report.HasDiverged() {
 				return fmt.Errorf("wire shape drift detected for %s", upstream)
 			}
@@ -161,9 +215,25 @@ func newDriftCheckCmd(f *cli.Factory) *cobra.Command {
 	cmd.Flags().StringVar(&referencePath, "reference", "", "path to the committed reference.toml")
 	cmd.Flags().StringVar(&captureRoot, "capture-dir", "", "root directory for transcripts")
 	cmd.Flags().StringVar(&caCert, "ca-cert", "", "path to mitmproxy CA cert")
+	cmd.Flags().StringVar(&driftLogPath, "drift-log", "", "path for the structured drift JSONL log (default: ~/.local/state/clyde/mitm-drift.jsonl)")
+	cmd.Flags().StringSliceVar(&includeUA, "include-ua", nil, "v2 only: include records whose User-Agent contains one of these substrings")
+	cmd.Flags().StringSliceVar(&excludeUA, "exclude-ua", nil, "v2 only: drop records whose User-Agent contains one of these substrings")
+	cmd.Flags().StringSliceVar(&requireKeys, "require-body-key", nil, "v2 only: require these top-level body keys")
+	cmd.Flags().StringSliceVar(&forbidKeys, "forbid-body-key", nil, "v2 only: drop records that contain any of these keys")
 	_ = cmd.MarkFlagRequired("upstream")
 	_ = cmd.MarkFlagRequired("reference")
 	return cmd
+}
+
+func defaultDriftLogPath() string {
+	if base := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); base != "" {
+		return filepath.Join(base, "clyde", "mitm-drift.jsonl")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "mitm-drift.jsonl"
+	}
+	return filepath.Join(home, ".local", "state", "clyde", "mitm-drift.jsonl")
 }
 
 func out2(f *cli.Factory) io.Writer {
