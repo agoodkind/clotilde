@@ -182,8 +182,19 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 	if cfg.DirectOAuth {
 		s.oauthMgr = oauth.NewManager(cfg.OAuth, "")
 		id := cfg.ClientIdentity
+		messagesURL := cfg.OAuth.MessagesURL
+		if override := strings.TrimSpace(deps.AnthropicMessagesURLOverride); override != "" {
+			// Rewrite messages outbound through the MITM proxy. The
+			// proxy's classifyRoute strips api.anthropic.com from
+			// upstreamURL and prepends its own base, so we only need
+			// to match the path the proxy expects (/v1/messages).
+			messagesURL = strings.TrimRight(override, "/") + "/v1/messages"
+			s.log.LogAttrs(context.Background(), slog.LevelInfo, "adapter.oauth.mitm_routed",
+				slog.String("messages_url", messagesURL),
+			)
+		}
 		s.anthr = anthropic.New(nil, s.oauthMgr, anthropic.Config{
-			MessagesURL:             cfg.OAuth.MessagesURL,
+			MessagesURL:             messagesURL,
 			OAuthAnthropicVersion:   cfg.OAuth.AnthropicVersion,
 			BetaHeader:              id.BetaHeader,
 			UserAgent:               id.UserAgent,

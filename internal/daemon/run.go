@@ -25,6 +25,7 @@ import (
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/adapter"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/webapp"
 )
 
@@ -750,12 +751,35 @@ func startAdapter(log *slog.Logger, srv *Server, inherited net.Listener) (*adapt
 		return nil, nil, nil
 	}
 
+	// When [mitm].enabled_default is set and the provider list
+	// includes "claude", route the adapter's outbound /v1/messages
+	// through the local MITM proxy. This lets us capture our own
+	// outbound and diff against the claude-cli reference snapshot
+	// (CLYDE-124 live verification).
+	mitmOverride := ""
+	if cfg.MITM.EnabledFor("claude") {
+		proxy, err := mitm.EnsureStarted(cfg.MITM, log.With("subcomponent", "mitm"))
+		if err != nil {
+			log.Warn("adapter.mitm.start_failed",
+				"component", "adapter",
+				"err", err,
+			)
+		} else {
+			mitmOverride = proxy.ClaudeBaseURL()
+			log.Info("adapter.mitm.routing_enabled",
+				"component", "adapter",
+				"proxy_base", mitmOverride,
+			)
+		}
+	}
+
 	ctrl := &adapterController{
 		log: log,
 		deps: adapter.Deps{
-			ResolveClaude: findRealClaude,
-			ScratchDir:    adapterScratchDir,
-			RequestEvents: srv.providerStats.Record,
+			ResolveClaude:                findRealClaude,
+			ScratchDir:                   adapterScratchDir,
+			RequestEvents:                srv.providerStats.Record,
+			AnthropicMessagesURLOverride: mitmOverride,
 		},
 	}
 	if err := ctrl.apply(launchConfigFromGlobal(cfg), true, inherited); err != nil {

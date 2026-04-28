@@ -26,6 +26,13 @@ type Deps struct {
 	// RequestEvents receives normalized adapter request lifecycle
 	// updates so the daemon can aggregate live provider stats.
 	RequestEvents adapterruntime.RequestEventSink
+	// AnthropicMessagesURLOverride, when non-empty, replaces the
+	// configured /v1/messages URL on the Anthropic client so its
+	// outbound HTTP rides through the local MITM capture proxy.
+	// The daemon populates this when [mitm].enabled_default is
+	// true and the provider list includes "claude". The adapter
+	// otherwise sends directly to api.anthropic.com.
+	AnthropicMessagesURLOverride string
 }
 
 // Runner spawns claude -p for one request. Each HTTP request builds
