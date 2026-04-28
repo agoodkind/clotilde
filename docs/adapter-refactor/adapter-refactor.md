@@ -251,15 +251,44 @@ layer's job is small and concrete. The resolver consumes a typed
 
 ### 4. Anthropic provider implementation
 
-- [ ] `internal/adapter/anthropic/` implements `Provider` directly against the
-  OAuth bucket. No subprocess, no `claude -p`, no fallback escalation logic.
+**Gate (P0). Byte-identical claude-cli wire parity.** Plan 4 cannot start
+its rewrite until the claude-cli snapshot pipeline lands. The new provider
+must reproduce claude-cli's outbound `/v1/messages` POST exactly: URL,
+method, headers, beta list, build identifier, stainless package version,
+system prompt prefix, request body framing. Drift in any of these causes
+silent quality degradation in the OAuth bucket. We will not ship the
+Anthropic provider half-assed.
+
+Required preconditions (all land before any other Plan 4 work):
+
+- [ ] **MITM polling harness.** Capture a real `claude` CLI invocation
+  through a local proxy and snapshot the full outbound POST to
+  `research/anthropic/captures/<timestamp>/cli-call.json`. Wired up via
+  `make capture-claude-cli` and a scheduled task that runs daily.
+- [ ] **Snapshot diff tool.** Go utility that diffs the new provider's
+  reconstructed wire request against the latest snapshot byte-for-byte.
+  Fails CI on divergence. Runs locally for dev loops.
+- [ ] **Source-of-truth generation.** Snapshot drives a generated
+  constants file consumed by the new request_builder. The `[adapter.anthropic]`
+  client_identity TOML keys move out of hand-curated defaults.
+- [ ] **Drift alarm.** Scheduled poll surfaces a notification or ticket
+  when the snapshot changes vs. the committed source of truth.
+
+Once the gate is green, the provider work itself:
+
+- [ ] `internal/adapter/anthropic/` implements `Provider` directly against
+  the OAuth bucket. No subprocess, no `claude -p`, no fallback escalation
+  logic.
 - [ ] Classifier (`ResponseClass`, header interpretation, native error
-  envelopes) stays. Live-validate against real 429s and attach captured logs
-  to the history file.
+  envelopes) stays. Live-validate against real 429s and attach captured
+  logs to the history file.
 - [ ] Delete `internal/adapter/anthropic/fallback/`.
-- [ ] Delete root finish-reason callers (`internal/adapter/stream.go:150` and
-  any leftover after the fallback package is gone). Provider owns its own
-  finish-reason mapping.
+- [ ] Delete root finish-reason callers (`internal/adapter/stream.go:150`
+  and any leftover after the fallback package is gone). Provider owns its
+  own finish-reason mapping.
+- [ ] Live validation: a real Cursor + Anthropic-OAuth turn diffs against
+  the captured claude-cli snapshot at zero divergence. The diff tool gates
+  the slice; manual eyeballing is not enough.
 
 ### 5. Codex provider implementation
 
