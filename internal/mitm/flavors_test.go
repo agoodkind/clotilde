@@ -10,7 +10,7 @@ func TestClassifyRecordExtractsUserAgentAndBeta(t *testing.T) {
 		Kind: RecordHTTPRequest,
 		RequestHeaders: map[string]string{
 			"User-Agent":       "claude-cli/2.1.121 (external, cli)",
-			"Anthropic-Beta":   "oauth-2025-04-20,interleaved-thinking-2025-05-14" //gitleaks:allow,
+			"Anthropic-Beta":   "oauth-2025-04-20,interleaved-thinking-2025-05-14", //gitleaks:allow
 			"Anthropic-Version": "2023-06-01",
 		},
 	}
@@ -24,7 +24,7 @@ func TestClassifyRecordExtractsUserAgentAndBeta(t *testing.T) {
 }
 
 func TestBetaFingerprintIsOrderInsensitive(t *testing.T) {
-	a := betaFingerprint("oauth-2025-04-20,interleaved-thinking-2025-05-14" //gitleaks:allow)
+	a := betaFingerprint("oauth-2025-04-20,interleaved-thinking-2025-05-14") //gitleaks:allow
 	b := betaFingerprint("interleaved-thinking-2025-05-14,oauth-2025-04-20")
 	if a != b {
 		t.Errorf("order-insensitive fingerprint failed: %q != %q", a, b)
@@ -34,7 +34,7 @@ func TestBetaFingerprintIsOrderInsensitive(t *testing.T) {
 func TestFlavorSlugStableAndDistinct(t *testing.T) {
 	probe := FlavorSignature{
 		UserAgent:       "claude-cli/2.1.121 (external, cli)",
-		BetaFingerprint: "oauth-2025-04-20,interleaved-thinking-2025-05-14" //gitleaks:allow,
+		BetaFingerprint: "oauth-2025-04-20,interleaved-thinking-2025-05-14", //gitleaks:allow
 		BodyKeys:        []string{"max_tokens", "messages", "metadata", "model"},
 	}
 	interactive := FlavorSignature{
