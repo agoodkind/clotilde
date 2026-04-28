@@ -1,0 +1,135 @@
+// Package mitm captures upstream wire traffic for parity tracking.
+// schema.go declares the typed shapes used across capture, snapshot
+// extraction, and diff. Capture records arrive as JSONL on disk and
+// share the dump.py schema from
+// research/codex/captures/2026-04-27/.
+package mitm
+
+// CaptureRecordKind enumerates the JSONL record kinds produced by
+// the proxy. New kinds extend this enum, never spill into untyped
+// fields.
+type CaptureRecordKind string
+
+const (
+	RecordHTTPRequest  CaptureRecordKind = "http_request"
+	RecordHTTPResponse CaptureRecordKind = "http_response"
+	RecordWSStart      CaptureRecordKind = "ws_start"
+	RecordWSMessage    CaptureRecordKind = "ws_msg"
+	RecordWSEnd        CaptureRecordKind = "ws_end"
+)
+
+// CaptureRecord is the typed view of one JSONL line. Different
+// kinds populate different fields; consumers switch on Kind. The
+// raw map representation lives elsewhere; this struct is what every
+// snapshot/diff/codegen consumer reads from.
+type CaptureRecord struct {
+	Kind CaptureRecordKind `json:"kind"`
+	T    int64             `json:"t,omitempty"`
+	URL  string            `json:"url,omitempty"`
+
+	// HTTP fields.
+	Method   string            `json:"method,omitempty"`
+	Status   int               `json:"status,omitempty"`
+	Headers  map[string]string `json:"headers,omitempty"`
+	BodyLen  int               `json:"body_len,omitempty"`
+	BodyText string            `json:"body,omitempty"`
+
+	// ws_start fields.
+	RequestHeaders  map[string]string `json:"request_headers,omitempty"`
+	ResponseHeaders map[string]string `json:"response_headers,omitempty"`
+
+	// ws_msg fields.
+	FromClient bool   `json:"from_client,omitempty"`
+	Length     int    `json:"len,omitempty"`
+	Text       string `json:"text,omitempty"`
+	Seq        int    `json:"seq,omitempty"`
+
+	// ws_end fields.
+	Messages int    `json:"messages,omitempty"`
+	Err      string `json:"err,omitempty"`
+}
+
+// Snapshot is the typed reference for what an upstream client emits
+// on the wire. Persisted as TOML under
+// `research/<upstream>/snapshots/<version>/reference.toml`. Diff
+// runs the adapter's request_builder for an equivalent input and
+// compares against this struct field-by-field.
+type Snapshot struct {
+	Upstream      SnapshotUpstream      `toml:"upstream" json:"upstream"`
+	Handshake     SnapshotHandshake     `toml:"handshake" json:"handshake"`
+	Body          SnapshotBody          `toml:"body" json:"body"`
+	FrameSequence SnapshotFrameSequence `toml:"frame_sequence" json:"frame_sequence"`
+	Constants     SnapshotConstants     `toml:"constants" json:"constants"`
+}
+
+type SnapshotUpstream struct {
+	Name      string `toml:"name" json:"name"`
+	Version   string `toml:"version" json:"version"`
+	CapturedAt string `toml:"captured_at" json:"captured_at"`
+}
+
+type SnapshotHandshake struct {
+	URLPattern string                 `toml:"url_pattern" json:"url_pattern"`
+	Headers    []SnapshotHeader       `toml:"headers" json:"headers"`
+}
+
+type SnapshotHeader struct {
+	Name  string `toml:"name" json:"name"`
+	Value string `toml:"value" json:"value"`
+}
+
+type SnapshotBody struct {
+	Type        string   `toml:"type" json:"type"`
+	FieldNames  []string `toml:"field_names" json:"field_names"`
+	ToolKinds   []string `toml:"tool_kinds" json:"tool_kinds"`
+	IncludeKeys []string `toml:"include_keys" json:"include_keys"`
+}
+
+type SnapshotFrameSequence struct {
+	Opening    string                  `toml:"opening" json:"opening"`
+	Warmup     SnapshotFrameDescriptor `toml:"warmup" json:"warmup"`
+	Real       SnapshotFrameDescriptor `toml:"real" json:"real"`
+	ChainsPrev bool                    `toml:"chains_prev" json:"chains_prev"`
+}
+
+type SnapshotFrameDescriptor struct {
+	Generate            string `toml:"generate" json:"generate"`
+	HasPrev             bool   `toml:"has_prev" json:"has_prev"`
+	InputCountMin       int    `toml:"input_count_min" json:"input_count_min"`
+	InputCountMax       int    `toml:"input_count_max" json:"input_count_max"`
+	ToolsCountMin       int    `toml:"tools_count_min" json:"tools_count_min"`
+	ToolsCountMax       int    `toml:"tools_count_max" json:"tools_count_max"`
+	StoreFieldRequired  bool   `toml:"store_field_required" json:"store_field_required"`
+	StoreValueObserved  string `toml:"store_value_observed" json:"store_value_observed"`
+}
+
+type SnapshotConstants struct {
+	Originator             string `toml:"originator" json:"originator"`
+	OpenAIBeta             string `toml:"openai_beta" json:"openai_beta"`
+	UserAgent              string `toml:"user_agent" json:"user_agent"`
+	BetaFeatures           string `toml:"beta_features" json:"beta_features"`
+	StainlessPackageVersion string `toml:"stainless_package_version" json:"stainless_package_version"`
+}
+
+// DiffReport is the structured output of comparing a captured
+// reference against an equivalent payload built by the adapter.
+// Empty Mismatches means the two are equivalent under the
+// snapshot's contract.
+type DiffReport struct {
+	Upstream    string         `json:"upstream"`
+	Mismatches  []DiffMismatch `json:"mismatches"`
+	Extra       []DiffMismatch `json:"extra"`
+	Missing     []DiffMismatch `json:"missing"`
+}
+
+type DiffMismatch struct {
+	Field    string `json:"field"`
+	Expected string `json:"expected"`
+	Got      string `json:"got"`
+	Reason   string `json:"reason"`
+}
+
+// HasDiverged reports whether the diff found any mismatch.
+func (r DiffReport) HasDiverged() bool {
+	return len(r.Mismatches) > 0 || len(r.Extra) > 0 || len(r.Missing) > 0
+}
