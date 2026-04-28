@@ -12,6 +12,7 @@ import (
 	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 )
 
 func (s *Server) AnthropicConfigured() bool {
@@ -181,4 +182,35 @@ func (s *Server) LogCacheUsageFallback(ctx context.Context, backend, reqID, alia
 
 func (s *Server) UnclaimNotice(kind string, resetsAt time.Time) {
 	Unclaim(kind, resetsAt)
+}
+
+// Methods that the Anthropic backend Dispatcher and
+// FallbackResponseDispatcher interfaces require. The Codex provider
+// no longer needs these because its Provider.Execute owns the wire
+// path directly. Anthropic still routes through the legacy
+// dispatcher chain until Plan 4 step 2 lands; once the Anthropic
+// rewrite migrates to Provider.Execute, these can be private again.
+
+func (s *Server) EmitRequestStarted(ctx context.Context, model adaptermodel.ResolvedModel, route, reqID, modelID string, stream bool) {
+	s.emitRequestStarted(ctx, model, route, reqID, modelID, stream)
+}
+
+func (s *Server) EmitRequestStreamOpened(ctx context.Context, model adaptermodel.ResolvedModel, route, reqID, modelID string, stream bool) {
+	s.emitRequestStreamOpened(ctx, model, route, reqID, modelID, stream)
+}
+
+func (s *Server) StreamChunkFromTooltrans(ch adapteropenai.StreamChunk) adapteropenai.StreamChunk {
+	return streamChunkFromTooltrans(ch)
+}
+
+func (s *Server) WriteJSON(w http.ResponseWriter, status int, v adapteropenai.ChatResponse) {
+	writeJSON(w, status, v)
+}
+
+func (s *Server) LogTerminal(ctx context.Context, ev adapterruntime.RequestEvent) {
+	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, ev)
+}
+
+func (s *Server) SystemFingerprint() string {
+	return systemFingerprint
 }

@@ -24,14 +24,14 @@ type providerStreamWriter struct {
 }
 
 func newProviderStreamWriter(s *Server, w http.ResponseWriter) (*providerStreamWriter, error) {
-	sse, err := s.NewSSEWriter(w)
+	sse, err := newSSEWriter(w)
 	if err != nil {
 		return nil, err
 	}
 	flusher, _ := w.(http.Flusher)
 	return &providerStreamWriter{
 		sse:               sse,
-		systemFingerprint: s.SystemFingerprint(),
+		systemFingerprint: systemFingerprint,
 		flusher:           flusher,
 	}, nil
 }

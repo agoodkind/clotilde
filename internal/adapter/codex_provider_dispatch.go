@@ -35,7 +35,7 @@ func (s *Server) dispatchCodexProvider(
 	started := time.Now()
 	_ = cursorReq // resolvedReq.Cursor carries the same value; keep parameter for future hooks.
 
-	s.EmitRequestStarted(r.Context(), model, "direct", reqID, model.Alias, req.Stream)
+	s.emitRequestStarted(r.Context(), model, "direct", reqID, model.Alias, req.Stream)
 
 	if req.Stream {
 		s.dispatchCodexProviderStream(r.Context(), w, r, req, model, reqID, started, resolvedReq)
@@ -61,11 +61,11 @@ func (s *Server) dispatchCodexProviderStream(
 	}
 	created := time.Now().Unix()
 
-	s.EmitRequestStreamOpened(r.Context(), model, "direct", reqID, model.Alias, true)
+	s.emitRequestStreamOpened(r.Context(), model, "direct", reqID, model.Alias, true)
 
 	result, runErr := s.codexProvider.Execute(ctx, resolvedReq, writer)
 	if runErr != nil {
-		s.LogTerminal(ctx, adapterruntime.RequestEvent{
+		adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
 			Stage:      adapterruntime.RequestStageFailed,
 			Provider:   "codex_direct",
 			Backend:    model.Backend,
@@ -123,7 +123,7 @@ func (s *Server) dispatchCodexProviderStream(
 		slog.Bool("reasoning_signaled", result.ReasoningSignaled),
 		slog.Bool("reasoning_visible", result.ReasoningVisible),
 	)
-	s.LogTerminal(ctx, adapterruntime.RequestEvent{
+	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
 		Stage:                      adapterruntime.RequestStageCompleted,
 		Provider:                   "codex_direct",
 		Backend:                    model.Backend,
@@ -153,7 +153,7 @@ func (s *Server) dispatchCodexProviderCollect(
 	collector := newProviderCollectorWriter()
 	result, runErr := s.codexProvider.Execute(ctx, resolvedReq, collector)
 	if runErr != nil {
-		s.LogTerminal(ctx, adapterruntime.RequestEvent{
+		adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
 			Stage:      adapterruntime.RequestStageFailed,
 			Provider:   "codex_direct",
 			Backend:    model.Backend,
@@ -174,7 +174,7 @@ func (s *Server) dispatchCodexProviderCollect(
 		ReasoningVisible:           result.ReasoningVisible,
 		DerivedCacheCreationTokens: result.DerivedCacheCreationTokens,
 	}
-	merged := s.MergeChunks(reqID, model.Alias, collector.chunks, runResult)
+	merged := adaptercodex.MergeChunks(reqID, model.Alias, systemFingerprint, collector.chunks, runResult)
 	usage := result.Usage
 	if model.Context > 0 {
 		usage.MaxTokens = model.Context
@@ -182,7 +182,7 @@ func (s *Server) dispatchCodexProviderCollect(
 	if merged.Usage != nil {
 		merged.Usage.MaxTokens = usage.MaxTokens
 	}
-	s.WriteJSON(w, http.StatusOK, merged)
+	writeJSON(w, http.StatusOK, merged)
 	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.completed",
 		slog.String("request_id", reqID),
 		slog.String("model", model.Alias),
@@ -198,7 +198,7 @@ func (s *Server) dispatchCodexProviderCollect(
 		slog.Bool("reasoning_signaled", result.ReasoningSignaled),
 		slog.Bool("reasoning_visible", result.ReasoningVisible),
 	)
-	s.LogTerminal(ctx, adapterruntime.RequestEvent{
+	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
 		Stage:                      adapterruntime.RequestStageCompleted,
 		Provider:                   "codex_direct",
 		Backend:                    model.Backend,
