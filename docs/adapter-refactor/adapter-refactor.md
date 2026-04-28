@@ -421,10 +421,14 @@ suffix-extension matcher described in step 5 above. CLYDE-123
 After items 1 through 6 land, the bridges become unused.
 
 - [ ] Delete `internal/adapter/anthropic_bridge.go`. Closes with Plan 4.
-- [ ] Delete `internal/adapter/codex_bridge.go`. Currently a thin
-  shim around `s.codexProvider.Execute`. Inline the call site in
-  the dispatcher and drop the file.
-- [ ] Delete `internal/adapter/codex_runtime.go`.
+- [x] Deleted `internal/adapter/codex_bridge.go`. The shared methods
+  it exposed (EmitRequestStarted, LogTerminal, etc.) moved into
+  `anthropic_bridge.go` because the Anthropic backend Dispatcher
+  interface is the only consumer that still requires them. Codex
+  provider dispatch calls private equivalents directly.
+- [x] Deleted `internal/adapter/codex_runtime.go`. The codex package
+  now ships sensible production defaults (os.Getwd, $SHELL detection)
+  so the daemon does not need an init-only override file.
 - [x] Deleted `internal/adapter/codex_sessions.go`.
 - [ ] Reduce `internal/adapter/oauth_handler.go` to nothing or move the few
   remaining helpers into provider construction at startup.
