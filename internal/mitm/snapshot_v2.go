@@ -25,6 +25,16 @@ type SnapshotV2Options struct {
 	// values before a header is classified V2HeaderClassFree
 	// instead of V2HeaderClassEnum. Default 5.
 	EnumThreshold int
+	// IncludeUserAgentSubstrings, when non-empty, restricts records
+	// to those whose User-Agent header contains at least one of the
+	// listed substrings (case-insensitive). Useful for extracting a
+	// canonical reference from a transcript that mixes the upstream
+	// CLI, our adapter, and other clients sharing the proxy.
+	IncludeUserAgentSubstrings []string
+	// ExcludeUserAgentSubstrings drops records whose User-Agent
+	// matches any listed substring (case-insensitive). Applied after
+	// IncludeUserAgentSubstrings.
+	ExcludeUserAgentSubstrings []string
 }
 
 const (
@@ -152,6 +162,9 @@ func buildSnapshotV2(rawLines [][]byte, records []CaptureRecord, opts SnapshotV2
 		// keys (which the proxy emits in summary mode under
 		// request_body.keys but the typed schema does not expose).
 		sig := classifyRequestRaw(raw, rec)
+		if !uaMatches(sig.UserAgent, opts.IncludeUserAgentSubstrings, opts.ExcludeUserAgentSubstrings) {
+			continue
+		}
 		slug := sig.FlavorSlug()
 		flavored[slug] = append(flavored[slug], rawRequest{raw: raw, record: rec})
 		flavorSigs[slug] = sig
@@ -186,6 +199,32 @@ func buildSnapshotV2(rawLines [][]byte, records []CaptureRecord, opts SnapshotV2
 	}
 
 	return snap, nil
+}
+
+// uaMatches applies include/exclude substring filters to a User-Agent.
+// Empty include set means include-all. Comparisons are case-insensitive.
+func uaMatches(ua string, include, exclude []string) bool {
+	low := strings.ToLower(ua)
+	for _, ex := range exclude {
+		if ex == "" {
+			continue
+		}
+		if strings.Contains(low, strings.ToLower(ex)) {
+			return false
+		}
+	}
+	if len(include) == 0 {
+		return true
+	}
+	for _, inc := range include {
+		if inc == "" {
+			continue
+		}
+		if strings.Contains(low, strings.ToLower(inc)) {
+			return true
+		}
+	}
+	return false
 }
 
 // classifyRequestRaw is the v2 classifier. Same signature shape as

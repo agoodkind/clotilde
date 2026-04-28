@@ -217,10 +217,12 @@ func newCaptureCmd(f *cli.Factory) *cobra.Command {
 
 func newSnapshotCmd(f *cli.Factory) *cobra.Command {
 	var (
-		upstream   string
-		version    string
-		outputDir  string
-		useV2      bool
+		upstream  string
+		version   string
+		outputDir string
+		useV2     bool
+		includeUA []string
+		excludeUA []string
 	)
 	cmd := &cobra.Command{
 		Use:   "snapshot <transcript>",
@@ -232,8 +234,10 @@ func newSnapshotCmd(f *cli.Factory) *cobra.Command {
 			}
 			if useV2 {
 				snap, err := mitmpkg.ExtractSnapshotV2(args[0], mitmpkg.SnapshotV2Options{
-					UpstreamName:    upstream,
-					UpstreamVersion: version,
+					UpstreamName:               upstream,
+					UpstreamVersion:            version,
+					IncludeUserAgentSubstrings: includeUA,
+					ExcludeUserAgentSubstrings: excludeUA,
 				})
 				if err != nil {
 					return err
@@ -269,6 +273,8 @@ func newSnapshotCmd(f *cli.Factory) *cobra.Command {
 	cmd.Flags().StringVar(&version, "version", "", "upstream version string to record in the snapshot")
 	cmd.Flags().StringVar(&outputDir, "output-dir", "", "directory to write reference.toml (default: transcript dir)")
 	cmd.Flags().BoolVar(&useV2, "v2", false, "emit per-flavor SnapshotV2 with classified headers and nested body shapes")
+	cmd.Flags().StringSliceVar(&includeUA, "include-ua", nil, "only include records whose User-Agent contains one of these substrings (v2 only)")
+	cmd.Flags().StringSliceVar(&excludeUA, "exclude-ua", nil, "drop records whose User-Agent contains one of these substrings (v2 only)")
 	_ = cmd.MarkFlagRequired("upstream")
 	return cmd
 }
