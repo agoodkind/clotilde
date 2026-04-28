@@ -9,12 +9,23 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"goodkind.io/clyde/internal/cli"
 	mitmpkg "goodkind.io/clyde/internal/mitm"
 )
+
+// isV2Snapshot returns true when the reference TOML uses the v2
+// per-flavor schema. Detection sniffs for the [[flavors]] table.
+func isV2Snapshot(path string) bool {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(raw), "[[flavors]]")
+}
 
 // NewCmd returns the cobra command for `clyde mitm`.
 func NewCmd(f *cli.Factory) *cobra.Command {
@@ -49,9 +60,27 @@ func newCodegenCmd(f *cli.Factory) *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "codegen <reference.toml>",
-		Short: "Generate wire_constants_gen.go from a committed reference snapshot",
+		Short: "Generate wire_constants_gen.go (v1) or wire_flavors_gen.go (v2) from a committed reference snapshot",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Auto-detect v2 by sniffing the file. v2 has a top-level
+			// [[flavors]] table; v1 has top-level [body] / [constants].
+			if isV2Snapshot(args[0]) {
+				snap, err := mitmpkg.LoadSnapshotV2TOML(args[0])
+				if err != nil {
+					return fmt.Errorf("load v2 reference: %w", err)
+				}
+				out, err := mitmpkg.GenerateWireFlavors(snap, mitmpkg.CodegenOptions{
+					PackageName: pkg,
+					OutputDir:   outputDir,
+					UpstreamRef: args[0],
+				})
+				if err != nil {
+					return err
+				}
+				fmt.Fprintln(out2(f), "generated:", out)
+				return nil
+			}
 			snap, err := mitmpkg.LoadSnapshotTOML(args[0])
 			if err != nil {
 				return fmt.Errorf("load reference: %w", err)
