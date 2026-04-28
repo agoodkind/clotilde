@@ -79,9 +79,21 @@ func RunDirect(
 				continuationTelemetry.MismatchDiffSummary = MismatchDiffSummary(mismatch.Expected, mismatch.Current)
 			}
 			LogContinuationDecision(ctx, cfg.Log, continuationTelemetry)
-			if continuation.Hit {
-				wsReq = WithPreviousResponseID(wsReq, continuation.PreviousResponseID, continuation.IncrementalInput)
-			}
+			// previous_response_id reuse is intentionally disabled.
+			// ChatGPT Pro Codex requires store=false on outbound
+			// requests; with store=false the upstream never
+			// persists the response, so any previous_response_id
+			// reference returns "Previous response with id ...
+			// not found." and forces a full-replay retry. We log
+			// the continuation decision for telemetry and
+			// hit-rate observability, but never inject the id.
+			//
+			// Cost savings on this provider come from the
+			// prompt-cache (prompt_cache_key) which works
+			// independently. If a future ChatGPT Pro release
+			// allows store=true, re-enable the WithPreviousResponseID
+			// call below.
+			_ = continuation.Hit
 		}
 		wsCfg := WebsocketTransportConfig{
 			URL:            cfg.WebsocketURL,
