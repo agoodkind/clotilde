@@ -117,7 +117,6 @@ type Server struct {
 	fbSem         chan struct{}
 	httpClient    *http.Client
 	ctxUsage      *contextUsageTracker
-	codexContinue    *adaptercodex.ContinuationStore
 	providerRegistry *adapterprovider.Registry
 	codexProvider    *adaptercodex.Provider
 }
@@ -165,7 +164,6 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 		ctxUsage: newContextUsageTracker(),
 	}
 	if cfg.Codex.Enabled {
-		s.codexContinue = adaptercodex.NewContinuationStore()
 		s.providerRegistry = adapterprovider.NewRegistry()
 		s.codexProvider = adaptercodex.NewProvider(adapterprovider.Deps{
 			Config:     cfg,

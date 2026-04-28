@@ -29,34 +29,6 @@ type TransportTelemetry struct {
 	ContextWindowError       bool
 }
 
-type ContinuationTelemetry struct {
-	RequestID             string
-	Alias                 string
-	Transport             string
-	Key                   string
-	Hit                   bool
-	MissReason            string
-	MismatchField         string
-	FingerprintMatch      bool
-	StoredFingerprint     string
-	IncomingFingerprint   string
-	PreviousResponseID    string
-	IncrementalCount      int
-	ExpectedEventCount    int
-	CurrentEventCount     int
-	BaselineMatchStart    int
-	BaselineMatchEnd      int
-	MismatchExpectedIndex int
-	MismatchCurrentIndex  int
-	MismatchExpectedItem  int
-	MismatchCurrentItem   int
-	MismatchExpected      string
-	MismatchCurrent       string
-	MismatchDiffSummary   string
-	RollingHitRate        float64
-	RollingWindowSize     int
-}
-
 func LogTransportPrepared(ctx context.Context, log *slog.Logger, telemetry TransportTelemetry) {
 	if log == nil {
 		log = slog.Default()
@@ -88,37 +60,3 @@ func LogTransportPrepared(ctx context.Context, log *slog.Logger, telemetry Trans
 	)
 }
 
-func LogContinuationDecision(ctx context.Context, log *slog.Logger, telemetry ContinuationTelemetry) {
-	if log == nil {
-		log = slog.Default()
-	}
-	log.InfoContext(ctx, "adapter.codex.continuation.decided",
-		"component", "adapter",
-		"subcomponent", "codex",
-		"request_id", telemetry.RequestID,
-		"alias", telemetry.Alias,
-		"transport", telemetry.Transport,
-		"has_key", telemetry.Key != "",
-		"hit", telemetry.Hit,
-		"miss_reason", telemetry.MissReason,
-		"mismatch_field", telemetry.MismatchField,
-		"fingerprint_match", telemetry.FingerprintMatch,
-		"stored_fingerprint", telemetry.StoredFingerprint,
-		"incoming_fingerprint", telemetry.IncomingFingerprint,
-		"has_previous_response_id", telemetry.PreviousResponseID != "",
-		"incremental_input_count", telemetry.IncrementalCount,
-		"expected_event_count", telemetry.ExpectedEventCount,
-		"current_event_count", telemetry.CurrentEventCount,
-		"baseline_match_start", telemetry.BaselineMatchStart,
-		"baseline_match_end", telemetry.BaselineMatchEnd,
-		"mismatch_expected_event_index", telemetry.MismatchExpectedIndex,
-		"mismatch_current_event_index", telemetry.MismatchCurrentIndex,
-		"mismatch_expected_item_index", telemetry.MismatchExpectedItem,
-		"mismatch_current_item_index", telemetry.MismatchCurrentItem,
-		"mismatch_expected", telemetry.MismatchExpected,
-		"mismatch_current", telemetry.MismatchCurrent,
-		"mismatch_diff_summary", telemetry.MismatchDiffSummary,
-		"rolling_hit_rate", telemetry.RollingHitRate,
-		"rolling_window_size", telemetry.RollingWindowSize,
-	)
-}
