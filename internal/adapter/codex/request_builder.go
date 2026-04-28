@@ -310,6 +310,23 @@ func responsesOutputText(raw any) string {
 	}
 }
 
+// rewriteWorkspacePath translates daemon-cwd-rooted paths to the
+// caller's workspace path. Originally added for the codex subprocess
+// path where the codex CLI ran in the daemon's cwd; the websocket
+// direct path has no such translation need because Cursor and the
+// upstream both speak in absolute paths anchored at the workspace.
+//
+// Several guards keep this from corrupting absolute paths when the
+// daemon is launched without an explicit working directory:
+//   - bail when workspacePath or text is empty.
+//   - bail when GetwdFn returns the same path.
+//   - bail when the daemon cwd is `/` (launchd default), because
+//     replacing every `/` with the workspace mashes every absolute
+//     path beyond recognition.
+//   - bail when the daemon cwd does not actually appear in the text
+//     as a directory-bounded substring; avoids partial-prefix
+//     mashing on text that merely happens to contain a similar
+//     short string.
 func rewriteWorkspacePath(text, workspacePath string) string {
 	workspacePath = strings.TrimSpace(workspacePath)
 	if workspacePath == "" || text == "" {
@@ -323,7 +340,87 @@ func rewriteWorkspacePath(text, workspacePath string) string {
 	if cwd == "" || cwd == workspacePath {
 		return text
 	}
-	return strings.ReplaceAll(text, cwd, workspacePath)
+	// Reject cwd values that are too short to be meaningful as a
+	// path prefix. `/` is the launchd default and trips a
+	// catastrophic global slash replace. Anything shorter than 2
+	// characters or containing only path separators is treated as
+	// "no real prefix".
+	if len(cwd) < 2 || strings.Trim(cwd, "/") == "" {
+		return text
+	}
+	// Replace only bounded occurrences. An unbounded ReplaceAll would
+	// rewrite substrings inside unrelated identifiers (e.g. `/var`
+	// inside `/variable`), which is the original mashing failure.
+	return pathBoundedReplaceAll(text, cwd, workspacePath)
+}
+
+// pathBoundedContains reports whether `needle` appears in `haystack`
+// at a position where it is bounded by the start of the string, the
+// end of the string, or a non-identifier character. When `needle`
+// begins with a path separator, the leading `/` itself counts as the
+// preceding boundary so suffix matches like `/bar` in `/foo/bar`
+// resolve correctly.
+func pathBoundedContains(haystack, needle string) bool {
+	_, found := pathBoundedFirstMatch(haystack, needle, 0)
+	return found
+}
+
+// pathBoundedReplaceAll replaces every bounded occurrence of needle
+// in haystack with replacement. Unbounded occurrences (substrings
+// inside identifiers) pass through untouched.
+func pathBoundedReplaceAll(haystack, needle, replacement string) string {
+	if needle == "" {
+		return haystack
+	}
+	var out strings.Builder
+	out.Grow(len(haystack))
+	idx := 0
+	for idx < len(haystack) {
+		pos, ok := pathBoundedFirstMatch(haystack, needle, idx)
+		if !ok {
+			out.WriteString(haystack[idx:])
+			return out.String()
+		}
+		out.WriteString(haystack[idx:pos])
+		out.WriteString(replacement)
+		idx = pos + len(needle)
+	}
+	return out.String()
+}
+
+func pathBoundedFirstMatch(haystack, needle string, from int) (int, bool) {
+	if needle == "" || from >= len(haystack) {
+		return 0, false
+	}
+	for {
+		rel := strings.Index(haystack[from:], needle)
+		if rel < 0 {
+			return 0, false
+		}
+		pos := from + rel
+		end := pos + len(needle)
+		if isPathBoundary(haystack, pos, end, needle) {
+			return pos, true
+		}
+		from = pos + 1
+		if from >= len(haystack) {
+			return 0, false
+		}
+	}
+}
+
+func isPathBoundary(haystack string, pos, end int, needle string) bool {
+	startOK := pos == 0 || isPathSeparatorByte(haystack[pos-1]) || needle[0] == '/'
+	endOK := end == len(haystack) || isPathSeparatorByte(haystack[end])
+	return startOK && endOK
+}
+
+func isPathSeparatorByte(b byte) bool {
+	switch b {
+	case '/', ' ', '\n', '\t', '"', '\'', '(', ')', ',', ':', ';':
+		return true
+	}
+	return false
 }
 
 func functionCallItem(tc adapteropenai.ToolCall, shellMode string) map[string]any {
