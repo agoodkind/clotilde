@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"strings"
 
-	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	"goodkind.io/clyde/internal/adapter/finishreason"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
@@ -106,10 +105,6 @@ type toolCallState struct {
 	ArgumentsEmitted  bool
 	Arguments         strings.Builder
 	Input             strings.Builder
-}
-
-func InboundToolName(name string) string {
-	return adaptercursor.InboundCodexToolName(name)
 }
 
 func SanitizeForUpstreamCache(text string) string {

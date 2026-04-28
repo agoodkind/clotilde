@@ -24,6 +24,22 @@ type Request struct {
 	CanSwitchMode   bool
 	CanSpawnAgent   bool
 	PathKind        RequestPathKind
+
+	// Tool-presence flags grounded in empirical 2026-04-27 captures.
+	// Cursor signals product semantics by which tools are available
+	// in the request, not by separate request fields. The classifier
+	// in TranslateRequest sets these from the raw tool name list.
+	HasSubagentTool    bool
+	HasSwitchModeTool  bool
+	HasAskQuestionTool bool
+	HasCreatePlanTool  bool
+	HasApplyPatchTool  bool
+
+	// MCPToolNames lists every function tool whose name matches the
+	// Cursor MCP convention. Today: CallMcpTool, FetchMcpResource,
+	// plus any future MCP-prefixed names. Custom tools (ApplyPatch
+	// etc.) are not MCP and are tracked via the Has*Tool flags above.
+	MCPToolNames []string
 }
 
 // TranslateRequest derives Cursor-specific metadata from an OpenAI-compatible
@@ -42,8 +58,44 @@ func TranslateRequest(req adapteropenai.ChatRequest) Request {
 	translated.Mode = requestMode(translated.RawToolNames)
 	translated.CanSwitchMode = hasRawToolName(translated.RawToolNames, "SwitchMode")
 	translated.CanSpawnAgent = hasRawToolName(translated.RawToolNames, "Subagent")
+	translated.HasSubagentTool = translated.CanSpawnAgent
+	translated.HasSwitchModeTool = translated.CanSwitchMode
+	translated.HasAskQuestionTool = hasRawToolName(translated.RawToolNames, "AskQuestion")
+	translated.HasCreatePlanTool = hasRawToolName(translated.RawToolNames, "CreatePlan")
+	translated.HasApplyPatchTool = hasRawToolName(translated.RawToolNames, "ApplyPatch")
+	translated.MCPToolNames = collectMCPToolNames(translated.RawToolNames)
 	translated.PathKind = RequestPath(translated)
 	return translated
+}
+
+// collectMCPToolNames returns the subset of raw tool names that match
+// the Cursor MCP convention. Today the canonical names are
+// `CallMcpTool` and `FetchMcpResource`; the substring fallback catches
+// any future MCP-prefixed function tool without a code change. The
+// result preserves the order the names appeared in the request.
+func collectMCPToolNames(toolNames []string) []string {
+	if len(toolNames) == 0 {
+		return nil
+	}
+	out := make([]string, 0, 2)
+	for _, name := range toolNames {
+		if isMCPToolName(name) {
+			out = append(out, name)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func isMCPToolName(name string) bool {
+	switch name {
+	case "CallMcpTool", "FetchMcpResource":
+		return true
+	}
+	lowered := strings.ToLower(name)
+	return strings.Contains(lowered, "mcp")
 }
 
 func (r Request) Context() Context {

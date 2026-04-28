@@ -217,7 +217,7 @@ func requestTools(req adapteropenai.ChatRequest) []adapteropenai.Tool {
 	filtered := make([]adapteropenai.Tool, 0, len(tools))
 	for _, tool := range tools {
 		toolName := strings.TrimSpace(tool.Function.Name)
-		if allowed[toolName] || adaptercursor.KeepCodexToolForWriteIntent(toolName) {
+		if allowed[toolName] || KeepToolForWriteIntent(toolName) {
 			filtered = append(filtered, tool)
 		}
 	}
@@ -258,7 +258,7 @@ func toolSpecs(req adapteropenai.ChatRequest, shellMode string) []any {
 			}
 			continue
 		}
-		out = append(out, FunctionToolSpec(adaptercursor.OutboundCodexToolName(toolName), tool.Function.Description, tool.Function.Parameters, tool.Function.Strict))
+		out = append(out, FunctionToolSpec(OutboundToolName(toolName), tool.Function.Description, tool.Function.Parameters, tool.Function.Strict))
 	}
 	return out
 }
@@ -343,7 +343,7 @@ func functionCallItem(tc adapteropenai.ToolCall, shellMode string) map[string]an
 	return map[string]any{
 		"type":      "function_call",
 		"call_id":   callID,
-		"name":      adaptercursor.OutboundCodexToolName(tc.Function.Name),
+		"name":      OutboundToolName(tc.Function.Name),
 		"arguments": tc.Function.Arguments,
 	}
 }
@@ -368,7 +368,7 @@ func functionCallFromResponsesItem(item map[string]any, shellMode, workspacePath
 		ID:   callID,
 		Type: "function",
 		Function: adapteropenai.ToolCallFunction{
-			Name:      adaptercursor.InboundCodexToolName(name),
+			Name:      InboundToolName(name),
 			Arguments: args,
 		},
 	}
@@ -442,7 +442,7 @@ func inputFromResponsesInput(
 			name := mapString(item, "name")
 			inputText := rewriteWorkspacePath(UnwrapApplyPatchInput(rawString(item, "input")), workspacePath)
 			if callID != "" {
-				toolCallNames[callID] = adaptercursor.InboundCodexToolName(name)
+				toolCallNames[callID] = InboundToolName(name)
 			}
 			input = append(input, map[string]any{
 				"type":    "custom_tool_call",

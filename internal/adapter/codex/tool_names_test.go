@@ -1,4 +1,4 @@
-package cursor
+package codex
 
 import "testing"
 
@@ -18,17 +18,32 @@ func TestCodexToolNameTranslationRoundTrip(t *testing.T) {
 	}
 
 	for cursorName, codexName := range testCases {
-		if got := OutboundCodexToolName(cursorName); got != codexName {
+		if got := OutboundToolName(cursorName); got != codexName {
 			t.Fatalf("outbound %q => %q want %q", cursorName, got, codexName)
 		}
-		if got := InboundCodexToolName(codexName); got != cursorName {
+		if got := InboundToolName(codexName); got != cursorName {
 			t.Fatalf("inbound %q => %q want %q", codexName, got, cursorName)
 		}
 	}
 }
 
-func TestInboundCodexToolNameNormalizesNativeShellTool(t *testing.T) {
-	if got := InboundCodexToolName("shell_command"); got != "Shell" {
+func TestInboundToolNameNormalizesNativeShellTool(t *testing.T) {
+	if got := InboundToolName("shell_command"); got != "Shell" {
 		t.Fatalf("inbound shell_command => %q want %q", got, "Shell")
+	}
+}
+
+func TestKeepToolForWriteIntent(t *testing.T) {
+	if !KeepToolForWriteIntent("ApplyPatch") {
+		t.Errorf("KeepToolForWriteIntent(ApplyPatch) = false, want true")
+	}
+	if !KeepToolForWriteIntent("apply_patch") {
+		t.Errorf("KeepToolForWriteIntent(apply_patch) = false, want true")
+	}
+	if KeepToolForWriteIntent("") {
+		t.Errorf("KeepToolForWriteIntent(\"\") = true, want false")
+	}
+	if KeepToolForWriteIntent("nonsense") {
+		t.Errorf("KeepToolForWriteIntent(nonsense) = true, want false")
 	}
 }
