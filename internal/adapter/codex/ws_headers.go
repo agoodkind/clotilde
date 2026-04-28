@@ -18,6 +18,7 @@ type ResponsesWebsocketHeaderConfig struct {
 	TurnState            *TurnState
 	TurnMetadata         string
 	IncludeTimingMetrics bool
+	Originator           string // empty means use CodexOriginatorValue
 }
 
 func BuildResponsesWebsocketHeaders(cfg ResponsesWebsocketHeaderConfig) http.Header {
@@ -59,5 +60,10 @@ func BuildResponsesWebsocketHeaders(cfg ResponsesWebsocketHeaderConfig) http.Hea
 		header.Set(CodexTimingMetricsHeader, "true")
 	}
 	header.Set(openAIBetaHeader, responsesWebsocketsV2BetaHeaderValue)
+	originator := strings.TrimSpace(cfg.Originator)
+	if originator == "" {
+		originator = CodexOriginatorValue
+	}
+	header.Set(CodexOriginatorHeader, originator)
 	return header
 }

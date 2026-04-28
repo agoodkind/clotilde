@@ -235,12 +235,21 @@ func logWebsocketFrame(ctx context.Context, cfg WebsocketTransportConfig, payloa
 
 func dialResponsesWebsocket(ctx context.Context, cfg WebsocketTransportConfig) (*websocket.Conn, *http.Response, error) {
 	dialer := websocket.Dialer{}
+	installationID, _ := LoadInstallationID()
+	turnMetadataJSON := ""
+	conv := strings.TrimSpace(cfg.ConversationID)
+	if conv != "" {
+		if json, err := NewTurnMetadata(conv, "").MarshalCompact(); err == nil {
+			turnMetadataJSON = json
+		}
+	}
 	header := BuildResponsesWebsocketHeaders(ResponsesWebsocketHeaderConfig{
 		RequestID:      cfg.RequestID,
 		ConversationID: cfg.ConversationID,
 		Token:          cfg.Token,
-		InstallationID: cfg.AccountID,
+		InstallationID: installationID,
 		TurnState:      cfg.TurnState,
+		TurnMetadata:   turnMetadataJSON,
 	})
 	conn, resp, err := dialer.DialContext(ctx, cfg.URL, header)
 	if resp != nil && cfg.TurnState != nil {

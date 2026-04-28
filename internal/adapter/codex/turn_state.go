@@ -13,7 +13,15 @@ const (
 	CodexWindowIDHeader       = "x-codex-window-id"
 	CodexTimingMetricsHeader  = "x-responsesapi-include-timing-metrics"
 	CodexBetaFeaturesHeader   = "x-codex-beta-features"
+	CodexOriginatorHeader     = "originator"
 )
+
+// CodexOriginatorValue is our first-party identity in the
+// `originator` header. We do not spoof codex_exec or Codex Desktop;
+// our wire shape is a superset and we want it to be visible to the
+// upstream as a distinct client. Reference values observed:
+// codex_exec (CLI), Codex Desktop (app).
+const CodexOriginatorValue = "clyde"
 
 type TurnState struct {
 	mu    sync.RWMutex

@@ -40,7 +40,10 @@ func RunDirect(
 	if cfg.WebsocketEnabled {
 		conversationID := strings.TrimSpace(transportPayload.PromptCache)
 		if conversationID != "" {
-			transportPayload.ClientMetadata = ClientMetadata(cfg.AccountID, CodexWindowID(conversationID))
+			installationID, _ := LoadInstallationID()
+			turnMeta := NewTurnMetadata(conversationID, "")
+			turnMetaJSON, _ := turnMeta.MarshalCompact()
+			transportPayload.ClientMetadata = ClientMetadataWithTurn(installationID, CodexWindowID(conversationID), turnMetaJSON)
 		}
 		wsReq := ResponseCreateRequestFromHTTP(transportPayload)
 		fullWSReq := wsReq

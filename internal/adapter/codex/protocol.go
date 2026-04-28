@@ -115,12 +115,24 @@ func SanitizeForUpstreamCache(text string) string {
 }
 
 func ClientMetadata(installationID, windowID string) map[string]string {
+	return ClientMetadataWithTurn(installationID, windowID, "")
+}
+
+// ClientMetadataWithTurn extends ClientMetadata with the
+// `x-codex-turn-metadata` JSON blob. Codex CLI and Codex Desktop both
+// mirror the handshake header into client_metadata; we do the same.
+// turnMetadataJSON should be the already-marshaled JSON string from
+// TurnMetadata.MarshalCompact.
+func ClientMetadataWithTurn(installationID, windowID, turnMetadataJSON string) map[string]string {
 	out := map[string]string{}
 	if v := strings.TrimSpace(installationID); v != "" {
 		out["x-codex-installation-id"] = v
 	}
 	if v := strings.TrimSpace(windowID); v != "" {
 		out["x-codex-window-id"] = v
+	}
+	if v := strings.TrimSpace(turnMetadataJSON); v != "" {
+		out["x-codex-turn-metadata"] = v
 	}
 	if len(out) == 0 {
 		return nil

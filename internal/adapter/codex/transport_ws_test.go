@@ -170,8 +170,17 @@ func TestRunWebsocketTransportParsesTextAndCompletion(t *testing.T) {
 		if got := r.Header.Get(CodexWindowIDHeader); got != "cursor:conv-123:0" {
 			t.Fatalf("%s=%q want cursor:conv-123:0", CodexWindowIDHeader, got)
 		}
-		if got := r.Header.Get(CodexInstallationIDHeader); got != "acct-123" {
-			t.Fatalf("%s=%q want acct-123", CodexInstallationIDHeader, got)
+		// x-codex-installation-id now comes from LoadInstallationID
+		// (~/.codex/installation_id or persisted clyde uuid) rather
+		// than the auth account_id. Only assert non-empty here.
+		if got := r.Header.Get(CodexInstallationIDHeader); got == "" {
+			t.Fatalf("%s should be non-empty", CodexInstallationIDHeader)
+		}
+		if got := r.Header.Get(CodexOriginatorHeader); got != CodexOriginatorValue {
+			t.Fatalf("%s=%q want %s", CodexOriginatorHeader, got, CodexOriginatorValue)
+		}
+		if got := r.Header.Get(CodexTurnMetadataHeader); got == "" {
+			t.Fatalf("%s should be non-empty", CodexTurnMetadataHeader)
 		}
 		responseHeader := http.Header{}
 		responseHeader.Set(CodexTurnStateHeader, "turn-123")
