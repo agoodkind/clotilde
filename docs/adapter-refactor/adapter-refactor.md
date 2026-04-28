@@ -265,20 +265,34 @@ Anthropic provider half-assed.
 
 Required preconditions (all land before any other Plan 4 work):
 
-- [ ] **MITM polling harness.** Capture a real `claude` CLI invocation
-  through a local proxy and snapshot the full outbound POST to
-  `research/anthropic/captures/<timestamp>/cli-call.json`. Wired up via
-  `make capture-claude-cli` and a scheduled task that runs daily.
-- [ ] **Snapshot diff tool.** Go utility that diffs the new provider's
-  reconstructed wire request against the latest snapshot byte-for-byte.
-  Fails CI on divergence. Runs locally for dev loops.
-- [ ] **Source-of-truth generation.** Snapshot drives a generated
-  constants file consumed by the new request_builder. The `[adapter.anthropic]`
-  client_identity TOML keys move out of hand-curated defaults.
+- [x] **MITM harness.** `clyde mitm capture --upstream claude-code` and the
+  always-on TOML path both land claude-cli outbound under
+  `~/.local/state/clyde/mitm/always-on/capture.jsonl`. Response bodies
+  are decompressed in the capture path so JSON is readable for diffing.
+- [x] **Snapshot v2 extractor.** `clyde mitm snapshot --v2` classifies
+  records into per-flavor shapes with header presence/occurrence and
+  body field tracking. The flavor classifier handles raw-mode JSON
+  string bodies as well as summary-mode `{keys: [...]}` shapes.
+- [x] **Source-of-truth generation.** `clyde mitm codegen --package
+  anthropic` emits `internal/adapter/anthropic/wire_flavors_gen.go`
+  from the v2 reference. Two parity tests
+  (`TestOutboundHeadersMatchClaudeCLIInteractiveFlavor`,
+  `TestOutboundHeadersAllowConfigOverride`) gate divergence at unit
+  test time.
+- [x] **Body-side identity parity.** Adapter emits `metadata.user_id`
+  (with stable `device_id`, OAuth-derived `account_uuid`, and
+  per-conversation `session_id`) and
+  `context_management.clear_thinking_20251015` whenever thinking is
+  on, matching the captured reference exactly.
+- [ ] **Live byte-identical verification.** A Cursor turn against an
+  Anthropic-backed model with the daemon routing through the local
+  MITM. Diff captured outbound against the canonical
+  `claude-code-interactive-6fde33e0` flavor reference. Empty diff is
+  the gate.
 - [ ] **Drift alarm.** Scheduled poll surfaces a notification or ticket
   when the snapshot changes vs. the committed source of truth.
 
-Once the gate is green, the provider work itself:
+Once the live verification passes, the provider work itself:
 
 - [ ] `internal/adapter/anthropic/` implements `Provider` directly against
   the OAuth bucket. No subprocess, no `claude -p`, no fallback escalation
