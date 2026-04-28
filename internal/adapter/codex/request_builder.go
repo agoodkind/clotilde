@@ -160,7 +160,15 @@ func BuildRequest(req adapteropenai.ChatRequest, model adaptermodel.ResolvedMode
 	return HTTPTransportRequest{
 		Model:                modelName,
 		Instructions:         instructions,
-		Store:                false,
+		// Store=true tells ChatGPT Pro to persist the response so the
+		// next turn can reference it via previous_response_id. Without
+		// this, the upstream returns "Previous response with id ...
+		// not found." on every continuation attempt and our ledger
+		// burns CPU on a recovery retry that always falls back to
+		// full-conversation replay. The continuation ledger is the
+		// whole reason we send these requests over websocket; storing
+		// the response is the prerequisite for it working.
+		Store:                true,
 		Stream:               true,
 		Include:              include,
 		PromptCache:          requestContextTrackerKey(cursorReq, model.Alias),
