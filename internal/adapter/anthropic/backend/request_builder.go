@@ -25,7 +25,12 @@ type BuildRequestConfig struct {
 	MicrocompactEnabled             *bool
 	MicrocompactKeepRecent          int
 	PerContextBetas                 map[string]string
-	Logger                          *slog.Logger
+	// Identity sources metadata.user_id. AccountUUID and DeviceID
+	// stay constant across requests; the per-request session_id is
+	// taken from Cursor's metadata.cursorConversationId via
+	// BuildRequest's req.User parameter.
+	Identity anthropic.Identity
+	Logger   *slog.Logger
 }
 
 func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort string, cfg BuildRequestConfig, reqID string) (anthropic.Request, error) {
@@ -101,6 +106,22 @@ func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, model adap
 		out.OutputConfig = &anthropic.OutputConfig{Effort: effort}
 	}
 	ApplyThinkingConfig(&out, model, strippedModel)
+	if userID := cfg.Identity.EncodeUserID(); userID != "" {
+		out.Metadata = &anthropic.RequestMetadata{UserID: userID}
+	}
+	// claude-cli sends context_management.clear_thinking when thinking
+	// is on (adaptive or enabled). The Stream flag on out is always
+	// false at this stage; response_runtime sets it on streaming
+	// dispatch. We mirror claude-cli's gate (thinking-on only) so the
+	// upstream cache fingerprint matches whether streamed or not.
+	if out.Thinking != nil && out.Thinking.Type != "disabled" {
+		out.ContextManagement = &anthropic.ContextManagement{
+			Edits: []anthropic.ContextManagementEdit{{
+				Type: "clear_thinking_20251015",
+				Keep: "all",
+			}},
+		}
+	}
 	return out, nil
 }
 

@@ -141,6 +141,33 @@ type ToolChoice struct {
 	DisableParallelToolUse bool   `json:"disable_parallel_tool_use,omitempty"`
 }
 
+// MetadataUserID is the typed payload claude-cli serializes into
+// metadata.user_id. The wire form is a JSON string (the inner object
+// is JSON-encoded twice). Mirrors the captured shape in
+// research/claude-code/snapshots/latest/reference.toml.
+type MetadataUserID struct {
+	DeviceID    string `json:"device_id"`
+	AccountUUID string `json:"account_uuid"`
+	SessionID   string `json:"session_id"`
+}
+
+// RequestMetadata is the metadata.* block on /v1/messages.
+type RequestMetadata struct {
+	UserID string `json:"user_id"`
+}
+
+// ContextManagementEdit is one edit instruction. Only
+// clear_thinking_20251015 is observed today.
+type ContextManagementEdit struct {
+	Type string `json:"type"`
+	Keep string `json:"keep,omitempty"`
+}
+
+// ContextManagement carries the context_management block.
+type ContextManagement struct {
+	Edits []ContextManagementEdit `json:"edits,omitempty"`
+}
+
 // Request is the subset of the /v1/messages body we generate.
 // System and SystemBlocks are mutually exclusive on the wire; the
 // custom MarshalJSON emits SystemBlocks as "system":[...] when
@@ -161,9 +188,11 @@ type Request struct {
 	// rejected on haiku-4-5 with
 	// `400 adaptive thinking is not supported on this model`;
 	// enabled requires `max_tokens > budget_tokens`.
-	Thinking   *Thinking   `json:"thinking,omitempty"`
-	Tools      []Tool      `json:"tools,omitempty"`
-	ToolChoice *ToolChoice `json:"tool_choice,omitempty"`
+	Thinking          *Thinking          `json:"thinking,omitempty"`
+	Tools             []Tool             `json:"tools,omitempty"`
+	ToolChoice        *ToolChoice        `json:"tool_choice,omitempty"`
+	Metadata          *RequestMetadata   `json:"metadata,omitempty"`
+	ContextManagement *ContextManagement `json:"context_management,omitempty"`
 	// OnHeaders receives the raw response headers on successful 200 responses.
 	// The callback executes during do() after the /v1/messages request is
 	// committed and before status-specific processing.

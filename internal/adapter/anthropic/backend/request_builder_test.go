@@ -7,9 +7,18 @@ import (
 	"strings"
 	"testing"
 
+	"goodkind.io/clyde/internal/adapter/anthropic"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
+
+func anthropicID() anthropic.Identity {
+	return anthropic.Identity{
+		DeviceID:    "dev-1",
+		AccountUUID: "acct-1",
+		SessionID:   "sess-1",
+	}
+}
 
 func requestBuilderConfig() BuildRequestConfig {
 	return BuildRequestConfig{
@@ -29,6 +38,61 @@ func requestBuilderChatRequest() adapteropenai.ChatRequest {
 			{Role: "user", Content: []byte(`"hello"`)},
 		},
 		MaxTokens: &maxTokens,
+	}
+}
+
+func TestBuildRequestEmitsMetadataAndContextManagement(t *testing.T) {
+	req := requestBuilderChatRequest()
+	stream := true
+	req.Stream = stream
+	model := adaptermodel.ResolvedModel{
+		Alias:           "clyde-opus-4-7-medium-thinking-enabled",
+		ClaudeModel:     "claude-opus-4-7",
+		MaxOutputTokens: 32000,
+		Thinking:        adaptermodel.ThinkingEnabled,
+	}
+	cfg := requestBuilderConfig()
+	cfg.Identity = anthropicID()
+
+	out, err := BuildRequest(context.Background(), req, model, adaptermodel.EffortMedium, cfg, "req-test")
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	if out.Metadata == nil {
+		t.Fatal("Metadata is nil")
+	}
+	if !strings.Contains(out.Metadata.UserID, `"device_id":"dev-1"`) {
+		t.Errorf("Metadata.UserID missing device_id: %s", out.Metadata.UserID)
+	}
+	if !strings.Contains(out.Metadata.UserID, `"account_uuid":"acct-1"`) {
+		t.Errorf("Metadata.UserID missing account_uuid: %s", out.Metadata.UserID)
+	}
+	if !strings.Contains(out.Metadata.UserID, `"session_id":"sess-1"`) {
+		t.Errorf("Metadata.UserID missing session_id: %s", out.Metadata.UserID)
+	}
+	if out.ContextManagement == nil || len(out.ContextManagement.Edits) != 1 {
+		t.Fatalf("ContextManagement missing or wrong length: %+v", out.ContextManagement)
+	}
+	edit := out.ContextManagement.Edits[0]
+	if edit.Type != "clear_thinking_20251015" || edit.Keep != "all" {
+		t.Errorf("clear_thinking edit shape wrong: %+v", edit)
+	}
+}
+
+func TestBuildRequestSkipsContextManagementWhenThinkingOff(t *testing.T) {
+	req := requestBuilderChatRequest()
+	req.Stream = true
+	model := adaptermodel.ResolvedModel{
+		Alias:           "clyde-haiku-4-5",
+		ClaudeModel:     "claude-haiku-4-5",
+		MaxOutputTokens: 4096,
+	}
+	out, err := BuildRequest(context.Background(), req, model, "", requestBuilderConfig(), "req-test")
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	if out.ContextManagement != nil {
+		t.Errorf("ContextManagement should be nil when thinking is off, got %+v", out.ContextManagement)
 	}
 }
 
