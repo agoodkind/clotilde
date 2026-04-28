@@ -29,11 +29,7 @@ func (i Identity) EncodeUserID() string {
 	if i.DeviceID == "" && i.AccountUUID == "" && i.SessionID == "" {
 		return ""
 	}
-	encoded, err := json.Marshal(MetadataUserID{
-		DeviceID:    i.DeviceID,
-		AccountUUID: i.AccountUUID,
-		SessionID:   i.SessionID,
-	})
+	encoded, err := json.Marshal(MetadataUserID(i))
 	if err != nil {
 		return ""
 	}
@@ -86,8 +82,10 @@ func readOrGenerateDeviceID() (string, error) {
 }
 
 // AccountUUIDFromAccessToken extracts the `sub` claim from a JWT
-// access token. claude-cli uses this as account_uuid in metadata.
-// Returns an empty string when the token is opaque or malformed.
+// access token. Anthropic's OAuth tokens are opaque (`sk-ant-oat...`),
+// not JWTs, so this is a fallback that returns empty for the
+// real-world case. Kept for parity with other providers that may
+// issue JWT access tokens.
 func AccountUUIDFromAccessToken(token string) string {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
@@ -108,4 +106,31 @@ func AccountUUIDFromAccessToken(token string) string {
 		return ""
 	}
 	return claims.Sub
+}
+
+// AccountUUIDFromClaudeConfig reads ~/.claude.json (claude-cli's
+// state file) and returns oauthAccount.accountUuid. This mirrors
+// where claude-cli reads its own account_uuid from for the
+// metadata.user_id payload. Returns empty string and a non-nil
+// error when the file is missing, unreadable, or has no
+// oauthAccount entry.
+func AccountUUIDFromClaudeConfig() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(home, ".claude.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	var doc struct {
+		OAuthAccount struct {
+			AccountUUID string `json:"accountUuid"`
+		} `json:"oauthAccount"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(doc.OAuthAccount.AccountUUID), nil
 }

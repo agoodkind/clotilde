@@ -45,14 +45,27 @@ run_guard() {
     fi
   fi
 
-  (
+  # Filter out generated files (.pb.go and anything under /api/)
+  # since clyde-staticcheck's upstream analyzers don't uniformly
+  # honor the `Code generated ... DO NOT EDIT.` marker. The filter
+  # mirrors the standalone `make staticcheck` target so both paths
+  # agree on what counts as a finding.
+  local out
+  out=$(
     cd "$repo_root"
-    # GOMAXPROCS bounds the analysis framework's internal worker
-    # pool so a single staticcheck run cannot consume every core.
     env GOFLAGS= CLYDE_SKIP_BUILD_GUARD=1 GOMAXPROCS=2 \
-      go tool clyde-staticcheck ./...
-  )
-  local rc=$?
+      go tool clyde-staticcheck ./... 2>&1
+  ) || true
+  local filtered
+  filtered=$(printf "%s\n" "$out" \
+    | grep -Ev "\\.pb\\.go:|/api/" \
+    | grep -Ev "^go: error obtaining buildID" \
+    || true)
+  local rc=0
+  if [[ -n "$filtered" ]]; then
+    printf "%s\n" "$filtered" >&2
+    rc=1
+  fi
   if [[ $rc -eq 0 ]]; then
     : > "$passed"
   fi

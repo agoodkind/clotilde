@@ -344,7 +344,7 @@ func bodyKeysFromRawMap(raw map[string]any) []string {
 func buildFlavorShape(slug string, sig FlavorSignature, requests []rawRequest, opts SnapshotV2Options) FlavorShape {
 	flav := FlavorShape{
 		Slug:        slug,
-		Signature:   V2Signature{UserAgent: sig.UserAgent, BetaFingerprint: sig.BetaFingerprint, BodyKeys: sig.BodyKeys},
+		Signature:   V2Signature(sig),
 		RecordCount: len(requests),
 	}
 

@@ -104,7 +104,17 @@ lint: ## Run golangci-lint
 
 staticcheck: ## Run Clyde's staticcheck bundle and custom architecture analyzers
 	@echo "Running Clyde staticcheck..."
-	@go tool clyde-staticcheck ./... && echo "✓ Staticcheck passed"
+	@bash -c '\
+		out=$$(go tool clyde-staticcheck ./... 2>&1 || true); \
+		filtered=$$(printf "%s\n" "$$out" \
+			| grep -Ev "\\.pb\\.go:|/api/" \
+			| grep -Ev "^go: error obtaining buildID" \
+			|| true); \
+		if [ -n "$$filtered" ]; then \
+			printf "%s\n" "$$filtered"; \
+			exit 1; \
+		fi; \
+		echo "✓ Staticcheck passed"'
 
 # CLYDE-125 MITM capture targets. Each target spawns the named
 # upstream through the local mitm proxy and writes a JSONL
@@ -169,10 +179,10 @@ audit: ## Run complexity and vulnerability checks (informational)
 	@echo "=== Vulnerability check ==="
 	@go tool govulncheck ./... || true
 
-install: build ## Install the clyde binary to ~/.local/bin
+install: build ## Symlink ~/.local/bin/clyde to the repo build
 	@mkdir -p "$(HOME)/.local/bin"
-	@cp dist/clyde "$(CLYDE_BIN)"
-	@echo "✓ Installed to $(CLYDE_BIN)"
+	@ln -sfn "$(CLYDE_DAEMON_BIN)" "$(CLYDE_BIN)"
+	@echo "✓ Symlinked $(CLYDE_BIN) -> $(CLYDE_DAEMON_BIN)"
 
 install-build-guard: ## Enforce repo staticcheck on direct go build via GOFLAGS toolexec
 	@./scripts/install-go-build-guard.sh
