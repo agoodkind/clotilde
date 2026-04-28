@@ -142,14 +142,39 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		p.log.Warn("mitm.proxy.copy_failed", "provider", provider, "path", r.URL.Path, "err", copyErr)
 	}
 
+	upstreamURLForRecord := upstream + r.URL.RequestURI()
+	requestEvent := map[string]any{
+		"kind":            string(RecordHTTPRequest),
+		"t":               time.Now().Unix(),
+		"ts":              time.Now().UTC().Format(time.RFC3339Nano),
+		"provider":        provider,
+		"method":          r.Method,
+		"url":             upstreamURLForRecord,
+		"path":            r.URL.Path,
+		"query":           r.URL.RawQuery,
+		"headers":         redactHeaders(r.Header),
+		"body_len":        len(body),
+		"body":            summarizeBody(cfg.BodyMode, body),
+		"request_headers": redactHeaders(r.Header),
+		"request_body":    summarizeBody(cfg.BodyMode, body),
+	}
+	if err := appendCapture(cfg.CaptureDir, requestEvent); err != nil {
+		p.log.Warn("mitm.capture.append_failed", "capture_dir", cfg.CaptureDir, "err", err)
+	}
 	event := map[string]any{
+		"kind":             string(RecordHTTPResponse),
+		"t":                time.Now().Unix(),
 		"ts":               time.Now().UTC().Format(time.RFC3339Nano),
 		"provider":         provider,
 		"method":           r.Method,
+		"url":              upstreamURLForRecord,
 		"path":             r.URL.Path,
 		"query":            r.URL.RawQuery,
 		"status":           resp.StatusCode,
 		"duration_ms":      duration.Milliseconds(),
+		"headers":          redactHeaders(resp.Header),
+		"body_len":         len(capture.Bytes()),
+		"body":             summarizeBody(cfg.BodyMode, capture.Bytes()),
 		"request_headers":  redactHeaders(r.Header),
 		"response_headers": redactHeaders(resp.Header),
 		"request_body":     summarizeBody(cfg.BodyMode, body),
@@ -265,6 +290,7 @@ func summarizeValue(v any) any {
 }
 
 func appendCapture(dir string, event map[string]any) error {
+	dir = expandHome(dir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -305,6 +331,29 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 
 func (b *limitedBuffer) Bytes() []byte {
 	return b.buf.Bytes()
+}
+
+// expandHome rewrites a leading "~" or "~/" in a path to the user's
+// home directory. Go's os.MkdirAll and os.OpenFile do not perform
+// shell-style tilde expansion, and TOML configs frequently use "~"
+// as a portable home marker. This helper closes that gap for the
+// capture_dir setting and any other path the proxy reads.
+func expandHome(path string) string {
+	if path == "" {
+		return path
+	}
+	if path == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+		return path
+	}
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
 }
 
 func ClaudeEnv(ctx context.Context, cfg config.MITMConfig, log *slog.Logger) (map[string]string, error) {
