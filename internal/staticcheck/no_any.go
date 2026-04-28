@@ -85,6 +85,7 @@ func allowsDynamicBoundary(path string) bool {
 		"internal/adapter/codex/request_builder.go",
 		"internal/adapter/codex/transport_request.go",
 		"internal/adapter/codex/transport_ws.go",
+		"internal/adapter/codex/ws_session.go",
 		"internal/adapter/openai/",
 	}
 	for _, item := range allowed {
