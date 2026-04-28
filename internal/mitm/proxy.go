@@ -19,11 +19,20 @@ import (
 	"goodkind.io/clyde/internal/config"
 )
 
-const (
+var (
 	anthropicUpstream = "https://api.anthropic.com"
 	openAIUpstream    = "https://api.openai.com"
 	chatGPTUpstream   = "https://chatgpt.com"
 )
+
+// setChatGPTUpstreamForTest swaps the chatGPTUpstream value and
+// returns the previous one. Test-only hook to exercise the proxy
+// against an httptest backend without binding the real domain.
+func setChatGPTUpstreamForTest(value string) string {
+	prev := chatGPTUpstream
+	chatGPTUpstream = value
+	return prev
+}
 
 type Proxy struct {
 	log    *slog.Logger
@@ -93,6 +102,10 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	provider, upstream := classifyRoute(r.URL.Path)
 	if provider == "" {
 		http.Error(w, "unsupported mitm route", http.StatusNotFound)
+		return
+	}
+	if isWebsocketUpgrade(r) {
+		p.handleWebsocket(w, r, upstream)
 		return
 	}
 
