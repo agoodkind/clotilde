@@ -186,37 +186,6 @@ func TestLogCodexEventDoubleWritesToDedicatedSink(t *testing.T) {
 	}
 }
 
-func TestLogAppRPCResponseWritesRedactedBody(t *testing.T) {
-	dir := t.TempDir()
-	sinkPath := filepath.Join(dir, "codex.jsonl")
-	t.Setenv("CLYDE_CODEX_LOG_PATH", sinkPath)
-	resetCodexLogger()
-	t.Cleanup(resetCodexLogger)
-
-	logAppRPCResponse(context.Background(), "req-app", "gpt-5.4", RPCMessage{
-		Method: "mcpServer/oauthLogin/completed",
-		Params: json.RawMessage(`{"access_token":"secret","nested":{"authorization":"Bearer abc"},"status":"ok"}`),
-	}, BodyLogConfig{Mode: BodyLogWhitelist, MaxKB: 4})
-
-	got, err := os.ReadFile(sinkPath)
-	if err != nil {
-		t.Fatalf("read sink: %v", err)
-	}
-	text := string(got)
-	if !strings.Contains(text, "codex.app.response") {
-		t.Fatalf("sink missing app response event: %s", text)
-	}
-	if !strings.Contains(text, `"method":"mcpServer/oauthLogin/completed"`) {
-		t.Fatalf("sink missing app method: %s", text)
-	}
-	if strings.Contains(text, "secret") || strings.Contains(text, "Bearer abc") {
-		t.Fatalf("sink leaked secret body: %s", text)
-	}
-	if !strings.Contains(text, "redacted") {
-		t.Fatalf("sink missing redacted marker: %s", text)
-	}
-}
-
 func TestSummarizeHTTPRequestCarriesShapeFields(t *testing.T) {
 	payload := HTTPTransportRequest{
 		Model:        "gpt-5.4",

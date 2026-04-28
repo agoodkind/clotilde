@@ -44,9 +44,6 @@ func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
 		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = s.Shutdown(shutCtx)
-		if s.codexSessions != nil {
-			s.codexSessions.CloseAll()
-		}
 		return nil
 	case err := <-errCh:
 		if errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {

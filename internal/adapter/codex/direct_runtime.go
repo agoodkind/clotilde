@@ -102,17 +102,13 @@ func RunDirect(
 		if cfg.Continuation != nil {
 			cfg.Continuation.Forget(continuation.Key)
 		}
-		if !errors.Is(wsErr, ErrWebsocketFallbackToHTTP) {
-			return NewRunResult("stop"), wsErr
-		}
+		return NewRunResult("stop"), wsErr
 	}
-	return RunHTTPTransport(ctx, cfg.HTTPClient, HTTPTransportConfig{
-		BaseURL:        cfg.BaseURL,
-		Token:          cfg.Token,
-		AccountID:      cfg.AccountID,
-		RequestID:      cfg.RequestID,
-		Alias:          model.Alias,
-		ConversationID: strings.TrimSpace(transportPayload.PromptCache),
-		BodyLog:        cfg.BodyLog,
-	}, transportPayload, emit)
+	// Codex is websocket-only after Plan 5 + Step H. The HTTPS/SSE
+	// transport was removed; reaching this point means the websocket
+	// was disabled by configuration, which is no longer a supported
+	// state. Surface a clear error rather than silently mishandling.
+	return NewRunResult("stop"), errCodexWebsocketDisabled
 }
+
+var errCodexWebsocketDisabled = errors.New("codex websocket transport is disabled but no HTTPS fallback exists")

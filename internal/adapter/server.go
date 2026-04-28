@@ -117,7 +117,6 @@ type Server struct {
 	fbSem         chan struct{}
 	httpClient    *http.Client
 	ctxUsage      *contextUsageTracker
-	codexSessions    *codexSessionManager
 	codexContinue    *adaptercodex.ContinuationStore
 	providerRegistry *adapterprovider.Registry
 	codexProvider    *adaptercodex.Provider
@@ -167,9 +166,6 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 	}
 	if cfg.Codex.Enabled {
 		s.codexContinue = adaptercodex.NewContinuationStore()
-		s.codexSessions = newCodexSessionManager(log.With("subcomponent", "codex_session"), func(spec codexSessionSpec) (codexManagedTransport, error) {
-			return newCodexAppTransport(s.codexAppServerPath(), spec)
-		})
 		s.providerRegistry = adapterprovider.NewRegistry()
 		s.codexProvider = adaptercodex.NewProvider(adapterprovider.Deps{
 			Config:     cfg,
@@ -258,25 +254,6 @@ func (s *Server) codexWebsocketURL() string {
 		return "ws://" + strings.TrimPrefix(base, "http://")
 	}
 	return base
-}
-
-func (s *Server) codexAppServerPath() string {
-	if v := strings.TrimSpace(s.cfg.Codex.AppServerPath); v != "" {
-		return v
-	}
-	return "codex"
-}
-
-func (s *Server) codexAppFallbackTimeout() time.Duration {
-	raw := strings.TrimSpace(s.cfg.Codex.AppFallbackTimeout)
-	if raw == "" {
-		return 45 * time.Second
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil || d <= 0 {
-		return 45 * time.Second
-	}
-	return d
 }
 
 type codexAuthFile struct {

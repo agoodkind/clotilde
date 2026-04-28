@@ -83,7 +83,7 @@ func allowsDynamicBoundary(path string) bool {
 		"internal/adapter/codex/native_tools.go",
 		"internal/adapter/codex/protocol.go",
 		"internal/adapter/codex/request_builder.go",
-		"internal/adapter/codex/transport_http.go",
+		"internal/adapter/codex/transport_request.go",
 		"internal/adapter/codex/transport_ws.go",
 		"internal/adapter/openai/",
 	}

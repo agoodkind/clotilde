@@ -247,13 +247,6 @@ type AdapterCodex struct {
 	NativeModelRouting string `json:"nativeModelRouting,omitempty" toml:"native_model_routing,omitempty"`
 	// NativeModelShunt is used when NativeModelRouting is "shunt".
 	NativeModelShunt string `json:"nativeModelShunt,omitempty" toml:"native_model_shunt,omitempty"`
-	// AppFallback enables app-server fallback when direct HTTP fails.
-	AppFallback bool `json:"appFallback,omitempty" toml:"app_fallback,omitempty"`
-	// AppServerPath is the codex binary path used for fallback.
-	// Empty defaults to "codex".
-	AppServerPath string `json:"appServerPath,omitempty" toml:"app_server_path,omitempty"`
-	// AppFallbackTimeout caps one fallback request wall time.
-	AppFallbackTimeout string `json:"appFallbackTimeout,omitempty" toml:"app_fallback_timeout,omitempty"`
 }
 
 // AdapterLogprobs picks the per-backend behavior. Each value is

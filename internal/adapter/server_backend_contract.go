@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
-	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 )
@@ -81,13 +80,17 @@ func (s *Server) dispatchResolvedChat(
 		}, w, r, req, model, effort, reqID, body)
 		return
 	case BackendCodex:
-		if s.codexProvider != nil && resolverErr == nil && resolvedReq.Provider == adapterresolver.ProviderCodex {
-			s.dispatchCodexProvider(w, r, req, model, reqID, cursorReq, resolvedReq)
+		if s.codexProvider == nil {
+			writeError(w, http.StatusServiceUnavailable, "codex_disabled",
+				"codex backend is not enabled in [adapter.codex]")
 			return
 		}
-		if err := adaptercodex.Dispatch(s, w, r, req, model, effort, reqID); err != nil {
-			writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
+		if resolverErr != nil || resolvedReq.Provider != adapterresolver.ProviderCodex {
+			writeError(w, http.StatusBadRequest, "unresolved_codex",
+				"resolver did not map this request to the codex provider")
+			return
 		}
+		s.dispatchCodexProvider(w, r, req, model, reqID, cursorReq, resolvedReq)
 		return
 	default:
 		writeError(w, http.StatusBadRequest, "unsupported_backend",
