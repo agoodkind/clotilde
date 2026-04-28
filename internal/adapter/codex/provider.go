@@ -27,7 +27,7 @@ type Provider struct {
 	log          *slog.Logger
 	httpClient   *http.Client
 	now          func() time.Time
-	continuation *ContinuationStore
+	sessionCache *WebsocketSessionCache
 	accountID    string
 	bodyLog      BodyLogConfig
 }
@@ -35,12 +35,14 @@ type Provider struct {
 // ProviderOptions extends the generic provider.Deps with Codex-only
 // settings the dispatcher knows at construction time. Today: the
 // account id (lifted from auth.json by daemon startup) and the
-// continuation ledger pointer.
+// websocket-session idle timeout.
 type ProviderOptions struct {
-	AccountID    string
-	Continuation *ContinuationStore
-	BodyLog      BodyLogConfig
+	AccountID          string
+	BodyLog            BodyLogConfig
+	WsSessionIdleTTL   time.Duration
 }
+
+const defaultWsSessionIdleTTL = 10 * time.Minute
 
 // NewProvider constructs the Codex Provider.
 func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
@@ -56,16 +58,29 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 	if log == nil {
 		log = slog.Default()
 	}
+	idleTTL := opts.WsSessionIdleTTL
+	if idleTTL <= 0 {
+		idleTTL = defaultWsSessionIdleTTL
+	}
 	return &Provider{
 		cfg:          deps.Config.Codex,
 		auth:         deps.Auth,
 		log:          log,
 		httpClient:   httpClient,
 		now:          now,
-		continuation: opts.Continuation,
+		sessionCache: NewWebsocketSessionCache(log, idleTTL),
 		accountID:    strings.TrimSpace(opts.AccountID),
 		bodyLog:      opts.BodyLog,
 	}
+}
+
+// CloseAllSessions is invoked on daemon shutdown so any cached
+// websocket connections are closed before the daemon exits.
+func (p *Provider) CloseAllSessions(reason string) {
+	if p == nil || p.sessionCache == nil {
+		return
+	}
+	p.sessionCache.CloseAll(reason)
 }
 
 // ID satisfies adapterprovider.Provider.
@@ -111,7 +126,7 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		Token:            token,
 		AccountID:        p.accountID,
 		RequestID:        req.Cursor.RequestID,
-		Continuation:     p.continuation,
+		SessionCache:     p.sessionCache,
 		Log:              p.log,
 		BodyLog:          p.bodyLog,
 	}

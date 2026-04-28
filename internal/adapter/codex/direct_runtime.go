@@ -20,9 +20,18 @@ type DirectConfig struct {
 	Token            string
 	AccountID        string
 	RequestID        string
-	Continuation     *ContinuationStore
-	Log              *slog.Logger
-	BodyLog          BodyLogConfig
+	// Continuation remains for compat with the legacy fresh-dial
+	// path. New traffic flows through SessionCache. Continuation
+	// will be removed once Step 7 verification confirms no caller
+	// needs it.
+	Continuation *ContinuationStore
+	// SessionCache enables persistent ws session reuse with chained
+	// previous_response_id and delta input. When set, RunDirect
+	// passes it to RunWebsocketTransport which routes through the
+	// cache-aware path. Constructed once per Provider.
+	SessionCache *WebsocketSessionCache
+	Log          *slog.Logger
+	BodyLog      BodyLogConfig
 }
 
 func RunDirect(
@@ -108,6 +117,8 @@ func RunDirect(
 			TurnState:      turnState,
 			Prewarm:        strings.TrimSpace(wsReq.PreviousResponseID) == "",
 			BodyLog:        cfg.BodyLog,
+			SessionCache:   cfg.SessionCache,
+			Log:            cfg.Log,
 		}
 		wsAttemptStarted := time.Now()
 		res, wsErr := RunWebsocketTransport(ctx, wsCfg, wsReq, emit)

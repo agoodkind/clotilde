@@ -55,7 +55,12 @@ func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
 
 // Shutdown stops accepting new adapter requests, closes idle keepalive
 // connections, and lets active handlers finish until ctx expires.
+// Cached upstream websocket sessions are closed so connections do not
+// leak across reload boundaries.
 func (s *Server) Shutdown(ctx context.Context) error {
+	if s.codexProvider != nil {
+		s.codexProvider.CloseAllSessions("shutdown")
+	}
 	if s.httpSrv == nil {
 		return nil
 	}

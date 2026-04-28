@@ -173,8 +173,7 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 			Logger:     log.With("subcomponent", "codex_provider"),
 			HTTPClient: s.httpClient,
 		}, adaptercodex.ProviderOptions{
-			Continuation: s.codexContinue,
-			BodyLog:      adaptercodex.BodyLogConfig{Mode: logging.Body.Mode, MaxKB: logging.Body.MaxKB},
+			BodyLog: adaptercodex.BodyLogConfig{Mode: logging.Body.Mode, MaxKB: logging.Body.MaxKB},
 		})
 		s.providerRegistry.Register(s.codexProvider)
 		log.LogAttrs(context.Background(), slog.LevelInfo, "adapter.provider_registry.registered",
