@@ -117,6 +117,20 @@ func badgeFor(m StatusMode) (string, tcell.Color) {
 	return " ? ", tcell.ColorWhite
 }
 
+func badgeStyle(bg tcell.Color) tcell.Style {
+	return tcell.StyleDefault.Background(bg).Foreground(badgeTextColor(bg)).Bold(true)
+}
+
+func badgeTextColor(bg tcell.Color) tcell.Color {
+	switch bg {
+	case ColorAccent, ColorModeDetail, ColorModeView, ColorModeFilter:
+		if detectedTerminalTheme == terminalThemeLight {
+			return tcell.ColorWhite
+		}
+	}
+	return tcell.ColorBlack
+}
+
 // legendForStatus returns styled segments for the keybinding hints.
 func legendForStatus(s *StatusBarWidget) []TextSegment {
 	actions := legendActionsForStatus(s)
@@ -275,10 +289,10 @@ func (s *StatusBarWidget) Draw(scr tcell.Screen, r Rect) {
 	fillRow(scr, r.X, r.Y, r.W, StyleStatusBar)
 
 	label, bg := badgeFor(s.Mode)
-	badgeStyle := tcell.StyleDefault.Background(bg).Foreground(tcell.ColorBlack).Bold(true)
+	modeBadgeStyle := badgeStyle(bg)
 
 	x := r.X + 1
-	used := drawString(scr, x, r.Y, badgeStyle, label, r.W-1)
+	used := drawString(scr, x, r.Y, modeBadgeStyle, label, r.W-1)
 	x += used
 	// Small gap after badge
 	drawString(scr, x, r.Y, StyleStatusBar, "  ", 2)
@@ -327,7 +341,7 @@ func (s *StatusBarWidget) Draw(scr tcell.Screen, r Rect) {
 		txt := " " + s.DaemonSpinner + " connecting "
 		bx := rightX - runeCount(txt)
 		if bx > x {
-			connectingStyle := tcell.StyleDefault.Background(ColorAccent).Foreground(tcell.ColorBlack).Bold(true)
+			connectingStyle := badgeStyle(ColorAccent)
 			drawString(scr, bx, r.Y, connectingStyle, txt, rightX-bx)
 			rightX = bx
 		}
@@ -335,7 +349,7 @@ func (s *StatusBarWidget) Draw(scr tcell.Screen, r Rect) {
 		txt := " DAEMON OFFLINE "
 		bx := rightX - runeCount(txt)
 		if bx > x {
-			offlineStyle := tcell.StyleDefault.Background(ColorWarning).Foreground(tcell.ColorBlack).Bold(true)
+			offlineStyle := badgeStyle(ColorWarning)
 			drawString(scr, bx, r.Y, offlineStyle, txt, rightX-bx)
 			rightX = bx
 		}
@@ -355,7 +369,7 @@ func (s *StatusBarWidget) Draw(scr tcell.Screen, r Rect) {
 		txt := " RC×" + itoa(s.BridgeCount) + " "
 		bx := rightX - runeCount(txt)
 		if bx > x {
-			drawString(scr, bx, r.Y, tcell.StyleDefault.Background(ColorSuccess).Foreground(tcell.ColorBlack).Bold(true), txt, rightX-bx)
+			drawString(scr, bx, r.Y, badgeStyle(ColorSuccess), txt, rightX-bx)
 			rightX = bx
 		}
 	}

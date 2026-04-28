@@ -528,6 +528,7 @@ const (
 
 // NewApp creates and returns the clyde TUI.
 func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *App {
+	applyTUITheme(detectTerminalTheme())
 	var opt AppOptions
 	if len(opts) > 0 {
 		opt = opts[0]
@@ -2115,6 +2116,7 @@ func (a *App) teardownScreen() {
 
 // initScreen allocates a tcell screen and enables mouse + focus.
 func (a *App) initScreen() error {
+	applyTUITheme(detectTerminalTheme())
 	slog.Info("tui.initScreen.start", "current_screen", fmt.Sprintf("%p", a.screen))
 	scr, err := tcell.NewScreen()
 	if err != nil {

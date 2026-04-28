@@ -102,15 +102,6 @@ const (
 	terminalThemeLight
 )
 
-var detectedTerminalTheme = detectTerminalTheme()
-
-// ColorDimOverlay is the dark-theme full-screen fill applied by
-// dimBackground behind modals. Light terminals use ColorDimOverlayLight.
-var (
-	ColorDimOverlay      = tcell.Color234
-	ColorDimOverlayLight = tcell.Color252
-)
-
 // dimBackground paints a darker background over every cell in the
 // screen so the pane on top reads as a lifted panel. Cells are
 // rewritten with their existing rune and foreground, only the
@@ -130,9 +121,6 @@ func dimBackground(scr tcell.Screen) {
 }
 
 func dimOverlayColor() tcell.Color {
-	if detectedTerminalTheme == terminalThemeLight {
-		return ColorDimOverlayLight
-	}
 	return ColorDimOverlay
 }
 

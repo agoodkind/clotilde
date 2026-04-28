@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gdamore/tcell/v2"
 )
 
 func TestLegendForCompactNoLongerUsesTabHint(t *testing.T) {
@@ -79,5 +81,22 @@ func TestLegendActionAtFindsRefreshHint(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected to find refresh legend hit target")
+	}
+}
+
+func TestBadgeTextColorTracksLightPalette(t *testing.T) {
+	defer applyTUITheme(detectedTerminalTheme)
+
+	applyTUITheme(terminalThemeLight)
+	if got := badgeTextColor(ColorAccent); got != tcell.ColorWhite {
+		t.Fatalf("light accent badge text = %v, want white", got)
+	}
+	if got := badgeTextColor(ColorWarning); got != tcell.ColorBlack {
+		t.Fatalf("light warning badge text = %v, want black", got)
+	}
+
+	applyTUITheme(terminalThemeDark)
+	if got := badgeTextColor(ColorAccent); got != tcell.ColorBlack {
+		t.Fatalf("dark accent badge text = %v, want black", got)
 	}
 }
