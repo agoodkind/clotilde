@@ -462,11 +462,14 @@ func translateToolChoice(raw json.RawMessage) (*AnthToolChoice, error) {
 		case "none":
 			return &AnthToolChoice{Type: "none"}, nil
 		case "auto":
-			return &AnthToolChoice{Type: "auto"}, nil
+			// claude-cli does not send tool_choice when behavior is
+			// "auto" (the Anthropic default). Returning nil omits the
+			// field on the wire. CLYDE-124 parity.
+			return nil, nil
 		case "required":
 			return &AnthToolChoice{Type: "any"}, nil
 		default:
-			return &AnthToolChoice{Type: "auto"}, nil
+			return nil, nil
 		}
 	}
 	var obj struct {
@@ -481,7 +484,7 @@ func translateToolChoice(raw json.RawMessage) (*AnthToolChoice, error) {
 	if obj.Type == "function" {
 		return &AnthToolChoice{Type: "tool", Name: obj.Function.Name}, nil
 	}
-	return &AnthToolChoice{Type: "auto"}, nil
+	return nil, nil
 }
 
 // thinkingBlockquoteRE matches the "Thinking" collapsible the

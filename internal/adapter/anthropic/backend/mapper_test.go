@@ -103,7 +103,9 @@ func TestTranslateRequestToolChoiceVariants(t *testing.T) {
 		want *AnthToolChoice
 	}{
 		{"none", `"none"`, &AnthToolChoice{Type: "none"}},
-		{"auto", `"auto"`, &AnthToolChoice{Type: "auto"}},
+		// "auto" is the Anthropic default; claude-cli omits tool_choice
+		// in this case so we do too (CLYDE-124 parity).
+		{"auto", `"auto"`, nil},
 		{"required", `"required"`, &AnthToolChoice{Type: "any"}},
 		{"named", `{"type":"function","function":{"name":"X"}}`, &AnthToolChoice{Type: "tool", Name: "X"}},
 	}
@@ -122,7 +124,12 @@ func TestTranslateRequestToolChoiceVariants(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if out.ToolChoice == nil || out.ToolChoice.Type != tc.want.Type || out.ToolChoice.Name != tc.want.Name {
+			switch {
+			case tc.want == nil:
+				if out.ToolChoice != nil {
+					t.Fatalf("got %+v want <nil>", out.ToolChoice)
+				}
+			case out.ToolChoice == nil || out.ToolChoice.Type != tc.want.Type || out.ToolChoice.Name != tc.want.Name:
 				t.Fatalf("got %+v want %+v", out.ToolChoice, tc.want)
 			}
 		})
