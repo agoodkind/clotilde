@@ -37,7 +37,108 @@ Supported upstreams: claude-code, claude-desktop, codex-cli, codex-desktop.`,
 	cmd.AddCommand(newCaptureCmd(f))
 	cmd.AddCommand(newSnapshotCmd(f))
 	cmd.AddCommand(newDiffCmd(f))
+	cmd.AddCommand(newCodegenCmd(f))
+	cmd.AddCommand(newDriftCheckCmd(f))
 	return cmd
+}
+
+func newCodegenCmd(f *cli.Factory) *cobra.Command {
+	var (
+		pkg       string
+		outputDir string
+	)
+	cmd := &cobra.Command{
+		Use:   "codegen <reference.toml>",
+		Short: "Generate wire_constants_gen.go from a committed reference snapshot",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			snap, err := mitmpkg.LoadSnapshotTOML(args[0])
+			if err != nil {
+				return fmt.Errorf("load reference: %w", err)
+			}
+			out, err := mitmpkg.GenerateWireConstants(snap, mitmpkg.CodegenOptions{
+				PackageName: pkg,
+				OutputDir:   outputDir,
+				UpstreamRef: args[0],
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Fprintln(out2(f), "generated:", out)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&pkg, "package", "", "Go package the generated file belongs to (e.g. codex, anthropic)")
+	cmd.Flags().StringVar(&outputDir, "output-dir", "", "directory for the generated file (default internal/adapter/<package>/)")
+	_ = cmd.MarkFlagRequired("package")
+	return cmd
+}
+
+// newDriftCheckCmd performs a single capture/snapshot/diff cycle for
+// one upstream and exits non-zero on divergence. Suitable for CI or
+// for a scheduled cron task to surface upstream wire drift.
+func newDriftCheckCmd(f *cli.Factory) *cobra.Command {
+	var (
+		upstream      string
+		referencePath string
+		captureRoot   string
+		caCert        string
+	)
+	cmd := &cobra.Command{
+		Use:   "drift-check",
+		Short: "Capture, snapshot, diff, and exit non-zero on drift (suitable for CI/cron)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			profile, err := mitmpkg.LookupLaunchProfile(upstream)
+			if err != nil {
+				return err
+			}
+			if captureRoot == "" {
+				captureRoot = defaultCaptureRoot()
+			}
+			if caCert == "" {
+				caCert = defaultCACert()
+			}
+			ctx, cancel := context.WithCancel(cmd.Context())
+			defer cancel()
+			result, err := mitmpkg.RunCaptureSession(ctx, mitmpkg.CaptureSessionOptions{
+				Profile:     profile,
+				CaptureRoot: captureRoot,
+				CACertPath:  caCert,
+				Log:         f.Logger,
+			})
+			if err != nil {
+				return fmt.Errorf("capture: %w", err)
+			}
+			snap, err := mitmpkg.ExtractSnapshot(result.TranscriptPath, mitmpkg.SnapshotOptions{
+				UpstreamName: upstream,
+				UpstreamVersion: "live-" + result.StartedAt.Format("20060102T150405"),
+			})
+			if err != nil {
+				return fmt.Errorf("extract: %w", err)
+			}
+			ref, err := mitmpkg.LoadSnapshotTOML(referencePath)
+			if err != nil {
+				return fmt.Errorf("load reference: %w", err)
+			}
+			report := mitmpkg.DiffSnapshots(ref, snap)
+			fmt.Fprintln(out2(f), report.SummaryString())
+			if report.HasDiverged() {
+				return fmt.Errorf("wire shape drift detected for %s", upstream)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&upstream, "upstream", "", "upstream name")
+	cmd.Flags().StringVar(&referencePath, "reference", "", "path to the committed reference.toml")
+	cmd.Flags().StringVar(&captureRoot, "capture-dir", "", "root directory for transcripts")
+	cmd.Flags().StringVar(&caCert, "ca-cert", "", "path to mitmproxy CA cert")
+	_ = cmd.MarkFlagRequired("upstream")
+	_ = cmd.MarkFlagRequired("reference")
+	return cmd
+}
+
+func out2(f *cli.Factory) io.Writer {
+	return out(f)
 }
 
 func newCaptureCmd(f *cli.Factory) *cobra.Command {
