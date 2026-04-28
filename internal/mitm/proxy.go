@@ -155,6 +155,16 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	if copyErr != nil {
 		p.log.Warn("mitm.proxy.copy_failed", "provider", provider, "path", r.URL.Path, "err", copyErr)
 	}
+	captureBody, decoded := decodeForCapture(capture.Bytes(), resp.Header.Get("Content-Encoding"))
+	if decoded {
+		p.log.Debug("mitm.capture.decoded",
+			"provider", provider,
+			"path", r.URL.Path,
+			"encoding", resp.Header.Get("Content-Encoding"),
+			"raw_bytes", len(capture.Bytes()),
+			"decoded_bytes", len(captureBody),
+		)
+	}
 
 	upstreamURLForRecord := upstream + r.URL.RequestURI()
 	requestEvent := map[string]any{
@@ -187,12 +197,12 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		"status":           resp.StatusCode,
 		"duration_ms":      duration.Milliseconds(),
 		"headers":          redactHeaders(resp.Header),
-		"body_len":         len(capture.Bytes()),
-		"body":             summarizeBody(cfg.BodyMode, capture.Bytes()),
+		"body_len":         len(captureBody),
+		"body":             summarizeBody(cfg.BodyMode, captureBody),
 		"request_headers":  redactHeaders(r.Header),
 		"response_headers": redactHeaders(resp.Header),
 		"request_body":     summarizeBody(cfg.BodyMode, body),
-		"response_body":    summarizeBody(cfg.BodyMode, capture.Bytes()),
+		"response_body":    summarizeBody(cfg.BodyMode, captureBody),
 	}
 	p.log.Info("mitm.capture.completed",
 		"provider", provider,
