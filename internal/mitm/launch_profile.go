@@ -53,6 +53,19 @@ func LaunchProfiles() map[string]LaunchProfile {
 			IsElectron:     true,
 			UpstreamDomains: []string{"api.anthropic.com", "claude.ai"},
 		},
+		// VS Code is generic Electron. The proxy intercepts whatever
+		// extensions hit chatgpt.com / api.anthropic.com (e.g.
+		// Continue, GitHub Copilot Chat with custom endpoints). The
+		// LaunchProfile thread Chromium flags through; first-party
+		// extensions that pin certs (Copilot today) bypass the proxy
+		// regardless. CLYDE-131 tracks Copilot pinning specifically.
+		"vscode": {
+			Name:           "vscode",
+			BinaryFinder:   findApp("/Applications/Visual Studio Code.app/Contents/MacOS/Electron"),
+			EnvKeys:        []string{"SSL_CERT_FILE", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS"},
+			IsElectron:     true,
+			UpstreamDomains: []string{"api.anthropic.com", "claude.ai", "chatgpt.com", "openai.com", "api.githubcopilot.com"},
+		},
 	}
 }
 

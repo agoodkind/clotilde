@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-func TestLaunchProfilesCoverFourUpstreams(t *testing.T) {
+func TestLaunchProfilesCoverSupportedUpstreams(t *testing.T) {
 	profiles := LaunchProfiles()
-	for _, name := range []string{"codex-cli", "codex-desktop", "claude-code", "claude-desktop"} {
+	for _, name := range []string{"codex-cli", "codex-desktop", "claude-code", "claude-desktop", "vscode"} {
 		if _, ok := profiles[name]; !ok {
 			t.Errorf("missing profile %q", name)
 		}
