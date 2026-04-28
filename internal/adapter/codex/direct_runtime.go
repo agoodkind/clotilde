@@ -47,20 +47,26 @@ func RunDirect(
 		var continuation ContinuationDecision
 		if cfg.Continuation != nil {
 			continuation = cfg.Continuation.Prepare(fullWSReq)
+			rollingRate, rollingWindow := cfg.Continuation.RecordHitRate(continuation.Key, continuation.Hit)
 			continuationTelemetry := ContinuationTelemetry{
-				RequestID:          cfg.RequestID,
-				Alias:              model.Alias,
-				Transport:          "responses_websocket",
-				Key:                continuation.Key,
-				Hit:                continuation.Hit,
-				MissReason:         continuation.MissReason,
-				FingerprintMatch:   continuation.FingerprintMatch,
-				PreviousResponseID: continuation.PreviousResponseID,
-				IncrementalCount:   len(continuation.IncrementalInput),
-				ExpectedEventCount: continuation.Diagnostics.ExpectedEventCount,
-				CurrentEventCount:  continuation.Diagnostics.CurrentEventCount,
-				BaselineMatchStart: continuation.Diagnostics.MatchStart,
-				BaselineMatchEnd:   continuation.Diagnostics.MatchEnd,
+				RequestID:           cfg.RequestID,
+				Alias:               model.Alias,
+				Transport:           "responses_websocket",
+				Key:                 continuation.Key,
+				Hit:                 continuation.Hit,
+				MissReason:          continuation.MissReason,
+				MismatchField:       continuation.MismatchField,
+				FingerprintMatch:    continuation.FingerprintMatch,
+				StoredFingerprint:   continuation.StoredFingerprint,
+				IncomingFingerprint: continuation.IncomingFingerprint,
+				PreviousResponseID:  continuation.PreviousResponseID,
+				IncrementalCount:    len(continuation.IncrementalInput),
+				ExpectedEventCount:  continuation.Diagnostics.ExpectedEventCount,
+				CurrentEventCount:   continuation.Diagnostics.CurrentEventCount,
+				BaselineMatchStart:  continuation.Diagnostics.MatchStart,
+				BaselineMatchEnd:    continuation.Diagnostics.MatchEnd,
+				RollingHitRate:      rollingRate,
+				RollingWindowSize:   rollingWindow,
 			}
 			if mismatch := continuation.Diagnostics.Mismatch; mismatch != nil {
 				continuationTelemetry.MismatchExpectedIndex = mismatch.ExpectedEventIndex
@@ -69,6 +75,7 @@ func RunDirect(
 				continuationTelemetry.MismatchCurrentItem = mismatch.CurrentItemIndex
 				continuationTelemetry.MismatchExpected = mismatch.Expected
 				continuationTelemetry.MismatchCurrent = mismatch.Current
+				continuationTelemetry.MismatchDiffSummary = MismatchDiffSummary(mismatch.Expected, mismatch.Current)
 			}
 			LogContinuationDecision(ctx, cfg.Log, continuationTelemetry)
 			if continuation.Hit {

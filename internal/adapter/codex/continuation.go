@@ -10,8 +10,9 @@ import (
 )
 
 type ContinuationStore struct {
-	mu      sync.Mutex
-	entries map[string]ContinuationEntry
+	mu       sync.Mutex
+	entries  map[string]ContinuationEntry
+	hitRates *HitRateTracker
 }
 
 type ContinuationEntry struct {
@@ -24,13 +25,16 @@ type ContinuationEntry struct {
 }
 
 type ContinuationDecision struct {
-	Key                string
-	Hit                bool
-	MissReason         string
-	FingerprintMatch   bool
-	PreviousResponseID string
-	IncrementalInput   []map[string]any
-	Diagnostics        ContinuationDiagnostics
+	Key                  string
+	Hit                  bool
+	MissReason           string
+	MismatchField        string
+	FingerprintMatch     bool
+	StoredFingerprint    string
+	IncomingFingerprint  string
+	PreviousResponseID   string
+	IncrementalInput     []map[string]any
+	Diagnostics          ContinuationDiagnostics
 }
 
 type ContinuationDiagnostics struct {
@@ -51,43 +55,86 @@ type ContinuationMismatch struct {
 }
 
 func NewContinuationStore() *ContinuationStore {
-	return &ContinuationStore{entries: make(map[string]ContinuationEntry)}
+	return &ContinuationStore{
+		entries:  make(map[string]ContinuationEntry),
+		hitRates: NewHitRateTracker(defaultHitRateWindow),
+	}
+}
+
+// RecordHitRate updates the rolling hit-rate window for the given
+// conversation key with one new observation and returns the
+// post-update rate plus current window size. Callers wire this into
+// LogContinuationDecision so per-conversation regression is visible
+// from logs alone.
+func (s *ContinuationStore) RecordHitRate(conversationKey string, hit bool) (float64, int) {
+	if s == nil {
+		return 0, 0
+	}
+	return s.hitRates.Record(conversationKey, hit)
 }
 
 func (s *ContinuationStore) Prepare(req ResponseCreateWsRequest) ContinuationDecision {
 	key := strings.TrimSpace(req.PromptCacheKey)
 	if key == "" {
-		return ContinuationDecision{MissReason: "missing_prompt_cache_key"}
+		return ContinuationDecision{MissReason: "missing_prompt_cache_key", MismatchField: "prompt_cache_key"}
 	}
 	fingerprint := continuationConfigFingerprint(req)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entry, ok := s.entries[key]
 	if !ok {
-		return ContinuationDecision{Key: key, MissReason: "no_prior_response"}
+		return ContinuationDecision{Key: key, MissReason: "no_prior_response", IncomingFingerprint: fingerprint}
 	}
 	out := ContinuationDecision{
-		Key:                key,
-		PreviousResponseID: entry.PreviousResponseID,
-		FingerprintMatch:   entry.ConfigFingerprint == fingerprint && entry.Model == req.Model,
+		Key:                 key,
+		PreviousResponseID:  entry.PreviousResponseID,
+		FingerprintMatch:    entry.ConfigFingerprint == fingerprint && entry.Model == req.Model,
+		StoredFingerprint:   entry.ConfigFingerprint,
+		IncomingFingerprint: fingerprint,
 	}
 	if strings.TrimSpace(entry.PreviousResponseID) == "" {
 		out.MissReason = "missing_previous_response_id"
+		out.MismatchField = "previous_response_id"
 		return out
 	}
 	if !out.FingerprintMatch {
 		out.MissReason = "fingerprint_mismatch"
+		if entry.Model != req.Model {
+			out.MismatchField = "model"
+		} else {
+			out.MismatchField = "config_fingerprint"
+		}
 		return out
 	}
 	diff := incrementalContinuationInput(entry.Input, entry.OutputItems, req.Input)
 	out.Diagnostics = diff.Diagnostics
 	if len(diff.IncrementalInput) == 0 {
 		out.MissReason = diff.Reason
+		out.MismatchField = continuationMismatchFieldFromReason(diff.Reason)
 		return out
 	}
 	out.Hit = true
 	out.IncrementalInput = diff.IncrementalInput
 	return out
+}
+
+// continuationMismatchFieldFromReason classifies the diff.Reason
+// produced by incrementalContinuationInput into a stable bucket the
+// telemetry sink can group on. Reasons that are not yet enumerated
+// fall through to "other" so unknown shapes surface as data rather
+// than panic the daemon.
+func continuationMismatchFieldFromReason(reason string) string {
+	switch reason {
+	case "output_item_baseline_mismatch":
+		return "output_item_baseline"
+	case "input_baseline_mismatch":
+		return "input_baseline"
+	case "no_incremental_input":
+		return "input"
+	case "":
+		return ""
+	}
+	return "other"
 }
 
 func (s *ContinuationStore) Complete(decision ContinuationDecision, fullReq ResponseCreateWsRequest, result RunResult) {

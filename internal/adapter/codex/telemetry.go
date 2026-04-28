@@ -36,7 +36,10 @@ type ContinuationTelemetry struct {
 	Key                   string
 	Hit                   bool
 	MissReason            string
+	MismatchField         string
 	FingerprintMatch      bool
+	StoredFingerprint     string
+	IncomingFingerprint   string
 	PreviousResponseID    string
 	IncrementalCount      int
 	ExpectedEventCount    int
@@ -49,6 +52,9 @@ type ContinuationTelemetry struct {
 	MismatchCurrentItem   int
 	MismatchExpected      string
 	MismatchCurrent       string
+	MismatchDiffSummary   string
+	RollingHitRate        float64
+	RollingWindowSize     int
 }
 
 func LogTransportPrepared(ctx context.Context, log *slog.Logger, telemetry TransportTelemetry) {
@@ -95,7 +101,10 @@ func LogContinuationDecision(ctx context.Context, log *slog.Logger, telemetry Co
 		"has_key", telemetry.Key != "",
 		"hit", telemetry.Hit,
 		"miss_reason", telemetry.MissReason,
+		"mismatch_field", telemetry.MismatchField,
 		"fingerprint_match", telemetry.FingerprintMatch,
+		"stored_fingerprint", telemetry.StoredFingerprint,
+		"incoming_fingerprint", telemetry.IncomingFingerprint,
 		"has_previous_response_id", telemetry.PreviousResponseID != "",
 		"incremental_input_count", telemetry.IncrementalCount,
 		"expected_event_count", telemetry.ExpectedEventCount,
@@ -108,5 +117,8 @@ func LogContinuationDecision(ctx context.Context, log *slog.Logger, telemetry Co
 		"mismatch_current_item_index", telemetry.MismatchCurrentItem,
 		"mismatch_expected", telemetry.MismatchExpected,
 		"mismatch_current", telemetry.MismatchCurrent,
+		"mismatch_diff_summary", telemetry.MismatchDiffSummary,
+		"rolling_hit_rate", telemetry.RollingHitRate,
+		"rolling_window_size", telemetry.RollingWindowSize,
 	)
 }
