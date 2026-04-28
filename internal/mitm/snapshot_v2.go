@@ -239,9 +239,24 @@ func bodyKeysFromRawMap(raw map[string]any) []string {
 			sort.Strings(out)
 			return out
 		}
-		// Raw mode: the body IS the full payload object.
+		// Raw mode (legacy shape where the proxy decoded JSON before
+		// recording): the body IS the full payload object.
 		out := make([]string, 0, len(b))
 		for k := range b {
+			out = append(out, k)
+		}
+		sort.Strings(out)
+		return out
+	case string:
+		// Raw mode: the proxy stores the JSON payload as a string.
+		// Parse it on the fly so the classifier sees real keys
+		// instead of clustering every raw-mode request as "other".
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(b), &parsed); err != nil {
+			return nil
+		}
+		out := make([]string, 0, len(parsed))
+		for k := range parsed {
 			out = append(out, k)
 		}
 		sort.Strings(out)
