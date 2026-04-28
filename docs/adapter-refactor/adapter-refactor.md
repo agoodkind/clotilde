@@ -103,11 +103,15 @@ adapter. Cursor server collapses them.
 - Cursor product tools observed: `Subagent`, `SwitchMode`, `AskQuestion`,
   `CreatePlan`, `ApplyPatch`
 
-**Continuation ledger reality check.** The `previous_response_id` reuse
-ledger fires but hit rate is bad. 1 of 6 turns hit on a real session.
-Five of six bailed to full replay with `miss_reason:
-output_item_baseline_mismatch`. This is its own P1 work item; see Plan
-step "Continuation hit rate fix".
+**Continuation ledger reality check (superseded).** The original
+`previous_response_id` reuse ledger fired but hit rate was bad: 1 of 6
+turns on a real session, with 5 bailing to full replay. A 2026-04-27
+MITM investigation against `codex` CLI and Codex.app established the
+fingerprint-baseline approach was structurally wrong. Cross-process
+`previous_response_id` reuse with `store: false` is not supported by
+the upstream. The replacement approach is a persistent ws session
+cache with intra-connection `previous_response_id` chaining and a
+suffix-extension delta-input matcher. See Plan step 5 and CLYDE-126.
 
 **Unresolved.** No `system` role observed on input items. The system
 prompt path is unknown. Likely a `developer`-role item flushed before the
@@ -290,82 +294,108 @@ Once the gate is green, the provider work itself:
   the captured claude-cli snapshot at zero divergence. The diff tool gates
   the slice; manual eyeballing is not enough.
 
-### 5. Codex provider implementation
+### 5. Codex provider implementation (parity superset of CLI + Desktop)
 
-Codex has exactly one transport. Direct websocket via gorilla/websocket
-(`transport_ws.go`) hitting `wss://chatgpt.com/backend-api/codex/responses`
-with the OAuth access token from `~/.codex/auth.json`. No HTTPS+SSE
-transport. No `codex app-server` subprocess.
+The Codex provider implements a strict superset of the wire behaviors observed
+across `codex` CLI (interactive), `codex exec` non-interactive, and Codex
+Desktop. Reference captures live in
+`research/codex/captures/2026-04-27/`. Implementation tracked in
+**CLYDE-126**. Drift detection harness is **CLYDE-125**.
 
-Empirical justification. The websocket path is ~5x faster per turn than the
+Transport. Direct websocket via gorilla/websocket (`transport_ws.go`)
+hitting `wss://chatgpt.com/backend-api/codex/responses` with the OAuth
+access token from `~/.codex/auth.json`. No HTTPS+SSE transport. No
+`codex app-server` subprocess. Both deleted on 2026-04-27.
+
+Empirical timings. The websocket path is ~5x faster per turn than the
 subprocess (median ~860ms vs ~5300ms for a trivial completion against
-`gpt-5.3-codex`) and is the only path that exposes `previous_response_id`
-reuse, midstream reconnect, and turn metadata. Cursor sessions are stateful
-end to end, so reconnect and continuation are required. The HTTPS+SSE
-transport offers slightly faster TTFT but no continuation, so it does not
-serve the use case.
+`gpt-5.3-codex`).
 
-- [ ] `internal/adapter/codex/` implements `Provider` against the direct
+Connection lifecycle (NEW, CLYDE-126).
+
+- The provider maintains a per-conversation `WebsocketSessionCache`
+  keyed on `cursorConversationId`. Each entry holds the live
+  `*websocket.Conn`, the last `resp_*` id from this connection, the
+  prior input baseline for delta computation, and an idle timestamp.
+- The current `RunWebsocketTransport` dials a fresh ws per request and
+  defers Close, which throws away the only mechanism the upstream
+  offers for cross-turn cost reduction. Reuse the connection.
+- Within a cached session, chain `previous_response_id` across every
+  `response.create` frame. `store: false` does not block this; the
+  constraint is same-connection lifetime.
+- Two-frame protocol unconditional: warmup `generate: false` (no input,
+  no prev) returns a `resp_*`; first real frame sets
+  `previous_response_id = warmup_resp` with delta input. Subsequent
+  frames chain off the prior `resp_*`.
+- Invalidate on any ws read or write error, server `response.failed`,
+  baseline divergence, idle timeout (default 10 minutes), or daemon
+  shutdown.
+
+Identity headers (NEW, CLYDE-126).
+
+- `originator: clyde` (own first-party identity, not spoofed
+  `codex_exec` or `Codex Desktop`).
+- `x-codex-turn-metadata` JSON with `session_id`, `thread_source`,
+  `turn_id`, `sandbox`, and a `workspaces` block populated from the
+  Cursor request when available. Mirror in `client_metadata`.
+- `x-codex-installation-id` from `~/.codex/installation_id` if present;
+  otherwise generate-and-persist a clyde-owned uuid at
+  `~/.config/clyde/codex-installation-id`. Mirror in `client_metadata`.
+- `x-codex-window-id` stays `<conv>:0` always. Confirmed empirical.
+- `prompt_cache_key = <cursorConversationId>`. Already correct.
+
+Status of deletions (DONE 2026-04-27).
+
+- [x] `internal/adapter/codex/` implements `Provider` against the direct
   websocket transport only.
-- [ ] Continuation ledger and `previous_response_id` reuse already shipped;
-  verify under live Cursor reconnect and attach
-  `adapter.codex.continuation.decided` logs to the history file.
-- [ ] Delete `internal/adapter/codex/rpc_client.go`. This is the
-  `exec.CommandContext` entry point that spawned
-  `codex app-server --listen stdio://`.
-- [ ] Delete `internal/adapter/codex/transport_app.go` and
-  `internal/adapter/codex/app_protocol.go`. These are the stdio JSON-RPC
-  transport and protocol types.
-- [ ] Delete `internal/adapter/codex_app_fallback.go` and the dispatcher
-  glue that wired the subprocess in.
-- [ ] Delete `internal/adapter/codex/transport_http.go` and the SSE-only
+- [x] Deleted `internal/adapter/codex/rpc_client.go` (subprocess entry).
+- [x] Deleted `internal/adapter/codex/transport_app.go` and
+  `internal/adapter/codex/app_protocol.go` (stdio JSON-RPC transport).
+- [x] Deleted `internal/adapter/codex_app_fallback.go` and the
+  dispatcher glue.
+- [x] Deleted `internal/adapter/codex/transport_http.go` and the SSE
   parsing helpers that no longer have a caller.
-- [ ] Drop the related config: `Codex.AppServerPath`, `Codex.AppFallback`,
-  `Codex.AppFallbackTimeout`, `Codex.WebsocketEnabled` (becomes always-on).
-- [ ] Tool-use, cancellation, and failure characterization captured. Document
-  expected normalized event shape per case in
-  `adapter-refactor-research.md`.
+- [x] Dropped `Codex.AppServerPath`, `Codex.AppFallback`,
+  `Codex.AppFallbackTimeout`, `Codex.WebsocketEnabled`.
 
-### 5b. Continuation hit rate fix
+Outstanding (CLYDE-126).
 
-Empirical capture from a real Cursor session shows the continuation ledger
-fires but the baseline check rejects most reuse opportunities. 1 of 6 turns
-hit. 5 of 6 bailed to full replay with `miss_reason:
-output_item_baseline_mismatch`. Cursor sends ~500KB of conversation per
-turn, so missed continuation is a direct cost-and-latency loss on every
-turn. This is the single biggest measurable performance issue in the
-adapter today and is independent of the architectural refactor.
+- [ ] Add `internal/adapter/codex/installation.go` with
+  `LoadInstallationID()` reading `~/.codex/installation_id` or
+  generating a persisted clyde uuid.
+- [ ] Add `internal/adapter/codex/turn_metadata.go` with typed
+  `TurnMetadata` struct including `Workspaces`. JSON marshal helper.
+- [ ] Add `originator: clyde` plus the new `x-codex-turn-metadata`
+  field to `ws_headers.go`. Mirror in `request_builder.go`
+  `client_metadata`.
+- [ ] Add `internal/adapter/codex/ws_session.go` with
+  `WebsocketSession`, `WebsocketSessionCache`, Take/Put/Invalidate/CloseAll.
+- [ ] Add `internal/adapter/codex/delta_input.go` with `ComputeDelta`
+  for suffix-extension comparison. Replaces the cross-process
+  fingerprint-baseline matcher.
+- [ ] Rewrite `RunWebsocketTransport` to take a session from the cache,
+  dial fresh on miss with warmup, chain `previous_response_id`, put
+  back on success, invalidate on error.
+- [ ] Construct the cache once in `NewProvider`. Drop the
+  `ContinuationStore` from `direct_runtime.go` and `server.go`.
+- [ ] Add `Codex.WsSessionIdleTimeout` (default `"10m"`) to
+  `internal/config/config.go`.
+- [ ] `Server.Shutdown` calls `provider.CloseAllSessions("shutdown")`.
+- [ ] Replace `ContinuationTelemetry` log fields with the
+  `adapter.codex.ws_session.{opened,taken,put,invalidated}` and
+  `adapter.codex.frame.sent` events described in CLYDE-126.
 
-- [ ] Expand `LogContinuationDecision` in
-  `internal/adapter/codex/telemetry.go` to record which baseline field
-  diverged on a miss. New fields: `mismatch_field`,
-  `stored_fingerprint`, `incoming_fingerprint`,
-  `mismatch_diff_summary`.
-- [ ] Capture 20+ live agent-mode turns from a fresh Cursor session and
-  classify the mismatch distribution by `mismatch_field`. Save to
-  `research/cursor/captures/<timestamp>/continuation-hit-rate.md`.
-- [ ] Identify which baseline fields are noise vs signal in
-  `internal/adapter/codex/continuation.go`. Likely noise candidates to
-  exclude from the fingerprint: `cursorRequestId` (per-turn unique by
-  definition), turn-scoped ordering of `output_items` that are
-  semantically equivalent, optional protocol fields that round-trip
-  differently. Likely signal that must stay: tool-list identity, model
-  identity, effort, conversation prefix.
-- [ ] Tighten the baseline so equivalent turns hit. Acceptance: above 80%
-  hit rate on a 5+ turn agent session that uses tools.
-- [ ] Add a per-conversation rolling hit-rate metric to
-  `adapter.codex.continuation.decided`. Surfaces a regression from logs
-  alone.
-- [ ] Add a regression test next to `continuation_test.go` that drives
-  the ledger through three consecutive turns with a stable tool list and
-  asserts turns 2 and 3 hit.
-- [ ] Update `adapter-refactor-history.md` with before-and-after hit
-  rates once the fix lands. Pre-refactor baseline is 1 of 6 = ~17% on
-  2026-04-27.
+### 5b. Cross-process fingerprint matcher (superseded)
 
-This step blocks Plan step 9 live validation (Plan 9b in Tack). The
-reconnect work cannot be declared done while baseline mismatch is the
-dominant outcome.
+A 2026-04-27 MITM investigation established that cross-process and
+cross-connection `previous_response_id` reuse with `store: false` is
+structurally not supported by the upstream. The 1/6 hit rate observed
+from the existing fingerprint matcher is misleading; even the 1 "hit"
+would have failed at the upstream had the prior connection actually
+closed. The fingerprint approach was solving the wrong problem. CLYDE-126
+replaces it with the persistent ws session cache plus delta-input
+suffix-extension matcher described in step 5 above. CLYDE-123
+(continuation hit rate) closes as superseded.
 
 ### 6. Render layer is the only OpenAI framing owner
 
@@ -408,15 +438,24 @@ After items 1 through 6 land, the bridges become unused.
 The refactor is not done until live traffic confirms it.
 
 - [ ] Anthropic rate-limit classifier validated against real 429s.
-- [ ] Codex `previous_response_id` reuse validated against a real Cursor
-  reconnect.
-- [ ] Codex turn metadata validated against a live ChatGPT Pro session.
-- [ ] Continuation hit rate above 80% on a fresh 5+ turn Cursor agent
-  session, measured from `adapter.codex.continuation.decided` logs.
-  Pre-refactor baseline is 1 of 6 = ~17% (2026-04-27). This is the
-  before/after gate for whether step 5b worked.
+- [ ] Codex `previous_response_id` chaining validated within a single
+  cached ws connection across 3+ Cursor turns on the same conversation.
+- [ ] Codex turn metadata (`x-codex-turn-metadata` workspaces block,
+  `originator: clyde`, `x-codex-installation-id`) validated against a
+  live ChatGPT Pro session. Compare against
+  `research/codex/captures/2026-04-27/` reference.
+- [ ] ws connection reuse rate above 90% per conversation on a fresh
+  5+ turn Cursor agent session, measured from
+  `adapter.codex.ws_session.{opened,taken}` logs.
+- [ ] Delta-input rate above 80% on turns after the first, measured as
+  `delta_input_count / total_response_create_count` from
+  `adapter.codex.frame.sent` logs.
+- [ ] Token usage on turn 2 prompt_tokens drops to roughly delta plus
+  cached prefix, not a full replay. Pre-refactor baseline is full
+  replay every turn (~500 KB inbound times N turns).
 - [ ] Capture logs from `~/.local/state/clyde/clyde-daemon.jsonl` and
-  `~/.local/state/clyde/anthropic.jsonl`. Attach excerpts to the history file.
+  `~/.local/state/clyde/anthropic.jsonl`. Attach excerpts to the
+  history file under `research/cursor/captures/<timestamp>/`.
 
 ## Conventions
 
