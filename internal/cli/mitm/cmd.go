@@ -128,10 +128,6 @@ log, and exit non-zero on divergence. Suitable for cron / CI.
 Auto-detects v1 vs v2 reference shape. Body-key and User-Agent
 filters apply only to v2.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			profile, err := mitmpkg.LookupLaunchProfile(upstream)
-			if err != nil {
-				return err
-			}
 			if captureRoot == "" {
 				captureRoot = defaultCaptureRoot()
 			}
@@ -143,69 +139,23 @@ filters apply only to v2.`,
 			}
 			ctx, cancel := context.WithCancel(cmd.Context())
 			defer cancel()
-			result, err := mitmpkg.RunCaptureSession(ctx, mitmpkg.CaptureSessionOptions{
-				Profile:     profile,
-				CaptureRoot: captureRoot,
-				CACertPath:  caCert,
-				Log:         f.Logger,
+			outcome, err := mitmpkg.RunDriftCheck(ctx, mitmpkg.DriftCheckOptions{
+				Upstream:        upstream,
+				Reference:       referencePath,
+				CaptureRoot:     captureRoot,
+				CACertPath:      caCert,
+				DriftLogPath:    driftLogPath,
+				IncludeUA:       includeUA,
+				ExcludeUA:       excludeUA,
+				RequireBodyKeys: requireKeys,
+				ForbidBodyKeys:  forbidKeys,
+				Log:             f.Logger,
 			})
 			if err != nil {
-				return fmt.Errorf("capture: %w", err)
+				return err
 			}
-
-			outcome := mitmpkg.DriftOutcome{
-				Upstream:       upstream,
-				ReferencePath:  referencePath,
-				TranscriptPath: result.TranscriptPath,
-				StartedAt:      result.StartedAt,
-			}
-			if isV2Snapshot(referencePath) {
-				ref, err := mitmpkg.LoadSnapshotV2TOML(referencePath)
-				if err != nil {
-					return fmt.Errorf("load v2 reference: %w", err)
-				}
-				cand, err := mitmpkg.ExtractSnapshotV2(result.TranscriptPath, mitmpkg.SnapshotV2Options{
-					UpstreamName:               upstream,
-					UpstreamVersion:            "live-" + result.StartedAt.Format("20060102T150405"),
-					IncludeUserAgentSubstrings: includeUA,
-					ExcludeUserAgentSubstrings: excludeUA,
-					RequireBodyKeys:            requireKeys,
-					ForbidBodyKeys:             forbidKeys,
-				})
-				if err != nil {
-					return fmt.Errorf("extract v2: %w", err)
-				}
-				report := mitmpkg.DiffSnapshotsV2(ref, cand)
-				outcome.SchemaVersion = "v2"
-				outcome.V2 = &report
-				fmt.Fprintln(out2(f), report.SummaryString())
-				if err := mitmpkg.AppendDriftOutcome(driftLogPath, outcome); err != nil {
-					f.Logger.Warn("mitm.drift.log_append_failed", "path", driftLogPath, "err", err)
-				}
-				if report.HasDiverged() {
-					return fmt.Errorf("wire shape drift detected for %s", upstream)
-				}
-				return nil
-			}
-			ref, err := mitmpkg.LoadSnapshotTOML(referencePath)
-			if err != nil {
-				return fmt.Errorf("load reference: %w", err)
-			}
-			cand, err := mitmpkg.ExtractSnapshot(result.TranscriptPath, mitmpkg.SnapshotOptions{
-				UpstreamName:    upstream,
-				UpstreamVersion: "live-" + result.StartedAt.Format("20060102T150405"),
-			})
-			if err != nil {
-				return fmt.Errorf("extract: %w", err)
-			}
-			report := mitmpkg.DiffSnapshots(ref, cand)
-			outcome.SchemaVersion = "v1"
-			outcome.V1 = &report
-			fmt.Fprintln(out2(f), report.SummaryString())
-			if err := mitmpkg.AppendDriftOutcome(driftLogPath, outcome); err != nil {
-				f.Logger.Warn("mitm.drift.log_append_failed", "path", driftLogPath, "err", err)
-			}
-			if report.HasDiverged() {
+			fmt.Fprintln(out2(f), outcome.Summary)
+			if outcome.Diverged {
 				return fmt.Errorf("wire shape drift detected for %s", upstream)
 			}
 			return nil

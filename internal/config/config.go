@@ -679,10 +679,37 @@ type Defaults struct {
 
 // MITMConfig configures the local capture proxy and its persistence.
 type MITMConfig struct {
-	EnabledDefault bool   `json:"enabledDefault,omitempty" toml:"enabled_default,omitempty"`
-	Providers      string `json:"providers,omitempty" toml:"providers,omitempty"`
-	BodyMode       string `json:"bodyMode,omitempty" toml:"body_mode,omitempty"`
-	CaptureDir     string `json:"captureDir,omitempty" toml:"capture_dir,omitempty"`
+	EnabledDefault bool            `json:"enabledDefault,omitempty" toml:"enabled_default,omitempty"`
+	Providers      string          `json:"providers,omitempty" toml:"providers,omitempty"`
+	BodyMode       string          `json:"bodyMode,omitempty" toml:"body_mode,omitempty"`
+	CaptureDir     string          `json:"captureDir,omitempty" toml:"capture_dir,omitempty"`
+	Drift          MITMDriftConfig `json:"drift,omitempty" toml:"drift,omitempty"`
+}
+
+// MITMDriftConfig configures the daemon-driven drift watchdog. When
+// Enabled, the daemon spawns a goroutine that runs drift-check
+// against every entry in Upstreams every Interval. Each upstream
+// captures one fresh transcript through the launch profile, snapshots
+// it, diffs it against Reference, and appends a structured outcome
+// to per-upstream JSONL logs under DriftLogDir.
+type MITMDriftConfig struct {
+	Enabled     bool                            `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	Interval    time.Duration                   `json:"interval,omitempty" toml:"interval,omitempty"`
+	DriftLogDir string                          `json:"driftLogDir,omitempty" toml:"drift_log_dir,omitempty"`
+	CaptureRoot string                          `json:"captureRoot,omitempty" toml:"capture_root,omitempty"`
+	CACertPath  string                          `json:"caCertPath,omitempty" toml:"ca_cert_path,omitempty"`
+	Upstreams   map[string]MITMDriftUpstreamCfg `json:"upstreams,omitempty" toml:"upstreams,omitempty"`
+}
+
+// MITMDriftUpstreamCfg configures one upstream's drift run. Reference
+// is required; the rest are optional filters that match the
+// snapshot/diff CLI flags.
+type MITMDriftUpstreamCfg struct {
+	Reference       string   `json:"reference" toml:"reference"`
+	IncludeUA       []string `json:"includeUa,omitempty" toml:"include_ua,omitempty"`
+	ExcludeUA       []string `json:"excludeUa,omitempty" toml:"exclude_ua,omitempty"`
+	RequireBodyKeys []string `json:"requireBodyKeys,omitempty" toml:"require_body_keys,omitempty"`
+	ForbidBodyKeys  []string `json:"forbidBodyKeys,omitempty" toml:"forbid_body_keys,omitempty"`
 }
 
 func (m MITMConfig) EnabledFor(provider string) bool {

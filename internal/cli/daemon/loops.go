@@ -2,13 +2,19 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	adapteroauth "goodkind.io/clyde/internal/adapter/oauth"
 	"goodkind.io/clyde/internal/config"
 	daemonsvc "goodkind.io/clyde/internal/daemon"
+	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/prune"
 	"goodkind.io/clyde/internal/session"
 )
@@ -184,6 +190,150 @@ func oauthLoop() daemonsvc.ExtraLoop {
 		}()
 		return cancel
 	}
+}
+
+// driftLoop returns a daemonsvc.ExtraLoop that periodically runs
+// mitm.RunDriftCheck for each configured upstream. Disabled by
+// default; enable via [mitm.drift] enabled = true in the global
+// config. Electron upstreams (claude-desktop, codex-desktop, vscode)
+// are skipped automatically because RunDriftCheck cannot drive an
+// interactive UI headlessly.
+func driftLoop() daemonsvc.ExtraLoop {
+	return func(log *slog.Logger) func() {
+		cfg, err := config.LoadGlobalOrDefault()
+		if err != nil {
+			log.LogAttrs(context.Background(), slog.LevelWarn, "mitm.drift.config_load_failed",
+				slog.String("component", "mitm-drift"),
+				slog.Any("err", err),
+			)
+			return nil
+		}
+		dcfg := cfg.MITM.Drift
+		if !dcfg.Enabled || len(dcfg.Upstreams) == 0 {
+			return nil
+		}
+		interval := dcfg.Interval
+		if interval <= 0 {
+			interval = 24 * time.Hour
+		}
+		upstreams := make([]string, 0, len(dcfg.Upstreams))
+		for name := range dcfg.Upstreams {
+			upstreams = append(upstreams, name)
+		}
+		sort.Strings(upstreams)
+
+		log.LogAttrs(context.Background(), slog.LevelInfo, "mitm.drift.scheduled",
+			slog.String("component", "mitm-drift"),
+			slog.Int64("interval_ms", interval.Milliseconds()),
+			slog.Any("upstreams", upstreams),
+		)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			runDriftTick(ctx, log, dcfg, upstreams)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					runDriftTick(ctx, log, dcfg, upstreams)
+				}
+			}
+		}()
+		return cancel
+	}
+}
+
+// driftTickSummary aggregates one tick's outcomes so the loop can
+// emit a single Info summary at the end (per the no-info-in-loops
+// rule). Per-upstream divergence and failure events still fire at
+// Warn/Error so they are not suppressed.
+type driftTickSummary struct {
+	totalDurationMs int64
+	clean           []string
+	diverged        []string
+	failed          []string
+	skipped         []string
+}
+
+func runDriftTick(
+	ctx context.Context,
+	log *slog.Logger,
+	dcfg config.MITMDriftConfig,
+	upstreams []string,
+) {
+	logDir := strings.TrimSpace(dcfg.DriftLogDir)
+	if logDir == "" {
+		logDir = defaultDriftLogDir()
+	}
+	tickStarted := time.Now()
+	summary := driftTickSummary{}
+	for _, upstream := range upstreams {
+		entry := dcfg.Upstreams[upstream]
+		if strings.TrimSpace(entry.Reference) == "" {
+			log.LogAttrs(ctx, slog.LevelWarn, "mitm.drift.upstream_skipped_no_reference",
+				slog.String("component", "mitm-drift"),
+				slog.String("upstream", upstream),
+			)
+			summary.skipped = append(summary.skipped, upstream)
+			continue
+		}
+		outcome, err := mitm.RunDriftCheck(ctx, mitm.DriftCheckOptions{
+			Upstream:        upstream,
+			Reference:       entry.Reference,
+			CaptureRoot:     dcfg.CaptureRoot,
+			CACertPath:      dcfg.CACertPath,
+			DriftLogPath:    filepath.Join(logDir, upstream+".jsonl"),
+			IncludeUA:       entry.IncludeUA,
+			ExcludeUA:       entry.ExcludeUA,
+			RequireBodyKeys: entry.RequireBodyKeys,
+			ForbidBodyKeys:  entry.ForbidBodyKeys,
+			Log:             log.With("subcomponent", "mitm-drift", "upstream", upstream),
+		})
+		switch {
+		case errors.Is(ctx.Err(), context.Canceled):
+			return
+		case err != nil:
+			log.LogAttrs(ctx, slog.LevelError, "mitm.drift.tick_failed",
+				slog.String("component", "mitm-drift"),
+				slog.String("upstream", upstream),
+				slog.Any("err", err),
+			)
+			summary.failed = append(summary.failed, upstream)
+		case outcome.Diverged:
+			log.LogAttrs(ctx, slog.LevelWarn, "mitm.drift.tick_diverged",
+				slog.String("component", "mitm-drift"),
+				slog.String("upstream", upstream),
+				slog.String("schema_version", outcome.SchemaVersion),
+				slog.String("summary", outcome.Summary),
+			)
+			summary.diverged = append(summary.diverged, upstream)
+		default:
+			summary.clean = append(summary.clean, upstream)
+		}
+	}
+	summary.totalDurationMs = time.Since(tickStarted).Milliseconds()
+	log.LogAttrs(ctx, slog.LevelInfo, "mitm.drift.tick_completed",
+		slog.String("component", "mitm-drift"),
+		slog.Int64("duration_ms", summary.totalDurationMs),
+		slog.Int("clean", len(summary.clean)),
+		slog.Int("diverged", len(summary.diverged)),
+		slog.Int("failed", len(summary.failed)),
+		slog.Int("skipped", len(summary.skipped)),
+	)
+}
+
+func defaultDriftLogDir() string {
+	if base := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); base != "" {
+		return filepath.Join(base, "clyde", "mitm-drift")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "mitm-drift"
+	}
+	return filepath.Join(home, ".local", "state", "clyde", "mitm-drift")
 }
 
 func runOAuthRefresh(ctx context.Context, log *slog.Logger) {
