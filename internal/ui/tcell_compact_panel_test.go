@@ -274,6 +274,46 @@ func TestCompactPanelBusyDrawsDisabledActionButtons(t *testing.T) {
 	}
 }
 
+func TestCompactPanelIdleProgressDoesNotShowWaitingSpinner(t *testing.T) {
+	scr := tcell.NewSimulationScreen("UTF-8")
+	if err := scr.Init(); err != nil {
+		t.Fatalf("init simulation screen: %v", err)
+	}
+	defer scr.Fini()
+	scr.SetSize(90, 24)
+
+	panel := NewCompactPanel("demo")
+	panel.Draw(scr, Rect{X: 0, Y: 0, W: 90, H: 24})
+	scr.Show()
+
+	text := compactPanelScreenText(scr)
+	if strings.Contains(text, "waiting for progress") {
+		t.Fatalf("idle compact panel should not show waiting spinner:\n%s", text)
+	}
+	if !strings.Contains(text, "No run yet") {
+		t.Fatalf("idle compact panel missing static hint:\n%s", text)
+	}
+}
+
+func TestCompactPanelBusyProgressShowsWaitingSpinner(t *testing.T) {
+	scr := tcell.NewSimulationScreen("UTF-8")
+	if err := scr.Init(); err != nil {
+		t.Fatalf("init simulation screen: %v", err)
+	}
+	defer scr.Fini()
+	scr.SetSize(90, 24)
+
+	panel := NewCompactPanel("demo")
+	panel.SetBusy("preview", true)
+	panel.Draw(scr, Rect{X: 0, Y: 0, W: 90, H: 24})
+	scr.Show()
+
+	text := compactPanelScreenText(scr)
+	if !strings.Contains(text, "waiting for progress") {
+		t.Fatalf("busy compact panel should show waiting spinner:\n%s", text)
+	}
+}
+
 func TestCompactPanelProgressLogStaysAboveActions(t *testing.T) {
 	scr := tcell.NewSimulationScreen("UTF-8")
 	if err := scr.Init(); err != nil {

@@ -37,6 +37,12 @@ type ExportPanel struct {
 	destIdx    int
 	actionIdx  int
 
+	scrollOffset  int
+	contentHeight int
+	contentRect   Rect
+	focusRows     [8]int
+	scrollToFocus bool
+
 	status string
 	log    []string
 
@@ -120,94 +126,140 @@ func (p *ExportPanel) Draw(scr tcell.Screen, r Rect) {
 	y := inner.Y
 	drawString(scr, inner.X, y, StyleHeader, "Export Transcript", inner.W)
 	drawString(scr, inner.X+imax(0, inner.W-runeCount(p.sessionName)-2), y, StyleMuted, p.sessionName, inner.W)
-	y += 2
-
-	drawString(scr, inner.X, y, StyleHeader, "Summary", inner.W)
-	y++
-	drawString(scr, inner.X, y, StyleDefault, fmt.Sprintf("visible tokens %s   visible messages %s   file size %s",
-		formatDetailTokens(p.stats.VisibleTokensEstimate),
-		formatWithCommas(p.stats.VisibleMessages),
-		formatBytes(p.stats.TranscriptSizeBytes)), inner.W)
-	y++
-	drawString(scr, inner.X, y, StyleDefault, fmt.Sprintf("user msgs %s   assistant msgs %s   tool results %s",
-		formatWithCommas(p.stats.UserMessages),
-		formatWithCommas(p.stats.AssistantMessages),
-		formatWithCommas(p.stats.ToolResultMessages)), inner.W)
-	y++
-	drawString(scr, inner.X, y, StyleDefault, fmt.Sprintf("tool calls %s   system prompts %s   compactions %s",
-		formatWithCommas(p.stats.ToolCalls),
-		formatWithCommas(p.stats.SystemPrompts),
-		formatWithCommas(p.stats.Compactions)), inner.W)
-	y += 2
-
-	drawString(scr, inner.X, y, StyleHeader, "History", inner.W)
-	y++
-	historyLabel := "include from   "
-	drawString(scr, inner.X, y, p.focusStyle(0), historyLabel+p.historySliderForWidth(inner.W-runeCount(historyLabel)), inner.W)
-	y++
-	drawString(scr, inner.X, y, StyleMuted, "included       "+p.historyIncludedLabel(), inner.W)
-	y++
-	drawString(scr, inner.X, y, StyleMuted, "estimate       "+p.estimateLabel(), inner.W)
-	y += 2
-
-	drawString(scr, inner.X, y, StyleHeader, "Content", inner.W)
-	y++
-	drawString(scr, inner.X, y, p.focusStyle(1), p.renderContentChecks(), inner.W)
-	y++
-	drawString(scr, inner.X, y, p.focusStyle(2), p.renderMoreContentChecks(), inner.W)
-	y += 2
-
-	drawString(scr, inner.X, y, StyleHeader, "Compression", inner.W)
-	y++
-	drawString(scr, inner.X, y, p.focusStyle(3), "whitespace  [ "+p.whitespaceLabel()+" ]", inner.W)
-	y++
-	descPrefix := "description    "
-	descIndent := strings.Repeat(" ", runeCount(descPrefix))
-	for i, line := range wrapText(p.whitespaceDescription(), imax(20, inner.W-runeCount(descPrefix))) {
-		prefix := descPrefix
-		if i > 0 {
-			prefix = descIndent
-		}
-		drawString(scr, inner.X, y, StyleMuted, prefix+line, inner.W)
-		y++
-	}
-	y += 2
-
-	drawString(scr, inner.X, y, StyleHeader, "Destination", inner.W)
-	y++
-	drawString(scr, inner.X, y, p.focusStyle(4), p.renderDestinationChecks(), inner.W)
-	y++
-	drawString(scr, inner.X, y, p.focusStyle(5), "folder  [ Choose folder... ]  "+p.folder, inner.W)
-	y++
-	drawString(scr, inner.X, y, p.focusStyle(6), "name    ["+p.name+"]", inner.W)
-	y += 2
-
-	drawString(scr, inner.X, y, StyleHeader, "Live Status", inner.W)
-	y++
-	drawString(scr, inner.X, y, StyleMuted, "status: "+p.status, inner.W)
-	y++
-	for _, line := range p.log {
-		if y >= inner.Y+inner.H-3 {
-			break
-		}
-		drawString(scr, inner.X, y, StyleDefault, line, inner.W)
-		y++
-	}
 
 	actionsY := inner.Y + inner.H - 2
+	contentTop := inner.Y + 2
+	contentH := imax(1, actionsY-contentTop-2)
+	contentW := imax(1, inner.W-1)
+	p.contentRect = Rect{X: inner.X, Y: contentTop, W: contentW, H: contentH}
+
+	lines := p.renderLines(contentW)
+	p.contentHeight = len(lines)
+	maxOffset := imax(0, p.contentHeight-p.contentRect.H)
+	p.scrollOffset = clamp(p.scrollOffset, 0, maxOffset)
+	if p.scrollToFocus {
+		p.ensureFocusedRowVisible()
+		p.scrollToFocus = false
+	}
+
+	for row := 0; row < p.contentRect.H; row++ {
+		idx := p.scrollOffset + row
+		if idx >= len(lines) {
+			break
+		}
+		line := lines[idx]
+		drawString(scr, p.contentRect.X, p.contentRect.Y+row, line.Style, line.Text, p.contentRect.W)
+	}
+	if p.contentHeight > p.contentRect.H {
+		drawScrollbar(scr, inner.X+inner.W-1, p.contentRect.Y, p.contentRect.H, p.contentRect.H, p.contentHeight, p.scrollOffset)
+	}
+
 	drawString(scr, inner.X, actionsY-1, StyleHeader, "Actions", inner.W)
 	drawString(scr, inner.X, actionsY, p.focusStyle(7), p.renderActions(), inner.W)
 }
 
+type exportPanelLine struct {
+	Text  string
+	Style tcell.Style
+}
+
+func (p *ExportPanel) renderLines(width int) []exportPanelLine {
+	p.focusRows = [8]int{}
+	for i := range p.focusRows {
+		p.focusRows[i] = -1
+	}
+
+	var lines []exportPanelLine
+	add := func(style tcell.Style, text string) {
+		lines = append(lines, exportPanelLine{Text: text, Style: style})
+	}
+	blank := func(n int) {
+		for i := 0; i < n; i++ {
+			add(StyleDefault, "")
+		}
+	}
+	addFocus := func(group int, style tcell.Style, text string) {
+		if group >= 0 && group < len(p.focusRows) && p.focusRows[group] < 0 {
+			p.focusRows[group] = len(lines)
+		}
+		add(style, text)
+	}
+
+	add(StyleHeader, "Summary")
+	add(StyleDefault, fmt.Sprintf("visible tokens %s   visible messages %s   file size %s",
+		formatDetailTokens(p.stats.VisibleTokensEstimate),
+		formatWithCommas(p.stats.VisibleMessages),
+		formatBytes(p.stats.TranscriptSizeBytes)))
+	add(StyleDefault, fmt.Sprintf("user msgs %s   assistant msgs %s   tool results %s",
+		formatWithCommas(p.stats.UserMessages),
+		formatWithCommas(p.stats.AssistantMessages),
+		formatWithCommas(p.stats.ToolResultMessages)))
+	add(StyleDefault, fmt.Sprintf("tool calls %s   system prompts %s   compactions %s",
+		formatWithCommas(p.stats.ToolCalls),
+		formatWithCommas(p.stats.SystemPrompts),
+		formatWithCommas(p.stats.Compactions)))
+	blank(1)
+
+	historyLabel := "include from   "
+	add(StyleHeader, "History")
+	addFocus(0, p.focusStyle(0), historyLabel+p.historySliderForWidth(width-runeCount(historyLabel)))
+	add(StyleMuted, "included       "+p.historyIncludedLabel())
+	add(StyleMuted, "estimate       "+p.estimateLabel())
+	blank(1)
+
+	add(StyleHeader, "Content")
+	addFocus(1, p.focusStyle(1), p.renderContentChecks())
+	addFocus(2, p.focusStyle(2), p.renderMoreContentChecks())
+	blank(1)
+
+	add(StyleHeader, "Compression")
+	addFocus(3, p.focusStyle(3), "whitespace  [ "+p.whitespaceLabel()+" ]")
+	descPrefix := "description    "
+	descIndent := strings.Repeat(" ", runeCount(descPrefix))
+	for i, line := range wrapText(p.whitespaceDescription(), imax(20, width-runeCount(descPrefix))) {
+		prefix := descPrefix
+		if i > 0 {
+			prefix = descIndent
+		}
+		add(StyleMuted, prefix+line)
+	}
+	blank(1)
+
+	add(StyleHeader, "Destination")
+	addFocus(4, p.focusStyle(4), p.renderDestinationChecks())
+	addFocus(5, p.focusStyle(5), "folder  [ Choose folder... ]  "+p.folder)
+	addFocus(6, p.focusStyle(6), "name    ["+p.name+"]")
+	blank(1)
+
+	add(StyleHeader, "Live Status")
+	add(StyleMuted, "status: "+p.status)
+	for _, line := range p.log {
+		add(StyleDefault, line)
+	}
+
+	return lines
+}
+
 func (p *ExportPanel) StatusLegendActions() []LegendAction {
-	return []LegendAction{LegendFocus, LegendAdjust, LegendSelect, LegendClose}
+	return []LegendAction{LegendFocus, LegendAdjust, LegendScroll, LegendSelect, LegendClose}
 }
 
 func (p *ExportPanel) HandleEvent(ev tcell.Event) bool {
 	switch e := ev.(type) {
 	case *tcell.EventMouse:
 		x, y := e.Position()
-		return p.Rect.Contains(x, y)
+		if !p.Rect.Contains(x, y) {
+			return false
+		}
+		if e.Buttons()&tcell.WheelUp != 0 {
+			p.scrollBody(-3)
+			return true
+		}
+		if e.Buttons()&tcell.WheelDown != 0 {
+			p.scrollBody(3)
+			return true
+		}
+		return true
 	case *tcell.EventKey:
 		if e.Key() == tcell.KeyEscape || (e.Key() == tcell.KeyRune && (e.Rune() == 'q' || e.Rune() == 'Q')) {
 			if p.OnClose != nil {
@@ -218,9 +270,17 @@ func (p *ExportPanel) HandleEvent(ev tcell.Event) bool {
 		switch e.Key() {
 		case tcell.KeyUp:
 			p.focusGroup = (p.focusGroup + 7) % 8
+			p.scrollToFocus = true
 			return true
 		case tcell.KeyDown:
 			p.focusGroup = (p.focusGroup + 1) % 8
+			p.scrollToFocus = true
+			return true
+		case tcell.KeyPgUp:
+			p.scrollBody(-imax(1, p.contentRect.H))
+			return true
+		case tcell.KeyPgDn:
+			p.scrollBody(imax(1, p.contentRect.H))
 			return true
 		}
 		switch p.focusGroup {
@@ -246,6 +306,29 @@ func (p *ExportPanel) HandleEvent(ev tcell.Event) bool {
 		}
 	}
 	return false
+}
+
+func (p *ExportPanel) scrollBody(delta int) {
+	maxOffset := imax(0, p.contentHeight-p.contentRect.H)
+	p.scrollOffset = clamp(p.scrollOffset+delta, 0, maxOffset)
+	p.scrollToFocus = false
+}
+
+func (p *ExportPanel) ensureFocusedRowVisible() {
+	if p.focusGroup < 0 || p.focusGroup >= len(p.focusRows) {
+		return
+	}
+	row := p.focusRows[p.focusGroup]
+	if row < 0 || p.contentRect.H <= 0 {
+		return
+	}
+	if row < p.scrollOffset {
+		p.scrollOffset = row
+	} else if row >= p.scrollOffset+p.contentRect.H {
+		p.scrollOffset = row - p.contentRect.H + 1
+	}
+	maxOffset := imax(0, p.contentHeight-p.contentRect.H)
+	p.scrollOffset = clamp(p.scrollOffset, 0, maxOffset)
 }
 
 func (p *ExportPanel) handleHistoryKeys(e *tcell.EventKey) bool {

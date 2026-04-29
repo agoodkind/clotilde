@@ -1167,6 +1167,37 @@ func (s *Server) GetSessionExportStats(ctx context.Context, req *clydev1.GetSess
 	return resp, nil
 }
 
+func (s *Server) ExportSession(ctx context.Context, req *clydev1.ExportSessionRequest) (*clydev1.ExportSessionResponse, error) {
+	if req.GetSessionName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "session_name is required")
+	}
+	started := time.Now()
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "store init: %v", err)
+	}
+	sess, err := store.Resolve(req.GetSessionName())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "resolve session: %v", err)
+	}
+	if sess == nil {
+		return nil, status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
+	}
+	body, err := buildSessionExport(sess, req)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "build export: %v", err)
+	}
+	s.log.Info("daemon.session_export.completed",
+		"component", "daemon",
+		"subcomponent", "sessions",
+		"duration_ms", time.Since(started).Milliseconds(),
+		"session", sess.Name,
+		"format", req.GetFormat().String(),
+		"history_start", req.GetHistoryStart(),
+		"bytes", len(body))
+	return &clydev1.ExportSessionResponse{Body: body}, nil
+}
+
 func (s *Server) contextStateForSession(sess *session.Session) sessionContextState {
 	if sess == nil || sess.Name == "" || sess.Metadata.SessionID == "" || strings.TrimSpace(sess.Metadata.TranscriptPath) == "" {
 		return sessionContextState{}

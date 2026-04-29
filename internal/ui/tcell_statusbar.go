@@ -13,6 +13,7 @@ const (
 	StatusFilter
 	StatusSearch
 	StatusCompact
+	StatusExport
 	StatusView
 	StatusConfirm
 )
@@ -109,6 +110,8 @@ func badgeFor(m StatusMode) (string, tcell.Color) {
 		return " SEARCH ", ColorModeSearch
 	case StatusCompact:
 		return " COMPACT ", ColorModeCompact
+	case StatusExport:
+		return " EXPORT ", ColorModeCompact
 	case StatusView:
 		return " VIEW ", ColorModeView
 	case StatusConfirm:
@@ -158,7 +161,7 @@ func legendActionsForStatus(s *StatusBarWidget) []LegendAction {
 		return []LegendAction{LegendTypeFilter, LegendClear}
 	case StatusSearch:
 		return []LegendAction{LegendNext, LegendSearch, LegendClose}
-	case StatusCompact:
+	case StatusCompact, StatusExport:
 		return []LegendAction{LegendFocus, LegendAdjust, LegendSelect, LegendClose}
 	case StatusView:
 		return []LegendAction{LegendScroll, LegendClose}

@@ -472,17 +472,7 @@ func (p *CompactPanel) focusStyle(group int) tcell.Style {
 
 func (p *CompactPanel) renderChecks() string {
 	check := func(name string, on bool, idx int) string {
-		marker := " "
-		if on {
-			marker = "x"
-		}
-		prefix := " "
-		suffix := " "
-		if p.focusGroup == 2 && p.checkboxIdx == idx {
-			prefix = ">"
-			suffix = "<"
-		}
-		return fmt.Sprintf("%s[%s] %s%s", prefix, marker, name, suffix)
+		return renderCheckItem(name, on, p.focusGroup == 2 && p.checkboxIdx == idx)
 	}
 	return check("thinking", p.thinking, 0) + "  " +
 		check("images", p.images, 1) + "  " +
@@ -497,16 +487,10 @@ func (p *CompactPanel) renderActions() string {
 		if i > 0 {
 			out += " "
 		}
-		left := "["
-		right := "]"
-		if p.focusGroup == 3 && p.actionIdx == i {
-			left = "[>"
-			right = "<]"
-		}
 		if i == 1 && p.confirmApply {
 			label = "Apply (confirm)"
 		}
-		out += left + " " + label + " " + right
+		out += renderActionLabel(label, p.focusGroup == 3 && p.actionIdx == i)
 	}
 	return out
 }
@@ -559,7 +543,11 @@ func (p *CompactPanel) drawProgressLog(scr tcell.Screen, r Rect) {
 	lines := p.logLines
 	p.logScroll = clamp(p.logScroll, 0, imax(0, len(lines)-content.H))
 	if len(lines) == 0 {
-		drawString(scr, content.X, content.Y, StyleMuted, "(waiting for progress)", content.W)
+		if p.busy {
+			ClockLoadingSpinner("waiting for progress...").Draw(scr, content.X, content.Y, content.W)
+			return
+		}
+		drawString(scr, content.X, content.Y, StyleMuted, "No run yet. Press Preview to inspect or Apply to mutate.", content.W)
 		return
 	}
 	start := imax(0, len(lines)-content.H-p.logScroll)

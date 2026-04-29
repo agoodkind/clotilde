@@ -519,6 +519,49 @@ func TestUX_ExportPanelActionCallsCallbackWithKnobs(t *testing.T) {
 	}
 }
 
+func TestUX_ExportCompletionStacksOverPanelAndShowsPath(t *testing.T) {
+	a, scr, cleanup := mkAppWithSessions(t, 1)
+	defer cleanup()
+	a.cb.ExportSession = func(_ *session.Session, req SessionExportRequest) ([]byte, error) {
+		return []byte("demo"), nil
+	}
+	sess := a.sessions[a.visibleIdx[0]]
+	a.openExportOptions(sess)
+	panel, ok := a.overlay.(*ExportPanel)
+	if !ok {
+		t.Fatalf("overlay = %T, want *ExportPanel", a.overlay)
+	}
+	req := panel.buildRequest()
+	req.CopyToClipboard = false
+	req.SaveToFile = true
+	req.Directory = t.TempDir()
+	req.Filename = "demo.md"
+
+	a.exportSessionWithRequest(sess, req, panel)
+	ev := scr.PollEvent()
+	interrupt, ok := ev.(*tcell.EventInterrupt)
+	if !ok {
+		t.Fatalf("event = %T, want *tcell.EventInterrupt", ev)
+	}
+	a.handleEvent(interrupt)
+
+	modal, ok := a.overlay.(*Modal)
+	if !ok {
+		t.Fatalf("overlay after export = %T, want *Modal", a.overlay)
+	}
+	wantPath := filepath.Join(req.Directory, req.Filename)
+	if !strings.Contains(modal.Body, wantPath) {
+		t.Fatalf("completion body = %q, want path %q", modal.Body, wantPath)
+	}
+	if len(a.overlayStack) != 1 || a.overlayStack[0].widget != panel {
+		t.Fatalf("completion should stack over export panel, stack=%#v", a.overlayStack)
+	}
+	a.closeOverlay()
+	if a.overlay != panel {
+		t.Fatalf("closing completion should restore panel, got %T", a.overlay)
+	}
+}
+
 func TestUX_RegistrySessionUpdateAppliesWithoutSnapshotReload(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 2)
 	defer cleanup()

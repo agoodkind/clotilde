@@ -61,6 +61,10 @@ type ToolCall struct {
 	IsError bool          // true if tool result was an error
 }
 
+type ParseOptions struct {
+	PreserveSystemPrompts bool
+}
+
 // ToolNames returns the names of all tools used in this message.
 func (m *Message) ToolNames() []string {
 	names := make([]string, len(m.Tools))
@@ -125,6 +129,10 @@ var transcriptNoisePatterns = func() []*regexp.Regexp {
 // Tool outputs are NOT loaded by default (expensive). Call LoadToolOutputs
 // to populate them for specific messages.
 func Parse(r io.Reader) ([]Message, error) {
+	return ParseWithOptions(r, ParseOptions{})
+}
+
+func ParseWithOptions(r io.Reader, opts ParseOptions) ([]Message, error) {
 	reader := bufio.NewReader(r)
 
 	var messages []Message
@@ -133,7 +141,7 @@ func Parse(r io.Reader) ([]Message, error) {
 		if len(line) > 0 {
 			line = bytes.TrimRight(line, "\r\n")
 			if len(line) > 0 {
-				if msg, ok := parseLine(line); ok {
+				if msg, ok := parseLine(line, opts); ok {
 					messages = append(messages, msg)
 				}
 			}
@@ -148,7 +156,7 @@ func Parse(r io.Reader) ([]Message, error) {
 	return messages, nil
 }
 
-func parseLine(line []byte) (Message, bool) {
+func parseLine(line []byte, opts ParseOptions) (Message, bool) {
 	var entry rawEntry
 	if err := json.Unmarshal(line, &entry); err != nil {
 		return Message{}, false
@@ -176,7 +184,10 @@ func parseLine(line []byte) (Message, bool) {
 		if text == "" {
 			return Message{}, false // tool result entry, skip
 		}
-		m.Text = stripSystemTags(text)
+		if !opts.PreserveSystemPrompts {
+			text = stripSystemTags(text)
+		}
+		m.Text = strings.TrimSpace(text)
 		return m, m.Text != ""
 	}
 

@@ -165,6 +165,52 @@ func TestExportPanelDrawsStatsAndSlider(t *testing.T) {
 	}
 }
 
+func TestExportPanelSmallViewportScrollsWithoutOverlappingActions(t *testing.T) {
+	panel := NewExportPanel("demo", SessionExportStats{
+		VisibleTokensEstimate: 402000,
+		VisibleMessages:       756,
+		UserMessages:          206,
+		AssistantMessages:     2908,
+		ToolResultMessages:    2358,
+		ToolCalls:             2358,
+		SystemPrompts:         297,
+		Compactions:           3,
+		TranscriptSizeBytes:   12 * 1024 * 1024,
+	}, "/tmp")
+	scr := tcell.NewSimulationScreen("UTF-8")
+	if err := scr.Init(); err != nil {
+		t.Fatalf("screen init: %v", err)
+	}
+	defer scr.Fini()
+	scr.SetSize(78, 24)
+	panel.Draw(scr, Rect{X: 0, Y: 0, W: 78, H: 24})
+	scr.Show()
+
+	text := compactPanelScreenText(scr)
+	if strings.Contains(text, "Actionspace") {
+		t.Fatalf("actions overlapped compression row:\n%s", text)
+	}
+	if panel.contentHeight <= panel.contentRect.H {
+		t.Fatalf("test expected overflowing content, height=%d viewport=%d", panel.contentHeight, panel.contentRect.H)
+	}
+
+	x := panel.contentRect.X + 1
+	y := panel.contentRect.Y + 1
+	if !panel.HandleEvent(tcell.NewEventMouse(x, y, tcell.WheelDown, tcell.ModNone)) {
+		t.Fatalf("expected mouse wheel to be handled")
+	}
+	if panel.scrollOffset == 0 {
+		t.Fatalf("expected mouse wheel to advance scroll offset")
+	}
+
+	if !panel.HandleEvent(tcell.NewEventKey(tcell.KeyPgUp, 0, tcell.ModNone)) {
+		t.Fatalf("expected page up to be handled")
+	}
+	if panel.scrollOffset != 0 {
+		t.Fatalf("page up should return to top, offset=%d", panel.scrollOffset)
+	}
+}
+
 func TestExportWhitespaceDescriptionsUseFullCopy(t *testing.T) {
 	tests := []struct {
 		mode SessionExportWhitespaceCompression

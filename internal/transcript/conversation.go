@@ -158,7 +158,11 @@ func toolFullDetailText(tools []ToolCall) string {
 			continue
 		}
 		body, _ := json.Marshal(tool.Input)
-		lines = append(lines, fmt.Sprintf("[tool: %s] %s", tool.Name, string(body)))
+		line := fmt.Sprintf("[tool: %s] %s", tool.Name, string(body))
+		if strings.TrimSpace(tool.Output) != "" {
+			line += "\n[tool output]\n" + strings.TrimSpace(tool.Output)
+		}
+		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n")
 }

@@ -1128,6 +1128,28 @@ func GetSessionExportStatsViaDaemon(ctx context.Context, sessionName string) (*c
 	return resp, nil
 }
 
+func ExportSessionViaDaemon(ctx context.Context, req *clydev1.ExportSessionRequest) (*clydev1.ExportSessionResponse, error) {
+	log := daemonClientLog(ctx)
+	log.DebugContext(ctx, "daemon.client.session_export.begin", "session", req.GetSessionName())
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.session_export.connect_failed", "err", err)
+		return nil, err
+	}
+	defer c.conn.Close()
+	rpcCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	resp, rpcErr := c.rpc.ExportSession(rpcCtx, req)
+	if rpcErr != nil {
+		log.DebugContext(rpcCtx, "daemon.client.session_export.rpc_failed", "session", req.GetSessionName(), "err", rpcErr)
+		return nil, rpcErr
+	}
+	log.DebugContext(rpcCtx, "daemon.client.session_export.ok",
+		"session", req.GetSessionName(),
+		"bytes", len(resp.GetBody()))
+	return resp, nil
+}
+
 func ProbeContextUsageViaDaemon(ctx context.Context, sessionName string) (*clydev1.ProbeContextUsageResponse, error) {
 	log := daemonClientLog(ctx)
 	log.DebugContext(ctx, "daemon.client.context_usage.begin", "session", sessionName)

@@ -1396,6 +1396,7 @@ type viewContentLoaded struct {
 type exportFinished struct {
 	title string
 	body  string
+	stack bool
 }
 
 type exportStatsLoaded struct {
@@ -2728,7 +2729,11 @@ func (a *App) handleEvent(ev tcell.Event) {
 			a.overlay = &ViewerOverlay{Box: tb, OnClose: a.closeOverlay}
 			a.mode = StatusView
 		case exportFinished:
-			a.openNoticeModal(d.title, d.body)
+			if d.stack {
+				a.pushNoticeModal(d.title, d.body)
+			} else {
+				a.openNoticeModal(d.title, d.body)
+			}
 		default:
 			// Several call sites post the *App itself as the payload to
 			// request a generic table repaint (see PostEvent calls in
@@ -5707,32 +5712,48 @@ func (a *App) exportSessionWithRequest(sess *session.Session, req SessionExportR
 	go func() {
 		body, err := a.cb.ExportSession(sess, req)
 		if err != nil {
-			a.postInterrupt(exportFinished{title: "Export failed", body: err.Error()})
+			a.postInterrupt(exportFinished{title: "Export failed", body: err.Error(), stack: true})
 			return
 		}
 		if req.CopyToClipboard {
 			if err := CopyToClipboard(string(body)); err != nil {
-				a.postInterrupt(exportFinished{title: "Copy failed", body: err.Error()})
+				a.postInterrupt(exportFinished{title: "Copy failed", body: err.Error(), stack: true})
 				return
 			}
 		}
+		var savedPath string
 		if req.SaveToFile {
 			path := exportOutputPath(req)
 			if _, err := os.Stat(path); err == nil && !req.Overwrite {
-				a.postInterrupt(exportFinished{title: "Save failed", body: "file exists: " + path})
+				a.postInterrupt(exportFinished{title: "Save failed", body: "file exists: " + path, stack: true})
 				return
 			}
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-				a.postInterrupt(exportFinished{title: "Save failed", body: err.Error()})
+				a.postInterrupt(exportFinished{title: "Save failed", body: err.Error(), stack: true})
 				return
 			}
 			if err := os.WriteFile(path, body, 0o644); err != nil {
-				a.postInterrupt(exportFinished{title: "Save failed", body: err.Error()})
+				a.postInterrupt(exportFinished{title: "Save failed", body: err.Error(), stack: true})
 				return
 			}
+			savedPath = path
 		}
-		a.postInterrupt(exportFinished{title: "Export complete", body: "transcript export completed"})
+		a.postInterrupt(exportFinished{title: "Export complete", body: exportCompleteBody(req, savedPath), stack: true})
 	}()
+}
+
+func exportCompleteBody(req SessionExportRequest, savedPath string) string {
+	parts := make([]string, 0, 2)
+	if req.CopyToClipboard {
+		parts = append(parts, "Copied to clipboard.")
+	}
+	if savedPath != "" {
+		parts = append(parts, "Saved to "+savedPath)
+	}
+	if len(parts) == 0 {
+		return "Export completed."
+	}
+	return strings.Join(parts, "\n")
 }
 
 func defaultExportPath(sess *session.Session, format SessionExportFormat) string {
@@ -5850,6 +5871,13 @@ func (a *App) openNoticeModal(title, body string) {
 		a.closeOverlay()
 	}
 	a.overlay = modal
+}
+
+func (a *App) pushNoticeModal(title, body string) {
+	if a.overlay != nil {
+		a.overlayStack = append(a.overlayStack, overlayFrame{widget: a.overlay, mode: a.mode})
+	}
+	a.openNoticeModal(title, body)
 }
 
 // refreshSessions requests a daemon-owned dashboard snapshot without blocking

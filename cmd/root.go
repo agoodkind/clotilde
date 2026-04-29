@@ -15,10 +15,7 @@
 package cmd
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -32,7 +29,6 @@ import (
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/claude"
-	compactengine "goodkind.io/clyde/internal/compact"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/outputstyle"
@@ -358,7 +354,12 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			return strings.TrimSpace(b.String())
 		},
 		ExportSession: func(sess *session.Session, req ui.SessionExportRequest) ([]byte, error) {
-			return exportSessionContent(sess, req)
+			rpcReq := exportRequestToProto(sess, req)
+			resp, err := daemon.ExportSessionViaDaemon(context.Background(), rpcReq)
+			if err != nil {
+				return nil, err
+			}
+			return resp.GetBody(), nil
 		},
 		LoadExportStats: func(sess *session.Session) (ui.SessionExportStats, error) {
 			if sess == nil {
@@ -533,182 +534,6 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			return sessionDetailFromProto(resp), nil
 		},
 	}
-}
-
-func exportSessionContent(sess *session.Session, req ui.SessionExportRequest) ([]byte, error) {
-	if sess == nil {
-		return nil, fmt.Errorf("nil session")
-	}
-	if strings.TrimSpace(sess.Metadata.TranscriptPath) == "" {
-		return nil, fmt.Errorf("session has no transcript path")
-	}
-	f, err := os.Open(sess.Metadata.TranscriptPath)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	messages, err := transcript.Parse(f)
-	if err != nil {
-		return nil, err
-	}
-	if history, historyErr := loadExportHistoryMessages(sess, req); historyErr == nil && len(history) > 0 {
-		messages = append(history, messages...)
-	}
-	messages = filterExportMessages(messages, req)
-	opts := transcript.ShapeOptions{
-		ConversationOnly: true,
-		ToolOnly:         transcript.ToolOnlyOmit,
-		IncludeThinking:  req.IncludeThinking,
-	}
-	if req.IncludeToolCalls {
-		opts.ConversationOnly = false
-		opts.ToolOnly = transcript.ToolOnlyFullDetail
-	}
-	var body []byte
-	switch req.Format {
-	case ui.SessionExportMarkdown:
-		body = []byte(transcript.RenderMarkdownWithOptions(messages, opts))
-	case ui.SessionExportHTML:
-		body = []byte(transcript.RenderHTMLWithOptions(messages, opts))
-	case ui.SessionExportJSON:
-		body, err = transcript.RenderJSONWithOptions(messages, opts)
-		if err != nil {
-			return nil, err
-		}
-	case ui.SessionExportPlainText:
-		fallthrough
-	default:
-		body = []byte(transcript.RenderPlainTextWithOptions(messages, opts))
-	}
-	return compressExportWhitespace(body, req.Format, req.WhitespaceCompression), nil
-}
-
-func compressExportWhitespace(body []byte, format ui.SessionExportFormat, mode ui.SessionExportWhitespaceCompression) []byte {
-	if mode == "" || mode == ui.SessionExportWhitespacePreserve {
-		return body
-	}
-	if format == ui.SessionExportJSON {
-		var compacted bytes.Buffer
-		if err := json.Compact(&compacted, body); err == nil {
-			return compacted.Bytes()
-		}
-		return body
-	}
-	text := compressExportWhitespaceText(string(body), mode)
-	return []byte(text)
-}
-
-func compressExportWhitespaceText(text string, mode ui.SessionExportWhitespaceCompression) string {
-	if mode == ui.SessionExportWhitespacePreserve || mode == "" {
-		return text
-	}
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	text = strings.ReplaceAll(text, "\r", "\n")
-	lines := strings.Split(text, "\n")
-	out := make([]string, 0, len(lines))
-	blank := false
-	inFence := false
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
-			inFence = !inFence
-			out = append(out, trimmed)
-			blank = false
-			continue
-		}
-		if trimmed == "" {
-			if mode == ui.SessionExportWhitespaceDense {
-				continue
-			}
-			if !blank {
-				out = append(out, "")
-				blank = true
-			}
-			continue
-		}
-		blank = false
-		if inFence || shouldPreserveExportLineWhitespace(line, trimmed) {
-			out = append(out, strings.TrimRight(line, " \t"))
-			continue
-		}
-		out = append(out, strings.Join(strings.Fields(trimmed), " "))
-	}
-	return strings.TrimSpace(strings.Join(out, "\n"))
-}
-
-func shouldPreserveExportLineWhitespace(line, trimmed string) bool {
-	if strings.HasPrefix(line, "    ") || strings.HasPrefix(line, "\t") {
-		return true
-	}
-	if strings.HasPrefix(trimmed, "#") ||
-		strings.HasPrefix(trimmed, ">") ||
-		strings.HasPrefix(trimmed, "- ") ||
-		strings.HasPrefix(trimmed, "* ") ||
-		strings.HasPrefix(trimmed, "+ ") ||
-		strings.HasPrefix(trimmed, "|") {
-		return true
-	}
-	if len(trimmed) >= 3 && trimmed[0] >= '0' && trimmed[0] <= '9' {
-		for i := 1; i < len(trimmed) && i < 4; i++ {
-			if trimmed[i] == '.' && i+1 < len(trimmed) && trimmed[i+1] == ' ' {
-				return true
-			}
-			if trimmed[i] < '0' || trimmed[i] > '9' {
-				break
-			}
-		}
-	}
-	return false
-}
-
-func loadExportHistoryMessages(sess *session.Session, req ui.SessionExportRequest) ([]transcript.Message, error) {
-	if sess == nil || sess.Metadata.SessionID == "" || req.HistoryStart < 0 {
-		return nil, nil
-	}
-	entries, err := compactengine.ReadLedger(sess.Metadata.SessionID)
-	if err != nil || len(entries) == 0 {
-		return nil, err
-	}
-	if req.HistoryStart >= len(entries) {
-		return nil, nil
-	}
-	entry := entries[req.HistoryStart]
-	if entry.SnapshotPath == "" {
-		return nil, nil
-	}
-	f, err := os.Open(entry.SnapshotPath)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		return nil, err
-	}
-	defer gz.Close()
-	return transcript.Parse(gz)
-}
-
-func filterExportMessages(messages []transcript.Message, req ui.SessionExportRequest) []transcript.Message {
-	out := make([]transcript.Message, 0, len(messages))
-	for _, msg := range messages {
-		hasChatText := strings.TrimSpace(msg.Text) != ""
-		if !req.IncludeChat && hasChatText {
-			msg.Text = ""
-		}
-		if !req.IncludeThinking {
-			msg.Thinking = ""
-		}
-		if !req.IncludeToolCalls {
-			msg.HasTools = false
-			msg.Tools = nil
-		}
-		if strings.TrimSpace(msg.Text) == "" && strings.TrimSpace(msg.Thinking) == "" && !msg.HasTools {
-			continue
-		}
-		out = append(out, msg)
-	}
-	return out
 }
 
 func compactEventFromProto(ev *clydev1.CompactEvent) ui.CompactEvent {
@@ -906,6 +731,55 @@ func exportStatsFromProto(resp *clydev1.GetSessionExportStatsResponse) ui.Sessio
 		SystemPrompts:         int(resp.GetSystemPrompts()),
 		Compactions:           int(resp.GetCompactions()),
 		TranscriptSizeBytes:   resp.GetTranscriptSizeBytes(),
+	}
+}
+
+func exportRequestToProto(sess *session.Session, req ui.SessionExportRequest) *clydev1.ExportSessionRequest {
+	sessionName := strings.TrimSpace(req.SessionName)
+	if sessionName == "" && sess != nil {
+		sessionName = sess.Name
+	}
+	return &clydev1.ExportSessionRequest{
+		SessionName:            sessionName,
+		Format:                 exportFormatToProto(req.Format),
+		HistoryStart:           int32(req.HistoryStart),
+		WhitespaceCompression:  exportWhitespaceToProto(req.WhitespaceCompression),
+		IncludeChat:            req.IncludeChat,
+		IncludeThinking:        req.IncludeThinking,
+		IncludeSystemPrompts:   req.IncludeSystemPrompts,
+		IncludeToolCalls:       req.IncludeToolCalls,
+		IncludeToolOutputs:     req.IncludeToolOutputs,
+		IncludeRawJsonMetadata: req.IncludeRawJSONMetadata,
+	}
+}
+
+func exportFormatToProto(format ui.SessionExportFormat) clydev1.SessionExportFormat {
+	switch format {
+	case ui.SessionExportHTML:
+		return clydev1.SessionExportFormat_SESSION_EXPORT_FORMAT_HTML
+	case ui.SessionExportJSON:
+		return clydev1.SessionExportFormat_SESSION_EXPORT_FORMAT_JSON
+	case ui.SessionExportPlainText:
+		return clydev1.SessionExportFormat_SESSION_EXPORT_FORMAT_PLAIN_TEXT
+	case ui.SessionExportMarkdown:
+		fallthrough
+	default:
+		return clydev1.SessionExportFormat_SESSION_EXPORT_FORMAT_MARKDOWN
+	}
+}
+
+func exportWhitespaceToProto(mode ui.SessionExportWhitespaceCompression) clydev1.SessionExportWhitespaceCompression {
+	switch mode {
+	case ui.SessionExportWhitespacePreserve:
+		return clydev1.SessionExportWhitespaceCompression_SESSION_EXPORT_WHITESPACE_COMPRESSION_PRESERVE
+	case ui.SessionExportWhitespaceCompact:
+		return clydev1.SessionExportWhitespaceCompression_SESSION_EXPORT_WHITESPACE_COMPRESSION_COMPACT
+	case ui.SessionExportWhitespaceDense:
+		return clydev1.SessionExportWhitespaceCompression_SESSION_EXPORT_WHITESPACE_COMPRESSION_DENSE
+	case ui.SessionExportWhitespaceTidy:
+		fallthrough
+	default:
+		return clydev1.SessionExportWhitespaceCompression_SESSION_EXPORT_WHITESPACE_COMPRESSION_TIDY
 	}
 }
 
