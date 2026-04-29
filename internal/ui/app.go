@@ -13,6 +13,7 @@ package ui
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -45,8 +46,8 @@ type AppOptions struct {
 	// DashboardLaunchCWD is the process working directory when the dashboard
 	// started. It is the default for "new session" without opening the picker.
 	DashboardLaunchCWD string
-	// LaunchBasedir scopes the startup dashboard to sessions rooted at this
-	// basedir and routes "new session" directly to that directory.
+	// LaunchBasedir biases the startup dashboard toward sessions rooted at
+	// this basedir while keeping global sessions visible underneath.
 	LaunchBasedir string
 }
 
@@ -114,7 +115,8 @@ type AppCallbacks struct {
 	RefreshSummary   func(sess *session.Session, onDone func(*session.Session)) error
 	GetSessionDetail func(sess *session.Session) (SessionDetail, error)
 	ViewContent      func(sess *session.Session) string
-	ExportSession    func(sess *session.Session, format SessionExportFormat) ([]byte, error)
+	ExportSession    func(sess *session.Session, req SessionExportRequest) ([]byte, error)
+	LoadExportStats  func(sess *session.Session) (SessionExportStats, error)
 	// SubscribeRegistry, when set, opens a long-lived subscription to
 	// the daemon's registry-event stream. Each event nudges the TUI to
 	// reload sessions from disk so adoptions land immediately instead
@@ -138,6 +140,45 @@ const (
 	SessionExportHTML      SessionExportFormat = "html"
 	SessionExportJSON      SessionExportFormat = "json"
 )
+
+type SessionExportWhitespaceCompression string
+
+const (
+	SessionExportWhitespacePreserve SessionExportWhitespaceCompression = "preserve"
+	SessionExportWhitespaceTidy     SessionExportWhitespaceCompression = "tidy"
+	SessionExportWhitespaceCompact  SessionExportWhitespaceCompression = "compact"
+	SessionExportWhitespaceDense    SessionExportWhitespaceCompression = "dense"
+)
+
+type SessionExportRequest struct {
+	SessionName            string
+	Format                 SessionExportFormat
+	HistoryStart           int
+	WhitespaceCompression  SessionExportWhitespaceCompression
+	IncludeChat            bool
+	IncludeThinking        bool
+	IncludeSystemPrompts   bool
+	IncludeToolCalls       bool
+	IncludeToolOutputs     bool
+	IncludeRawJSONMetadata bool
+	CopyToClipboard        bool
+	SaveToFile             bool
+	Directory              string
+	Filename               string
+	Overwrite              bool
+}
+
+type SessionExportStats struct {
+	VisibleTokensEstimate int
+	VisibleMessages       int
+	UserMessages          int
+	AssistantMessages     int
+	ToolResultMessages    int
+	ToolCalls             int
+	SystemPrompts         int
+	Compactions           int
+	TranscriptSizeBytes   int64
+}
 
 type SessionSnapshot struct {
 	Sessions            []*session.Session
@@ -166,6 +207,9 @@ type SessionEvent struct {
 	ContextState        *SessionContextState
 	Bridge              *Bridge
 	GlobalRemoteControl *bool
+	BinaryPath          string
+	BinaryReason        string
+	BinaryHash          string
 }
 
 type SessionContextState struct {
@@ -229,6 +273,7 @@ type SessionDetail struct {
 	CompactionCount       int             // compact_boundary entries in this transcript
 	LastPreCompactTokens  int             // pre-compact token count from the latest clyde compact boundary
 	TranscriptSizeBytes   int64
+	ConversationLoading   bool
 	ContextUsage          SessionContextUsage
 	ContextUsageLoaded    bool
 	ContextUsageStatus    string
@@ -348,11 +393,10 @@ type App struct {
 	// Overlays (one at a time)
 	overlay Widget
 	// overlayStack remembers overlays under the current one. Pushing a
-	// new overlay on top (e.g. the compact result modal over the
-	// compact form) preserves the bottom layer so dismissing the top
-	// returns the user where they came from instead of dropping them
-	// to the dashboard.
-	overlayStack []Widget
+	// new overlay on top preserves the bottom layer so dismissing the
+	// top returns the user where they came from instead of dropping
+	// back to the dashboard.
+	overlayStack []overlayFrame
 
 	// Rects (recomputed on resize)
 	headerRect Rect
@@ -365,6 +409,7 @@ type App struct {
 	selected      *session.Session
 	sessions      []*session.Session
 	visibleIdx    []int // indexes into sessions after filter
+	tableRowIdx   []int // maps rendered table rows to sessions; -1 is a section separator
 	filter        string
 	sortCol       SortColumn
 	sortAsc       bool
@@ -403,6 +448,12 @@ type App struct {
 	detailCache   map[string]SessionDetail
 	detailLoading map[string]bool
 	detailMu      sync.Mutex
+
+	// exportStatsCache stores daemon-derived export aggregates keyed by
+	// session name. Like detail loading, requests are coalesced so the
+	// export panel can open immediately and hydrate asynchronously.
+	exportStatsCache   map[string]SessionExportStats
+	exportStatsLoading map[string]bool
 
 	// spinnerFrame increments on each redraw that is waiting for async
 	// data so the user sees motion in the details header.
@@ -486,11 +537,9 @@ type App struct {
 
 	// dashboardLaunchCWD is cwd when clyde started the TUI; used for New chat default.
 	dashboardLaunchCWD string
-	// launchBasedir is set for `clyde <dir>` and scopes the session list to
-	// one workspace root. The handled flag prevents reopening the new-session
-	// modal after every refresh when no matching sessions exist.
-	launchBasedir        string
-	launchBasedirHandled bool
+	// launchBasedir is set for `clyde <dir>` and ranks matching sessions
+	// before the rest of the global list.
+	launchBasedir string
 
 	// Return flow trace state is used to stitch resume/prompt freeze
 	// paths across event-loop boundaries and make state transitions
@@ -502,10 +551,14 @@ type App struct {
 	lastLayoutW int
 	lastLayoutH int
 
-	// buildHash identifies the binary build. runHash identifies this process
-	// instance so operators can tell which wrapper is currently painting.
-	buildHash string
-	runHash   string
+	// buildHash identifies stamped build metadata, executableHash
+	// fingerprints the actual running file, and runHash identifies this
+	// process instance so operators can tell which wrapper is painting.
+	buildHash      string
+	executableHash string
+	runHash        string
+	executableMu   sync.Mutex
+	executableBase executableSnapshot
 
 	// pendingResizeDisplaySync is set on every EventResize so the next draw
 	// in the run loop is followed by Screen.Sync. A debounced only approach
@@ -544,6 +597,8 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 		bridges:            make(map[string]Bridge),
 		detailCache:        make(map[string]SessionDetail),
 		detailLoading:      make(map[string]bool),
+		exportStatsCache:   make(map[string]SessionExportStats),
+		exportStatsLoading: make(map[string]bool),
 		summaryRefreshing:  make(map[string]bool),
 		lastUsedTickerSeen: make(map[string]time.Time),
 		recentlyUpdatedAt:  make(map[string]time.Time),
@@ -558,6 +613,7 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 		heartbeatStartedAt: time.Now(),
 		lastHeartbeatAt:    time.Now(),
 		buildHash:          shortStableHash(gklogversion.String()),
+		executableHash:     currentExecutableHash(),
 		runHash:            shortStableHash(fmt.Sprintf("%d:%d", os.Getpid(), time.Now().UnixNano())),
 	}
 	// Default suspendImpl: real teardown / exec / reinit. Tests
@@ -604,11 +660,6 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 			}
 		}
 		a.openReturnPrompt(opt.ReturnTo)
-	}
-	if a.launchBasedir != "" && len(a.visibleIdx) > 0 {
-		a.table.Active = true
-		a.table.SelectedRow = 0
-		a.openDetails(a.sessions[a.visibleIdx[0]])
 	}
 	return a
 }
@@ -713,6 +764,7 @@ func (a *App) openReturnPrompt(sess *session.Session) {
 	}
 	modal.StatsSegments = statsSegments
 	modal.StatsLoading = statsLoading
+	modal.StatsSessionName = sess.Name
 	a.overlay = modal
 	if a.isCurrentReturnPathSession(sess) {
 		a.trackReturnPathState(returnPathStateReturnPromptVisible, "returnprompt.visible", sess)
@@ -809,7 +861,11 @@ func (a *App) cachedDetailForSession(sess *session.Session) (SessionDetail, bool
 	// background load and render with a lightweight placeholder until
 	// cache is warm.
 	a.loadDetailAsync(sess)
-	return SessionDetail{Model: valueOr(a.modelCache[sess.Name], "-")}, true
+	return SessionDetail{
+		Model:                 valueOr(a.modelCache[sess.Name], "-"),
+		ContextUsageStatus:    "loading...",
+		TranscriptStatsStatus: "loading...",
+	}, true
 }
 
 func (a *App) buildSessionStatsSegments(sess *session.Session) ([][]TextSegment, bool) {
@@ -867,6 +923,12 @@ func (a *App) Run() error {
 	a.running = true
 	a.draw()
 	a.requestSessionsAsync("startup")
+
+	if err := a.refreshExecutableBaseline(); err != nil {
+		slog.Warn("tui.self_reload.snapshot_failed",
+			"component", "tui",
+			"err", err)
+	}
 
 	// Ticker that posts a spinner tick every 100ms. The handler only
 	// triggers a redraw when something is actually loading, so an idle
@@ -994,6 +1056,9 @@ func (a *App) Run() error {
 		drawDuration := time.Duration(0)
 		shouldDraw := a.running
 		_, compactOverlay := a.overlay.(*CompactPanel)
+		if shouldDraw && isSpinnerInterrupt && !a.hasPendingVisualActivity() {
+			shouldDraw = false
+		}
 		if shouldDraw && isSpinnerInterrupt && !a.appFocused && !compactOverlay {
 			shouldDraw = false
 			slog.Debug("tui.loop.skip_draw.spinner_unfocused",
@@ -1072,8 +1137,7 @@ func (a *App) runHealthTicker(stop <-chan struct{}) {
 }
 
 func (a *App) runSelfReloadWatcher(stop <-chan struct{}) {
-	base, err := currentExecutableSnapshot()
-	if err != nil {
+	if err := a.refreshExecutableBaseline(); err != nil {
 		slog.Warn("tui.self_reload.snapshot_failed",
 			"component", "tui",
 			"err", err)
@@ -1081,9 +1145,9 @@ func (a *App) runSelfReloadWatcher(stop <-chan struct{}) {
 	}
 	slog.Debug("tui.self_reload.watcher_started",
 		"component", "tui",
-		"path", base.path,
-		"mtime", base.info.ModTime().Format(time.RFC3339Nano),
-		"size", base.info.Size())
+		"path", a.executableBaselinePath(),
+		"mtime", a.executableBaselineModTime(),
+		"size", a.executableBaselineSize())
 
 	t := time.NewTicker(2 * time.Second)
 	defer t.Stop()
@@ -1092,21 +1156,69 @@ func (a *App) runSelfReloadWatcher(stop <-chan struct{}) {
 		case <-stop:
 			return
 		case <-t.C:
-			changed, reason, err := executableChanged(base)
+			changed, reason, err := a.executableChangedSinceBaseline()
 			if err != nil {
 				slog.Debug("tui.self_reload.check_failed",
 					"component", "tui",
-					"path", base.path,
+					"path", a.executableBaselinePath(),
 					"err", err)
 				continue
 			}
 			if !changed {
 				continue
 			}
-			a.postInterrupt(selfReloadAvailable{path: base.path, reason: reason})
+			a.postInterrupt(selfReloadAvailable{path: a.executableBaselinePath(), reason: reason})
 			return
 		}
 	}
+}
+
+func (a *App) refreshExecutableBaseline() error {
+	base, err := currentExecutableSnapshot()
+	if err != nil {
+		return err
+	}
+	a.executableMu.Lock()
+	defer a.executableMu.Unlock()
+	a.executableBase = base
+	return nil
+}
+
+func (a *App) executableChangedSinceBaseline() (bool, string, error) {
+	a.executableMu.Lock()
+	base := a.executableBase
+	a.executableMu.Unlock()
+	if base.path == "" || base.info == nil {
+		if err := a.refreshExecutableBaseline(); err != nil {
+			return false, "", err
+		}
+		return false, "", nil
+	}
+	return executableChanged(base)
+}
+
+func (a *App) executableBaselinePath() string {
+	a.executableMu.Lock()
+	defer a.executableMu.Unlock()
+	return a.executableBase.path
+}
+
+func (a *App) executableBaselineModTime() string {
+	a.executableMu.Lock()
+	defer a.executableMu.Unlock()
+	if a.executableBase.info == nil {
+		return ""
+	}
+	return a.executableBase.info.ModTime().Format(time.RFC3339Nano)
+}
+
+func (a *App) executableBaselineSize() int64 {
+	a.executableMu.Lock()
+	defer a.executableMu.Unlock()
+	if a.executableBase.info == nil {
+		return 0
+	}
+	return a.executableBase.info.Size()
 }
 
 func currentExecutableSnapshot() (executableSnapshot, error) {
@@ -1138,12 +1250,100 @@ func executableChanged(base executableSnapshot) (bool, string, error) {
 	return false, "", nil
 }
 
-func execCurrentProcess(path string) error {
+var execCurrentProcess = func(path string) error {
 	slog.Info("tui.self_reload.exec",
 		"component", "tui",
 		"path", path,
 		"arg_count", len(os.Args))
 	return syscall.Exec(path, os.Args, os.Environ())
+}
+
+func (a *App) execNewBinaryBeforeReinit(source string) bool {
+	changed, reason, err := a.executableChangedSinceBaseline()
+	if err != nil {
+		slog.Debug("tui.self_reload.reentry_check_failed",
+			"component", "tui",
+			"source", source,
+			"path", a.executableBaselinePath(),
+			"err", err)
+		return false
+	}
+	if !changed {
+		return false
+	}
+	path := a.executableBaselinePath()
+	a.exportReturnPromptForExec(source)
+	slog.Info("tui.self_reload.reentry_exec",
+		"component", "tui",
+		"source", source,
+		"path", path,
+		"reason", reason)
+	if err := execCurrentProcess(path); err != nil {
+		slog.Warn("tui.self_reload.reentry_exec_failed",
+			"component", "tui",
+			"source", source,
+			"path", path,
+			"reason", reason,
+			"err", err)
+		return false
+	}
+	return true
+}
+
+func (a *App) exportReturnPromptForExec(source string) {
+	if source != "suspend_return" || a.returnPathSession == nil {
+		return
+	}
+	_ = os.Setenv(EnvTUIReturnSessionID, a.returnPathSession.Metadata.SessionID)
+	_ = os.Setenv(EnvTUIReturnSessionName, a.returnPathSession.Name)
+	slog.Info("tui.self_reload.return_prompt_exported",
+		"component", "tui",
+		"session", a.returnPathSession.Name,
+		"session_id", a.returnPathSession.Metadata.SessionID)
+}
+
+func (a *App) requestSelfReload(path, reason, source, hash string) {
+	if path == "" {
+		path = a.executableBaselinePath()
+	}
+	slog.Info("tui.self_reload.requested",
+		"component", "tui",
+		"source", source,
+		"path", path,
+		"reason", reason,
+		"hash", hash)
+	if a.overlay != nil {
+		a.pendingReloadPath = path
+		a.pendingReloadReason = reason
+		if panel, ok := a.overlay.(*CompactPanel); ok {
+			panel.ApplyCompactEvent(CompactEvent{
+				Kind:    "status",
+				Message: "clyde update available; close compact panel to reload",
+			})
+		}
+		return
+	}
+	a.reloadExecPath = path
+	a.running = false
+}
+
+func (a *App) daemonBinaryUpdateAlreadyRunning(hash string) bool {
+	hash = strings.TrimSpace(hash)
+	if hash == "" || hash == "unknown" {
+		return false
+	}
+	runningHash := strings.TrimSpace(a.executableHash)
+	if runningHash == "" || runningHash == "unknown" {
+		runningHash = currentExecutableHash()
+	}
+	if runningHash != hash {
+		return false
+	}
+	slog.Debug("tui.self_reload.daemon_event_ignored",
+		"component", "tui",
+		"reason", "already_running_binary",
+		"hash", hash)
+	return true
 }
 
 type compactStreamEvent struct {
@@ -1198,6 +1398,12 @@ type exportFinished struct {
 	body  string
 }
 
+type exportStatsLoaded struct {
+	name  string
+	stats SessionExportStats
+	err   error
+}
+
 type bridgesLoaded struct {
 	list     []Bridge
 	err      error
@@ -1238,6 +1444,20 @@ type providerStatsEvent struct {
 	stats ProviderStats
 }
 
+type tableSelectionAnchor struct {
+	name        string
+	sessionID   string
+	row         int
+	offset      int
+	active      bool
+	detailsOpen bool
+}
+
+type overlayFrame struct {
+	widget Widget
+	mode   StatusMode
+}
+
 type lastUsedTick struct{}
 
 type idleSummarySweepTick struct{}
@@ -1269,6 +1489,11 @@ const terminalModeResetSequence = "" +
 	"\x1b[0m" + //    reset SGR attributes
 	"\x1b>" + //      keypad normal (DECKPNM)
 	"\x1b[!p" //      DECSTR soft reset (clears DECCKM, DECOM, DECAWM, etc)
+
+const (
+	EnvTUIReturnSessionID   = "CLYDE_TUI_RETURN_SESSION_ID"
+	EnvTUIReturnSessionName = "CLYDE_TUI_RETURN_SESSION_NAME"
+)
 
 func writeSuspendTerminalPrep(w io.Writer) {
 	if w == nil {
@@ -1323,13 +1548,7 @@ func (a *App) refreshConfigControls() {
 }
 
 func (a *App) applySessionSnapshot(snapshot SessionSnapshot) {
-	selectedName := ""
-	if a.selected != nil {
-		selectedName = a.selected.Name
-	} else if a.table.Active && a.table.SelectedRow >= 0 && a.table.SelectedRow < len(a.visibleIdx) {
-		selectedName = a.sessions[a.visibleIdx[a.table.SelectedRow]].Name
-	}
-	prevOffset := a.table.Offset
+	selection := a.captureTableSelection()
 
 	a.sessions = dedupeSessionList(snapshot.Sessions)
 	a.modelCache = copyStringMap(snapshot.Models)
@@ -1345,36 +1564,25 @@ func (a *App) applySessionSnapshot(snapshot SessionSnapshot) {
 	a.bridgeMu.Unlock()
 	a.sortSessions()
 	a.populateTable()
-
-	if selectedName != "" {
-		if updated := a.findSessionByName(selectedName); updated != nil {
-			a.selected = updated
-			if row := a.findVisibleRowByName(selectedName); row >= 0 {
-				a.table.Active = true
-				a.table.SelectedRow = row
-				a.table.Offset = clamp(prevOffset, 0, imax(0, len(a.table.Rows)-1))
-			}
-		} else {
-			a.deselect()
-		}
-	}
+	a.restoreTableSelection(selection)
 	if a.selected != nil {
 		a.populateDetails()
 	}
-	a.maybeEnterLaunchBasedirFlow()
 }
 
 func (a *App) applySessionEvent(ev SessionEvent) {
-	selectedName := ""
-	if a.selected != nil {
-		selectedName = a.selected.Name
-	} else if a.table.Active && a.table.SelectedRow >= 0 && a.table.SelectedRow < len(a.visibleIdx) {
-		selectedName = a.sessions[a.visibleIdx[a.table.SelectedRow]].Name
+	if ev.Kind == "CLYDE_BINARY_UPDATED" {
+		if a.daemonBinaryUpdateAlreadyRunning(ev.BinaryHash) {
+			return
+		}
+		a.requestSelfReload(ev.BinaryPath, ev.BinaryReason, "daemon_registry", ev.BinaryHash)
+		return
 	}
-	if ev.Kind == "SESSION_RENAMED" && selectedName == ev.OldName && ev.SessionName != "" {
-		selectedName = ev.SessionName
+
+	selection := a.captureTableSelection()
+	if ev.Kind == "SESSION_RENAMED" && selection.name == ev.OldName && ev.SessionName != "" {
+		selection.name = ev.SessionName
 	}
-	prevOffset := a.table.Offset
 
 	if ev.GlobalRemoteControl != nil {
 		a.globalRemoteControl = *ev.GlobalRemoteControl
@@ -1423,42 +1631,9 @@ func (a *App) applySessionEvent(ev SessionEvent) {
 
 	a.sortSessions()
 	a.populateTable()
-
-	if selectedName != "" {
-		if updated := a.findSessionByName(selectedName); updated != nil {
-			a.selected = updated
-			if row := a.findVisibleRowByName(selectedName); row >= 0 {
-				a.table.Active = true
-				a.table.SelectedRow = row
-				a.table.Offset = clamp(prevOffset, 0, imax(0, len(a.table.Rows)-1))
-			}
-		} else {
-			a.deselect()
-		}
-	}
+	a.restoreTableSelection(selection)
 	if a.selected != nil {
 		a.populateDetails()
-	}
-}
-
-func (a *App) maybeEnterLaunchBasedirFlow() {
-	if a.launchBasedir == "" || a.overlay != nil {
-		return
-	}
-	if len(a.visibleIdx) == 0 {
-		if a.launchBasedirHandled {
-			return
-		}
-		a.launchBasedirHandled = true
-		a.openNewSessionTypeModal(a.launchBasedir)
-		return
-	}
-	if !a.table.Active {
-		a.table.Active = true
-		a.table.SelectedRow = 0
-	}
-	if a.selected == nil && a.table.SelectedRow >= 0 && a.table.SelectedRow < len(a.visibleIdx) {
-		a.openDetails(a.sessions[a.visibleIdx[a.table.SelectedRow]])
 	}
 }
 
@@ -1887,6 +2062,25 @@ func (a *App) isSessionsLoading() bool {
 	return a.sessionsLoading
 }
 
+func (a *App) hasPendingVisualActivity() bool {
+	if a.isSessionsLoading() || a.configLoading {
+		return true
+	}
+	a.statsMu.Lock()
+	statsLoading := a.statsLoading
+	a.statsMu.Unlock()
+	if statsLoading {
+		return true
+	}
+	a.detailMu.Lock()
+	detailsLoading := len(a.detailLoading) > 0
+	a.detailMu.Unlock()
+	if detailsLoading {
+		return true
+	}
+	return len(a.exportStatsLoading) > 0
+}
+
 func (a *App) showStartupLoadingState() bool {
 	return a.startupLoading && a.isSessionsLoading() && len(a.sessions) == 0
 }
@@ -2062,6 +2256,29 @@ func (a *App) detailsLoadingNow(name string) bool {
 	a.detailMu.Lock()
 	defer a.detailMu.Unlock()
 	return a.detailLoading[name]
+}
+
+func (a *App) cachedExportStatsForSession(sess *session.Session) (SessionExportStats, bool) {
+	if sess == nil {
+		return SessionExportStats{}, false
+	}
+	stats, ok := a.exportStatsCache[sess.Name]
+	return stats, ok
+}
+
+func (a *App) requestExportStatsAsync(sess *session.Session) {
+	if sess == nil || a.cb.LoadExportStats == nil {
+		return
+	}
+	name := sess.Name
+	if a.exportStatsLoading[name] {
+		return
+	}
+	a.exportStatsLoading[name] = true
+	go func() {
+		stats, err := a.cb.LoadExportStats(sess)
+		a.postInterrupt(exportStatsLoaded{name: name, stats: stats, err: err})
+	}()
 }
 
 // syncTableSelectionWithOffset moves the selected row to stay in the visible
@@ -2343,9 +2560,16 @@ func (a *App) handleEvent(ev tcell.Event) {
 			a.detailCache[d.name] = d.detail
 			delete(a.detailLoading, d.name)
 			a.detailMu.Unlock()
+			a.refreshOpenOptionsModalStats(d.name)
 			if a.selected != nil && a.selected.Name == d.name {
 				a.populateDetails()
 			}
+		case exportStatsLoaded:
+			delete(a.exportStatsLoading, d.name)
+			if d.err == nil {
+				a.exportStatsCache[d.name] = d.stats
+			}
+			a.applyExportStatsResult(d.name, d.stats, d.err)
 		case spinnerTick:
 			a.spinnerFrame++
 			if a.selected != nil && a.detailsLoadingNow(a.selected.Name) {
@@ -2403,23 +2627,7 @@ func (a *App) handleEvent(ev tcell.Event) {
 		case providerStatsEvent:
 			a.applyProviderStats(d.stats)
 		case selfReloadAvailable:
-			slog.Info("tui.self_reload.requested",
-				"component", "tui",
-				"path", d.path,
-				"reason", d.reason)
-			if a.overlay != nil {
-				a.pendingReloadPath = d.path
-				a.pendingReloadReason = d.reason
-				if panel, ok := a.overlay.(*CompactPanel); ok {
-					panel.ApplyCompactEvent(CompactEvent{
-						Kind:    "status",
-						Message: "clyde update available; close compact panel to reload",
-					})
-				}
-				break
-			}
-			a.reloadExecPath = d.path
-			a.running = false
+			a.requestSelfReload(d.path, d.reason, "local_watcher", "")
 		case compactStreamEvent:
 			if panel, ok := a.overlay.(*CompactPanel); ok {
 				panel.ApplyCompactEvent(d.event)
@@ -3117,8 +3325,9 @@ func (a *App) draw() {
 	if !a.lastHeartbeatAt.IsZero() {
 		lastHeartbeatText = formatHeartbeatAge(time.Since(a.lastHeartbeatAt))
 	}
-	runtimeStamp := fmt.Sprintf("b:%s r:%s lh:%s",
+	runtimeStamp := fmt.Sprintf("b:%s x:%s r:%s lh:%s",
 		a.buildHash,
+		a.executableHash,
 		a.runHash,
 		lastHeartbeatText,
 	)
@@ -3174,7 +3383,7 @@ func (a *App) draw() {
 	a.bridgeMu.RUnlock()
 	a.status.DaemonOnline = a.isDaemonOnline()
 	a.status.DaemonConnecting = a.showStartupLoadingState() && !a.isDaemonOnline()
-	a.status.DaemonSpinner = spinnerGlyph(a.spinnerFrame)
+	a.status.DaemonSpinner = LoadingSpinnerGlyph(a.spinnerFrame)
 	a.daemonMu.RLock()
 	a.status.DaemonStatus = shortDaemonStatus(a.daemonLastErr)
 	a.daemonMu.RUnlock()
@@ -3318,7 +3527,7 @@ func (a *App) layout() {
 }
 
 func (a *App) positionTextFor() string {
-	n := len(a.visibleIdx)
+	n := len(a.tableRowIdx)
 	if n == 0 || !a.table.Active {
 		return ""
 	}
@@ -3337,10 +3546,18 @@ func (a *App) positionTextFor() string {
 // populateTable rebuilds the table rows from the current visible sessions.
 func (a *App) populateTable() {
 	startedAt := time.Now()
-	rows := make([][]TableCell, 0, len(a.visibleIdx))
+	rows := make([][]TableCell, 0, len(a.visibleIdx)+1)
+	a.tableRowIdx = a.tableRowIdx[:0]
+	insertedGlobalSeparator := false
 	for _, idx := range a.visibleIdx {
 		sess := a.sessions[idx]
+		if a.launchBasedir != "" && !insertedGlobalSeparator && a.launchBasedirRank(sess) > 0 {
+			rows = append(rows, a.globalSessionListSeparatorRow())
+			a.tableRowIdx = append(a.tableRowIdx, -1)
+			insertedGlobalSeparator = true
+		}
 		rows = append(rows, a.rowFor(sess))
+		a.tableRowIdx = append(a.tableRowIdx, idx)
 	}
 	a.table.Rows = rows
 	a.table.SortCol = int(a.sortCol)
@@ -3365,6 +3582,20 @@ func (a *App) populateTable() {
 			"sort_col", int(a.sortCol),
 			"sort_asc", a.sortAsc,
 			"filter", a.filter)
+	}
+}
+
+func (a *App) globalSessionListSeparatorRow() []TableCell {
+	style := StyleDefault.Foreground(ColorAccent).Bold(true)
+	fillerStyle := StyleDefault.Foreground(ColorMuted).Dim(true)
+	return []TableCell{
+		{Text: "[global session list]", Style: style},
+		{Text: strings.Repeat("-", 10), Style: fillerStyle},
+		{Text: strings.Repeat("-", 8), Style: fillerStyle},
+		{Text: "", Style: fillerStyle},
+		{Text: "", Style: fillerStyle},
+		{Text: "", Style: fillerStyle},
+		{Text: "", Style: fillerStyle},
 	}
 }
 
@@ -3475,9 +3706,6 @@ func (a *App) rebuildVisible() {
 	a.hiddenCount = 0
 	f := strings.ToLower(a.filter)
 	for i, sess := range a.sessions {
-		if a.launchBasedir != "" && session.CanonicalWorkspaceRoot(sess.Metadata.WorkspaceRoot) != a.launchBasedir {
-			continue
-		}
 		if !a.showEphemeral && isEphemeralSession(sess) {
 			a.hiddenCount++
 			continue
@@ -3496,6 +3724,13 @@ func (a *App) rebuildVisible() {
 func (a *App) sortSessions() {
 	sort.SliceStable(a.sessions, func(i, j int) bool {
 		x, y := a.sessions[i], a.sessions[j]
+		if a.launchBasedir != "" {
+			xRank := a.launchBasedirRank(x)
+			yRank := a.launchBasedirRank(y)
+			if xRank != yRank {
+				return xRank < yRank
+			}
+		}
 		cmp := 0
 		switch a.sortCol {
 		case SortColName:
@@ -3522,6 +3757,13 @@ func (a *App) sortSessions() {
 		return cmp < 0
 	})
 	a.rebuildVisible()
+}
+
+func (a *App) launchBasedirRank(sess *session.Session) int {
+	if sess != nil && session.CanonicalWorkspaceRoot(sess.Metadata.WorkspaceRoot) == a.launchBasedir {
+		return 0
+	}
+	return 1
 }
 
 func compareInts(a, b int) int {
@@ -3583,19 +3825,87 @@ func sortColTableIndex(c SortColumn) int {
 	return -1
 }
 
+func (a *App) captureTableSelection() tableSelectionAnchor {
+	anchor := tableSelectionAnchor{
+		row:    a.table.SelectedRow,
+		offset: a.table.Offset,
+		active: a.table.Active,
+	}
+	if a.selected != nil {
+		anchor.name = a.selected.Name
+		anchor.sessionID = a.selected.Metadata.SessionID
+		anchor.detailsOpen = true
+		return anchor
+	}
+	if a.table.Active {
+		sess := a.sessionForTableRow(a.table.SelectedRow)
+		if sess != nil {
+			anchor.name = sess.Name
+			anchor.sessionID = sess.Metadata.SessionID
+		}
+	}
+	return anchor
+}
+
+func (a *App) restoreTableSelection(anchor tableSelectionAnchor) {
+	a.table.Active = anchor.active
+	a.table.SelectedRow = anchor.row
+	a.table.Offset = clamp(anchor.offset, 0, imax(0, len(a.tableRowIdx)-1))
+
+	if anchor.name == "" && anchor.sessionID == "" {
+		if len(a.tableRowIdx) == 0 {
+			a.table.SelectedRow = 0
+			a.table.Offset = 0
+		} else if anchor.active {
+			a.table.SelectedRow = clamp(anchor.row, 0, len(a.tableRowIdx)-1)
+		}
+		if anchor.detailsOpen {
+			a.deselect()
+		}
+		return
+	}
+
+	updated, row := a.findVisibleSession(anchor.name, anchor.sessionID)
+	if updated == nil {
+		if anchor.detailsOpen {
+			a.deselect()
+		}
+		if anchor.active && len(a.tableRowIdx) > 0 {
+			a.table.Active = true
+			a.table.SelectedRow = clamp(anchor.row, 0, len(a.tableRowIdx)-1)
+		}
+		return
+	}
+
+	if anchor.detailsOpen {
+		a.selected = updated
+	}
+	a.table.Active = anchor.active || anchor.detailsOpen
+	a.table.SelectedRow = row
+	a.table.Offset = clamp(anchor.offset, 0, imax(0, len(a.tableRowIdx)-1))
+}
+
 // currentSession returns the session at the currently selected table row.
 func (a *App) currentSession() *session.Session {
-	if len(a.visibleIdx) == 0 || a.table.SelectedRow < 0 || a.table.SelectedRow >= len(a.visibleIdx) {
+	return a.sessionForTableRow(a.table.SelectedRow)
+}
+
+func (a *App) sessionForTableRow(row int) *session.Session {
+	if row < 0 || row >= len(a.tableRowIdx) {
 		return nil
 	}
-	return a.sessions[a.visibleIdx[a.table.SelectedRow]]
+	idx := a.tableRowIdx[row]
+	if idx < 0 || idx >= len(a.sessions) {
+		return nil
+	}
+	return a.sessions[idx]
 }
 
 func (a *App) trackSelection(row int) {
-	if row < 0 || row >= len(a.visibleIdx) {
+	sess := a.sessionForTableRow(row)
+	if sess == nil {
 		return
 	}
-	sess := a.sessions[a.visibleIdx[row]]
 	// Keep details in sync if currently shown. The first arrow key
 	// press also auto-opens the pane so the user gets context without
 	// hitting Space first.
@@ -3752,6 +4062,7 @@ func (a *App) populateDetails() {
 	// Paint a fast placeholder so the UI is never blocked on disk I/O.
 	placeholder := SessionDetail{
 		Model:                 a.modelCache[name],
+		ConversationLoading:   true,
 		ContextUsage:          contextState.Usage,
 		ContextUsageLoaded:    contextState.Loaded,
 		ContextUsageStatus:    contextState.Status,
@@ -3786,20 +4097,13 @@ func (a *App) loadDetailAsync(sess *session.Session) {
 	}()
 }
 
-// spinnerGlyph returns a single rotating spinner character for frame n.
-func spinnerGlyph(n int) string {
-	// ASCII frames render reliably across terminal fonts and themes.
-	frames := []string{"|", "/", "-", "\\"}
-	return frames[n%len(frames)]
-}
-
 func (a *App) drawSessionsLoadingState(r Rect) {
 	clearRect(a.screen, r)
 	lines := []struct {
 		style tcell.Style
 		text  string
 	}{
-		{style: StyleDefault.Bold(true), text: spinnerGlyph(a.spinnerFrame) + " Loading sessions"},
+		{style: StyleDefault.Bold(true), text: NewLoadingSpinner("Loading sessions", a.spinnerFrame).Text()},
 		{style: StyleMuted, text: "Connecting to daemon and building the initial snapshot"},
 	}
 	a.drawCenteredLines(r, lines)
@@ -3849,19 +4153,18 @@ func formatHeartbeatAge(age time.Duration) string {
 // ---------------- Actions ----------------
 
 func (a *App) resumeRow(row int) {
-	if row < 0 || row >= len(a.visibleIdx) || a.cb.ResumeSession == nil {
+	if a.cb.ResumeSession == nil {
 		return
 	}
-	sess := a.sessions[a.visibleIdx[row]]
+	sess := a.sessionForTableRow(row)
+	if sess == nil {
+		return
+	}
 	slog.Debug("resume.row_selected", "session", sess.Name, "row", row)
 	a.runResumeLifecycle(sess, "resumeRow")
 }
 
 func (a *App) newSession() {
-	if a.launchBasedir != "" {
-		a.openNewSessionTypeModal(a.launchBasedir)
-		return
-	}
 	a.openNewStarterModal()
 }
 
@@ -4281,6 +4584,12 @@ func (a *App) openRichCompactForm(sess *session.Session) {
 	panel.OnUndo = func() {
 		a.startCompactUndo(sess.Name, panel)
 	}
+	if a.overlay != nil {
+		a.overlayStack = append(a.overlayStack, overlayFrame{
+			widget: a.overlay,
+			mode:   a.mode,
+		})
+	}
 	a.overlay = panel
 	a.mode = StatusCompact
 }
@@ -4545,9 +4854,9 @@ func (a *App) drawStatsTab(r Rect) {
 	}
 	if !loaded {
 		label := "Loading"
-		value := "collecting provider stats..."
-		if loading {
-			value = "collecting provider stats..."
+		value := "provider stats unavailable"
+		if loading || a.cb.LoadStats != nil {
+			value = NewLoadingSpinner("collecting provider stats...", a.spinnerFrame).Text()
 		}
 		rows = append(rows, row{label: label, value: value, style: StyleSubtext})
 	} else {
@@ -4741,7 +5050,7 @@ func (a *App) drawSettingsTab(r Rect) {
 		{label: "Controls", style: StyleDefault.Foreground(ColorAccent).Bold(true)},
 	}
 	if a.configLoading {
-		rows = append(rows, row{label: "Loading", value: "fetching daemon-backed controls...", style: StyleSubtext})
+		rows = append(rows, row{label: "Loading", value: NewLoadingSpinner("fetching daemon-backed controls...", a.spinnerFrame).Text(), style: StyleSubtext})
 	}
 	if a.configErr != "" {
 		rows = append(rows, row{label: "Error", value: a.configErr, style: StyleSubtext})
@@ -4893,12 +5202,31 @@ func (a *App) openHelpModal() {
 // list. The post session prompt uses this to re locate the row after
 // a refresh cycle so repeated Resume clicks keep firing.
 func (a *App) findVisibleRowByName(name string) int {
-	for vi, idx := range a.visibleIdx {
+	for vi, idx := range a.tableRowIdx {
 		if idx >= 0 && idx < len(a.sessions) && a.sessions[idx].Name == name {
 			return vi
 		}
 	}
 	return -1
+}
+
+func (a *App) findVisibleSession(name, sessionID string) (*session.Session, int) {
+	for vi, idx := range a.tableRowIdx {
+		if idx < 0 || idx >= len(a.sessions) {
+			continue
+		}
+		sess := a.sessions[idx]
+		if sess == nil {
+			continue
+		}
+		if sessionID != "" && sess.Metadata.SessionID == sessionID {
+			return sess, vi
+		}
+		if name != "" && sess.Name == name {
+			return sess, vi
+		}
+	}
+	return nil, -1
 }
 
 func (a *App) findSessionByName(name string) *session.Session {
@@ -4992,31 +5320,29 @@ func (a *App) rowSession() *session.Session {
 	if a.selected != nil {
 		return a.selected
 	}
-	if a.table.SelectedRow < 0 || a.table.SelectedRow >= len(a.visibleIdx) {
-		return nil
-	}
-	return a.sessions[a.visibleIdx[a.table.SelectedRow]]
+	return a.sessionForTableRow(a.table.SelectedRow)
 }
 
 // openSessionOptions shows the per-session options popup for the row at
 // the given visible index. Used for table OnActivate (Enter or
 // double-click). A no-op when the row is out of range.
 func (a *App) openSessionOptions(row int) {
-	if row < 0 || row >= len(a.visibleIdx) {
+	sess := a.sessionForTableRow(row)
+	if sess == nil {
 		slog.Debug("tui.overlay.options.skipped",
 			"component", "tui",
-			"reason", "row_out_of_range",
+			"reason", "row_not_session",
 			"row", row,
-			"visible_total", len(a.visibleIdx))
+			"rows_total", len(a.tableRowIdx))
 		return
 	}
 	slog.Debug("tui.overlay.options.open_by_row",
 		"component", "tui",
 		"row", row,
-		"session", a.sessions[a.visibleIdx[row]].Name,
+		"session", sess.Name,
 		"selected", a.selectedSessionName(),
 		"active_tab", a.activeTab)
-	a.openSessionOptionsFor(a.sessions[a.visibleIdx[row]])
+	a.openSessionOptionsFor(sess)
 }
 
 // openSessionOptionsFor builds the options menu for the given session
@@ -5033,6 +5359,7 @@ func (a *App) openSessionOptionsFor(sess *session.Session) {
 	modal := NewOptionsModal(sess.Name, a.sessionOptionsEntries(sess, close))
 	modal.OnCancel = close
 	modal.StatsSegments, modal.StatsLoading = a.buildSessionStatsSegments(sess)
+	modal.StatsSessionName = sess.Name
 	a.overlay = modal
 	slog.Debug("tui.overlay.options.opened",
 		"component", "tui",
@@ -5041,6 +5368,41 @@ func (a *App) openSessionOptionsFor(sess *session.Session) {
 		"stats_loading", modal.StatsLoading,
 		"selected", a.selectedSessionName(),
 		"active_tab", a.activeTab)
+}
+
+func (a *App) refreshOpenOptionsModalStats(name string) {
+	modal, ok := a.overlay.(*OptionsModal)
+	if !ok || modal.StatsSessionName != name {
+		return
+	}
+	sess := a.findSessionByName(name)
+	if sess == nil {
+		return
+	}
+	modal.StatsSegments, modal.StatsLoading = a.buildSessionStatsSegments(sess)
+}
+
+func (a *App) applyExportStatsResult(name string, stats SessionExportStats, err error) {
+	applyToPanel := func(panel *ExportPanel) {
+		if panel == nil || panel.sessionName != name {
+			return
+		}
+		if err != nil {
+			panel.status = "failed to load export stats: " + err.Error()
+			return
+		}
+		panel.ApplyStats(stats)
+	}
+	if panel, ok := a.overlay.(*ExportPanel); ok {
+		applyToPanel(panel)
+	}
+	for i := range a.overlayStack {
+		panel, ok := a.overlayStack[i].widget.(*ExportPanel)
+		if !ok {
+			continue
+		}
+		applyToPanel(panel)
+	}
 }
 
 func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []OptionsModalEntry {
@@ -5120,7 +5482,6 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []Optio
 			Label: "Compact",
 			Hint:  "c",
 			Action: func() {
-				close()
 				a.openRichCompactForm(sess)
 			},
 		},
@@ -5142,17 +5503,6 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []Optio
 			},
 			Disabled: a.cb.DeleteSession == nil,
 		},
-	}
-	if a.launchBasedir != "" {
-		create := OptionsModalEntry{
-			Label: "New session here",
-			Hint:  shortPath(a.launchBasedir),
-			Action: func() {
-				close()
-				a.openNewSessionTypeModal(a.launchBasedir)
-			},
-		}
-		entries = append([]OptionsModalEntry{create}, entries...)
 	}
 	return entries
 }
@@ -5227,67 +5577,43 @@ func (a *App) openExportOptions(sess *session.Session) {
 	if sess == nil || a.cb.ExportSession == nil {
 		return
 	}
-	close := func() { a.closeOverlay() }
-	modal := NewOptionsModal("Export "+sess.Name, []OptionsModalEntry{
-		{
-			Label: "Copy plain text",
-			Hint:  "clipboard",
-			Action: func() {
-				close()
-				a.exportSessionToClipboard(sess, SessionExportPlainText)
-			},
-		},
-		{
-			Label: "Copy markdown",
-			Hint:  "clipboard",
-			Action: func() {
-				close()
-				a.exportSessionToClipboard(sess, SessionExportMarkdown)
-			},
-		},
-		{
-			Label: "Save plain text...",
-			Hint:  ".txt",
-			Action: func() {
-				close()
-				a.openExportSavePrompt(sess, SessionExportPlainText)
-			},
-		},
-		{
-			Label: "Save markdown...",
-			Hint:  ".md",
-			Action: func() {
-				close()
-				a.openExportSavePrompt(sess, SessionExportMarkdown)
-			},
-		},
-		{
-			Label: "Save HTML...",
-			Hint:  ".html",
-			Action: func() {
-				close()
-				a.openExportSavePrompt(sess, SessionExportHTML)
-			},
-		},
-		{
-			Label: "Save JSON...",
-			Hint:  ".json",
-			Action: func() {
-				close()
-				a.openExportSavePrompt(sess, SessionExportJSON)
-			},
-		},
-	})
-	modal.OnCancel = close
-	a.overlay = modal
+	stats, loaded := a.cachedExportStatsForSession(sess)
+	panel := NewExportPanel(sess.Name, stats, defaultExportFolder())
+	if !loaded && a.cb.LoadExportStats != nil {
+		panel.StartLoadingStats()
+		a.requestExportStatsAsync(sess)
+	}
+	panel.OnClose = a.closeOverlay
+	panel.OnChooseFolder = func(panel *ExportPanel) {
+		a.openExportFolderPicker(panel)
+	}
+	panel.OnPreview = func(req SessionExportRequest) {
+		panel.status = "preview: " + panel.estimateLabel()
+	}
+	panel.OnExport = func(req SessionExportRequest) {
+		a.exportSessionWithRequest(sess, req, panel)
+	}
+	a.overlay = panel
+	a.mode = StatusExport
 }
 
 func (a *App) exportSessionToClipboard(sess *session.Session, format SessionExportFormat) {
 	if sess == nil || a.cb.ExportSession == nil {
 		return
 	}
+	req := SessionExportRequest{
+		SessionName:            sess.Name,
+		Format:                 format,
+		HistoryStart:           1 << 30,
+		WhitespaceCompression:  SessionExportWhitespaceTidy,
+		IncludeChat:            true,
+		IncludeThinking:        false,
+		IncludeToolCalls:       false,
+		CopyToClipboard:        true,
+		IncludeRawJSONMetadata: false,
+	}
 	go func() {
-		body, err := a.cb.ExportSession(sess, format)
+		body, err := a.cb.ExportSession(sess, req)
 		if err != nil {
 			a.postInterrupt(exportFinished{
 				title: "Export failed",
@@ -5324,7 +5650,18 @@ func (a *App) openExportSavePrompt(sess *session.Session, format SessionExportFo
 			return
 		}
 		go func() {
-			body, err := a.cb.ExportSession(sess, format)
+			body, err := a.cb.ExportSession(sess, SessionExportRequest{
+				SessionName:           sess.Name,
+				Format:                format,
+				HistoryStart:          1 << 30,
+				WhitespaceCompression: SessionExportWhitespaceTidy,
+				IncludeChat:           true,
+				IncludeThinking:       false,
+				IncludeToolCalls:      false,
+				SaveToFile:            true,
+				Directory:             filepath.Dir(path),
+				Filename:              filepath.Base(path),
+			})
 			if err != nil {
 				a.postInterrupt(exportFinished{title: "Export failed", body: err.Error()})
 				return
@@ -5348,16 +5685,73 @@ func (a *App) openExportSavePrompt(sess *session.Session, format SessionExportFo
 	a.mode = StatusFilter
 }
 
+func (a *App) openExportFolderPicker(panel *ExportPanel) {
+	if panel == nil {
+		return
+	}
+	a.overlayStack = append(a.overlayStack, overlayFrame{widget: a.overlay, mode: a.mode})
+	picker := NewFilePickerOverlay("Choose export folder", panel.folder)
+	picker.OnCancel = a.closeOverlay
+	picker.OnSelect = func(path string) {
+		a.closeOverlay()
+		panel.SetFolder(path)
+	}
+	a.overlay = picker
+}
+
+func (a *App) exportSessionWithRequest(sess *session.Session, req SessionExportRequest, panel *ExportPanel) {
+	if sess == nil || a.cb.ExportSession == nil {
+		return
+	}
+	panel.status = "export in progress..."
+	go func() {
+		body, err := a.cb.ExportSession(sess, req)
+		if err != nil {
+			a.postInterrupt(exportFinished{title: "Export failed", body: err.Error()})
+			return
+		}
+		if req.CopyToClipboard {
+			if err := CopyToClipboard(string(body)); err != nil {
+				a.postInterrupt(exportFinished{title: "Copy failed", body: err.Error()})
+				return
+			}
+		}
+		if req.SaveToFile {
+			path := exportOutputPath(req)
+			if _, err := os.Stat(path); err == nil && !req.Overwrite {
+				a.postInterrupt(exportFinished{title: "Save failed", body: "file exists: " + path})
+				return
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				a.postInterrupt(exportFinished{title: "Save failed", body: err.Error()})
+				return
+			}
+			if err := os.WriteFile(path, body, 0o644); err != nil {
+				a.postInterrupt(exportFinished{title: "Save failed", body: err.Error()})
+				return
+			}
+		}
+		a.postInterrupt(exportFinished{title: "Export complete", body: "transcript export completed"})
+	}()
+}
+
 func defaultExportPath(sess *session.Session, format SessionExportFormat) string {
 	filename := "session"
 	if sess != nil && sess.Name != "" {
 		filename = sess.Name
 	}
-	path := filename + "." + exportFormatExt(format)
+	path := defaultExportFilename(filename, format)
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		return filepath.Join(home, "Downloads", path)
 	}
 	return path
+}
+
+func defaultExportFolder() string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, "Downloads")
+	}
+	return "."
 }
 
 func exportFormatExt(format SessionExportFormat) string {
@@ -5402,12 +5796,23 @@ func (a *App) closeOverlay() {
 		a.compactCancel()
 		a.compactCancel = nil
 	}
-	a.overlay = nil
-	if a.selected != nil {
-		a.mode = StatusDetail
-	} else {
-		a.mode = StatusBrowse
+	if len(a.overlayStack) > 0 {
+		idx := len(a.overlayStack) - 1
+		frame := a.overlayStack[idx]
+		a.overlayStack = a.overlayStack[:idx]
+		a.overlay = frame.widget
+		a.mode = frame.mode
+		slog.Debug("tui.overlay.closed",
+			"component", "tui",
+			"old_overlay_type", oldOverlay,
+			"restored_overlay_type", fmt.Sprintf("%T", a.overlay),
+			"selected", a.selectedSessionName(),
+			"active_tab", a.activeTab,
+			"mode", int(a.mode))
+		return
 	}
+	a.overlay = nil
+	a.restoreModeAfterOverlayClose()
 	slog.Debug("tui.overlay.closed",
 		"component", "tui",
 		"old_overlay_type", oldOverlay,
@@ -5424,6 +5829,14 @@ func (a *App) closeOverlay() {
 		a.pendingReloadReason = ""
 		a.running = false
 	}
+}
+
+func (a *App) restoreModeAfterOverlayClose() {
+	if a.selected != nil {
+		a.mode = StatusDetail
+		return
+	}
+	a.mode = StatusBrowse
 }
 
 func (a *App) openNoticeModal(title, body string) {
@@ -5477,16 +5890,17 @@ func (a *App) requestStatsAsync(source string) {
 	go func() {
 		stats, err := a.cb.LoadStats()
 		a.statsMu.Lock()
-		defer a.statsMu.Unlock()
 		a.statsLoading = false
 		if err != nil {
 			a.statsErr = err.Error()
+			a.statsMu.Unlock()
 			a.postInterrupt(a)
 			return
 		}
 		a.stats = stats
 		a.statsLoaded = true
 		a.statsErr = ""
+		a.statsMu.Unlock()
 		a.postInterrupt(a)
 	}()
 }
@@ -5591,6 +6005,9 @@ func (a *App) suspendAndRun(fn func()) {
 	}()
 	callbackDuration := time.Since(callbackStartedAt)
 	slog.Info("tui.suspend callback complete")
+	if a.execNewBinaryBeforeReinit("suspend_return") {
+		return
+	}
 	slog.Info("tui.suspend reinit")
 	reinitStartedAt := time.Now()
 	if err := a.initScreen(); err != nil {
@@ -5796,4 +6213,24 @@ func shortStableHash(value string) string {
 		return strings.Repeat("0", 6-len(hex)) + hex
 	}
 	return hex[:6]
+}
+
+func currentExecutableHash() string {
+	path, err := os.Executable()
+	if err != nil {
+		slog.Debug("tui.executable_hash.path_failed",
+			"component", "tui",
+			"err", err)
+		return "unknown"
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		slog.Debug("tui.executable_hash.read_failed",
+			"component", "tui",
+			"path", path,
+			"err", err)
+		return "unknown"
+	}
+	sum := sha256.Sum256(body)
+	return fmt.Sprintf("%x", sum[:])[:6]
 }

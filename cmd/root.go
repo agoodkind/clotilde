@@ -15,7 +15,10 @@
 package cmd
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -29,6 +32,7 @@ import (
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/claude"
+	compactengine "goodkind.io/clyde/internal/compact"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/outputstyle"
@@ -66,7 +70,7 @@ func runDashboardTUI() {
 
 	dashboardCwd, _ := os.Getwd()
 	cb := buildAppCallbacks(dashboardCwd)
-	app := ui.NewApp(nil, cb, ui.AppOptions{DashboardLaunchCWD: dashboardCwd})
+	app := ui.NewApp(nil, cb, dashboardAppOptions(dashboardCwd, "", consumeTUIReturnSession()))
 
 	if err := app.Run(); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
@@ -79,7 +83,7 @@ func runDashboardTUI() {
 	slog.Info("dashboard.closed", "component", "tui")
 }
 
-// RunBasedirLaunch opens the dashboard scoped to one workspace root.
+// RunBasedirLaunch opens the dashboard biased toward one workspace root.
 // The caller is responsible for only invoking this for an existing directory.
 func RunBasedirLaunch(basedir string) int {
 	if !isatty.IsTerminal(os.Stdin.Fd()) || !isatty.IsTerminal(os.Stdout.Fd()) {
@@ -94,10 +98,7 @@ func RunBasedirLaunch(basedir string) int {
 
 	dashboardCwd, _ := os.Getwd()
 	cb := buildAppCallbacks(dashboardCwd)
-	app := ui.NewApp(nil, cb, ui.AppOptions{
-		DashboardLaunchCWD: dashboardCwd,
-		LaunchBasedir:      canonical,
-	})
+	app := ui.NewApp(nil, cb, dashboardAppOptions(canonical, canonical, consumeTUIReturnSession()))
 
 	if err := app.Run(); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
@@ -113,6 +114,51 @@ func RunBasedirLaunch(basedir string) int {
 		"basedir", canonical,
 	)
 	return 0
+}
+
+func dashboardAppOptions(launchCWD, launchBasedir string, returnTo *session.Session) ui.AppOptions {
+	return ui.AppOptions{
+		DashboardLaunchCWD: launchCWD,
+		LaunchBasedir:      launchBasedir,
+		ReturnTo:           returnTo,
+	}
+}
+
+func consumeTUIReturnSession() *session.Session {
+	sessionID := strings.TrimSpace(os.Getenv(ui.EnvTUIReturnSessionID))
+	sessionName := strings.TrimSpace(os.Getenv(ui.EnvTUIReturnSessionName))
+	_ = os.Unsetenv(ui.EnvTUIReturnSessionID)
+	_ = os.Unsetenv(ui.EnvTUIReturnSessionName)
+	query := sessionID
+	if query == "" {
+		query = sessionName
+	}
+	if query == "" {
+		return nil
+	}
+	store, err := session.NewGlobalFileStoreReadOnly()
+	if err != nil {
+		slog.Warn("dashboard.return_session.store_failed",
+			"component", "tui",
+			"session", sessionName,
+			"session_id", sessionID,
+			"err", err)
+		return nil
+	}
+	sess, err := store.Resolve(query)
+	if err != nil || sess == nil {
+		slog.Warn("dashboard.return_session.resolve_failed",
+			"component", "tui",
+			"session", sessionName,
+			"session_id", sessionID,
+			"err", err)
+		return nil
+	}
+	slog.Info("dashboard.return_session.restored",
+		"component", "tui",
+		"session", sess.Name,
+		"session_id", sess.Metadata.SessionID)
+	return sess
 }
 
 // runDiscoveryAdoption walks ~/.claude/projects and creates registry
@@ -311,8 +357,18 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			}
 			return strings.TrimSpace(b.String())
 		},
-		ExportSession: func(sess *session.Session, format ui.SessionExportFormat) ([]byte, error) {
-			return exportSessionContent(sess, format)
+		ExportSession: func(sess *session.Session, req ui.SessionExportRequest) ([]byte, error) {
+			return exportSessionContent(sess, req)
+		},
+		LoadExportStats: func(sess *session.Session) (ui.SessionExportStats, error) {
+			if sess == nil {
+				return ui.SessionExportStats{}, fmt.Errorf("nil session")
+			}
+			resp, err := daemon.GetSessionExportStatsViaDaemon(context.Background(), sess.Name)
+			if err != nil {
+				return ui.SessionExportStats{}, err
+			}
+			return exportStatsFromProto(resp), nil
 		},
 		SubscribeRegistry: func() (<-chan ui.SessionEvent, func(), error) {
 			raw, cancel, err := daemon.SubscribeRegistry(context.Background())
@@ -479,7 +535,7 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 	}
 }
 
-func exportSessionContent(sess *session.Session, format ui.SessionExportFormat) ([]byte, error) {
+func exportSessionContent(sess *session.Session, req ui.SessionExportRequest) ([]byte, error) {
 	if sess == nil {
 		return nil, fmt.Errorf("nil session")
 	}
@@ -495,22 +551,164 @@ func exportSessionContent(sess *session.Session, format ui.SessionExportFormat) 
 	if err != nil {
 		return nil, err
 	}
+	if history, historyErr := loadExportHistoryMessages(sess, req); historyErr == nil && len(history) > 0 {
+		messages = append(history, messages...)
+	}
+	messages = filterExportMessages(messages, req)
 	opts := transcript.ShapeOptions{
 		ConversationOnly: true,
 		ToolOnly:         transcript.ToolOnlyOmit,
+		IncludeThinking:  req.IncludeThinking,
 	}
-	switch format {
+	if req.IncludeToolCalls {
+		opts.ConversationOnly = false
+		opts.ToolOnly = transcript.ToolOnlyFullDetail
+	}
+	var body []byte
+	switch req.Format {
 	case ui.SessionExportMarkdown:
-		return []byte(transcript.RenderMarkdownWithOptions(messages, opts)), nil
+		body = []byte(transcript.RenderMarkdownWithOptions(messages, opts))
 	case ui.SessionExportHTML:
-		return []byte(transcript.RenderHTMLWithOptions(messages, opts)), nil
+		body = []byte(transcript.RenderHTMLWithOptions(messages, opts))
 	case ui.SessionExportJSON:
-		return transcript.RenderJSONWithOptions(messages, opts)
+		body, err = transcript.RenderJSONWithOptions(messages, opts)
+		if err != nil {
+			return nil, err
+		}
 	case ui.SessionExportPlainText:
 		fallthrough
 	default:
-		return []byte(transcript.RenderPlainTextWithOptions(messages, opts)), nil
+		body = []byte(transcript.RenderPlainTextWithOptions(messages, opts))
 	}
+	return compressExportWhitespace(body, req.Format, req.WhitespaceCompression), nil
+}
+
+func compressExportWhitespace(body []byte, format ui.SessionExportFormat, mode ui.SessionExportWhitespaceCompression) []byte {
+	if mode == "" || mode == ui.SessionExportWhitespacePreserve {
+		return body
+	}
+	if format == ui.SessionExportJSON {
+		var compacted bytes.Buffer
+		if err := json.Compact(&compacted, body); err == nil {
+			return compacted.Bytes()
+		}
+		return body
+	}
+	text := compressExportWhitespaceText(string(body), mode)
+	return []byte(text)
+}
+
+func compressExportWhitespaceText(text string, mode ui.SessionExportWhitespaceCompression) string {
+	if mode == ui.SessionExportWhitespacePreserve || mode == "" {
+		return text
+	}
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines))
+	blank := false
+	inFence := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			inFence = !inFence
+			out = append(out, trimmed)
+			blank = false
+			continue
+		}
+		if trimmed == "" {
+			if mode == ui.SessionExportWhitespaceDense {
+				continue
+			}
+			if !blank {
+				out = append(out, "")
+				blank = true
+			}
+			continue
+		}
+		blank = false
+		if inFence || shouldPreserveExportLineWhitespace(line, trimmed) {
+			out = append(out, strings.TrimRight(line, " \t"))
+			continue
+		}
+		out = append(out, strings.Join(strings.Fields(trimmed), " "))
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+func shouldPreserveExportLineWhitespace(line, trimmed string) bool {
+	if strings.HasPrefix(line, "    ") || strings.HasPrefix(line, "\t") {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "#") ||
+		strings.HasPrefix(trimmed, ">") ||
+		strings.HasPrefix(trimmed, "- ") ||
+		strings.HasPrefix(trimmed, "* ") ||
+		strings.HasPrefix(trimmed, "+ ") ||
+		strings.HasPrefix(trimmed, "|") {
+		return true
+	}
+	if len(trimmed) >= 3 && trimmed[0] >= '0' && trimmed[0] <= '9' {
+		for i := 1; i < len(trimmed) && i < 4; i++ {
+			if trimmed[i] == '.' && i+1 < len(trimmed) && trimmed[i+1] == ' ' {
+				return true
+			}
+			if trimmed[i] < '0' || trimmed[i] > '9' {
+				break
+			}
+		}
+	}
+	return false
+}
+
+func loadExportHistoryMessages(sess *session.Session, req ui.SessionExportRequest) ([]transcript.Message, error) {
+	if sess == nil || sess.Metadata.SessionID == "" || req.HistoryStart < 0 {
+		return nil, nil
+	}
+	entries, err := compactengine.ReadLedger(sess.Metadata.SessionID)
+	if err != nil || len(entries) == 0 {
+		return nil, err
+	}
+	if req.HistoryStart >= len(entries) {
+		return nil, nil
+	}
+	entry := entries[req.HistoryStart]
+	if entry.SnapshotPath == "" {
+		return nil, nil
+	}
+	f, err := os.Open(entry.SnapshotPath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return nil, err
+	}
+	defer gz.Close()
+	return transcript.Parse(gz)
+}
+
+func filterExportMessages(messages []transcript.Message, req ui.SessionExportRequest) []transcript.Message {
+	out := make([]transcript.Message, 0, len(messages))
+	for _, msg := range messages {
+		hasChatText := strings.TrimSpace(msg.Text) != ""
+		if !req.IncludeChat && hasChatText {
+			msg.Text = ""
+		}
+		if !req.IncludeThinking {
+			msg.Thinking = ""
+		}
+		if !req.IncludeToolCalls {
+			msg.HasTools = false
+			msg.Tools = nil
+		}
+		if strings.TrimSpace(msg.Text) == "" && strings.TrimSpace(msg.Thinking) == "" && !msg.HasTools {
+			continue
+		}
+		out = append(out, msg)
+	}
+	return out
 }
 
 func compactEventFromProto(ev *clydev1.CompactEvent) ui.CompactEvent {
@@ -643,6 +841,9 @@ func sessionEventFromProto(ev *clydev1.SubscribeRegistryResponse) ui.SessionEven
 		OldName:         ev.GetOldName(),
 		BridgeSessionID: ev.GetBridgeSessionId(),
 		BridgeURL:       ev.GetBridgeUrl(),
+		BinaryPath:      ev.GetBinaryPath(),
+		BinaryReason:    ev.GetBinaryReason(),
+		BinaryHash:      ev.GetBinaryHash(),
 	}
 	if raw := ev.GetSessionSummary(); raw != nil {
 		sess, model, remoteControl, messageCount, contextState, bridge := sessionSummaryFromProto(raw)
@@ -689,6 +890,23 @@ func sessionDetailFromProto(resp *clydev1.GetSessionDetailResponse) ui.SessionDe
 		out.Tools = append(out.Tools, ui.ToolUse{Name: t.GetName(), Count: int(t.GetCount())})
 	}
 	return out
+}
+
+func exportStatsFromProto(resp *clydev1.GetSessionExportStatsResponse) ui.SessionExportStats {
+	if resp == nil {
+		return ui.SessionExportStats{}
+	}
+	return ui.SessionExportStats{
+		VisibleTokensEstimate: int(resp.GetVisibleTokensEstimate()),
+		VisibleMessages:       int(resp.GetVisibleMessages()),
+		UserMessages:          int(resp.GetUserMessages()),
+		AssistantMessages:     int(resp.GetAssistantMessages()),
+		ToolResultMessages:    int(resp.GetToolResultMessages()),
+		ToolCalls:             int(resp.GetToolCalls()),
+		SystemPrompts:         int(resp.GetSystemPrompts()),
+		Compactions:           int(resp.GetCompactions()),
+		TranscriptSizeBytes:   resp.GetTranscriptSizeBytes(),
+	}
 }
 
 func configControlsFromProto(raw []*clydev1.ConfigControl) []ui.ConfigControl {

@@ -13,7 +13,7 @@ search. Anything not in that list went away in the wipe-to-core cull.
 
 Surface (post-cull), matching `cmd/clyde/main.go`:
 
-```
+```text
 clyde                       -> TUI dashboard (manage existing sessions)
 clyde compact ...           -> append-only compaction
 clyde daemon                -> background daemon (adapter + oauth + mcp + prune)
@@ -27,7 +27,7 @@ anything else               -> cobra; unknown -> ForwardToClaudeThenDashboard (T
 
 `compact`, `daemon`, and `mcp` are **clyde-owned** names; the real `claude` binary also defines `compact`, `daemon`, and `mcp` with different behavior, so users who need the stock subcommands should invoke `claude` directly. After forward, `cmd/root.go` skips the post-claude TUI for `api`, `-p`/`--print`, and a set of common one-shot first-arg subcommands (aligned with Claude Code `cli.tsx` / `main.tsx`).
 
-Developer tooling: `**cmd/clyde-tui-qa`** drives the real TUI for QA (see the section near the end of this file). It is not part of the default user surface.
+Developer tooling: `**cmd/clyde-tui-qa`\*\* drives the real TUI for QA (see the section near the end of this file). It is not part of the default user surface.
 
 The TUI is read-mostly with management actions wired via direct Go
 calls into the daemon: resume, delete, rename, view content, send-to,
@@ -42,6 +42,8 @@ Treat the TUI as a dumb renderer over daemon-owned and domain-owned state.
 
 - Put business logic, normalization, filtering, aggregation, and transcript shaping upstream in shared packages or daemon RPC construction.
 - Do not add TUI-only semantic cleanup, transcript parsing, cache aggregation, provider accounting, or state derivation when the same logic can live in `internal/transcript`, `internal/claude`, `internal/adapter`, or daemon/server code.
+- Any non-UI-critical work triggered from the TUI must run via a daemon-owned goroutine or daemon-backed async callback. Do not put transcript parsing, filesystem scans, config probing, RPC fan-out, context probes, export aggregation, or similar work directly in TUI draw paths or event handlers.
+- TUI code must never block on non-render work. Open the overlay or screen immediately, show progress through the shared loading spinner primitives, and hydrate the view when the goroutine posts results back into the event loop.
 - The TUI may own presentation concerns only:
   - layout
   - focus
@@ -68,7 +70,7 @@ and update callers instead of adding another escape hatch.
 - Tests should assert the typed shape. Do not build test fixtures with `map[string]any` when the production code has or should have a concrete type.
 - Existing loose types are technical debt, not precedent. When touching a loose surface, either replace it with enumerated types in the same change or leave a narrow, explicit follow-up note if the refactor is larger than the active task.
 
-## Architecture 
+## Architecture
 
 ### Core Concept
 
@@ -82,7 +84,7 @@ Clyde is a **thin, non-invasive wrapper**. It:
 
 Each session is a folder in `.claude/clyde/sessions/<name>/`:
 
-```
+```text
 .claude/clyde/
   config.json             # Project config (profiles - optional, created manually)
   sessions/
@@ -137,9 +139,9 @@ Each session is a folder in `.claude/clyde/sessions/<name>/`:
 }
 ```
 
-**Global config** (`internal/config/load.go`, `LoadGlobalOrDefault`): read from `$XDG_CONFIG_HOME/clyde/` (default `~/.config/clyde/`). `**config.toml` is preferred; `config.json` is used if TOML is absent.** `SaveGlobal` writes TOML only.
+**Global config** (`internal/config/load.go`, `LoadGlobalOrDefault`): read from `$XDG_CONFIG_HOME/clyde/` (default `~/.config/clyde/`). `**config.toml` is preferred; `config.json` is used if TOML is absent.\*\* `SaveGlobal` writes TOML only.
 
-The `Config` struct in `internal/config/config.go` includes `defaults`, `profiles`, `logging`, `adapter`, `search`, and other sections. `**profiles` exists in the on-disk schema. No production code path reads `cfg.Profiles` outside config tests today**, so do not document a `clyde` CLI that applies a profile by name until that wiring lands.
+The `Config` struct in `internal/config/config.go` includes `defaults`, `profiles`, `logging`, `adapter`, `search`, and other sections. `**profiles` exists in the on-disk schema. No production code path reads `cfg.Profiles` outside config tests today\*\*, so do not document a `clyde` CLI that applies a profile by name until that wiring lands.
 
 **Example profile-shaped fields** (for reference when authoring JSON or TOML by hand):
 
@@ -219,7 +221,7 @@ No matcher field - the single hook handles all sources (startup, resume, compact
 
 **Source-based dispatch:**
 
-- `**startup`**: New sessions. Outputs session name and context, saves transcript path.
+- `**startup`\*\*: New sessions. Outputs session name and context, saves transcript path.
 - `**resume**`: Resuming or fork flows. Outputs context when metadata has it.
 - `**compact**`: Session compaction. Defensive handler (Claude Code does not currently create a new UUID for `/compact`, but we handle it anyway in case behavior changes).
 - `**clear**`: Session clear. Updates metadata with new UUID and preserves old UUID in `previousSessionIds`.
@@ -260,7 +262,7 @@ No matcher field - the single hook handles all sources (startup, resume, compact
 
 Claude Code stores project data in `~/.claude/projects/` with paths like:
 
-```
+```text
 /home/user/project/foo.bar → ~/.claude/projects/-home-user-project-foo-bar/
 ```
 
@@ -282,7 +284,7 @@ When deleting a session, remove:
 
 This ensures complete cleanup even after multiple `/clear` operations (and `/compact`, if Claude Code's behavior changes to create new UUIDs for compaction).
 
-### OpenAI compatible adapter ***IN FLUX THIS SECTION IS STALE****
+### OpenAI compatible adapter **\*IN FLUX THIS SECTION IS STALE\*\***
 
 The daemon optionally hosts an OpenAI Chat Completions v1 HTTP surface under `internal/adapter/`. Incoming `model` strings resolve through a registry built from `[adapter]` and `[adapter.models]` in config (`internal/adapter/models.go`). Backends include direct Claude, Anthropic HTTP, configured shunts, and the local `claude` CLI fallback (`BackendFallback`). See `reasoning_effort` and family `efforts` in the adapter packages for how effort maps to wire format. Streaming and non streaming paths exist; tool calling, images, and embeddings policies are enforced in the dispatcher. There is no checked in `docs/openai-adapter.md`; read the code and config schema as the source of truth.
 
@@ -293,13 +295,13 @@ blind process restart. Keep these semantics intact when changing
 `internal/daemon/run.go`, `internal/adapter/`, or `internal/webapp/`:
 
 - Reload always re-execs the daemon's current `os.Executable()` path.
-The client does not send an executable path.
+  The client does not send an executable path.
 - The old daemon passes daemon-owned listener file descriptors to the
-child with `exec.Cmd.ExtraFiles`: gRPC Unix socket, adapter TCP
-listener when enabled, and webapp TCP listener when enabled.
+  child with `exec.Cmd.ExtraFiles`: gRPC Unix socket, adapter TCP
+  listener when enabled, and webapp TCP listener when enabled.
 - Listener addresses are part of the handoff contract. If adapter or
-webapp host/port changed, reload must reject with a clear "full
-restart required" error rather than rebinding.
+  webapp host/port changed, reload must reject with a clear "full
+  restart required" error rather than rebinding.
 - The child starts public listeners from inherited FDs first, reports
   readiness over the reload pipe, then waits to acquire
   `daemon.process.lock` before running exclusive background loops.
@@ -333,10 +335,10 @@ restart required" error rather than rebinding.
   serialize and the newest lock-owning generation performs the next
   reload.
 - Preserve active session runtime dirs while the old process drains so
-wrappers and remote-control sockets can reacquire against the child.
+  wrappers and remote-control sockets can reacquire against the child.
 - Concurrent reloads should remain serialized by the reload lock; a
-queued reload reconnects to the latest daemon generation, giving
-last-writer-wins behavior.
+  queued reload reconnects to the latest daemon generation, giving
+  last-writer-wins behavior.
 
 ### Remote Control (`--remote-control`)
 
@@ -484,7 +486,6 @@ Prefer events at these points:
 
 Prefer fields that make those events queryable and comparable:
 
-
 | Key            | Meaning                                                     |
 | -------------- | ----------------------------------------------------------- |
 | `component`    | Top-level subsystem (`api`, `worker`, `store`, `adapter`)   |
@@ -500,7 +501,6 @@ Prefer fields that make those events queryable and comparable:
 | `path`         | File or route involved in the operation                     |
 | `status`       | Outcome summary (`ok`, `retry`, `timeout`, `dropped`)       |
 | `err`          | Error value on `Warn` or `Error` events                     |
-
 
 Use the event message as the event name. Prefer a stable dot-separated form such as `http.request.completed`, `worker.job.retried`, or `store.snapshot.loaded`.
 
@@ -549,7 +549,7 @@ Do not bypass the structured logger for production diagnostics.
 Reject or avoid:
 
 - `fmt.Print`, `fmt.Println`, `fmt.Printf` for operational logging
-- `log.Print`*, `log.Fatal*`, `log.Panic*` from the stdlib `log` package for operational logging
+- `log.Print`_, `log.Fatal_`, `log.Panic\*`from the stdlib`log` package for operational logging
 
 Allowed:
 

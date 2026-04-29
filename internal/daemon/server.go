@@ -55,8 +55,9 @@ type Server struct {
 
 	// subscribers receive registry events as they happen. The mutex
 	// guards the map so subscribe and broadcast can run concurrently.
-	subMu       sync.Mutex
-	subscribers map[chan *clydev1.SubscribeRegistryResponse]registrySubscriberState
+	subMu        sync.Mutex
+	subscribers  map[chan *clydev1.SubscribeRegistryResponse]registrySubscriberState
+	binaryUpdate *clydev1.SubscribeRegistryResponse
 
 	// settingsLocks serialises writes per session name so two callers
 	// updating the same session do not stomp on each other. The lock
@@ -324,7 +325,17 @@ func (s *Server) SubscribeRegistry(_ *clydev1.SubscribeRegistryRequest, stream c
 
 	s.subMu.Lock()
 	s.subscribers[ch] = true
+	var binaryUpdate *clydev1.SubscribeRegistryResponse
+	if s.binaryUpdate != nil {
+		binaryUpdate = proto.Clone(s.binaryUpdate).(*clydev1.SubscribeRegistryResponse)
+	}
 	s.subMu.Unlock()
+	if binaryUpdate != nil {
+		select {
+		case ch <- binaryUpdate:
+		default:
+		}
+	}
 
 	defer func() {
 		s.subMu.Lock()
@@ -535,6 +546,19 @@ func (s *Server) publishGlobalSettingsEvent(globalRemoteControl bool) {
 		Kind:                clydev1.SubscribeRegistryResponse_KIND_GLOBAL_SETTINGS_UPDATED,
 		GlobalRemoteControl: globalRemoteControl,
 	})
+}
+
+func (s *Server) publishBinaryUpdate(path, reason, hash string) {
+	ev := &clydev1.SubscribeRegistryResponse{
+		Kind:         clydev1.SubscribeRegistryResponse_KIND_CLYDE_BINARY_UPDATED,
+		BinaryPath:   path,
+		BinaryReason: reason,
+		BinaryHash:   hash,
+	}
+	s.subMu.Lock()
+	s.binaryUpdate = ev
+	s.subMu.Unlock()
+	s.publishEvent(ev)
 }
 
 // Close shuts down the watcher and cleans up all active session runtime dirs.
@@ -1102,6 +1126,45 @@ func (s *Server) GetSessionDetail(ctx context.Context, req *clydev1.GetSessionDe
 		"session", sess.Name,
 		"messages_total", detail.GetTotalMessages())
 	return detail, nil
+}
+
+func (s *Server) GetSessionExportStats(ctx context.Context, req *clydev1.GetSessionExportStatsRequest) (*clydev1.GetSessionExportStatsResponse, error) {
+	if req.GetSessionName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "session_name is required")
+	}
+	started := time.Now()
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "store init: %v", err)
+	}
+	sess, err := store.Resolve(req.GetSessionName())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "resolve session: %v", err)
+	}
+	if sess == nil {
+		return nil, status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
+	}
+	stats := inspectExportStatsFor(sess.Metadata.TranscriptPath)
+	resp := &clydev1.GetSessionExportStatsResponse{
+		SessionName:           sess.Name,
+		VisibleTokensEstimate: int32(stats.VisibleTokensEstimate),
+		VisibleMessages:       int32(stats.VisibleMessages),
+		UserMessages:          int32(stats.UserMessages),
+		AssistantMessages:     int32(stats.AssistantMessages),
+		ToolResultMessages:    int32(stats.ToolResultMessages),
+		ToolCalls:             int32(stats.ToolCalls),
+		SystemPrompts:         int32(stats.SystemPrompts),
+		Compactions:           int32(stats.Compactions),
+		TranscriptSizeBytes:   stats.TranscriptSizeBytes,
+	}
+	s.log.Debug("daemon.session_export_stats.completed",
+		"component", "daemon",
+		"subcomponent", "sessions",
+		"duration_ms", time.Since(started).Milliseconds(),
+		"session", sess.Name,
+		"visible_messages", resp.GetVisibleMessages(),
+		"compactions", resp.GetCompactions())
+	return resp, nil
 }
 
 func (s *Server) contextStateForSession(sess *session.Session) sessionContextState {

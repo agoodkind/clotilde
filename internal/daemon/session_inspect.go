@@ -38,6 +38,18 @@ type inspectStats struct {
 	LastPreCompactTokens  int
 }
 
+type inspectExportStats struct {
+	VisibleTokensEstimate int
+	VisibleMessages       int
+	UserMessages          int
+	AssistantMessages     int
+	ToolResultMessages    int
+	ToolCalls             int
+	SystemPrompts         int
+	Compactions           int
+	TranscriptSizeBytes   int64
+}
+
 type daemonDeletedFiles struct {
 	Transcript []string
 	AgentLogs  []string
@@ -46,12 +58,14 @@ type daemonDeletedFiles struct {
 var daemonModelFamilyRegex = regexp.MustCompile(`claude-(?:\d+-)*(\w+)-\d+`)
 
 type inspectCacheEntry struct {
-	Size     int64
-	ModUnix  int64
-	Model    string
-	Stats    inspectStats
-	HasModel bool
-	HasStats bool
+	Size           int64
+	ModUnix        int64
+	Model          string
+	Stats          inspectStats
+	ExportStats    inspectExportStats
+	HasModel       bool
+	HasStats       bool
+	HasExportStats bool
 }
 
 var (
@@ -120,6 +134,8 @@ func inspectExtractModel(transcriptPath string) string {
 	if cached, found := inspectCacheLoad(transcriptPath); found && cached.Size == size && cached.ModUnix == modUnix {
 		cacheEntry.Stats = cached.Stats
 		cacheEntry.HasStats = cached.HasStats
+		cacheEntry.ExportStats = cached.ExportStats
+		cacheEntry.HasExportStats = cached.HasExportStats
 	}
 	inspectCacheStore(transcriptPath, cacheEntry)
 	return lastModel
@@ -232,9 +248,97 @@ func inspectStatsFor(transcriptPath string) inspectStats {
 	if cached, found := inspectCacheLoad(transcriptPath); found && cached.Size == size && cached.ModUnix == modUnix {
 		entry.Model = cached.Model
 		entry.HasModel = cached.HasModel
+		entry.ExportStats = cached.ExportStats
+		entry.HasExportStats = cached.HasExportStats
 	}
 	inspectCacheStore(transcriptPath, entry)
 	return out
+}
+
+func inspectExportStatsFor(transcriptPath string) inspectExportStats {
+	if strings.TrimSpace(transcriptPath) == "" {
+		return inspectExportStats{}
+	}
+	size, modUnix, ok := inspectFingerprint(transcriptPath)
+	if !ok {
+		return inspectExportStats{}
+	}
+	if cached, found := inspectCacheLoad(transcriptPath); found && cached.Size == size && cached.ModUnix == modUnix && cached.HasExportStats {
+		return cached.ExportStats
+	}
+
+	stats := inspectExportStats{TranscriptSizeBytes: size}
+	f, err := os.Open(transcriptPath)
+	if err != nil {
+		return stats
+	}
+	defer f.Close()
+
+	messages, err := itranscript.Parse(f)
+	if err == nil {
+		for _, msg := range messages {
+			if strings.TrimSpace(msg.Text) != "" {
+				stats.VisibleMessages++
+				stats.VisibleTokensEstimate += inspectRoughTokens(msg.Text)
+			}
+			switch msg.Role {
+			case "user":
+				stats.UserMessages++
+			case "assistant":
+				stats.AssistantMessages++
+			}
+			stats.ToolCalls += len(msg.Tools)
+			if msg.Thinking != "" {
+				stats.VisibleTokensEstimate += inspectRoughTokens(msg.Thinking)
+			}
+		}
+	}
+
+	raw, err := os.Open(transcriptPath)
+	if err == nil {
+		defer raw.Close()
+		scanner := bufio.NewScanner(raw)
+		scanner.Buffer(make([]byte, 1024*1024), 4*1024*1024)
+		for scanner.Scan() {
+			var entry inspectExportStatsLine
+			if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
+				continue
+			}
+			if entry.Type == "system" {
+				if entry.Subtype == "compact_boundary" {
+					stats.Compactions++
+				} else {
+					stats.SystemPrompts++
+				}
+				continue
+			}
+			if entry.Type == "user" && len(entry.Message.Content) > 0 {
+				var blocks []inspectExportStatsContentBlock
+				if err := json.Unmarshal(entry.Message.Content, &blocks); err == nil {
+					for _, block := range blocks {
+						if block.Type == "tool_result" {
+							stats.ToolResultMessages++
+						}
+					}
+				}
+			}
+		}
+	}
+
+	entry := inspectCacheEntry{
+		Size:           size,
+		ModUnix:        modUnix,
+		ExportStats:    stats,
+		HasExportStats: true,
+	}
+	if cached, found := inspectCacheLoad(transcriptPath); found && cached.Size == size && cached.ModUnix == modUnix {
+		entry.Model = cached.Model
+		entry.HasModel = cached.HasModel
+		entry.Stats = cached.Stats
+		entry.HasStats = cached.HasStats
+	}
+	inspectCacheStore(transcriptPath, entry)
+	return stats
 }
 
 func inspectToolUseStats(transcriptPath string, topN int) []inspectToolUse {
@@ -298,6 +402,20 @@ func inspectRoughTokens(text string) int {
 		return 1
 	}
 	return n
+}
+
+type inspectExportStatsLine struct {
+	Type    string                    `json:"type"`
+	Subtype string                    `json:"subtype"`
+	Message inspectExportStatsMessage `json:"message"`
+}
+
+type inspectExportStatsMessage struct {
+	Content json.RawMessage `json:"content"`
+}
+
+type inspectExportStatsContentBlock struct {
+	Type string `json:"type"`
 }
 
 func inspectForEachTailLine(transcriptPath string, tailSize int, fn func(line []byte)) error {

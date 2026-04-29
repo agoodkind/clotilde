@@ -117,29 +117,39 @@ func TestUX_NewSessionRemoteControlChoiceIsForwarded(t *testing.T) {
 	}
 }
 
-func TestUX_BasedirLaunchFiltersSessions(t *testing.T) {
+func TestUX_BasedirLaunchRanksMatchingSessionsFirst(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 3)
 	defer cleanup()
 
 	target := session.CanonicalWorkspaceRoot("/Users/test/Sites/ws-1")
 	a.launchBasedir = target
-	a.rebuildVisible()
+	a.sortSessions()
 	a.populateTable()
 
-	if len(a.visibleIdx) != 1 {
-		t.Fatalf("visible sessions = %d, want 1", len(a.visibleIdx))
+	if len(a.visibleIdx) != 3 {
+		t.Fatalf("visible sessions = %d, want 3", len(a.visibleIdx))
 	}
 	got := a.sessions[a.visibleIdx[0]]
 	if got.Name != "test-session-01" {
-		t.Fatalf("visible session = %q, want test-session-01", got.Name)
+		t.Fatalf("top session = %q, want test-session-01", got.Name)
+	}
+	if len(a.table.Rows) != 4 {
+		t.Fatalf("table rows = %d, want 4 including separator", len(a.table.Rows))
+	}
+	if got := a.table.Rows[1][0].Text; got != "[global session list]" {
+		t.Fatalf("separator row = %q, want [global session list]", got)
+	}
+	a.openSessionOptions(1)
+	if a.overlay != nil {
+		t.Fatalf("separator row should not open options, got %T", a.overlay)
 	}
 }
 
-func TestUX_BasedirLaunchEnterOpensOptionsWithCreateNew(t *testing.T) {
+func TestUX_BasedirLaunchEnterUsesNormalOptions(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 2)
 	defer cleanup()
 	a.launchBasedir = session.CanonicalWorkspaceRoot("/Users/test/Sites/ws-0")
-	a.rebuildVisible()
+	a.sortSessions()
 	a.populateTable()
 
 	a.openSessionOptions(0)
@@ -150,37 +160,36 @@ func TestUX_BasedirLaunchEnterOpensOptionsWithCreateNew(t *testing.T) {
 	if findModalAction(modal, "Resume") == nil {
 		t.Fatalf("basedir options missing Resume")
 	}
-	create := findModalAction(modal, "New session here")
-	if create == nil {
-		t.Fatalf("basedir options missing New session here")
-	}
-
-	create()
-	next, ok := a.overlay.(*OptionsModal)
-	if !ok {
-		t.Fatalf("overlay after create = %T, want *OptionsModal", a.overlay)
-	}
-	if findModalAction(next, "New tracked session") == nil {
-		t.Fatalf("create action did not open new-session type modal")
+	if findModalAction(modal, "New session here") != nil {
+		t.Fatalf("basedir options should not include special New session here action")
 	}
 }
 
-func TestUX_BasedirLaunchNoMatchesOpensNewSessionTypeModal(t *testing.T) {
+func TestUX_BasedirLaunchKeepsDefaultNewSessionFlow(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 0)
 	defer cleanup()
-	a.launchBasedir = session.CanonicalWorkspaceRoot("/Users/test/Sites/no-existing-sessions")
+	target := session.CanonicalWorkspaceRoot("/Users/test/Sites/no-existing-sessions")
+	a.launchBasedir = target
+	a.dashboardLaunchCWD = target
 
-	a.applySessionSnapshot(SessionSnapshot{Sessions: nil})
+	a.newSession()
 
 	modal, ok := a.overlay.(*OptionsModal)
 	if !ok {
 		t.Fatalf("overlay = %T, want *OptionsModal", a.overlay)
 	}
-	if findModalAction(modal, "New tracked session") == nil {
-		t.Fatalf("no-match basedir launch did not open new-session type modal")
+	startHere := findModalAction(modal, "Start in this directory")
+	if startHere == nil {
+		t.Fatalf("default new-session modal missing Start in this directory")
 	}
-	if !a.launchBasedirHandled {
-		t.Fatalf("launchBasedirHandled = false, want true")
+	startHere()
+
+	next, ok := a.overlay.(*OptionsModal)
+	if !ok {
+		t.Fatalf("overlay after start-here = %T, want *OptionsModal", a.overlay)
+	}
+	if findModalAction(next, "New tracked session") == nil {
+		t.Fatalf("start-here did not open existing new-session type modal")
 	}
 }
 
@@ -217,6 +226,88 @@ func TestUX_SnapshotRefreshKeepsHighlightedRowBySessionID(t *testing.T) {
 	}
 	if got.Name != "renamed-highlight" {
 		t.Fatalf("highlighted session name = %q, want renamed-highlight", got.Name)
+	}
+}
+
+func TestUX_OpenOptionsModalStatsRefreshAfterDetailLoad(t *testing.T) {
+	a, scr, cleanup := mkAppWithSessions(t, 1)
+	defer cleanup()
+
+	a.cb.GetSessionDetail = func(*session.Session) (SessionDetail, error) {
+		return SessionDetail{
+			Model:                 "opus",
+			TranscriptStatsLoaded: true,
+			TotalMessages:         42,
+			LastMessageTokens:     128,
+			ContextUsageLoaded:    true,
+			ContextUsage: SessionContextUsage{
+				TotalTokens:    1200,
+				MaxTokens:      200000,
+				Percentage:     1,
+				MessagesTokens: 900,
+			},
+		}, nil
+	}
+
+	sess := a.sessions[a.visibleIdx[0]]
+	a.openSessionOptionsFor(sess)
+	modal, ok := a.overlay.(*OptionsModal)
+	if !ok {
+		t.Fatalf("overlay = %T, want *OptionsModal", a.overlay)
+	}
+	if !modal.StatsLoading {
+		t.Fatalf("modal stats should start loading")
+	}
+
+	ev := scr.PollEvent()
+	interrupt, ok := ev.(*tcell.EventInterrupt)
+	if !ok {
+		t.Fatalf("event = %T, want *tcell.EventInterrupt", ev)
+	}
+	a.handleEvent(interrupt)
+
+	modal, ok = a.overlay.(*OptionsModal)
+	if !ok {
+		t.Fatalf("overlay after detail load = %T, want *OptionsModal", a.overlay)
+	}
+	if modal.StatsLoading {
+		t.Fatalf("modal stats still loading after detail load")
+	}
+	lines := flattenSegments(modal.StatsSegments)
+	if !strings.Contains(strings.Join(lines, "\n"), "42") {
+		t.Fatalf("modal stats did not refresh from loaded detail:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
+func TestUX_CloseCompactRestoresOptionsOverlay(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 1)
+	defer cleanup()
+
+	sess := a.sessions[a.visibleIdx[0]]
+	a.openSessionOptionsFor(sess)
+	options, ok := a.overlay.(*OptionsModal)
+	if !ok {
+		t.Fatalf("overlay = %T, want *OptionsModal", a.overlay)
+	}
+	compact := findModalAction(options, "Compact")
+	if compact == nil {
+		t.Fatalf("options missing Compact action")
+	}
+
+	compact()
+	if _, ok := a.overlay.(*CompactPanel); !ok {
+		t.Fatalf("overlay after compact = %T, want *CompactPanel", a.overlay)
+	}
+	if len(a.overlayStack) != 1 {
+		t.Fatalf("overlay stack = %d, want 1", len(a.overlayStack))
+	}
+
+	a.closeOverlay()
+	if a.overlay != options {
+		t.Fatalf("overlay after closing compact = %T, want original options", a.overlay)
+	}
+	if len(a.overlayStack) != 0 {
+		t.Fatalf("overlay stack after close = %d, want 0", len(a.overlayStack))
 	}
 }
 
@@ -269,7 +360,7 @@ func TestUX_SidecarRemoteLaunchPinsCanonicalSession(t *testing.T) {
 func TestUX_SessionOptionsIncludeExportWhenCallbackConfigured(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 2)
 	defer cleanup()
-	a.cb.ExportSession = func(*session.Session, SessionExportFormat) ([]byte, error) {
+	a.cb.ExportSession = func(*session.Session, SessionExportRequest) ([]byte, error) {
 		return []byte("demo"), nil
 	}
 
@@ -286,7 +377,7 @@ func TestUX_SessionOptionsIncludeExportWhenCallbackConfigured(t *testing.T) {
 func TestUX_OpenExportSavePromptSeedsDownloadsPath(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 1)
 	defer cleanup()
-	a.cb.ExportSession = func(*session.Session, SessionExportFormat) ([]byte, error) {
+	a.cb.ExportSession = func(*session.Session, SessionExportRequest) ([]byte, error) {
 		return []byte("demo"), nil
 	}
 	home := t.TempDir()
@@ -302,9 +393,129 @@ func TestUX_OpenExportSavePromptSeedsDownloadsPath(t *testing.T) {
 	if !ok {
 		t.Fatalf("overlay = %T, want *InputOverlay", a.overlay)
 	}
-	want := filepath.Join(home, "Downloads", sess.Name+".md")
+	want := filepath.Join(home, "Downloads", defaultExportFilename(sess.Name, SessionExportMarkdown))
 	if overlay.Input.Text != want {
 		t.Fatalf("path = %q want %q", overlay.Input.Text, want)
+	}
+}
+
+func TestUX_OpenExportOptionsDoesNotBlockOnExportStats(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 1)
+	defer cleanup()
+	block := make(chan struct{})
+	a.cb.ExportSession = func(*session.Session, SessionExportRequest) ([]byte, error) {
+		return []byte("demo"), nil
+	}
+	a.cb.LoadExportStats = func(*session.Session) (SessionExportStats, error) {
+		<-block
+		return SessionExportStats{Compactions: 2, VisibleMessages: 12, VisibleTokensEstimate: 1200}, nil
+	}
+
+	sess := a.sessions[a.visibleIdx[0]]
+	start := time.Now()
+	a.openExportOptions(sess)
+	elapsed := time.Since(start)
+	if elapsed > 50*time.Millisecond {
+		t.Fatalf("openExportOptions blocked on export stats: %s", elapsed)
+	}
+	panel, ok := a.overlay.(*ExportPanel)
+	if !ok {
+		t.Fatalf("overlay = %T, want *ExportPanel", a.overlay)
+	}
+	if panel.status != "loading export stats..." {
+		t.Fatalf("panel status = %q want loading export stats...", panel.status)
+	}
+	close(block)
+}
+
+func TestUX_OpenExportOptionsUsesInteractivePanel(t *testing.T) {
+	a, scr, cleanup := mkAppWithSessions(t, 1)
+	defer cleanup()
+	a.cb.ExportSession = func(*session.Session, SessionExportRequest) ([]byte, error) {
+		return []byte("demo"), nil
+	}
+	a.cb.LoadExportStats = func(*session.Session) (SessionExportStats, error) {
+		return SessionExportStats{Compactions: 2, VisibleMessages: 12, VisibleTokensEstimate: 1200}, nil
+	}
+
+	sess := a.sessions[a.visibleIdx[0]]
+	a.openExportOptions(sess)
+	panel, ok := a.overlay.(*ExportPanel)
+	if !ok {
+		t.Fatalf("overlay = %T, want *ExportPanel", a.overlay)
+	}
+	if panel.historyStart != 0 {
+		t.Fatalf("historyStart before stats load = %d want 0", panel.historyStart)
+	}
+	if a.mode != StatusExport {
+		t.Fatalf("mode = %v want StatusExport", a.mode)
+	}
+	if !strings.HasSuffix(panel.name, "-"+sess.Name+".md") {
+		t.Fatalf("panel filename = %q, want dated session name", panel.name)
+	}
+	if panel.status != "loading export stats..." {
+		t.Fatalf("panel status = %q want loading export stats...", panel.status)
+	}
+	ev := scr.PollEvent()
+	interrupt, ok := ev.(*tcell.EventInterrupt)
+	if !ok {
+		t.Fatalf("event = %T, want *tcell.EventInterrupt", ev)
+	}
+	a.handleEvent(interrupt)
+	panel, ok = a.overlay.(*ExportPanel)
+	if !ok {
+		t.Fatalf("overlay after stats load = %T, want *ExportPanel", a.overlay)
+	}
+	if panel.historyStart != 1 {
+		t.Fatalf("historyStart after stats load = %d want latest compaction", panel.historyStart)
+	}
+	if panel.status != "adjust controls and preview export" {
+		t.Fatalf("panel status after stats load = %q", panel.status)
+	}
+}
+
+func TestUX_ExportPanelFolderUsesFilePicker(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 1)
+	defer cleanup()
+	a.cb.ExportSession = func(*session.Session, SessionExportRequest) ([]byte, error) {
+		return []byte("demo"), nil
+	}
+	sess := a.sessions[a.visibleIdx[0]]
+	a.openExportOptions(sess)
+	panel, ok := a.overlay.(*ExportPanel)
+	if !ok {
+		t.Fatalf("overlay = %T, want *ExportPanel", a.overlay)
+	}
+	panel.OnChooseFolder(panel)
+	if _, ok := a.overlay.(*FilePickerOverlay); !ok {
+		t.Fatalf("overlay = %T, want *FilePickerOverlay", a.overlay)
+	}
+}
+
+func TestUX_ExportPanelActionCallsCallbackWithKnobs(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 1)
+	defer cleanup()
+	called := make(chan SessionExportRequest, 1)
+	a.cb.ExportSession = func(_ *session.Session, req SessionExportRequest) ([]byte, error) {
+		called <- req
+		return []byte("demo"), nil
+	}
+	sess := a.sessions[a.visibleIdx[0]]
+	a.openExportOptions(sess)
+	panel := a.overlay.(*ExportPanel)
+	panel.copyToClipboard = false
+	panel.saveToFile = false
+	panel.includeSystemPrompts = true
+	panel.actionIdx = 1
+	panel.triggerAction()
+
+	select {
+	case req := <-called:
+		if !req.IncludeSystemPrompts || req.CopyToClipboard || req.SaveToFile {
+			t.Fatalf("request did not preserve export knobs: %+v", req)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for export callback")
 	}
 }
 
@@ -920,5 +1131,105 @@ func TestSelfReloadDefersWhileOverlayOpen(t *testing.T) {
 	}
 	if a.reloadExecPath != "/tmp/clyde" {
 		t.Fatalf("reloadExecPath=%q want /tmp/clyde", a.reloadExecPath)
+	}
+}
+
+func TestDaemonBinaryUpdateTriggersSelfReload(t *testing.T) {
+	a := &App{running: true}
+
+	a.applySessionEvent(SessionEvent{
+		Kind:         "CLYDE_BINARY_UPDATED",
+		BinaryPath:   "/tmp/new-clyde",
+		BinaryReason: "file_replaced",
+		BinaryHash:   "def456",
+	})
+
+	if a.running {
+		t.Fatalf("daemon binary update should stop the app for exec reload")
+	}
+	if a.reloadExecPath != "/tmp/new-clyde" {
+		t.Fatalf("reloadExecPath=%q want /tmp/new-clyde", a.reloadExecPath)
+	}
+}
+
+func TestDaemonBinaryUpdateIgnoresAlreadyRunningHash(t *testing.T) {
+	a := &App{running: true, executableHash: "abc123"}
+
+	a.applySessionEvent(SessionEvent{
+		Kind:         "CLYDE_BINARY_UPDATED",
+		BinaryPath:   "/tmp/new-clyde",
+		BinaryReason: "file_replaced",
+		BinaryHash:   "abc123",
+	})
+
+	if !a.running {
+		t.Fatalf("matching daemon binary update should not stop the app")
+	}
+	if a.reloadExecPath != "" {
+		t.Fatalf("reloadExecPath=%q want empty", a.reloadExecPath)
+	}
+}
+
+func TestSelfReloadExecsBeforeSuspendReinit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "clyde")
+	if err := os.WriteFile(path, []byte("old"), 0o755); err != nil {
+		t.Fatalf("write old binary: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat old binary: %v", err)
+	}
+	a := &App{executableBase: executableSnapshot{path: path, info: info}}
+
+	if err := os.WriteFile(path, []byte("new-binary"), 0o755); err != nil {
+		t.Fatalf("write new binary: %v", err)
+	}
+
+	oldExec := execCurrentProcess
+	defer func() { execCurrentProcess = oldExec }()
+	var execPath string
+	execCurrentProcess = func(path string) error {
+		execPath = path
+		return nil
+	}
+
+	if !a.execNewBinaryBeforeReinit("test") {
+		t.Fatalf("execNewBinaryBeforeReinit = false, want true")
+	}
+	if execPath != path {
+		t.Fatalf("exec path = %q, want %q", execPath, path)
+	}
+}
+
+func TestSelfReloadExportsReturnPromptForExec(t *testing.T) {
+	t.Setenv(EnvTUIReturnSessionID, "")
+	t.Setenv(EnvTUIReturnSessionName, "")
+	sess := session.NewSession("chat-one", "session-uuid")
+	a := &App{returnPathSession: sess}
+
+	a.exportReturnPromptForExec("suspend_return")
+
+	if got := os.Getenv(EnvTUIReturnSessionID); got != "session-uuid" {
+		t.Fatalf("%s=%q want session-uuid", EnvTUIReturnSessionID, got)
+	}
+	if got := os.Getenv(EnvTUIReturnSessionName); got != "chat-one" {
+		t.Fatalf("%s=%q want chat-one", EnvTUIReturnSessionName, got)
+	}
+}
+
+func TestRuntimeStampIncludesExecutableHash(t *testing.T) {
+	a, scr, cleanup := mkAppWithSessions(t, 1)
+	defer cleanup()
+	a.buildHash = "build1"
+	a.executableHash = "exec22"
+	a.runHash = "run333"
+	a.lastHeartbeatAt = time.Now()
+
+	a.draw()
+	scr.Show()
+
+	text := compactPanelScreenText(scr)
+	if !strings.Contains(text, "b:build1 x:exec22 r:run333") {
+		t.Fatalf("runtime stamp missing executable hash:\n%s", text)
 	}
 }

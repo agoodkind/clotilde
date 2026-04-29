@@ -1105,6 +1105,29 @@ func GetSessionDetailViaDaemon(ctx context.Context, sessionName string) (*clydev
 	return resp, nil
 }
 
+func GetSessionExportStatsViaDaemon(ctx context.Context, sessionName string) (*clydev1.GetSessionExportStatsResponse, error) {
+	log := daemonClientLog(ctx)
+	log.DebugContext(ctx, "daemon.client.session_export_stats.begin", "session", sessionName)
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.session_export_stats.connect_failed", "err", err)
+		return nil, err
+	}
+	defer c.conn.Close()
+	rpcCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	resp, rpcErr := c.rpc.GetSessionExportStats(rpcCtx, &clydev1.GetSessionExportStatsRequest{SessionName: sessionName})
+	if rpcErr != nil {
+		log.DebugContext(rpcCtx, "daemon.client.session_export_stats.rpc_failed", "session", sessionName, "err", rpcErr)
+		return nil, rpcErr
+	}
+	log.DebugContext(rpcCtx, "daemon.client.session_export_stats.ok",
+		"session", sessionName,
+		"visible_messages", resp.GetVisibleMessages(),
+		"compactions", resp.GetCompactions())
+	return resp, nil
+}
+
 func ProbeContextUsageViaDaemon(ctx context.Context, sessionName string) (*clydev1.ProbeContextUsageResponse, error) {
 	log := daemonClientLog(ctx)
 	log.DebugContext(ctx, "daemon.client.context_usage.begin", "session", sessionName)

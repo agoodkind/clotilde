@@ -25,6 +25,7 @@ const (
 	ClydeService_ListActiveSessions_FullMethodName     = "/clyde.v1.ClydeService/ListActiveSessions"
 	ClydeService_ListSessions_FullMethodName           = "/clyde.v1.ClydeService/ListSessions"
 	ClydeService_GetSessionDetail_FullMethodName       = "/clyde.v1.ClydeService/GetSessionDetail"
+	ClydeService_GetSessionExportStats_FullMethodName  = "/clyde.v1.ClydeService/GetSessionExportStats"
 	ClydeService_TriggerScan_FullMethodName            = "/clyde.v1.ClydeService/TriggerScan"
 	ClydeService_ReloadDaemon_FullMethodName           = "/clyde.v1.ClydeService/ReloadDaemon"
 	ClydeService_SubscribeRegistry_FullMethodName      = "/clyde.v1.ClydeService/SubscribeRegistry"
@@ -57,6 +58,7 @@ type ClydeServiceClient interface {
 	ListActiveSessions(ctx context.Context, in *ListActiveSessionsRequest, opts ...grpc.CallOption) (*ListActiveSessionsResponse, error)
 	ListSessions(ctx context.Context, in *ListSessionsRequest, opts ...grpc.CallOption) (*ListSessionsResponse, error)
 	GetSessionDetail(ctx context.Context, in *GetSessionDetailRequest, opts ...grpc.CallOption) (*GetSessionDetailResponse, error)
+	GetSessionExportStats(ctx context.Context, in *GetSessionExportStatsRequest, opts ...grpc.CallOption) (*GetSessionExportStatsResponse, error)
 	TriggerScan(ctx context.Context, in *TriggerScanRequest, opts ...grpc.CallOption) (*TriggerScanResponse, error)
 	ReloadDaemon(ctx context.Context, in *ReloadDaemonRequest, opts ...grpc.CallOption) (*ReloadDaemonResponse, error)
 	SubscribeRegistry(ctx context.Context, in *SubscribeRegistryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[SubscribeRegistryResponse], error)
@@ -147,6 +149,16 @@ func (c *clydeServiceClient) GetSessionDetail(ctx context.Context, in *GetSessio
 	return out, nil
 }
 
+func (c *clydeServiceClient) GetSessionExportStats(ctx context.Context, in *GetSessionExportStatsRequest, opts ...grpc.CallOption) (*GetSessionExportStatsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSessionExportStatsResponse)
+	err := c.cc.Invoke(ctx, ClydeService_GetSessionExportStats_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *clydeServiceClient) TriggerScan(ctx context.Context, in *TriggerScanRequest, opts ...grpc.CallOption) (*TriggerScanResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(TriggerScanResponse)
@@ -174,10 +186,10 @@ func (c *clydeServiceClient) SubscribeRegistry(ctx context.Context, in *Subscrib
 		return nil, err
 	}
 	x := &grpc.GenericClientStream[SubscribeRegistryRequest, SubscribeRegistryResponse]{ClientStream: stream}
-	if err := x.SendMsg(in); err != nil {
+	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
-	if err := x.CloseSend(); err != nil {
+	if err := x.ClientStream.CloseSend(); err != nil {
 		return nil, err
 	}
 	return x, nil
@@ -203,10 +215,10 @@ func (c *clydeServiceClient) SubscribeProviderStats(ctx context.Context, in *Sub
 		return nil, err
 	}
 	x := &grpc.GenericClientStream[SubscribeProviderStatsRequest, ProviderStatsEvent]{ClientStream: stream}
-	if err := x.SendMsg(in); err != nil {
+	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
-	if err := x.CloseSend(); err != nil {
+	if err := x.ClientStream.CloseSend(); err != nil {
 		return nil, err
 	}
 	return x, nil
@@ -312,10 +324,10 @@ func (c *clydeServiceClient) TailTranscript(ctx context.Context, in *TailTranscr
 		return nil, err
 	}
 	x := &grpc.GenericClientStream[TailTranscriptRequest, TailTranscriptResponse]{ClientStream: stream}
-	if err := x.SendMsg(in); err != nil {
+	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
-	if err := x.CloseSend(); err != nil {
+	if err := x.ClientStream.CloseSend(); err != nil {
 		return nil, err
 	}
 	return x, nil
@@ -341,10 +353,10 @@ func (c *clydeServiceClient) CompactPreview(ctx context.Context, in *CompactRunR
 		return nil, err
 	}
 	x := &grpc.GenericClientStream[CompactRunRequest, CompactEvent]{ClientStream: stream}
-	if err := x.SendMsg(in); err != nil {
+	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
-	if err := x.CloseSend(); err != nil {
+	if err := x.ClientStream.CloseSend(); err != nil {
 		return nil, err
 	}
 	return x, nil
@@ -360,10 +372,10 @@ func (c *clydeServiceClient) CompactApply(ctx context.Context, in *CompactRunReq
 		return nil, err
 	}
 	x := &grpc.GenericClientStream[CompactRunRequest, CompactEvent]{ClientStream: stream}
-	if err := x.SendMsg(in); err != nil {
+	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
-	if err := x.CloseSend(); err != nil {
+	if err := x.ClientStream.CloseSend(); err != nil {
 		return nil, err
 	}
 	return x, nil
@@ -402,6 +414,7 @@ type ClydeServiceServer interface {
 	ListActiveSessions(context.Context, *ListActiveSessionsRequest) (*ListActiveSessionsResponse, error)
 	ListSessions(context.Context, *ListSessionsRequest) (*ListSessionsResponse, error)
 	GetSessionDetail(context.Context, *GetSessionDetailRequest) (*GetSessionDetailResponse, error)
+	GetSessionExportStats(context.Context, *GetSessionExportStatsRequest) (*GetSessionExportStatsResponse, error)
 	TriggerScan(context.Context, *TriggerScanRequest) (*TriggerScanResponse, error)
 	ReloadDaemon(context.Context, *ReloadDaemonRequest) (*ReloadDaemonResponse, error)
 	SubscribeRegistry(*SubscribeRegistryRequest, grpc.ServerStreamingServer[SubscribeRegistryResponse]) error
@@ -448,6 +461,9 @@ func (UnimplementedClydeServiceServer) ListSessions(context.Context, *ListSessio
 }
 func (UnimplementedClydeServiceServer) GetSessionDetail(context.Context, *GetSessionDetailRequest) (*GetSessionDetailResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetSessionDetail not implemented")
+}
+func (UnimplementedClydeServiceServer) GetSessionExportStats(context.Context, *GetSessionExportStatsRequest) (*GetSessionExportStatsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSessionExportStats not implemented")
 }
 func (UnimplementedClydeServiceServer) TriggerScan(context.Context, *TriggerScanRequest) (*TriggerScanResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TriggerScan not implemented")
@@ -633,6 +649,24 @@ func _ClydeService_GetSessionDetail_Handler(srv interface{}, ctx context.Context
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ClydeServiceServer).GetSessionDetail(ctx, req.(*GetSessionDetailRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClydeService_GetSessionExportStats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSessionExportStatsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).GetSessionExportStats(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_GetSessionExportStats_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).GetSessionExportStats(ctx, req.(*GetSessionExportStatsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -992,6 +1026,10 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetSessionDetail",
 			Handler:    _ClydeService_GetSessionDetail_Handler,
+		},
+		{
+			MethodName: "GetSessionExportStats",
+			Handler:    _ClydeService_GetSessionExportStats_Handler,
 		},
 		{
 			MethodName: "TriggerScan",
