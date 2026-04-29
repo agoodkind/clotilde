@@ -3,9 +3,11 @@ version: 2
 
 project_name: clyde
 
+dist: .goreleaser-dist
+
 before:
   hooks:
-    - go mod tidy
+    - go mod download
 
 builds:
   - id: clyde
@@ -16,7 +18,6 @@ builds:
     goos:
       - linux
       - darwin
-      - windows
     goarch:
       - amd64
       - arm64
@@ -27,14 +28,25 @@ archives:
   - id: default
     formats:
       - tar.gz
-    format_overrides:
-      - goos: windows
-        formats:
-          - zip
     name_template: >-
       {{ .ProjectName }}_ {{- .Os }}_ {{- .Arch }}
     ids:
       - clyde
+
+notarize:
+  macos:
+    - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
+      ids:
+        - clyde
+      sign:
+        certificate: "{{ .Env.MACOS_SIGN_P12 }}"
+        password: "{{ .Env.MACOS_SIGN_PASSWORD }}"
+      notarize:
+        issuer_id: "{{ .Env.MACOS_NOTARY_ISSUER_ID }}"
+        key_id: "{{ .Env.MACOS_NOTARY_KEY_ID }}"
+        key: "{{ .Env.MACOS_NOTARY_KEY }}"
+        wait: true
+        timeout: 20m
 
 checksum:
   name_template: "checksums.txt"

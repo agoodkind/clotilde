@@ -1,7 +1,7 @@
 .PHONY: help build test test-watch coverage clean fmt lint staticcheck deadcode govulncheck audit \
         install-build-guard uninstall-build-guard setup-hooks \
         deploy install-launch-agent uninstall-launch-agent install-hook uninstall-hook \
-        sign notarize
+        release release-snapshot sign notarize dist/clyde
 
 # Optional local overrides (signing creds, never committed). Copy config.mk.example.
 -include config.mk
@@ -40,8 +40,11 @@ LAUNCH_AGENT_PLIST    := $(HOME)/Library/LaunchAgents/$(LAUNCH_AGENT_LABEL).plis
 LAUNCH_AGENT_TEMPLATE := packaging/macos/io.goodkind.clyde.daemon.plist.in
 DAEMON_LOG            := $(HOME)/Library/Logs/clyde-daemon.log
 CLYDE_BIN             := $(HOME)/.local/bin/clyde
-CLYDE_DAEMON_BIN      := $(CURDIR)/dist/clyde
+CLYDE_DAEMON_BIN      := $(CLYDE_BIN)
+CLYDE_DEV_RUN         := $(CLYDE_BIN)
 UID                   := $(shell id -u)
+BUNDLE_ID             ?= io.goodkind.clyde
+CODESIGN_IDENTITY     := $(or $(CERT_ID),$(shell if [ "$$(uname)" = "Darwin" ]; then security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/ { print $$2; exit }'; fi))
 
 # ---------------------------------------------------------------------------
 # Default
@@ -57,19 +60,49 @@ help: ## Show this help message
 # Build
 # ---------------------------------------------------------------------------
 
-build: dist/clyde ## Build the clyde binary
-
-dist/clyde: $(GO_SRC) go.mod go.sum
+build: dist/clyde ## Build and signing-check the clyde binary without leaving a repo-local executable
 	@echo "Building clyde..."
+	@tmp="$$(mktemp -t clyde-build.XXXXXX)"; \
+	trap 'rm -f "$$tmp"' EXIT; \
+	go build -ldflags "$(LDFLAGS)" -o "$$tmp" ./cmd/clyde; \
+	if [ "$$(uname)" = "Darwin" ]; then \
+		if [ -z "$(CODESIGN_IDENTITY)" ]; then \
+			echo "No Developer ID Application signing identity found."; \
+			echo "Set CERT_ID in config.mk or install a Developer ID Application certificate."; \
+			exit 1; \
+		fi; \
+		echo "Signing temporary clyde build with $(CODESIGN_IDENTITY)..."; \
+		codesign --force --sign "$(CODESIGN_IDENTITY)" --identifier "$(BUNDLE_ID)" --options runtime --timestamp=none "$$tmp"; \
+		codesign --verify --verbose=2 "$$tmp"; \
+	fi
+	@echo "✓ Build and signing check passed"
+
+dist/clyde:
 	@mkdir -p dist
-	@go build -ldflags "$(LDFLAGS)" -o dist/clyde ./cmd/clyde
-	@echo "✓ Built to dist/clyde"
+	@chmod -R u+w dist/clyde 2>/dev/null; true
+	@rm -rf dist/clyde
+	@mkdir -p dist/clyde
+	@printf '%s\n' \
+		'Do not run binaries from this directory.' \
+		'Use ~/.local/bin/clyde so macOS Full Disk Access has one stable client path.' \
+		'Builds use temporary files and install only to ~/.local/bin/clyde.' \
+		> dist/clyde/README.txt
+	@chmod 0555 dist/clyde
+	@echo "✓ Reserved dist/clyde as a non-runtime directory"
 
 clean: ## Remove build artifacts
 	@echo "Cleaning..."
+	@chmod -R u+w dist 2>/dev/null; true
 	@rm -rf dist/
 	@rm -f *.test *.out coverage.txt coverage.html
 	@find . -name "*.test" -delete
+	@mkdir -p dist/clyde
+	@printf '%s\n' \
+		'Do not run binaries from this directory.' \
+		'Use ~/.local/bin/clyde so macOS Full Disk Access has one stable client path.' \
+		'Builds use temporary files and install only to ~/.local/bin/clyde.' \
+		> dist/clyde/README.txt
+	@chmod 0555 dist/clyde
 	@echo "✓ Cleaned"
 
 # ---------------------------------------------------------------------------
@@ -121,16 +154,16 @@ staticcheck: ## Run Clyde's staticcheck bundle and custom architecture analyzers
 # transcript under ~/.local/state/clyde/mitm/<upstream>/<timestamp>/.
 # Run mitmproxy once first to seed ~/.mitmproxy/mitmproxy-ca-cert.pem.
 capture-codex-cli: build
-	@dist/clyde mitm capture --upstream codex-cli
+	@"$(CLYDE_DEV_RUN)" mitm capture --upstream codex-cli
 
 capture-codex-desktop: build
-	@dist/clyde mitm capture --upstream codex-desktop
+	@"$(CLYDE_DEV_RUN)" mitm capture --upstream codex-desktop
 
 capture-claude-code: build
-	@dist/clyde mitm capture --upstream claude-code
+	@"$(CLYDE_DEV_RUN)" mitm capture --upstream claude-code
 
 capture-claude-desktop: build
-	@dist/clyde mitm capture --upstream claude-desktop
+	@"$(CLYDE_DEV_RUN)" mitm capture --upstream claude-desktop
 
 # mitm-launcher-* targets scaffold a dock-pinnable wrapper .app that
 # runs `clyde mitm launch <upstream>` on click. The wrapper ensures
@@ -167,8 +200,8 @@ wire-snapshot-check: build
 		fi; \
 		live_transcript="$$HOME/.local/state/clyde/mitm/$$upstream/$$live/capture.jsonl"; \
 		live_ref="$$HOME/.local/state/clyde/mitm/$$upstream/$$live/reference.toml"; \
-		dist/clyde mitm snapshot --upstream $$upstream --output-dir "$$HOME/.local/state/clyde/mitm/$$upstream/$$live" "$$live_transcript" >/dev/null && \
-		dist/clyde mitm diff "$$ref" "$$live_ref" || exit 1; \
+		"$(CLYDE_DEV_RUN)" mitm snapshot --upstream $$upstream --output-dir "$$HOME/.local/state/clyde/mitm/$$upstream/$$live" "$$live_transcript" >/dev/null && \
+		"$(CLYDE_DEV_RUN)" mitm diff "$$ref" "$$live_ref" || exit 1; \
 	done
 	@echo "✓ Wire snapshot parity clean"
 
@@ -199,10 +232,41 @@ audit: ## Run complexity and vulnerability checks (informational)
 	@echo "=== Vulnerability check ==="
 	@go tool govulncheck ./... || true
 
-install: build ## Symlink ~/.local/bin/clyde to the repo build
+release: ## Run a full GoReleaser release with 1Password-backed Apple notarization
+	@[ -f notarize.env ] || { echo "notarize.env not found. Copy notarize.env.example and fill in your 1Password op:// paths."; exit 1; }
+	@GOFLAGS= op run --env-file=notarize.env -- goreleaser release --clean
+
+release-snapshot: ## Build release artifacts locally without publishing or notarizing
+	@GOFLAGS= goreleaser release --snapshot --clean --skip=publish --skip=notarize
+
+install: dist/clyde ## Install the signed clyde binary to ~/.local/bin/clyde
 	@mkdir -p "$(HOME)/.local/bin"
-	@ln -sfn "$(CLYDE_DAEMON_BIN)" "$(CLYDE_BIN)"
-	@echo "✓ Symlinked $(CLYDE_BIN) -> $(CLYDE_DAEMON_BIN)"
+	@tmp="$$(mktemp -t clyde-install.XXXXXX)"; \
+	trap 'rm -f "$$tmp"' EXIT; \
+	go build -ldflags "$(LDFLAGS)" -o "$$tmp" ./cmd/clyde; \
+	if [ "$$(uname)" = "Darwin" ]; then \
+		if [ -z "$(CODESIGN_IDENTITY)" ]; then \
+			echo "No Developer ID Application signing identity found."; \
+			echo "Set CERT_ID in config.mk or install a Developer ID Application certificate."; \
+			exit 1; \
+		fi; \
+		echo "Signing install build with $(CODESIGN_IDENTITY)..."; \
+		codesign --force --sign "$(CODESIGN_IDENTITY)" --identifier "$(BUNDLE_ID)" --options runtime --timestamp=none "$$tmp"; \
+		codesign --verify --verbose=2 "$$tmp"; \
+	fi; \
+	rm -f "$(CLYDE_BIN)"; \
+	cp -f "$$tmp" "$(CLYDE_BIN)"
+	@if [ "$$(uname)" = "Darwin" ]; then codesign --verify --verbose=2 "$(CLYDE_BIN)"; fi
+	@chmod -R u+w dist/clyde 2>/dev/null; true
+	@rm -rf dist/clyde
+	@mkdir -p dist/clyde
+	@printf '%s\n' \
+		'Do not run binaries from this directory.' \
+		'Use ~/.local/bin/clyde so macOS Full Disk Access has one stable client path.' \
+		'Builds use temporary files and install only to ~/.local/bin/clyde.' \
+		> dist/clyde/README.txt
+	@chmod 0555 dist/clyde
+	@echo "✓ Installed $(CLYDE_BIN)"
 
 install-build-guard: ## Enforce repo staticcheck on direct go build via GOFLAGS toolexec
 	@./scripts/install-go-build-guard.sh
@@ -219,31 +283,31 @@ setup-hooks: ## Configure git hooks
 	@chmod +x .githooks/*
 	@echo "✓ Git hooks configured"
 
-deploy: build ## Install/start the daemon if needed; otherwise hand it off to the new binary
+deploy: install ## Install/start the daemon if needed; otherwise hand it off to the new binary
 	@if [ "$$(uname)" != "Darwin" ]; then \
-		echo "deploy currently manages the macOS LaunchAgent; use dist/clyde daemon reload on this platform"; \
+		echo "deploy currently manages the macOS LaunchAgent; use $(CLYDE_BIN) daemon reload on this platform"; \
 		exit 1; \
 	fi
 	@if [ ! -f "$(LAUNCH_AGENT_PLIST)" ] || ! launchctl list "$(LAUNCH_AGENT_LABEL)" >/dev/null 2>&1 || ! launchctl list "$(LAUNCH_AGENT_LABEL)" 2>/dev/null | grep -q '"PID" = [0-9]'; then \
 		$(MAKE) install-launch-agent; \
 	else \
-		dist/clyde daemon reload; \
+		"$(CLYDE_BIN)" daemon reload; \
 	fi
 
-install-launch-agent: ## Render and install the daemon LaunchAgent (runs OAuth refresh + adapter + prune in-process)
+install-launch-agent: install ## Render and install the daemon LaunchAgent (runs OAuth refresh + adapter + prune in-process)
 	@mkdir -p "$(HOME)/Library/LaunchAgents" "$(HOME)/Library/Logs"
 	@touch "$(DAEMON_LOG)"
 	@sed -e 's|@@CLYDE_DAEMON_BIN@@|$(CLYDE_DAEMON_BIN)|g' \
 	     -e 's|@@HOME@@|$(HOME)|g' \
 	     -e 's|@@LOG_PATH@@|$(DAEMON_LOG)|g' \
 	     "$(LAUNCH_AGENT_TEMPLATE)" > "$(LAUNCH_AGENT_PLIST)"
-	@launchctl bootout gui/$(UID)/$(LAUNCH_AGENT_LABEL) 2>/dev/null; true
+	@launchctl bootout gui/$(UID) "$(LAUNCH_AGENT_PLIST)" 2>/dev/null; true
 	@launchctl bootstrap gui/$(UID) "$(LAUNCH_AGENT_PLIST)"
 	@echo "✓ LaunchAgent installed: $(LAUNCH_AGENT_PLIST)"
 	@echo "  Logs: $(DAEMON_LOG)"
 
 uninstall-launch-agent: ## Remove the clyde daemon LaunchAgent
-	@launchctl bootout gui/$(UID)/$(LAUNCH_AGENT_LABEL) 2>/dev/null; true
+	@launchctl bootout gui/$(UID) "$(LAUNCH_AGENT_PLIST)" 2>/dev/null; true
 	@rm -f "$(LAUNCH_AGENT_PLIST)"
 	@echo "✓ LaunchAgent removed"
 
@@ -274,19 +338,21 @@ uninstall-hook: ## Remove the SessionStart hook from ~/.claude/settings.json
 # ---------------------------------------------------------------------------
 
 ifdef CERT_ID
-sign: build ## Sign binary with Developer ID Application certificate
-	@echo "Signing dist/clyde..."
-	@codesign -s "$(CERT_ID)" -f --options runtime --timestamp dist/clyde
-	@echo "✓ Signed dist/clyde"
+sign: build ## Build and signing-check binary with Developer ID Application certificate
 
-notarize: sign ## Sign and notarize binary for distribution (requires NOTARY_PROFILE in config.mk)
-	@echo "Creating notarization zip..."
-	@ditto -c -k --keepParent dist/clyde dist/clyde-notarize.zip
-	@echo "Submitting for notarization (waiting)..."
-	@xcrun notarytool submit dist/clyde-notarize.zip \
+notarize: dist/clyde ## Sign and notarize binary for distribution (requires NOTARY_PROFILE in config.mk)
+	@echo "Building signed notarization artifact..."
+	@tmpdir="$$(mktemp -d -t clyde-notarize.XXXXXX)"; \
+	trap 'rm -rf "$$tmpdir" dist/clyde-notarize.zip' EXIT; \
+	go build -ldflags "$(LDFLAGS)" -o "$$tmpdir/clyde" ./cmd/clyde; \
+	codesign --force --sign "$(CERT_ID)" --identifier "$(BUNDLE_ID)" --options runtime --timestamp "$$tmpdir/clyde"; \
+	codesign --verify --verbose=2 "$$tmpdir/clyde"; \
+	echo "Creating notarization zip..."; \
+	ditto -c -k --keepParent "$$tmpdir/clyde" dist/clyde-notarize.zip; \
+	echo "Submitting for notarization (waiting)..."; \
+	xcrun notarytool submit dist/clyde-notarize.zip \
 		--keychain-profile "$(NOTARY_PROFILE)" \
 		--wait
-	@rm dist/clyde-notarize.zip
 	@echo "✓ Notarized dist/clyde"
 else
 sign: build ## Sign binary (requires CERT_ID in config.mk)

@@ -21,6 +21,7 @@ profile.cov
 # Go artifacts
 vendor/
 dist/
+.goreleaser-dist/
 *.test
 *.out
 coverage.html
@@ -34,6 +35,7 @@ go.work.sum
 
 # env file
 .env
+notarize.env
 
 # Local build config (signing creds, never commit)
 config.mk
