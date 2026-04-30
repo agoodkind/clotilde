@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
-	"goodkind.io/clyde/internal/adapter/anthropic/fallback"
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	"goodkind.io/clyde/internal/adapter/oauth"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
@@ -96,28 +95,23 @@ var systemFingerprint = "fp_clyde_" + time.Now().UTC().Format("20060102")
 // either calls Start in a goroutine (production) or hands the
 // handler to httptest.Server (tests).
 type Server struct {
-	cfg      config.AdapterConfig
-	logprobs config.AdapterLogprobs
-	deps     Deps
-	log      *slog.Logger
-	logging  config.LoggingConfig
-	registry *Registry
-	sem      chan struct{}
-	token    string
-	mux      *http.ServeMux
-	httpSrv  *http.Server
-	connMu   sync.Mutex
-	conns    map[net.Conn]http.ConnState
-	oauthMgr *oauth.Manager
-	anthr    *anthropic.Client
-	// fb is the optional `claude -p` fallback driver. nil unless
-	// cfg.Fallback.Enabled. When set, fbSem caps its concurrency
-	// independently of sem.
-	fb            *fallback.Client
-	fbSem         chan struct{}
-	httpClient    *http.Client
-	ctxUsage      *contextUsageTracker
-	providerRegistry *adapterprovider.Registry
+	cfg               config.AdapterConfig
+	logprobs          config.AdapterLogprobs
+	deps              Deps
+	log               *slog.Logger
+	logging           config.LoggingConfig
+	registry          *Registry
+	sem               chan struct{}
+	token             string
+	mux               *http.ServeMux
+	httpSrv           *http.Server
+	connMu            sync.Mutex
+	conns             map[net.Conn]http.ConnState
+	oauthMgr          *oauth.Manager
+	anthr             *anthropic.Client
+	httpClient        *http.Client
+	ctxUsage          *contextUsageTracker
+	providerRegistry  *adapterprovider.Registry
 	codexProvider     *adaptercodex.Provider
 	anthropicProvider *anthropic.Provider
 }
@@ -206,8 +200,12 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 			CCVersion:               id.CCVersion,
 			CCEntrypoint:            id.CCEntrypoint,
 		})
-		s.anthropicProvider = anthropic.NewProvider(anthropic.ProviderOptions{
-			Log: log.With("subcomponent", "anthropic_provider"),
+		s.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{
+			Config: cfg,
+			Logger: log.With("subcomponent", "anthropic_provider"),
+		}, anthropic.ProviderOptions{
+			Collect: s.runAnthropicProviderCollect,
+			Stream:  s.runAnthropicProviderStream,
 		})
 		s.providerRegistry.Register(s.anthropicProvider)
 		s.log.LogAttrs(context.Background(), slog.LevelInfo, "adapter.provider_registry.registered",
@@ -216,21 +214,6 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 		)
 		s.log.LogAttrs(context.Background(), slog.LevelInfo, "adapter.oauth.enabled",
 			slog.Int("max_concurrent", max),
-		)
-	}
-	if cfg.Fallback.Enabled {
-		fbCfg, err := fallback.FromAdapterConfig(cfg.Fallback, deps.ResolveClaude, deps.ScratchDir)
-		if err != nil {
-			return nil, fmt.Errorf("adapter: fallback wiring: %w", err)
-		}
-		s.fb = fallback.New(fbCfg)
-		s.fbSem = make(chan struct{}, cfg.Fallback.MaxConcurrent)
-		s.log.LogAttrs(context.Background(), slog.LevelInfo, "adapter.fallback.enabled",
-			slog.String("trigger", cfg.Fallback.Trigger),
-			slog.Int("max_concurrent", cfg.Fallback.MaxConcurrent),
-			slog.String("binary", fbCfg.Binary),
-			slog.String("scratch", fbCfg.ScratchDir),
-			slog.Bool("forward_to_shunt", cfg.Fallback.ForwardToShunt.Enabled),
 		)
 	}
 	s.mux = s.routes()

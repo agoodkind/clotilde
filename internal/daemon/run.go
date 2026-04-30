@@ -40,6 +40,7 @@ type ExtraLoop func(log *slog.Logger) func()
 
 const adapterConfigReloadDebounce = 250 * time.Millisecond
 const adapterShutdownWait = 4 * time.Second
+
 // reloadHTTPDrainWait caps how long the reload waits for in-flight
 // adapter requests to finish before force-closing. The drain polls
 // active-request count rather than a flat sleep, so a tunnel that sits
@@ -241,6 +242,9 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
 		if exclusiveStopped {
 			exclusiveMu.Unlock()
 			return
+		}
+		if cancel := srv.startBinaryUpdateWatcher(2 * time.Second); cancel != nil {
+			exclusiveCancels = append(exclusiveCancels, cancel)
 		}
 		for _, loop := range extraLoops {
 			if loop == nil {

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
 
 func newTranslatorForTest() *StreamTranslator {
@@ -162,5 +163,67 @@ func TestStreamToolTranslator(t *testing.T) {
 	want2 := string([]byte{'"', ':', '"', 'N', 'Y', '"', '}'})
 	if all[2].Choices[0].Delta.ToolCalls[0].Function.Arguments != want2 {
 		t.Fatalf("arg2 %+v want %q", all[2].Choices[0].Delta.ToolCalls, want2)
+	}
+}
+
+func TestStreamTranslatorEventPathEmitsToolCallEvents(t *testing.T) {
+	t.Parallel()
+	tr := NewStreamTranslator("chatcmpl-event-tool", "alias")
+
+	events, _, _, _, err := tr.HandleEventEvents(
+		"content_block_start",
+		[]byte(`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t1","name":"get_weather","input":{}}}`),
+	)
+	if err != nil {
+		t.Fatalf("HandleEventEvents: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events len=%d want 1", len(events))
+	}
+	if events[0].Kind != adapterrender.EventToolCallDelta {
+		t.Fatalf("kind=%q want %q", events[0].Kind, adapterrender.EventToolCallDelta)
+	}
+	if len(events[0].ToolCalls) != 1 {
+		t.Fatalf("tool_calls len=%d want 1", len(events[0].ToolCalls))
+	}
+	if events[0].ToolCalls[0].Function.Name != "get_weather" {
+		t.Fatalf("tool name=%q", events[0].ToolCalls[0].Function.Name)
+	}
+}
+
+func TestStreamTranslatorEventPathEmitsRefusalEvent(t *testing.T) {
+	t.Parallel()
+	tr := NewStreamTranslator("chatcmpl-event-refusal", "alias")
+
+	if _, _, _, _, err := tr.HandleEventEvents("message_start", []byte(`{"type":"message_start","message":{"usage":{"input_tokens":1,"output_tokens":0}}}`)); err != nil {
+		t.Fatalf("message_start: %v", err)
+	}
+	if _, _, _, _, err := tr.HandleEventEvents("content_block_start", []byte(`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)); err != nil {
+		t.Fatalf("content_block_start: %v", err)
+	}
+	if _, _, _, _, err := tr.HandleEventEvents("content_block_delta", []byte(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"declined"}}`)); err != nil {
+		t.Fatalf("content_block_delta: %v", err)
+	}
+	if _, _, _, _, err := tr.HandleEventEvents("message_delta", []byte(`{"type":"message_delta","delta":{"stop_reason":"refusal"},"usage":{"output_tokens":2}}`)); err != nil {
+		t.Fatalf("message_delta: %v", err)
+	}
+	events, finished, reason, usage, err := tr.HandleEventEvents("message_stop", []byte(`{"type":"message_stop"}`))
+	if err != nil {
+		t.Fatalf("message_stop: %v", err)
+	}
+	if !finished || reason != "content_filter" {
+		t.Fatalf("finished=%v reason=%q", finished, reason)
+	}
+	if usage == nil || usage.CompletionTokens != 2 {
+		t.Fatalf("usage=%+v", usage)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events len=%d want 1", len(events))
+	}
+	if events[0].Kind != adapterrender.EventAssistantRefusalDelta {
+		t.Fatalf("kind=%q want %q", events[0].Kind, adapterrender.EventAssistantRefusalDelta)
+	}
+	if events[0].Text != "declined" {
+		t.Fatalf("refusal=%q want declined", events[0].Text)
 	}
 }

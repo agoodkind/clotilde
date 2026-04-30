@@ -44,20 +44,19 @@ func TestNewRegistryCapabilitiesValidation(t *testing.T) {
 			wantSub: "supports_vision",
 		},
 		{
-			name: "missing_logprobs_anthropic_rejected",
+			name: "fallback_logprobs_rejected",
 			mutate: func(cfg *config.AdapterConfig) {
 				cfg.Logprobs = config.AdapterLogprobs{
 					Fallback: "reject",
 				}
 			},
-			wantSub: "anthropic",
+			wantSub: "no longer supported",
 		},
 		{
 			name: "invalid_logprobs_value_rejected",
 			mutate: func(cfg *config.AdapterConfig) {
 				cfg.Logprobs = config.AdapterLogprobs{
-					Anthropic: "reject",
-					Fallback:  "verbatim",
+					Anthropic: "verbatim",
 				}
 			},
 			wantSub: "invalid",
@@ -112,7 +111,6 @@ func TestNewRegistryLogprobsDropAccepted(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Logprobs = config.AdapterLogprobs{
 		Anthropic: "drop",
-		Fallback:  "drop",
 	}
 	if _, err := NewRegistry(cfg); err != nil {
 		t.Fatalf("NewRegistry: %v", err)

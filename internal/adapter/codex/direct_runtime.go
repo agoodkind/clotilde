@@ -9,6 +9,7 @@ import (
 
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
 
 type DirectConfig struct {
@@ -42,7 +43,7 @@ func RunDirect(
 	req adapteropenai.ChatRequest,
 	model adaptermodel.ResolvedModel,
 	effort string,
-	emit func(adapteropenai.StreamChunk) error,
+	emit func(adapterrender.Event) error,
 ) (RunResult, error) {
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = http.DefaultClient
@@ -78,7 +79,7 @@ func RunDirect(
 		SessionCache:   cfg.SessionCache,
 		Log:            cfg.Log,
 	}
-	return RunWebsocketTransport(ctx, wsCfg, wsReq, emit)
+	return RunWebsocketTransportEvents(ctx, wsCfg, wsReq, emit)
 }
 
 var errCodexWebsocketDisabled = errors.New("codex websocket transport is disabled but no HTTPS fallback exists")

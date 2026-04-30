@@ -87,6 +87,7 @@ stream, stream_options, tools, user`. `unknown_keys` is always empty.
 `cursorConversationId` and `cursorRequestId`. Nothing else.
 
 **Tools (Responses API shape, no `function` sub-object):**
+
 - Function tools: flat `{type, name, description, parameters, strict}`
 - Custom tools: flat `{type, name, description, format}` where
   `format = {definition, syntax, type}`
@@ -98,6 +99,7 @@ stream, stream_options, tools, user`. `unknown_keys` is always empty.
 decompiled IDE-to-server proto carried `unified_mode`, `is_agentic`,
 `is_background_composer`, `subagent_info`, `is_resume`. None reach our
 adapter. Cursor server collapses them.
+
 - Agent mode: 18 tools
 - Plan mode: same set plus `CreatePlan`, total 19 tools
 - Cursor product tools observed: `Subagent`, `SwitchMode`, `AskQuestion`,
@@ -168,17 +170,67 @@ not a long-running task; it is replaced by a generator pass.
 
 ## Live package ownership
 
-| Package | Ownership |
-|---|---|
-| `internal/adapter/` | HTTP handler and dispatch. No upstream wire knowledge. |
-| `internal/adapter/openai/` | OpenAI request decode, response encode, SSE framing, wire types. |
-| `internal/adapter/cursor/` | Cursor product layer. Translates `openai.ChatRequest` into `cursor.Request` (conversation key, request id, tool-presence flags, MCP tool name list). |
-| `internal/adapter/resolver/` | Model identity. Takes `cursor.Request` and registry, returns `ResolvedRequest` (provider, family, effort, budget). |
-| `internal/adapter/provider/` | Provider interface, shared event writer, shared error types. |
-| `internal/adapter/anthropic/` | Anthropic OAuth direct provider. Request, transport, response. |
-| `internal/adapter/codex/` | Codex websocket-only provider. Transport, continuation ledger, turn metadata. |
-| `internal/adapter/render/` | Normalized event model. OpenAI chunk rendering. |
-| `internal/adapter/runtime/` | Lifecycle logging, notice surfacing, request-scoped fields. |
+| Package                       | Ownership                                                                                                                                            |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `internal/adapter/`           | HTTP handler and dispatch. No upstream wire knowledge.                                                                                               |
+| `internal/adapter/openai/`    | OpenAI request decode, response encode, SSE framing, wire types.                                                                                     |
+| `internal/adapter/cursor/`    | Cursor product layer. Translates `openai.ChatRequest` into `cursor.Request` (conversation key, request id, tool-presence flags, MCP tool name list). |
+| `internal/adapter/resolver/`  | Model identity. Takes `cursor.Request` and registry, returns `ResolvedRequest` (provider, family, effort, budget).                                   |
+| `internal/adapter/provider/`  | Provider interface, shared event writer, shared error types.                                                                                         |
+| `internal/adapter/anthropic/` | Anthropic OAuth direct provider. Request, transport, response.                                                                                       |
+| `internal/adapter/codex/`     | Codex websocket-only provider. Transport, continuation ledger, turn metadata.                                                                        |
+| `internal/adapter/render/`    | Normalized event model. OpenAI chunk rendering.                                                                                                      |
+| `internal/adapter/runtime/`   | Lifecycle logging, notice surfacing, request-scoped fields.                                                                                          |
+
+## Claude Code via Clyde
+
+This is an additive workstream beside the existing OpenAI-compatible
+surface, not a replacement for it. The current adapter can already emit
+Claude-compatible outbound Anthropic traffic, but it cannot yet act as a
+Claude Code base URL because the public ingress is still OpenAI-shaped.
+
+Tracking:
+
+- `CLYDE-134` owns the inbound Claude-native ingress slice under `EPIC-8`.
+- `ISSUE-105` and `ISSUE-124` remain the adjacent outbound/provider-parity
+  workstreams this depends on and reuses.
+
+Already done:
+
+- [x] Claude-cli parity capture pipeline landed for outbound Anthropic
+      traffic: MITM capture, snapshot v2 extraction, codegen of
+      `internal/adapter/anthropic/wire_flavors_gen.go`, parity tests, and
+      drift checks.
+- [x] Body-side parity for `metadata.user_id` and
+      `context_management.clear_thinking_20251015` landed and was
+      live-validated against captured Claude traffic.
+- [x] `internal/adapter/provider/` exists and daemon startup already
+      registers both `codex.Provider` and `anthropic.Provider`.
+- [x] Anthropic request shaping, OAuth transport, and wire-flavor logic
+      already live under `internal/adapter/anthropic/`.
+
+Still missing:
+
+- [ ] Public Anthropic-native routes. `internal/adapter/server_routes.go`
+      still exposes only `/v1/models`, `/v1/chat/completions`,
+      `/v1/completions`, and `/healthz`.
+- [ ] A native `/v1/messages` handler path that preserves Anthropic JSON
+      and SSE semantics instead of translating everything through OpenAI
+      chunks.
+- [ ] Endpoint parity for adjacent Claude Code calls, most likely
+      `/v1/models` and `/v1/messages/count_tokens` on the same base URL.
+- [ ] An explicit auth model for native ingress: Clyde-terminated auth
+      using daemon-owned identity vs transparent forwarding of caller auth
+      headers.
+- [ ] Native model catalog and validation rules for Claude-compatible ids.
+      The plan is to return Claude-compatible model ids, not remap
+      `opus`/`sonnet` requests to `gpt-*`.
+
+Design rule:
+
+- Do not build a second Anthropic execution stack under the root package.
+  Native Claude ingress should converge on the same provider-owned path
+  this refactor is already moving toward.
 
 ## What gets deleted
 
@@ -212,38 +264,41 @@ layer's job is small and concrete. The resolver consumes a typed
 `cursor.Request` and returns a `ResolvedRequest` with model identity.
 
 - [x] `internal/adapter/cursor/Request` carries typed `openai.ChatRequest`
-  plus `ConversationID`, `RequestID`, tool-presence flags
-  (`HasSubagentTool`, `HasSwitchModeTool`, `HasAskQuestionTool`,
-  `HasCreatePlanTool`, `HasApplyPatchTool`), `MCPToolNames`. No
-  `RequestPathKind` enum, no separate MCP extraction.
+      plus `ConversationID`, `RequestID`, tool-presence flags
+      (`HasSubagentTool`, `HasSwitchModeTool`, `HasAskQuestionTool`,
+      `HasCreatePlanTool`, `HasApplyPatchTool`), `MCPToolNames`. No
+      `RequestPathKind` enum, no separate MCP extraction.
 - [x] `internal/adapter/resolver/` exists with typed `ResolvedRequest`
-  (provider, family, effort, context budget) and
-  `Resolve(req cursor.Request, registry ModelRegistry) (ResolvedRequest, error)`.
+      (provider, family, effort, context budget) and
+      `Resolve(req cursor.Request, registry ModelRegistry) (ResolvedRequest, error)`.
 - [x] Resolver bridges to `model.Registry` via `ModelRegistryAdapter`.
-  Daemon-side `cursor.NormalizeModelAlias` callers route through it.
+      Daemon-side `cursor.NormalizeModelAlias` callers route through it.
 - [x] Tests cover model identity, conversation key derivation, tool
-  presence classification.
+      presence classification.
 
 ### 2. Provider interface (DONE for Codex)
 
 - [x] `internal/adapter/provider/` defines `Provider`, `ProviderRequest`,
-  `EventWriter`, `Result`, `Registry`, typed errors. No upstream wire
-  types leak in.
+      `EventWriter`, `Result`, `Registry`, typed errors. No upstream wire
+      types leak in.
 - [x] Daemon startup constructs `codex.Provider` with deps (
-  `internal/adapter/server.go`). The provider is registered on
-  `provider.Registry`. Dispatcher routes Codex traffic via the registry.
-- [ ] Anthropic still goes through `anthropic_bridge.go` instead of
-  `Provider.Execute`. This closes when Plan 4 lands.
+      `internal/adapter/server.go`). The provider is registered on
+      `provider.Registry`. Dispatcher routes Codex traffic via the registry.
+- [x] Anthropic now routes through `Provider.Execute` entrypoints for both
+      collect and stream via `internal/adapter/anthropic/provider.go` and
+      `internal/adapter/anthropic_provider_dispatch.go`. Remaining work is
+      bridge/fallback cleanup and ownership simplification, not the initial
+      provider cutover.
 
 ### 3. Codegen wire types
 
 - [ ] Add a `make wire-types` target. Source schemas live under
-  `research/anthropic/` and `research/codex/`. Output goes into the provider
-  packages. Codegen runs in CI and is checked in.
+      `research/anthropic/` and `research/codex/`. Output goes into the provider
+      packages. Codegen runs in CI and is checked in.
 - [ ] Replace hand-rolled types in `internal/adapter/codex/request_builder.go`,
-  `native_tools.go`, `events.go`, `continuation.go`, and the raw item-union
-  helpers in `protocol.go` with the generated types. Remove all
-  `map[string]any` payload probing in the same change.
+      `native_tools.go`, `events.go`, `continuation.go`, and the raw item-union
+      helpers in `protocol.go` with the generated types. Remove all
+      `map[string]any` payload probing in the same change.
 - [ ] Same pass for Anthropic backend types where they still hand-roll.
 
 ### 4. Anthropic provider implementation
@@ -259,50 +314,86 @@ Anthropic provider half-assed.
 Required preconditions (all land before any other Plan 4 work):
 
 - [x] **MITM harness.** `clyde mitm capture --upstream claude-code` and the
-  always-on TOML path both land claude-cli outbound under
-  `~/.local/state/clyde/mitm/always-on/capture.jsonl`. Response bodies
-  are decompressed in the capture path so JSON is readable for diffing.
+      always-on TOML path both land claude-cli outbound under
+      `~/.local/state/clyde/mitm/always-on/capture.jsonl`. Response bodies
+      are decompressed in the capture path so JSON is readable for diffing.
 - [x] **Snapshot v2 extractor.** `clyde mitm snapshot --v2` classifies
-  records into per-flavor shapes with header presence/occurrence and
-  body field tracking. The flavor classifier handles raw-mode JSON
-  string bodies as well as summary-mode `{keys: [...]}` shapes.
+      records into per-flavor shapes with header presence/occurrence and
+      body field tracking. The flavor classifier handles raw-mode JSON
+      string bodies as well as summary-mode `{keys: [...]}` shapes.
 - [x] **Source-of-truth generation.** `clyde mitm codegen --package
-  anthropic` emits `internal/adapter/anthropic/wire_flavors_gen.go`
-  from the v2 reference. Two parity tests
-  (`TestOutboundHeadersMatchClaudeCLIInteractiveFlavor`,
-  `TestOutboundHeadersAllowConfigOverride`) gate divergence at unit
-  test time.
+anthropic` emits `internal/adapter/anthropic/wire_flavors_gen.go`
+      from the v2 reference. Two parity tests
+      (`TestOutboundHeadersMatchClaudeCLIInteractiveFlavor`,
+      `TestOutboundHeadersAllowConfigOverride`) gate divergence at unit
+      test time.
 - [x] **Body-side identity parity.** Adapter emits `metadata.user_id`
-  (with stable `device_id`, OAuth-derived `account_uuid`, and
-  per-conversation `session_id`) and
-  `context_management.clear_thinking_20251015` whenever thinking is
-  on, matching the captured reference exactly.
+      (with stable `device_id`, OAuth-derived `account_uuid`, and
+      per-conversation `session_id`) and
+      `context_management.clear_thinking_20251015` whenever thinking is
+      on, matching the captured reference exactly.
 - [x] **Live byte-identical verification.** Cursor turns against Opus
-  through the daemon route via MITM landed at
-  `~/.local/state/clyde/mitm/always-on/capture.jsonl`.
-  `clyde mitm snapshot --v2` extracted a single
-  `claude-code-interactive-6fde33e0` flavor matching the canonical
-  reference. `clyde mitm diff` returned `snapshot parity: clean`.
+      through the daemon route via MITM landed at
+      `~/.local/state/clyde/mitm/always-on/capture.jsonl`.
+      `clyde mitm snapshot --v2` extracted a single
+      `claude-code-interactive-6fde33e0` flavor matching the canonical
+      reference. `clyde mitm diff` returned `snapshot parity: clean`.
 - [x] **Drift alarm.** `clyde mitm drift-check` lands per-upstream
-  JSONL outcomes at `~/.local/state/clyde/mitm-drift/<upstream>.jsonl`.
-  The daemon scheduler runs it on a configurable interval via
-  `[mitm.drift]` config.
+      JSONL outcomes at `~/.local/state/clyde/mitm-drift/<upstream>.jsonl`.
+      The daemon scheduler runs it on a configurable interval via
+      `[mitm.drift]` config.
 
 Provider work itself:
 
-- [ ] `internal/adapter/anthropic/` implements `Provider` directly
-  against the OAuth bucket. No subprocess. No `claude -p`. No
-  fallback escalation logic.
+- [x] Anthropic collect and stream both enter through
+      `Provider.Execute`, with runtime execution delegated from
+      `internal/adapter/anthropic_provider_dispatch.go`.
+- [x] Removed the stale legacy top-level Anthropic dispatcher entrypoints
+      from `internal/adapter/anthropic/backend/backend.go`; the file is now
+      gone along with the fallback-only helpers it still carried.
+- [x] Finished the remaining ownership cleanup. The live Anthropic path is
+      provider-owned end to end; `internal/adapter/anthropic_bridge.go` and
+      `internal/adapter/anthropic/fallback/` are deleted, fallback dispatch
+      is gone from the root server, and `internal/adapter/oauth_handler.go`
+      is reduced to Anthropic request-building and identity helpers.
 - [ ] Classifier (`ResponseClass`, header interpretation, native error
-  envelopes) stays. Live-validate against real 429s. Attach captured
-  logs to the history file.
-- [ ] Delete `internal/adapter/anthropic/fallback/`.
+      envelopes) stays. Live-validate against real 429s. Attach captured
+      logs to the history file.
 - [ ] Delete root finish-reason callers (`internal/adapter/stream.go:150`
-  and any leftover after the fallback package is gone). Provider owns
-  its own finish-reason mapping.
+      and any leftover after the fallback package is gone). Provider owns
+      its own finish-reason mapping.
 - [ ] Live validation: a real Cursor + Anthropic-OAuth turn produces
-  zero divergence against the canonical reference. The diff tool gates
-  the slice. Manual eyeballing is not enough.
+      zero divergence against the canonical reference. The diff tool gates
+      the slice. Manual eyeballing is not enough.
+
+### 4b. Claude-native ingress for Claude Code
+
+Claude Code source review on 2026-04-29 suggests the integration point
+is Anthropic-native base URL override, not OpenAI compatibility. The
+source snapshot points at `ANTHROPIC_BASE_URL` and provider-specific
+variants, while the main inference client stays on Anthropic SDK
+surfaces. That means the native ingress should preserve Claude model ids
+and Anthropic wire format instead of mapping `opus`/`sonnet` to GPT
+aliases. Tack tracking for this slice lives in `CLYDE-134`.
+
+- [ ] Add Anthropic-native HTTP routes beside the OpenAI facade:
+      `/v1/messages` first, then `/v1/messages/count_tokens`, and confirm
+      whether native `/v1/models` should share the same listener or wrap the
+      existing registry output differently.
+- [ ] Add a native handler path that parses Anthropic request bodies and
+      emits Anthropic-native JSON and SSE frames without the OpenAI render
+      layer in the middle.
+- [ ] Reuse provider-owned Anthropic request building and transport. Do
+      not introduce a second root-owned request builder or response parser.
+- [ ] Decide the auth contract for native ingress. Default bias is
+      Clyde-terminated auth because it matches the existing daemon-owned
+      OAuth bucket and identity machinery.
+- [ ] Define the native model surface: Claude-compatible ids out,
+      Claude-compatible ids in, and any model override behavior documented
+      against the source snapshot.
+- [ ] Live-validate a real Claude CLI session against Clyde via
+      `ANTHROPIC_BASE_URL`, including streaming, model listing, and token
+      counting if Claude calls that endpoint in practice.
 
 ### 5. Codex provider implementation (parity superset of CLI + Desktop)
 
@@ -357,43 +448,43 @@ Identity headers (NEW, CLYDE-126).
 Status of deletions (DONE 2026-04-27).
 
 - [x] `internal/adapter/codex/` implements `Provider` against the direct
-  websocket transport only.
+      websocket transport only.
 - [x] Deleted `internal/adapter/codex/rpc_client.go` (subprocess entry).
 - [x] Deleted `internal/adapter/codex/transport_app.go` and
-  `internal/adapter/codex/app_protocol.go` (stdio JSON-RPC transport).
+      `internal/adapter/codex/app_protocol.go` (stdio JSON-RPC transport).
 - [x] Deleted `internal/adapter/codex_app_fallback.go` and the
-  dispatcher glue.
+      dispatcher glue.
 - [x] Deleted `internal/adapter/codex/transport_http.go` and the SSE
-  parsing helpers that no longer have a caller.
+      parsing helpers that no longer have a caller.
 - [x] Dropped `Codex.AppServerPath`, `Codex.AppFallback`,
-  `Codex.AppFallbackTimeout`, `Codex.WebsocketEnabled`.
+      `Codex.AppFallbackTimeout`, `Codex.WebsocketEnabled`.
 
 Outstanding (CLYDE-126). All done as of 2026-04-28.
 
 - [x] `internal/adapter/codex/installation.go` reads
-  `~/.codex/installation_id` or generates a persisted clyde uuid.
+      `~/.codex/installation_id` or generates a persisted clyde uuid.
 - [x] `internal/adapter/codex/turn_metadata.go` carries typed
-  `TurnMetadata` with a `Workspaces` block. JSON marshal helper present.
+      `TurnMetadata` with a `Workspaces` block. JSON marshal helper present.
 - [x] `originator` (defaults to `clyde`) plus
-  `x-codex-turn-metadata` set in `ws_headers.go`. Mirrored in
-  `request_builder.go` `client_metadata`.
+      `x-codex-turn-metadata` set in `ws_headers.go`. Mirrored in
+      `request_builder.go` `client_metadata`.
 - [x] `internal/adapter/codex/ws_session.go` provides
-  `WebsocketSession`, `WebsocketSessionCache`, Take/Put/Invalidate/CloseAll.
+      `WebsocketSession`, `WebsocketSessionCache`, Take/Put/Invalidate/CloseAll.
 - [x] `internal/adapter/codex/delta_input.go` provides `ComputeDelta`
-  for suffix-extension comparison. Replaces the cross-process
-  fingerprint-baseline matcher.
+      for suffix-extension comparison. Replaces the cross-process
+      fingerprint-baseline matcher.
 - [x] `RunWebsocketTransport` takes a session from the cache, dials
-  fresh on miss with warmup, chains `previous_response_id`, puts the
-  session back on success, invalidates on error.
+      fresh on miss with warmup, chains `previous_response_id`, puts the
+      session back on success, invalidates on error.
 - [x] `NewProvider` constructs the cache once. The `ContinuationStore`
-  was removed from `direct_runtime.go` and `server.go`.
+      was removed from `direct_runtime.go` and `server.go`.
 - [x] `Server.Shutdown` calls `s.codexProvider.CloseAllSessions("shutdown")`.
 - [x] `WebsocketSessionCache` uses an idle TTL with
-  `idle_timeout` invalidation. Default and config knob can move into
-  `internal/config/config.go` if a user reports a value mismatch.
+      `idle_timeout` invalidation. Default and config knob can move into
+      `internal/config/config.go` if a user reports a value mismatch.
 - [x] `ContinuationTelemetry` log fields replaced by
-  `adapter.codex.ws_session.{opened,taken,put,invalidated}` and
-  `adapter.codex.frame.sent`.
+      `adapter.codex.ws_session.{opened,taken,put,invalidated}` and
+      `adapter.codex.frame.sent`.
 
 ### 5b. Cross-process fingerprint matcher (superseded)
 
@@ -409,34 +500,41 @@ suffix-extension matcher described in step 5 above. CLYDE-123
 
 ### 6. Render layer is the only OpenAI framing owner
 
-- [ ] Anthropic and Codex parsers emit normalized events directly via
-  `EventWriter`. Remove any backend-specific render branches.
-- [ ] All OpenAI SSE framing lives in `openai/`. `render/` consumes events,
-  `openai/` writes the wire format.
-- [ ] Tests at this layer: backend tests assert event production. Render
-  tests assert OpenAI chunks.
+- [x] Anthropic and Codex parsers emit normalized events directly via
+      `EventWriter`. The live paths now run through
+      `HandleEventEvents(...)`, `RunTranslatorEvents(...)`, and
+      `ParseSSEEvents(...)` rather than direct `StreamChunk` emission.
+      The temporary `EventWriter.WriteStreamChunk(...)` compatibility hook is
+      gone; chunk rendering stays adapter-owned inside the shared writers until
+      the collect mergers stop buffering chunk-shaped state.
+- [x] All OpenAI SSE framing lives in `openai/`. `render/` consumes events,
+      `openai/` writes the wire format.
+- [x] Tests at this layer: backend tests assert event production. Render
+      tests assert OpenAI chunks.
 
 ### 7. Delete the root cruft
 
 After items 1 through 6 land, the bridges become unused.
 
-- [ ] Delete `internal/adapter/anthropic_bridge.go`. Closes with Plan 4.
+- [x] Deleted `internal/adapter/anthropic_bridge.go` during the fallback
+      removal slice in Plan 4.
 - [x] Deleted `internal/adapter/codex_bridge.go`. The shared methods
-  it exposed (EmitRequestStarted, LogTerminal, etc.) moved into
-  `anthropic_bridge.go` because the Anthropic backend Dispatcher
-  interface is the only consumer that still requires them. Codex
-  provider dispatch calls private equivalents directly.
+      it exposed (EmitRequestStarted, LogTerminal, etc.) moved into
+      `anthropic_bridge.go` because the Anthropic backend Dispatcher
+      interface is the only consumer that still requires them. Codex
+      provider dispatch calls private equivalents directly.
 - [x] Deleted `internal/adapter/codex_runtime.go`. The codex package
-  now ships sensible production defaults (os.Getwd, $SHELL detection)
-  so the daemon does not need an init-only override file.
+      now ships sensible production defaults (os.Getwd, $SHELL detection)
+      so the daemon does not need an init-only override file.
 - [x] Deleted `internal/adapter/codex_sessions.go`.
-- [ ] Reduce `internal/adapter/oauth_handler.go` to nothing or move the few
-  remaining helpers into provider construction at startup.
-- [ ] Delete `internal/adapter/server_response.go` merge helpers.
-- [ ] Reduce `internal/adapter/server_streaming.go` to backend-neutral helpers
-  only, then evaluate whether anything is left.
+- [x] Reduced `internal/adapter/oauth_handler.go` to the small set of
+      Anthropic request-building and identity helpers that still have no
+      better home.
+- [x] Deleted `internal/adapter/server_response.go` merge helpers.
+- [x] Reduced `internal/adapter/server_streaming.go` to legacy non-provider
+      helpers only. Provider-owned stream paths no longer depend on it.
 - [ ] Delete `internal/adapter/tooltrans/`. Inline the sentinel helpers where
-  they are used.
+      they are used.
 - [ ] Sweep unused imports and dead types.
 
 ### 8. Test layout
@@ -444,9 +542,9 @@ After items 1 through 6 land, the bridges become unused.
 - [ ] Tests under provider packages, not the root.
 - [ ] Render and runtime tests under their own packages.
 - [ ] Root tests cover only HTTP routing, auth lookup, dispatch, and request
-  logging.
+      logging.
 - [ ] Per-provider lock-in tests: one test that fails if the provider's
-  ownership boundary regresses.
+      ownership boundary regresses.
 - [ ] Remove duplicated coverage between root and provider packages.
 
 ### 9. Live validation
@@ -455,23 +553,23 @@ The refactor is not done until live traffic confirms it.
 
 - [ ] Anthropic rate-limit classifier validated against real 429s.
 - [ ] Codex `previous_response_id` chaining validated within a single
-  cached ws connection across 3+ Cursor turns on the same conversation.
+      cached ws connection across 3+ Cursor turns on the same conversation.
 - [ ] Codex turn metadata (`x-codex-turn-metadata` workspaces block,
-  `originator: clyde`, `x-codex-installation-id`) validated against a
-  live ChatGPT Pro session. Compare against
-  `research/codex/captures/2026-04-27/` reference.
+      `originator: clyde`, `x-codex-installation-id`) validated against a
+      live ChatGPT Pro session. Compare against
+      `research/codex/captures/2026-04-27/` reference.
 - [ ] ws connection reuse rate above 90% per conversation on a fresh
-  5+ turn Cursor agent session, measured from
-  `adapter.codex.ws_session.{opened,taken}` logs.
+      5+ turn Cursor agent session, measured from
+      `adapter.codex.ws_session.{opened,taken}` logs.
 - [ ] Delta-input rate above 80% on turns after the first, measured as
-  `delta_input_count / total_response_create_count` from
-  `adapter.codex.frame.sent` logs.
+      `delta_input_count / total_response_create_count` from
+      `adapter.codex.frame.sent` logs.
 - [ ] Token usage on turn 2 prompt_tokens drops to roughly delta plus
-  cached prefix, not a full replay. Pre-refactor baseline is full
-  replay every turn (~500 KB inbound times N turns).
+      cached prefix, not a full replay. Pre-refactor baseline is full
+      replay every turn (~500 KB inbound times N turns).
 - [ ] Capture logs from `~/.local/state/clyde/clyde-daemon.jsonl` and
-  `~/.local/state/clyde/anthropic.jsonl`. Attach excerpts to the
-  history file under `research/cursor/captures/<timestamp>/`.
+      `~/.local/state/clyde/anthropic.jsonl`. Attach excerpts to the
+      history file under `research/cursor/captures/<timestamp>/`.
 
 ## Conventions
 

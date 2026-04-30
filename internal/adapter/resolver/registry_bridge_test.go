@@ -15,7 +15,6 @@ func TestBackendToProviderMapping(t *testing.T) {
 		{adaptermodel.BackendCodex, ProviderCodex},
 		{adaptermodel.BackendClaude, ProviderUnknown},
 		{adaptermodel.BackendShunt, ProviderUnknown},
-		{adaptermodel.BackendFallback, ProviderUnknown},
 		{"", ProviderUnknown},
 		{"nonsense", ProviderUnknown},
 	}

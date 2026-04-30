@@ -3,7 +3,6 @@ package ui
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -121,8 +120,8 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][
 		kv("Context", formatExactContextUsage(detail.ContextUsage))
 		kv("Messages", formatDetailTokens(detail.ContextUsage.MessagesTokens))
 	} else {
-		kv("Context", formatLoadingValue(detail.ContextUsageStatus))
-		kv("Messages", formatLoadingValue(detail.ContextUsageStatus))
+		kv("Context", loadingValue(detail.ContextUsageStatus))
+		kv("Messages", loadingValue(detail.ContextUsageStatus))
 	}
 	lastActivityAt, lastActivityAgo := formatDetailLastActivity(sess)
 	kvStacked("Last activity", lastActivityAt, lastActivityAgo)
@@ -169,7 +168,7 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][
 			kv("Size", fmt.Sprintf("%.2f MB", mb))
 		}
 	} else {
-		v := formatLoadingValue(detail.TranscriptStatsStatus)
+		v := loadingValue(detail.TranscriptStatsStatus)
 		kv("Visible msgs", v)
 		kv("Last msg est", v)
 		kv("Compactions", v)
@@ -311,18 +310,6 @@ func formatDetailCompactions(detail SessionDetail) string {
 	return value
 }
 
-func formatLoadingValue(status string) string {
-	switch strings.TrimSpace(status) {
-	case "", "loading...":
-		return spinnerGlyph(int(time.Now().UnixNano()/int64(100*time.Millisecond))) + " loading..."
-	default:
-		if strings.HasPrefix(status, "failed") {
-			return status
-		}
-		return spinnerGlyph(int(time.Now().UnixNano()/int64(100*time.Millisecond))) + " " + status
-	}
-}
-
 // buildRight renders the full conversation. Each message gets a role tag
 // and a timestamp. Long bodies are wrapped by the parent TextBox because
 // its Wrap flag is on.
@@ -334,7 +321,7 @@ func (d *DetailsView) buildRight(sess *session.Session, detail SessionDetail) []
 
 	if len(src) == 0 {
 		if detail.ConversationLoading {
-			return [][]TextSegment{{{Text: "  " + formatLoadingValue("loading conversation..."), Style: StyleMuted}}}
+			return [][]TextSegment{{{Text: "  " + loadingValue("loading conversation..."), Style: StyleMuted}}}
 		}
 		return [][]TextSegment{{{Text: "  (no visible messages)", Style: StyleMuted}}}
 	}

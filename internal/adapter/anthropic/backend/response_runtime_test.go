@@ -14,6 +14,7 @@ import (
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 )
 
@@ -125,6 +126,7 @@ func (w *fakeResponseSSEWriter) HasCommittedHeaders() bool {
 type fakeResponseDispatcher struct {
 	log          *slog.Logger
 	sseWriter    *fakeResponseSSEWriter
+	renderer     *adapterrender.EventRenderer
 	streamEvents func(context.Context, anthropic.Request, anthropic.EventSink) (anthropic.Usage, string, error)
 	actionables  int
 }
@@ -164,26 +166,6 @@ func (d *fakeResponseDispatcher) SystemFingerprint() string {
 	return "fp-test"
 }
 
-func (d *fakeResponseDispatcher) StreamChunkFromTooltrans(chunk adapteropenai.StreamChunk) adapteropenai.StreamChunk {
-	out := adapteropenai.StreamChunk{
-		ID:      chunk.ID,
-		Object:  chunk.Object,
-		Created: chunk.Created,
-		Model:   chunk.Model,
-	}
-	for _, choice := range chunk.Choices {
-		out.Choices = append(out.Choices, adapteropenai.StreamChoice{
-			Index: choice.Index,
-			Delta: adapteropenai.StreamDelta{
-				Role:    choice.Delta.Role,
-				Content: choice.Delta.Content,
-			},
-			FinishReason: choice.FinishReason,
-		})
-	}
-	return out
-}
-
 func (d *fakeResponseDispatcher) StreamChunkHasVisibleContent(chunk adapteropenai.StreamChunk) bool {
 	for _, choice := range chunk.Choices {
 		if choice.Delta.Content != "" || choice.Delta.Role != "" {
@@ -191,6 +173,31 @@ func (d *fakeResponseDispatcher) StreamChunkHasVisibleContent(chunk adapteropena
 		}
 	}
 	return false
+}
+
+func (d *fakeResponseDispatcher) WriteEvent(ev adapterrender.Event) error {
+	if d.sseWriter == nil {
+		d.sseWriter = &fakeResponseSSEWriter{}
+	}
+	if d.renderer == nil {
+		d.renderer = adapterrender.NewEventRenderer("req-test", "alias-test", "anthropic", nil)
+	}
+	d.sseWriter.chunks = append(d.sseWriter.chunks, d.renderer.HandleEvent(ev)...)
+	return nil
+}
+
+func (d *fakeResponseDispatcher) FlushEventWriter() error {
+	if d.renderer != nil {
+		d.renderer.Flush()
+	}
+	return nil
+}
+
+func (d *fakeResponseDispatcher) CollectedChunks() []adapteropenai.StreamChunk {
+	if d.sseWriter == nil {
+		return nil
+	}
+	return d.sseWriter.chunks
 }
 
 func (d *fakeResponseDispatcher) TrackAnthropicContextUsage(string, adapteropenai.Usage) TrackedUsage {

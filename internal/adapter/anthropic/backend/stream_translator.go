@@ -28,7 +28,7 @@ const (
 
 var NewEventRenderer = adapterrender.NewEventRenderer
 
-// StreamTranslator converts Anthropic SSE events into OpenAI streaming chunks.
+// StreamTranslator converts Anthropic SSE events into normalized render events.
 type StreamTranslator struct {
 	blockIndex         int
 	currentBlockType   string
@@ -49,9 +49,9 @@ func NewStreamTranslator(reqID, modelAlias string) *StreamTranslator {
 	}
 }
 
-// HandleEvent maps one Anthropic stream event to zero or more OpenAI chunks.
-func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
-	chunks []OpenAIStreamChunk,
+// HandleEventEvents maps one Anthropic stream event to zero or more normalized events.
+func (t *StreamTranslator) HandleEventEvents(eventName string, dataJSON []byte) (
+	events []Event,
 	finished bool,
 	finishReason string,
 	usage *OpenAIUsage,
@@ -101,7 +101,7 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 			idx := t.toolCallIndex
 			t.toolCallIndex++
 			t.toolCallByBlockIdx[ev.Index] = idx
-			return t.renderer.HandleEvent(Event{
+			return []Event{{
 				Kind: EventToolCallDelta,
 				ToolCalls: []OpenAIToolCall{{
 					Index: idx,
@@ -112,10 +112,10 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 						Arguments: "",
 					},
 				}},
-			}), false, "", nil, nil
+			}}, false, "", nil, nil
 		case "thinking":
 			t.currentBlockType = "thinking"
-			return t.renderer.HandleEvent(Event{Kind: EventReasoningSignaled}), false, "", nil, nil
+			return []Event{{Kind: EventReasoningSignaled}}, false, "", nil, nil
 		default:
 			t.currentBlockType = ev.ContentBlock.Type
 		}
@@ -135,13 +135,13 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 		switch ev.Delta.Type {
 		case "text_delta":
 			t.visibleText.WriteString(ev.Delta.Text)
-			return t.renderer.HandleEvent(Event{Kind: EventAssistantTextDelta, Text: ev.Delta.Text}), false, "", nil, nil
+			return []Event{{Kind: EventAssistantTextDelta, Text: ev.Delta.Text}}, false, "", nil, nil
 		case "input_json_delta":
 			tcIdx, ok := t.toolCallByBlockIdx[ev.Index]
 			if !ok {
 				return nil, false, "", nil, fmt.Errorf("unknown tool block index %d", ev.Index)
 			}
-			return t.renderer.HandleEvent(Event{
+			return []Event{{
 				Kind: EventToolCallDelta,
 				ToolCalls: []OpenAIToolCall{{
 					Index: tcIdx,
@@ -150,19 +150,13 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 						Arguments: ev.Delta.PartialJSON,
 					},
 				}},
-			}), false, "", nil, nil
+			}}, false, "", nil, nil
 		case "thinking_delta":
-			chunks := t.renderer.HandleEvent(Event{
+			return []Event{{
 				Kind:          EventReasoningDelta,
 				Text:          ev.Delta.Thinking,
 				ReasoningKind: "text",
-			})
-			for _, ch := range chunks {
-				if len(ch.Choices) > 0 {
-					t.visibleText.WriteString(ch.Choices[0].Delta.Content)
-				}
-			}
-			return chunks, false, "", nil, nil
+			}}, false, "", nil, nil
 		default:
 			return nil, false, "", nil, nil
 		}
@@ -176,7 +170,7 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 		// cached prefix stays byte-stable across turns.
 		if t.currentBlockType == "thinking" {
 			t.currentBlockType = ""
-			return t.renderer.HandleEvent(Event{Kind: EventReasoningFinished}), false, "", nil, nil
+			return []Event{{Kind: EventReasoningFinished}}, false, "", nil, nil
 		}
 		t.currentBlockType = ""
 		return nil, false, "", nil, nil
@@ -207,17 +201,10 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 			CompletionTokens: t.lastOutputTokens,
 			TotalTokens:      t.pendingInputTokens + t.lastOutputTokens,
 		}
-		var extra []OpenAIStreamChunk
+		var extra []Event
 		if t.lastStopReason == "refusal" && t.visibleText.Len() > 0 {
-			extra = append(extra, OpenAIStreamChunk{
-				ID:      t.renderer.RequestID(),
-				Object:  "chat.completion.chunk",
-				Created: t.renderer.CreatedUnix(),
-				Model:   t.renderer.ModelAlias(),
-				Choices: []OpenAIStreamChoice{{Index: 0, Delta: OpenAIStreamDelta{Refusal: t.visibleText.String()}}},
-			})
+			extra = append(extra, Event{Kind: adapterrender.EventAssistantRefusalDelta, Text: t.visibleText.String()})
 		}
-		t.renderer.Flush()
 		return extra, true, reason, u, nil
 
 	case "ping":
@@ -236,10 +223,37 @@ func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
 		if msg == "" {
 			msg = "anthropic stream error"
 		}
-		t.renderer.Flush()
 		return nil, false, "", nil, fmt.Errorf("%s", msg)
 
 	default:
 		return nil, false, "", nil, nil
 	}
+}
+
+// HandleEvent preserves the chunk-oriented test helper surface while the live
+// runtime moves to normalized render.Event emission.
+func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
+	chunks []OpenAIStreamChunk,
+	finished bool,
+	finishReason string,
+	usage *OpenAIUsage,
+	err error,
+) {
+	events, finished, finishReason, usage, err := t.HandleEventEvents(eventName, dataJSON)
+	if err != nil {
+		if t.renderer != nil {
+			t.renderer.Flush()
+		}
+		return nil, finished, finishReason, usage, err
+	}
+	if t.renderer == nil {
+		return nil, finished, finishReason, usage, nil
+	}
+	for _, ev := range events {
+		chunks = append(chunks, t.renderer.HandleEvent(ev)...)
+	}
+	if finished {
+		t.renderer.Flush()
+	}
+	return chunks, finished, finishReason, usage, nil
 }

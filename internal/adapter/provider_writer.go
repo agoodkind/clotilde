@@ -2,28 +2,35 @@ package adapter
 
 import (
 	"net/http"
+	"strings"
 
-	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
 
+const defaultProviderFinishReason = "stop"
+
 // providerStreamWriter implements provider.EventWriter on top of the
-// existing SSE writer the adapter already constructs for streaming
-// responses. WriteStreamChunk forwards directly to the underlying
-// codex.SSEWriter; WriteEvent will be filled in by Plan 6 once the
-// render pipeline emits normalized events. Today it returns nil to
-// keep the typed Provider interface satisfied without changing wire
-// behavior.
+// shared OpenAI SSE writer. Providers emit normalized render events;
+// the adapter renders them into streamed OpenAI chunks privately.
 type providerStreamWriter struct {
-	sse               adaptercodex.SSEWriter
+	sse               *sseWriter
 	systemFingerprint string
 	headersWritten    bool
 	flusher           http.Flusher
+	renderer          *adapterrender.EventRenderer
+	reqID             string
+	modelAlias        string
 }
 
-func newProviderStreamWriter(s *Server, w http.ResponseWriter) (*providerStreamWriter, error) {
+func newProviderStreamWriter(
+	s *Server,
+	w http.ResponseWriter,
+	reqID string,
+	modelAlias string,
+	backend string,
+) (*providerStreamWriter, error) {
 	sse, err := newSSEWriter(w)
 	if err != nil {
 		return nil, err
@@ -33,10 +40,13 @@ func newProviderStreamWriter(s *Server, w http.ResponseWriter) (*providerStreamW
 		sse:               sse,
 		systemFingerprint: systemFingerprint,
 		flusher:           flusher,
+		renderer:          adapterrender.NewEventRenderer(reqID, modelAlias, backend, s.log),
+		reqID:             reqID,
+		modelAlias:        modelAlias,
 	}, nil
 }
 
-func (p *providerStreamWriter) WriteStreamChunk(chunk adapteropenai.StreamChunk) error {
+func (p *providerStreamWriter) writeRenderedChunk(chunk adapteropenai.StreamChunk) error {
 	if !p.headersWritten {
 		p.sse.WriteSSEHeaders()
 		p.headersWritten = true
@@ -44,54 +54,121 @@ func (p *providerStreamWriter) WriteStreamChunk(chunk adapteropenai.StreamChunk)
 	return p.sse.EmitStreamChunk(p.systemFingerprint, chunk)
 }
 
-// WriteEvent is the future-state path for normalized render events.
-// Plan 6 (render finalization) replaces the StreamChunk emit path
-// with normalized events; until then this method is a no-op so the
-// Provider interface stays satisfied without losing fidelity.
-func (p *providerStreamWriter) WriteEvent(_ adapterrender.Event) error {
+func (p *providerStreamWriter) WriteEvent(ev adapterrender.Event) error {
+	if p == nil || p.renderer == nil {
+		return nil
+	}
+	for _, chunk := range p.renderer.HandleEvent(ev) {
+		if err := p.writeRenderedChunk(chunk); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 func (p *providerStreamWriter) Flush() error {
+	if p != nil && p.renderer != nil {
+		p.renderer.Flush()
+	}
 	if p.flusher != nil {
 		p.flusher.Flush()
 	}
 	return nil
 }
 
-// finalizeStream writes the SSE [DONE] sentinel after the provider's
-// Execute returns successfully. It is the streaming counterpart of
-// the chat.completion JSON envelope written by the non-streaming
-// path.
-func (p *providerStreamWriter) finalizeStream() error {
+func (p *providerStreamWriter) finalizeStream(result adapterprovider.Result, includeUsage bool) error {
+	if err := p.Flush(); err != nil {
+		return err
+	}
+	finishReason := normalizedProviderFinishReason(result.FinishReason)
+	finishChunk := adapteropenai.StreamChunk{
+		ID:      p.reqID,
+		Object:  "chat.completion.chunk",
+		Created: p.createdUnix(),
+		Model:   p.modelAlias,
+		Choices: []adapteropenai.StreamChoice{{
+			Index:        0,
+			Delta:        adapteropenai.StreamDelta{},
+			FinishReason: stringPtrLocal(finishReason),
+		}},
+	}
+	if includeUsage {
+		usage := result.Usage
+		finishChunk.Usage = &usage
+	}
+	if err := p.writeRenderedChunk(finishChunk); err != nil {
+		return err
+	}
+	if includeUsage {
+		usage := result.Usage
+		if err := p.writeRenderedChunk(adapteropenai.StreamChunk{
+			ID:      p.reqID,
+			Object:  "chat.completion.chunk",
+			Created: p.createdUnix(),
+			Model:   p.modelAlias,
+			Choices: []adapteropenai.StreamChoice{},
+			Usage:   &usage,
+		}); err != nil {
+			return err
+		}
+	}
 	return p.sse.WriteStreamDone()
 }
 
 var _ adapterprovider.EventWriter = (*providerStreamWriter)(nil)
 
 // providerCollectorWriter implements provider.EventWriter for the
-// non-streaming response path. It buffers every chunk in memory; the
-// dispatcher then merges the buffered chunks into the final
-// ChatResponse JSON envelope.
+// non-streaming response path. It buffers adapter-rendered chunks in
+// memory because the collect-mode reducers still merge chunk-shaped
+// state into final ChatResponses.
 type providerCollectorWriter struct {
-	chunks []adapteropenai.StreamChunk
+	chunks   []adapteropenai.StreamChunk
+	renderer *adapterrender.EventRenderer
 }
 
-func newProviderCollectorWriter() *providerCollectorWriter {
-	return &providerCollectorWriter{}
+func newProviderCollectorWriter(reqID string, modelAlias string, backend string) *providerCollectorWriter {
+	return &providerCollectorWriter{
+		renderer: adapterrender.NewEventRenderer(reqID, modelAlias, backend, nil),
+	}
 }
 
-func (p *providerCollectorWriter) WriteStreamChunk(chunk adapteropenai.StreamChunk) error {
+func (p *providerCollectorWriter) appendRenderedChunk(chunk adapteropenai.StreamChunk) error {
 	p.chunks = append(p.chunks, chunk)
 	return nil
 }
 
-func (p *providerCollectorWriter) WriteEvent(_ adapterrender.Event) error {
+func (p *providerCollectorWriter) WriteEvent(ev adapterrender.Event) error {
+	if p == nil || p.renderer == nil {
+		return nil
+	}
+	for _, chunk := range p.renderer.HandleEvent(ev) {
+		if err := p.appendRenderedChunk(chunk); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 func (p *providerCollectorWriter) Flush() error {
+	if p != nil && p.renderer != nil {
+		p.renderer.Flush()
+	}
 	return nil
 }
 
 var _ adapterprovider.EventWriter = (*providerCollectorWriter)(nil)
+
+func (p *providerStreamWriter) createdUnix() int64 {
+	if p != nil && p.renderer != nil {
+		return p.renderer.CreatedUnix()
+	}
+	return 0
+}
+
+func normalizedProviderFinishReason(finishReason string) string {
+	finishReason = strings.TrimSpace(finishReason)
+	if finishReason == "" {
+		return defaultProviderFinishReason
+	}
+	return finishReason
+}

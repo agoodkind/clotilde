@@ -215,13 +215,15 @@ func EffectiveAppSummary(req adapteropenai.ChatRequest) ReasoningSummary {
 	return ReasoningSummaryUnset
 }
 
-func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(adapteropenai.StreamChunk) error) (RunResult, error) {
+func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunResult, error) {
 	sc := bufio.NewScanner(body)
 	sc.Buffer(make([]byte, 0, 1024*128), 1024*1024*8)
 
 	var eventName string
 	var dataLines []string
 	out := NewRunResult("stop")
+	reasoningSignaled := false
+	reasoningVisible := false
 	toolCallsByItemID := make(map[string]*toolCallState)
 	nextToolIndex := 0
 	emitToolCall := func(state *toolCallState, fn adapteropenai.ToolCallFunction) error {
@@ -237,10 +239,10 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 			tc.Type = state.Type
 			state.IdentityEmitted = true
 		}
-		return EmitRendered(renderer, adapterrender.Event{
+		return emit(adapterrender.Event{
 			Kind:      adapterrender.EventToolCallDelta,
 			ToolCalls: []adapteropenai.ToolCall{tc},
-		}, emit, nil)
+		})
 	}
 	getToolState := func(itemID, callID, name string) (*toolCallState, bool) {
 		itemID = strings.TrimSpace(itemID)
@@ -313,7 +315,7 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 
 			if eventNameLocal == "response.output_text.delta" {
 				if delta := raw.Delta; delta != "" {
-					if err := EmitRendered(renderer, adapterrender.Event{Kind: adapterrender.EventAssistantTextDelta, Text: delta}, emit, nil); err != nil {
+					if err := emit(adapterrender.Event{Kind: adapterrender.EventAssistantTextDelta, Text: delta}); err != nil {
 						return out, err
 					}
 				}
@@ -486,18 +488,20 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 
 			if strings.Contains(eventNameLocal, "reasoning") && strings.HasSuffix(eventNameLocal, ".delta") {
 				if delta := raw.Delta; delta != "" {
+					reasoningSignaled = true
+					reasoningVisible = true
 					kind := "text"
 					var summaryIdx *int
 					if strings.Contains(eventNameLocal, "summary") {
 						kind = "summary"
 						summaryIdx = raw.SummaryIndex
 					}
-					if err := EmitRendered(renderer, adapterrender.Event{
+					if err := emit(adapterrender.Event{
 						Kind:          adapterrender.EventReasoningDelta,
 						Text:          delta,
 						ReasoningKind: kind,
 						SummaryIndex:  summaryIdx,
-					}, emit, nil); err != nil {
+					}); err != nil {
 						return RunResult{}, err
 					}
 				}
@@ -515,14 +519,14 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 						out.SetFinishReason(finishreason.FromCodexResponse(c.Response.Status, c.Response.IncompleteDetails.Reason))
 					}
 				}
-				out.ReasoningSignaled = reasoningTokensFromEvent(raw) > 0
-				if err := EmitRendered(renderer, adapterrender.Event{Kind: adapterrender.EventReasoningFinished}, emit, nil); err != nil {
+				if reasoningTokensFromEvent(raw) > 0 {
+					reasoningSignaled = true
+				}
+				if err := emit(adapterrender.Event{Kind: adapterrender.EventReasoningFinished}); err != nil {
 					return out, err
 				}
-				renderer.Flush()
-				state := renderer.State()
-				out.ReasoningSignaled = out.ReasoningSignaled || state.ReasoningSignaled
-				out.ReasoningVisible = state.ReasoningVisible
+				out.ReasoningSignaled = reasoningSignaled
+				out.ReasoningVisible = reasoningVisible
 				return out, nil
 			}
 			if eventNameLocal == "response.created" {
@@ -532,8 +536,7 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 				continue
 			}
 			if eventNameLocal == "response.failed" {
-				_ = EmitRendered(renderer, adapterrender.Event{Kind: adapterrender.EventReasoningFinished}, emit, nil)
-				renderer.Flush()
+				_ = emit(adapterrender.Event{Kind: adapterrender.EventReasoningFinished})
 				msg := "codex response failed"
 				if raw.Error != nil && raw.Error.Message != "" {
 					msg = raw.Error.Message
@@ -551,13 +554,10 @@ func ParseSSE(body io.Reader, renderer *adapterrender.EventRenderer, emit func(a
 		}
 	}
 	if err := sc.Err(); err != nil {
-		renderer.Flush()
 		return out, err
 	}
-	renderer.Flush()
-	state := renderer.State()
-	out.ReasoningSignaled = out.ReasoningSignaled || state.ReasoningSignaled
-	out.ReasoningVisible = state.ReasoningVisible
+	out.ReasoningSignaled = reasoningSignaled
+	out.ReasoningVisible = reasoningVisible
 	return out, nil
 }
 

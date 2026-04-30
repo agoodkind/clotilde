@@ -46,17 +46,6 @@ func errVisionAnthropicUnsupported(modelAlias string) *preflightError {
 	}
 }
 
-func errVisionFallbackUnsupported() *preflightError {
-	return &preflightError{
-		code: http.StatusBadRequest,
-		body: ErrorBody{
-			Message: "vision input is not supported on the fallback backend",
-			Type:    "invalid_request_error",
-			Code:    "fallback_no_vision",
-		},
-	}
-}
-
 func errToolNameEmpty(kind string, index int) *preflightError {
 	var msg string
 	if kind == "tools" {
@@ -140,13 +129,6 @@ func (s *Server) validateVision(ctx context.Context, req *ChatRequest, model Res
 		)
 		return errVisionAnthropicUnsupported(req.Model)
 	}
-	if model.Backend == BackendFallback {
-		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.vision_rejected",
-			slog.String("request_id", reqID),
-			slog.String("model", req.Model),
-		)
-		return errVisionFallbackUnsupported()
-	}
 	return nil
 }
 
@@ -204,19 +186,6 @@ func (s *Server) validateLogprobs(ctx context.Context, req *ChatRequest, model R
 				slog.String("request_id", reqID),
 				slog.String("model", req.Model),
 				slog.String("backend", "anthropic"),
-			)
-			return errLogprobsUnsupported()
-		case "drop":
-			req.Logprobs = nil
-			req.TopLogprobs = nil
-		}
-	case BackendFallback:
-		switch s.logprobs.Fallback {
-		case "reject":
-			s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.logprobs_rejected",
-				slog.String("request_id", reqID),
-				slog.String("model", req.Model),
-				slog.String("backend", "fallback"),
 			)
 			return errLogprobsUnsupported()
 		case "drop":

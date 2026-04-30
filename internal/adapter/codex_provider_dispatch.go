@@ -8,7 +8,6 @@ import (
 
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
-	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 )
@@ -54,12 +53,11 @@ func (s *Server) dispatchCodexProviderStream(
 	started time.Time,
 	resolvedReq adapterresolver.ResolvedRequest,
 ) {
-	writer, err := newProviderStreamWriter(s, w)
+	writer, err := newProviderStreamWriter(s, w, reqID, model.Alias, "codex")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
 		return
 	}
-	created := time.Now().Unix()
 
 	s.emitRequestStreamOpened(r.Context(), model, "direct", reqID, model.Alias, true)
 
@@ -79,34 +77,21 @@ func (s *Server) dispatchCodexProviderStream(
 		writeError(w, http.StatusBadGateway, "upstream_error", runErr.Error())
 		return
 	}
-
 	usage := result.Usage
 	if model.Context > 0 {
 		usage.MaxTokens = model.Context
 	}
-	finishReason := result.FinishReason
-	finishChunk := adapteropenai.StreamChunk{
-		ID:      reqID,
-		Object:  "chat.completion.chunk",
-		Created: created,
-		Model:   model.Alias,
-		Choices: []adapteropenai.StreamChoice{{Index: 0, Delta: adapteropenai.StreamDelta{}, FinishReason: stringPtrLocal(finishReason)}},
+	result.Usage = usage
+	finishReason := normalizedProviderFinishReason(result.FinishReason)
+	if err := writer.finalizeStream(result, req.StreamOptions != nil && req.StreamOptions.IncludeUsage); err != nil {
+		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_finalize_error",
+			slog.String("backend", "codex"),
+			slog.String("request_id", reqID),
+			slog.String("alias", model.Alias),
+			slog.Any("err", err),
+		)
+		return
 	}
-	if req.StreamOptions != nil && req.StreamOptions.IncludeUsage {
-		finishChunk.Usage = &usage
-	}
-	_ = writer.WriteStreamChunk(finishChunk)
-	if req.StreamOptions != nil && req.StreamOptions.IncludeUsage {
-		_ = writer.WriteStreamChunk(adapteropenai.StreamChunk{
-			ID:      reqID,
-			Object:  "chat.completion.chunk",
-			Created: created,
-			Model:   model.Alias,
-			Choices: []adapteropenai.StreamChoice{},
-			Usage:   &usage,
-		})
-	}
-	_ = writer.finalizeStream()
 
 	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.completed",
 		slog.String("request_id", reqID),
@@ -150,7 +135,7 @@ func (s *Server) dispatchCodexProviderCollect(
 	started time.Time,
 	resolvedReq adapterresolver.ResolvedRequest,
 ) {
-	collector := newProviderCollectorWriter()
+	collector := newProviderCollectorWriter(reqID, model.Alias, "codex")
 	result, runErr := s.codexProvider.Execute(ctx, resolvedReq, collector)
 	if runErr != nil {
 		adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{

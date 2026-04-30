@@ -959,12 +959,7 @@ func TestParseCodexSSEEmitsToolCallDeltas(t *testing.T) {
 		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}},"sequence_number":10}`,
 		"",
 	}, "\n") + "\n")
-	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
-	var got []adapteropenai.StreamChunk
-	res, err := ParseSSE(stream, r, func(ch adapteropenai.StreamChunk) error {
-		got = append(got, ch)
-		return nil
-	})
+	got, res, err := parseCodexSSEChunksForTest(stream)
 	if err != nil {
 		t.Fatalf("ParseSSE: %v", err)
 	}
@@ -1001,12 +996,7 @@ func TestParseCodexSSEEmitsToolArgumentsFromDoneWhenNoDeltaArrives(t *testing.T)
 		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}},"sequence_number":10}`,
 		"",
 	}, "\n") + "\n")
-	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
-	var got []adapteropenai.StreamChunk
-	res, err := ParseSSE(stream, r, func(ch adapteropenai.StreamChunk) error {
-		got = append(got, ch)
-		return nil
-	})
+	got, res, err := parseCodexSSEChunksForTest(stream)
 	if err != nil {
 		t.Fatalf("ParseSSE: %v", err)
 	}
@@ -1040,12 +1030,7 @@ func TestParseCodexSSEDoesNotDuplicateToolArgumentsOnDoneAfterDelta(t *testing.T
 		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}},"sequence_number":10}`,
 		"",
 	}, "\n") + "\n")
-	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
-	var got []adapteropenai.StreamChunk
-	_, err := ParseSSE(stream, r, func(ch adapteropenai.StreamChunk) error {
-		got = append(got, ch)
-		return nil
-	})
+	got, _, err := parseCodexSSEChunksForTest(stream)
 	if err != nil {
 		t.Fatalf("ParseSSE: %v", err)
 	}
@@ -1080,12 +1065,7 @@ func TestParseCodexSSEEmitsToolIdentityOnlyOnce(t *testing.T) {
 		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}},"sequence_number":10}`,
 		"",
 	}, "\n") + "\n")
-	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
-	var got []adapteropenai.StreamChunk
-	_, err := ParseSSE(stream, r, func(ch adapteropenai.StreamChunk) error {
-		got = append(got, ch)
-		return nil
-	})
+	got, _, err := parseCodexSSEChunksForTest(stream)
 	if err != nil {
 		t.Fatalf("ParseSSE: %v", err)
 	}
@@ -1116,12 +1096,7 @@ func TestParseCodexSSEMapsToolAliasesBackToCursorNames(t *testing.T) {
 		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}},"sequence_number":10}`,
 		"",
 	}, "\n") + "\n")
-	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
-	var got []adapteropenai.StreamChunk
-	_, err := ParseSSE(stream, r, func(ch adapteropenai.StreamChunk) error {
-		got = append(got, ch)
-		return nil
-	})
+	got, _, err := parseCodexSSEChunksForTest(stream)
 	if err != nil {
 		t.Fatalf("ParseSSE: %v", err)
 	}
@@ -1150,12 +1125,7 @@ func TestParseCodexSSEMapsNativeLocalShellToCursorShell(t *testing.T) {
 		`data: {"response":{"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`,
 		"",
 	}, "\n") + "\n")
-	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
-	var got []adapteropenai.StreamChunk
-	res, err := ParseSSE(stream, r, func(ch adapteropenai.StreamChunk) error {
-		got = append(got, ch)
-		return nil
-	})
+	got, res, err := parseCodexSSEChunksForTest(stream)
 	if err != nil {
 		t.Fatalf("ParseSSE: %v", err)
 	}
@@ -1196,12 +1166,7 @@ func TestParseCodexSSEMapsShellCommandToCursorShell(t *testing.T) {
 		`data: {"response":{"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`,
 		"",
 	}, "\n") + "\n")
-	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
-	var got []adapteropenai.StreamChunk
-	res, err := ParseSSE(stream, r, func(ch adapteropenai.StreamChunk) error {
-		got = append(got, ch)
-		return nil
-	})
+	got, res, err := parseCodexSSEChunksForTest(stream)
 	if err != nil {
 		t.Fatalf("ParseSSE: %v", err)
 	}
@@ -1243,12 +1208,7 @@ func TestParseCodexSSEMapsNativeApplyPatchToCursorApplyPatch(t *testing.T) {
 		`data: {"response":{"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`,
 		"",
 	}, "\n") + "\n")
-	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
-	var got []adapteropenai.StreamChunk
-	res, err := ParseSSE(stream, r, func(ch adapteropenai.StreamChunk) error {
-		got = append(got, ch)
-		return nil
-	})
+	got, res, err := parseCodexSSEChunksForTest(stream)
 	if err != nil {
 		t.Fatalf("ParseSSE: %v", err)
 	}
@@ -1333,15 +1293,27 @@ func TestCodexRendererEmitsSyntheticThinkingPlaceholderWhenSignaledWithoutVisibl
 }
 
 func collectCodexSSEForTest(stream *strings.Reader) (string, RunResult, error) {
-	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
+	renderer := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
 	var got strings.Builder
-	res, err := ParseSSE(stream, r, func(ch adapteropenai.StreamChunk) error {
-		if len(ch.Choices) > 0 {
-			got.WriteString(ch.Choices[0].Delta.Content)
+	res, err := ParseSSEEvents(stream, func(ev adapterrender.Event) error {
+		for _, ch := range renderer.HandleEvent(ev) {
+			if len(ch.Choices) > 0 {
+				got.WriteString(ch.Choices[0].Delta.Content)
+			}
 		}
 		return nil
 	})
 	return got.String(), res, err
+}
+
+func parseCodexSSEChunksForTest(stream *strings.Reader) ([]adapteropenai.StreamChunk, RunResult, error) {
+	renderer := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
+	var got []adapteropenai.StreamChunk
+	res, err := ParseSSEEvents(stream, func(ev adapterrender.Event) error {
+		got = append(got, renderer.HandleEvent(ev)...)
+		return nil
+	})
+	return got, res, err
 }
 
 func collectToolCalls(chunks []adapteropenai.StreamChunk) []adapteropenai.ToolCall {

@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"strings"
 
-	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 )
@@ -21,11 +20,11 @@ func (s *Server) applyBackendOverride(w http.ResponseWriter, r *http.Request, re
 
 	original := string(model.Backend)
 	switch override {
-	case BackendAnthropic, BackendFallback, BackendShunt, BackendCodex:
+	case BackendAnthropic, BackendShunt, BackendCodex:
 		model.Backend = override
 	default:
 		writeError(w, http.StatusBadRequest, "invalid_backend_override",
-			"X-Clyde-Backend must be one of: anthropic, fallback, shunt, codex")
+			"X-Clyde-Backend must be one of: anthropic, shunt, codex")
 		return model, false
 	}
 
@@ -65,37 +64,18 @@ func (s *Server) dispatchResolvedChat(
 	case BackendShunt:
 		s.forwardShunt(w, r, model, body)
 		return
-	case BackendFallback:
-		// Explicit-mode dispatch: alias is bound to the fallback backend
-		// directly, so no OAuth attempt is made first.
-		_ = s.HandleFallback(w, r, req, model, reqID, false)
-		return
 	case BackendAnthropic:
-		// Plan 4 step 1: try the registry path first. The Anthropic
-		// Provider is currently a registry shim that returns
-		// ErrLegacyDispatchPath; when that fires we fall through to
-		// the legacy anthropicbackend.Dispatch chain. The shim is in
-		// place so future symmetry-aware code paths can look up the
-		// provider by ResolvedRequest.Provider the same way Codex
-		// does. The internal rewrite (Provider.Execute owns the wire
-		// path, fallback/ deletion) is a follow-up slice.
-		if s.anthropicProvider != nil && resolverErr == nil &&
-			resolvedReq.Provider == adapterresolver.ProviderAnthropic {
-			if registered, lookupErr := s.providerRegistry.Lookup(adapterresolver.ProviderAnthropic); lookupErr == nil {
-				_ = registered
-				// Intentional placeholder. We look up to assert
-				// registry presence under the correct ID. Today
-				// Execute returns ErrLegacyDispatchPath, so we still
-				// fall through to the legacy dispatch path below.
-			}
+		if s.anthropicProvider == nil {
+			writeError(w, http.StatusServiceUnavailable, "anthropic_disabled",
+				"anthropic backend is not enabled in [adapter]")
+			return
 		}
-		anthropicbackend.Dispatch(s, anthropicbackend.FallbackConfig{
-			Enabled:            s.cfg.Fallback.Enabled,
-			Trigger:            s.cfg.Fallback.Trigger,
-			ForwardToShunt:     s.cfg.Fallback.ForwardToShunt.Enabled,
-			ForwardToShuntName: s.cfg.Fallback.ForwardToShunt.Shunt,
-			FailureEscalation:  s.cfg.Fallback.FailureEscalation,
-		}, w, r, req, model, effort, reqID, body)
+		if resolverErr != nil || resolvedReq.Provider != adapterresolver.ProviderAnthropic {
+			writeError(w, http.StatusBadRequest, "unresolved_anthropic",
+				"resolver did not map this request to the anthropic provider")
+			return
+		}
+		s.dispatchAnthropicProvider(w, r, effort, reqID, resolvedReq)
 		return
 	case BackendCodex:
 		if s.codexProvider == nil {
@@ -112,7 +92,7 @@ func (s *Server) dispatchResolvedChat(
 		return
 	default:
 		writeError(w, http.StatusBadRequest, "unsupported_backend",
-			"model resolved to unsupported backend "+model.Backend+"; configure anthropic, codex, shunt, or fallback explicitly")
+			"model resolved to unsupported backend "+model.Backend+"; configure anthropic, codex, or shunt explicitly")
 		return
 	}
 }

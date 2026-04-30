@@ -6,20 +6,20 @@ import (
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
-	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
 
 type StreamClient interface {
 	StreamEvents(context.Context, anthropic.Request, anthropic.EventSink) (anthropic.Usage, string, error)
 }
 
-func RunTranslatorStream(
+func RunTranslatorEvents(
 	client StreamClient,
 	ctx context.Context,
 	anthReq anthropic.Request,
 	model adaptermodel.ResolvedModel,
 	reqID string,
-	emit func(adapteropenai.StreamChunk) error,
+	emit func(adapterrender.Event) error,
 ) (anthropic.Usage, string, string, error) {
 	tr := NewStreamTranslator(reqID, model.Alias)
 	msgStartPayload, err := json.Marshal(struct {
@@ -33,12 +33,12 @@ func RunTranslatorStream(
 	if err != nil {
 		return anthropic.Usage{}, "", "", err
 	}
-	msgStartChunks, _, _, _, err := tr.HandleEvent("message_start", msgStartPayload)
+	msgStartEvents, _, _, _, err := tr.HandleEventEvents("message_start", msgStartPayload)
 	if err != nil {
 		return anthropic.Usage{}, "", "", err
 	}
-	for _, ch := range msgStartChunks {
-		if err := emit(ch); err != nil {
+	for _, ev := range msgStartEvents {
+		if err := emit(ev); err != nil {
 			return anthropic.Usage{}, "", "", err
 		}
 	}
@@ -53,12 +53,12 @@ func RunTranslatorStream(
 		if !ok {
 			return nil
 		}
-		outChunks, _, _, _, handleErr := tr.HandleEvent(evName, payload)
+		outEvents, _, _, _, handleErr := tr.HandleEventEvents(evName, payload)
 		if handleErr != nil {
 			return handleErr
 		}
-		for _, ch := range outChunks {
-			if err := emit(ch); err != nil {
+		for _, outEvent := range outEvents {
+			if err := emit(outEvent); err != nil {
 				return err
 			}
 		}
@@ -86,22 +86,22 @@ func RunTranslatorStream(
 	if err != nil {
 		return anthUsage, streamStopReason, "", err
 	}
-	mdChunks, _, _, _, err := tr.HandleEvent("message_delta", mdPayload)
+	mdEvents, _, _, _, err := tr.HandleEventEvents("message_delta", mdPayload)
 	if err != nil {
 		return anthUsage, streamStopReason, "", err
 	}
-	for _, ch := range mdChunks {
-		if err := emit(ch); err != nil {
+	for _, ev := range mdEvents {
+		if err := emit(ev); err != nil {
 			return anthUsage, streamStopReason, "", err
 		}
 	}
 
-	stopChunks, _, finishReason, _, err := tr.HandleEvent("message_stop", []byte("{}"))
+	stopEvents, _, finishReason, _, err := tr.HandleEventEvents("message_stop", []byte("{}"))
 	if err != nil {
 		return anthropic.Usage{}, streamStopReason, "", err
 	}
-	for _, ch := range stopChunks {
-		if err := emit(ch); err != nil {
+	for _, ev := range stopEvents {
+		if err := emit(ev); err != nil {
 			return anthropic.Usage{}, streamStopReason, "", err
 		}
 	}

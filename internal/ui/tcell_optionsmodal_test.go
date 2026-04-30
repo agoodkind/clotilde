@@ -126,6 +126,42 @@ func TestOptionsModalOptionsScrollbarDragScrolls(t *testing.T) {
 	}
 }
 
+func TestOptionsModalKeyboardNavigationScrollsOptionsPane(t *testing.T) {
+	scr := tcell.NewSimulationScreen("UTF-8")
+	if err := scr.Init(); err != nil {
+		t.Fatalf("init simulation screen: %v", err)
+	}
+	defer scr.Fini()
+	scr.SetSize(70, 12)
+
+	entries := make([]OptionsModalEntry, 0, 30)
+	for i := 0; i < 30; i++ {
+		entries = append(entries, OptionsModalEntry{
+			Label:  fmt.Sprintf("Entry %d", i),
+			Action: func() {},
+		})
+	}
+	modal := NewOptionsModal("many", entries)
+	modal.Draw(scr, Rect{X: 0, Y: 0, W: 70, H: 12})
+
+	for i := 0; i < 15; i++ {
+		if !modal.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone)) {
+			t.Fatalf("down key %d not handled", i)
+		}
+	}
+
+	if modal.optionsOffset == 0 {
+		t.Fatalf("optionsOffset did not advance after keyboard navigation")
+	}
+	logical, ok := modal.logicalRowForEntryIndex(modal.cursor)
+	if !ok {
+		t.Fatalf("cursor has no logical row")
+	}
+	if logical < modal.optionsOffset || logical >= modal.optionsOffset+modal.optionsVisibleRows {
+		t.Fatalf("cursor logical row %d outside visible window [%d,%d)", logical, modal.optionsOffset, modal.optionsOffset+modal.optionsVisibleRows)
+	}
+}
+
 func TestOptionsModalHintKeepsBreathingRoomFromLabel(t *testing.T) {
 	scr := tcell.NewSimulationScreen("UTF-8")
 	if err := scr.Init(); err != nil {

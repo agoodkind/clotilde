@@ -101,6 +101,76 @@ Streaming errors emit an OpenAI SSE error frame via `EmitStreamError(ErrorBody)`
 
 Microcompact (extended thinking span inside the streaming window) is Anthropic backend policy. It requires explicit opt-in and sits in `internal/adapter/anthropic/backend/microcompact.go`.
 
+## Claude Code native ingress research
+
+Tracked execution slice: `CLYDE-134` under `EPIC-8`.
+
+### Endpoint override shape
+
+The Claude Code source snapshot points at provider/base-URL override
+through env and config such as `ANTHROPIC_BASE_URL`,
+`ANTHROPIC_BEDROCK_BASE_URL`, `ANTHROPIC_VERTEX_BASE_URL`, and
+`ANTHROPIC_FOUNDRY_BASE_URL`. I did not find a general OpenAI-style
+`--base-url` CLI flag for the main inference path. The practical
+implication for Clyde is that Claude-native compatibility should target
+Anthropic-shaped endpoints rather than try to masquerade as OpenAI
+`chat/completions`.
+
+### Main transport shape
+
+The main Claude Code API client in the source snapshot is Anthropic SDK
+based. I did not find a native OpenAI client path for inference. This
+matches Clyde's current gap: the adapter can already produce
+Claude-compatible outbound Anthropic traffic, but the public listener in
+`internal/adapter/server_routes.go` still only exposes OpenAI-shaped
+ingress routes.
+
+### Model handling implications
+
+Claude Code appears to allow custom model strings, but only after alias
+resolution, allowlist checks, and provider validation. Known aliases such
+as `sonnet`, `opus`, and `haiku` normalize to canonical Claude-family
+ids. The implication for Clyde is that native ingress should advertise
+and accept Claude-compatible model ids, not remap these requests to
+`gpt-*` aliases.
+
+### Minimal compatibility target
+
+The current best guess for the first useful compatibility slice is:
+
+1. Native `POST /v1/messages`
+2. Adjacent token-counting support, likely `/v1/messages/count_tokens`
+3. A native model-list surface if Claude Code calls it on the same base
+   URL during startup or validation
+
+This remains separate from outbound parity work. `ISSUE-105` and
+`ISSUE-124` cover provider ownership and byte-identical claude-cli wire
+calls. `CLYDE-134` is the inbound facade slice that lets Claude Code
+point at Clyde directly.
+
+## Render ownership evidence
+
+The live provider/runtime boundary now emits normalized `render.Event`
+values rather than direct OpenAI chunks.
+
+### Live event-native entrypoints
+
+- Anthropic stream translation now flows through
+  `HandleEventEvents(...)` and `RunTranslatorEvents(...)`.
+- Codex transport parsing now flows through `ParseSSEEvents(...)`.
+- Shared writer ownership lives in `internal/adapter/provider_writer.go`,
+  where `WriteEvent(...)` renders events and owns OpenAI finish/usage framing.
+
+### Removed production compatibility wrappers
+
+- The old Anthropic chunk wrapper `RunTranslatorStream(...)` was removed once
+  the provider runtime and backend tests no longer depended on it.
+- The old Codex chunk wrapper `ParseSSE(...)` was removed once the parser tests
+  switched to event-native helpers.
+- The dead chunk-conversion helper `internal/adapter/stream_chunk_convert.go`
+  was deleted after the Anthropic dispatcher stopped requiring chunk-shaped
+  conversion hooks.
+
 ## Tooltrans removal evidence
 
 The `internal/adapter/tooltrans/` package once held Anthropic request translation, response stream translation, OpenAI wire aliases, and event-renderer aliases. These have been extracted into backend ownership.

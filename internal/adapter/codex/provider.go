@@ -10,8 +10,8 @@ import (
 	"time"
 
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
-	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
+	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/config"
 )
@@ -38,9 +38,9 @@ type Provider struct {
 // account id (lifted from auth.json by daemon startup) and the
 // websocket-session idle timeout.
 type ProviderOptions struct {
-	AccountID          string
-	BodyLog            BodyLogConfig
-	WsSessionIdleTTL   time.Duration
+	AccountID        string
+	BodyLog          BodyLogConfig
+	WsSessionIdleTTL time.Duration
 }
 
 const defaultWsSessionIdleTTL = 10 * time.Minute
@@ -96,14 +96,6 @@ var ErrCodexProviderNotConfigured = errors.New("codex provider: not configured")
 // Execute satisfies adapterprovider.Provider.Execute. It builds a
 // DirectConfig from the provider's deps, runs the websocket transport
 // via RunDirect, and surfaces the result as adapterprovider.Result.
-//
-// The bridge to provider.EventWriter goes via render.Event values
-// derived from the StreamChunk emit closure RunDirect uses today.
-// This is intentionally a thin shim: the chunk-to-event conversion
-// here covers the assistant-text-delta path in full, with tool calls
-// and reasoning forwarded through opaque deltas. Plan 6 (render
-// finalization) replaces this shim with a direct event emit from the
-// websocket parser.
 func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequest, w adapterprovider.EventWriter) (adapterprovider.Result, error) {
 	if p == nil {
 		return adapterprovider.Result{}, ErrCodexProviderNotConfigured
@@ -136,8 +128,8 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 	}
 
 	model := resolvedModelFromRequest(req)
-	emit := func(chunk adapteropenai.StreamChunk) error {
-		return w.WriteStreamChunk(chunk)
+	emit := func(ev adapterrender.Event) error {
+		return w.WriteEvent(ev)
 	}
 
 	runResult, runErr := RunDirect(ctx, directCfg, req.OpenAI, model, req.Effort.String(), emit)

@@ -13,19 +13,20 @@ import (
 type EventKind string
 
 const (
-	EventAssistantTextDelta  EventKind = "assistant_text_delta"
-	EventReasoningSignaled   EventKind = "reasoning_signaled"
-	EventReasoningDelta      EventKind = "reasoning_delta"
-	EventReasoningFinished   EventKind = "reasoning_finished"
-	EventPlanUpdated         EventKind = "plan_updated"
-	EventToolStarted         EventKind = "tool_started"
-	EventToolProgress        EventKind = "tool_progress"
-	EventToolCompleted       EventKind = "tool_completed"
-	EventFileChangeStarted   EventKind = "file_change_started"
-	EventFileChangeProgress  EventKind = "file_change_progress"
-	EventFileChangeCompleted EventKind = "file_change_completed"
-	EventNotice              EventKind = "notice"
-	EventToolCallDelta       EventKind = "tool_call_delta"
+	EventAssistantTextDelta    EventKind = "assistant_text_delta"
+	EventAssistantRefusalDelta EventKind = "assistant_refusal_delta"
+	EventReasoningSignaled     EventKind = "reasoning_signaled"
+	EventReasoningDelta        EventKind = "reasoning_delta"
+	EventReasoningFinished     EventKind = "reasoning_finished"
+	EventPlanUpdated           EventKind = "plan_updated"
+	EventToolStarted           EventKind = "tool_started"
+	EventToolProgress          EventKind = "tool_progress"
+	EventToolCompleted         EventKind = "tool_completed"
+	EventFileChangeStarted     EventKind = "file_change_started"
+	EventFileChangeProgress    EventKind = "file_change_progress"
+	EventFileChangeCompleted   EventKind = "file_change_completed"
+	EventNotice                EventKind = "notice"
+	EventToolCallDelta         EventKind = "tool_call_delta"
 )
 
 type EventPlanStep struct {
@@ -142,6 +143,13 @@ func (r *EventRenderer) HandleEvent(ev Event) []adapteropenai.StreamChunk {
 		if chunk := r.renderText(ev.Text); chunk != nil {
 			out = append(out, *chunk)
 		}
+	case EventAssistantRefusalDelta:
+		if chunk := r.renderReasoningClose(); chunk != nil {
+			out = append(out, *chunk)
+		}
+		if chunk := r.renderRefusal(ev.Text); chunk != nil {
+			out = append(out, *chunk)
+		}
 	case EventNotice:
 		if chunk := r.renderActivity(ev.Text); chunk != nil {
 			out = append(out, *chunk)
@@ -180,6 +188,19 @@ func (r *EventRenderer) renderText(text string) *adapteropenai.StreamChunk {
 		return nil
 	}
 	delta := adapteropenai.StreamDelta{Content: text}
+	if !r.seenRole {
+		delta.Role = "assistant"
+		r.seenRole = true
+	}
+	ch := r.baseChunk(delta)
+	return &ch
+}
+
+func (r *EventRenderer) renderRefusal(text string) *adapteropenai.StreamChunk {
+	if strings.TrimSpace(text) == "" && text == "" {
+		return nil
+	}
+	delta := adapteropenai.StreamDelta{Refusal: text}
 	if !r.seenRole {
 		delta.Role = "assistant"
 		r.seenRole = true

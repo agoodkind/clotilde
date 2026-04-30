@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
@@ -21,14 +20,8 @@ func (f fakeAuth) Token(_ context.Context) (string, error) {
 }
 
 type capturingWriter struct {
-	chunks  []adapteropenai.StreamChunk
 	events  []adapterrender.Event
 	flushed bool
-}
-
-func (c *capturingWriter) WriteStreamChunk(chunk adapteropenai.StreamChunk) error {
-	c.chunks = append(c.chunks, chunk)
-	return nil
 }
 
 func (c *capturingWriter) WriteEvent(ev adapterrender.Event) error {
@@ -102,7 +95,6 @@ func TestCodexWebsocketURLConversion(t *testing.T) {
 		}
 	}
 }
-
 
 func TestResolvedModelFromRequestPopulatesCodexFields(t *testing.T) {
 	req := adapterresolver.ResolvedRequest{

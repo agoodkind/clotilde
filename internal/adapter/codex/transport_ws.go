@@ -14,6 +14,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
 
 type ResponseCreateClientMetadata map[string]string
@@ -203,7 +204,7 @@ func writeAndParseWebsocketRequest(
 	conn *websocket.Conn,
 	cfg WebsocketTransportConfig,
 	payload ResponseCreateWsRequest,
-	emit func(adapteropenai.StreamChunk) error,
+	emit func(adapterrender.Event) error,
 	warmup bool,
 ) (RunResult, error) {
 	raw, err := MarshalResponseCreateWsRequest(payload)
@@ -215,7 +216,7 @@ func writeAndParseWebsocketRequest(
 		return NewRunResult("stop"), err
 	}
 	synthetic := streamWebsocketAsSyntheticSSE(conn)
-	result, err := ParseTransportStream(synthetic, cfg.RequestID, cfg.Alias, nil, emit)
+	result, err := ParseTransportStream(synthetic, emit)
 	if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 		return result, nil
 	}
@@ -294,16 +295,33 @@ func logWebsocketPrepared(ctx context.Context, cfg WebsocketTransportConfig, pay
 	LogTransportPrepared(ctx, nil, telemetry)
 }
 
+func RunWebsocketTransportEvents(
+	ctx context.Context,
+	cfg WebsocketTransportConfig,
+	payload ResponseCreateWsRequest,
+	emit func(adapterrender.Event) error,
+) (RunResult, error) {
+	if cfg.SessionCache != nil && strings.TrimSpace(cfg.ConversationID) != "" {
+		return runWebsocketWithCache(ctx, cfg, payload, emit)
+	}
+	return runWebsocketFreshDial(ctx, cfg, payload, emit)
+}
+
 func RunWebsocketTransport(
 	ctx context.Context,
 	cfg WebsocketTransportConfig,
 	payload ResponseCreateWsRequest,
 	emit func(adapteropenai.StreamChunk) error,
 ) (RunResult, error) {
-	if cfg.SessionCache != nil && strings.TrimSpace(cfg.ConversationID) != "" {
-		return runWebsocketWithCache(ctx, cfg, payload, emit)
-	}
-	return runWebsocketFreshDial(ctx, cfg, payload, emit)
+	renderer := adapterrender.NewEventRenderer(cfg.RequestID, cfg.Alias, "codex", nil)
+	return RunWebsocketTransportEvents(ctx, cfg, payload, func(ev adapterrender.Event) error {
+		for _, chunk := range renderer.HandleEvent(ev) {
+			if err := emit(chunk); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // runWebsocketFreshDial is the legacy path. Dial a fresh websocket,
@@ -314,7 +332,7 @@ func runWebsocketFreshDial(
 	ctx context.Context,
 	cfg WebsocketTransportConfig,
 	payload ResponseCreateWsRequest,
-	emit func(adapteropenai.StreamChunk) error,
+	emit func(adapterrender.Event) error,
 ) (RunResult, error) {
 	conn, resp, err := dialResponsesWebsocket(ctx, cfg)
 	if resp != nil && resp.StatusCode == http.StatusUpgradeRequired {
@@ -338,7 +356,7 @@ func runWebsocketFreshDial(
 			prewarmTimeout = defaultWebsocketPrewarmTimeout
 		}
 		_ = conn.SetReadDeadline(time.Now().Add(prewarmTimeout))
-		warmupResult, warmupErr := writeAndParseWebsocketRequest(conn, cfg, warmup, func(adapteropenai.StreamChunk) error {
+		warmupResult, warmupErr := writeAndParseWebsocketRequest(conn, cfg, warmup, func(adapterrender.Event) error {
 			return nil
 		}, true)
 		_ = conn.SetReadDeadline(time.Time{})
@@ -384,7 +402,7 @@ func runWebsocketWithCache(
 	ctx context.Context,
 	cfg WebsocketTransportConfig,
 	payload ResponseCreateWsRequest,
-	emit func(adapteropenai.StreamChunk) error,
+	emit func(adapterrender.Event) error,
 ) (RunResult, error) {
 	log := cfg.Log
 	if log == nil {
@@ -500,7 +518,7 @@ func openSessionAndWarmup(
 		prewarmTimeout = defaultWebsocketPrewarmTimeout
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(prewarmTimeout))
-	warmupResult, warmupErr := writeAndParseWebsocketRequest(conn, cfg, warmup, func(adapteropenai.StreamChunk) error {
+	warmupResult, warmupErr := writeAndParseWebsocketRequest(conn, cfg, warmup, func(adapterrender.Event) error {
 		return nil
 	}, true)
 	_ = conn.SetReadDeadline(time.Time{})

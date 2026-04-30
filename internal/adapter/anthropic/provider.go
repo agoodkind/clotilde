@@ -4,45 +4,96 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
+	"strings"
 
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 )
 
-// Provider is the registry-facing wrapper around the Anthropic OAuth
-// dispatch chain. It satisfies the upstream-agnostic
-// adapter/provider.Provider interface so the dispatcher can look it
-// up via ResolvedRequest.Provider symmetrically with codex.Provider.
+type requestIDContextKey struct{}
+
+// WithRequestID binds the adapter-generated request id into ctx so the
+// provider can preserve the existing response IDs and log correlation
+// fields while moving collect execution off the legacy root dispatcher.
+func WithRequestID(ctx context.Context, requestID string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if strings.TrimSpace(requestID) == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, requestIDContextKey{}, requestID)
+}
+
+func requestIDFromContext(ctx context.Context, fallback string) string {
+	if ctx != nil {
+		if value, ok := ctx.Value(requestIDContextKey{}).(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return strings.TrimSpace(fallback)
+}
+
+// ExecuteError preserves the legacy collect-path HTTP status/code
+// decisions for pre-wire failures now that Provider.Execute no longer
+// writes directly to the response writer.
+type ExecuteError struct {
+	Status  int
+	Code    string
+	Message string
+	Cause   error
+}
+
+func (e *ExecuteError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Message != "" {
+		return e.Message
+	}
+	if e.Cause != nil {
+		return e.Cause.Error()
+	}
+	return "anthropic provider execution failed"
+}
+
+func (e *ExecuteError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+// Provider is the Anthropic direct-OAuth implementation of the
+// upstream-agnostic adapter/provider.Provider contract.
 //
-// This is the FIRST step of Plan 4 of the adapter refactor: get
-// Anthropic into the provider registry so the dispatcher does not
-// have to special-case Anthropic with a `BackendAnthropic` switch
-// arm. The internal rewrite (event normalization through EventWriter,
-// deletion of `anthropic/fallback/`, deletion of `anthropic_bridge.go`)
-// is a follow-up slice. Until those land, Execute returns a
-// `ErrLegacyDispatchPath` sentinel that the dispatcher recognizes
-// and falls through to the existing `anthropicbackend.Dispatch`
-// chain. The registry presence is what unlocks future symmetric
-// changes.
+// Sitting 1 of Plan 4 only moves non-streaming Collect requests onto
+// Provider.Execute. Streaming still returns ErrLegacyDispatchPath so the
+// legacy dispatcher owns the SSE path until Sitting 2.
 type Provider struct {
-	log *slog.Logger
+	log     *slog.Logger
+	collect func(context.Context, adapterresolver.ResolvedRequest, string, adapterprovider.EventWriter) (adapterprovider.Result, error)
+	stream  func(context.Context, adapterresolver.ResolvedRequest, string, adapterprovider.EventWriter) (adapterprovider.Result, error)
 }
 
-// ProviderOptions configures the wrapper. Only logger today.
+// ProviderOptions binds the construction-time Anthropic-only
+// dependencies that the legacy root dispatcher used to pass per call.
 type ProviderOptions struct {
-	Log *slog.Logger
+	Collect func(context.Context, adapterresolver.ResolvedRequest, string, adapterprovider.EventWriter) (adapterprovider.Result, error)
+	Stream  func(context.Context, adapterresolver.ResolvedRequest, string, adapterprovider.EventWriter) (adapterprovider.Result, error)
 }
 
-// NewProvider returns a Provider satisfying the adapter/provider
-// contract. The wrapper does not retain any anthropic.Client or oauth
-// state; routing still goes through the existing Server methods until
-// the internal migration completes.
-func NewProvider(opts ProviderOptions) *Provider {
-	log := opts.Log
+func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
+	log := deps.Logger
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Provider{log: log.With("component", "adapter", "subcomponent", "anthropic_provider")}
+	return &Provider{
+		log:     log.With("component", "adapter", "subcomponent", "anthropic_provider"),
+		collect: opts.Collect,
+		stream:  opts.Stream,
+	}
 }
 
 // ID matches the resolver.ProviderID for the Anthropic backend.
@@ -56,13 +107,21 @@ func (p *Provider) ID() adapterresolver.ProviderID {
 // Plan 6) lands.
 var ErrLegacyDispatchPath = errors.New("anthropic provider: use legacy dispatch path")
 
-// Execute is the registry-facing entrypoint. Today it returns
-// ErrLegacyDispatchPath because event normalization still lives in
-// the existing dispatch chain. The Provider exists in the registry
-// so symmetry-aware code paths can look it up.
 func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequest, w adapterprovider.EventWriter) (adapterprovider.Result, error) {
-	_ = ctx
-	_ = req
-	_ = w
-	return adapterprovider.Result{}, ErrLegacyDispatchPath
+	if req.OpenAI.Stream {
+		if p == nil || p.stream == nil {
+			return adapterprovider.Result{}, ErrLegacyDispatchPath
+		}
+		reqID := requestIDFromContext(ctx, req.Cursor.RequestID)
+		return p.stream(ctx, req, reqID, w)
+	}
+	if p == nil || p.collect == nil {
+		return adapterprovider.Result{}, &ExecuteError{
+			Status:  http.StatusInternalServerError,
+			Code:    "oauth_unconfigured",
+			Message: "adapter built without anthropic collect provider; set adapter.direct_oauth=true and restart",
+		}
+	}
+	reqID := requestIDFromContext(ctx, req.Cursor.RequestID)
+	return p.collect(ctx, req, reqID, w)
 }

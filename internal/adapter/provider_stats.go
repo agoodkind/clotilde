@@ -11,8 +11,6 @@ func providerName(model ResolvedModel, path string) string {
 	switch model.Backend {
 	case BackendAnthropic:
 		return "anthropic-oauth"
-	case BackendFallback:
-		return "anthropic-fallback"
 	case BackendCodex:
 		if path == "app" {
 			return "openai-codex-app"

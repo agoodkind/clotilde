@@ -2,7 +2,6 @@ package ui
 
 import (
 	"strings"
-	"time"
 
 	"github.com/gdamore/tcell/v2"
 )
@@ -37,8 +36,9 @@ type OptionsModal struct {
 	Entries    []OptionsModalEntry
 	// StatsSegments, when provided, renders a reusable session stats
 	// pane on the left and keeps the options list on the right.
-	StatsSegments [][]TextSegment
-	StatsLoading  bool
+	StatsSegments    [][]TextSegment
+	StatsLoading     bool
+	StatsSessionName string
 
 	cursor int
 	rect   Rect
@@ -205,15 +205,6 @@ func (m *OptionsModal) Draw(scr tcell.Screen, r Rect) {
 	drawString(scr, inner.X, box.Y+box.H-1, StyleMuted, hint, inner.W)
 }
 
-func overlaySpinnerGlyph() string {
-	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-	index := int((time.Now().UnixNano() / int64(100*time.Millisecond)) % int64(len(frames)))
-	if index < 0 {
-		index = 0
-	}
-	return frames[index]
-}
-
 func (m *OptionsModal) HandleEvent(ev tcell.Event) bool {
 	switch e := ev.(type) {
 	case *tcell.EventKey:
@@ -299,17 +290,21 @@ func (m *OptionsModal) handleKey(e *tcell.EventKey) bool {
 	switch e.Key() {
 	case tcell.KeyUp:
 		m.moveCursor(-1)
+		m.ensureCursorVisible()
 		return true
 	case tcell.KeyDown:
 		m.moveCursor(+1)
+		m.ensureCursorVisible()
 		return true
 	case tcell.KeyRune:
 		switch e.Rune() {
 		case 'j':
 			m.moveCursor(+1)
+			m.ensureCursorVisible()
 			return true
 		case 'k':
 			m.moveCursor(-1)
+			m.ensureCursorVisible()
 			return true
 		}
 	}
@@ -422,8 +417,7 @@ func (m *OptionsModal) drawStatsPane(scr tcell.Screen, r Rect) {
 	m.statsBox.Lines = nil
 	m.statsBox.Draw(scr, r)
 	if m.StatsLoading && r.H >= 2 {
-		loadingText := " " + overlaySpinnerGlyph() + " loading stats..."
-		drawString(scr, r.X+1, r.Y+r.H-1, StyleMuted, loadingText, imax(0, r.W-2))
+		NewLoadingSpinner("loading stats...", currentLoadingFrame()).Draw(scr, r.X+1, r.Y+r.H-1, imax(0, r.W-2))
 	}
 }
 
@@ -520,4 +514,31 @@ func (m *OptionsModal) jumpToOptionsScrollbarY(y int) {
 	maxOff := imax(0, m.optionsTotalRows-m.optionsVisibleRows)
 	newOff := rel * maxOff / imax(1, m.optionsScrollbarRect.H-1)
 	m.optionsOffset = clamp(newOff, 0, maxOff)
+}
+
+func (m *OptionsModal) ensureCursorVisible() {
+	if m.optionsVisibleRows <= 0 {
+		return
+	}
+	logical, ok := m.logicalRowForEntryIndex(m.cursor)
+	if !ok {
+		return
+	}
+	if logical < m.optionsOffset {
+		m.optionsOffset = logical
+	} else if logical >= m.optionsOffset+m.optionsVisibleRows {
+		m.optionsOffset = logical - m.optionsVisibleRows + 1
+	}
+	maxOff := imax(0, m.optionsTotalRows-m.optionsVisibleRows)
+	m.optionsOffset = clamp(m.optionsOffset, 0, maxOff)
+}
+
+func (m *OptionsModal) logicalRowForEntryIndex(index int) (int, bool) {
+	if index < 0 || index >= m.totalEntries() {
+		return 0, false
+	}
+	if len(m.TopEntries) > 0 && len(m.Entries) > 0 && index >= len(m.TopEntries) {
+		return index + 1, true
+	}
+	return index, true
 }

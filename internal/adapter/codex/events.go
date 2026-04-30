@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"strings"
 
-	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
 
@@ -114,23 +113,6 @@ func LogProtocolEvent(ctx context.Context, requestID, backend, event string, att
 	slog.LogAttrs(ctx, slog.LevelDebug, "adapter.protocol.event", base...)
 }
 
-func EmitRendered(
-	renderer *adapterrender.EventRenderer,
-	ev adapterrender.Event,
-	emit func(adapteropenai.StreamChunk) error,
-	assistantText *strings.Builder,
-) error {
-	for _, ch := range renderer.HandleEvent(ev) {
-		if assistantText != nil && len(ch.Choices) > 0 {
-			assistantText.WriteString(ch.Choices[0].Delta.Content)
-		}
-		if err := emit(ch); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func logTransportEvent(log *slog.Logger, ctx context.Context, requestID, msg string, attrs ...slog.Attr) {
 	if log == nil {
 		log = slog.Default()
@@ -187,7 +169,6 @@ func mapString(m map[string]any, key string) string {
 	return strings.TrimSpace(v)
 }
 
-func ParseTransportStream(body io.Reader, requestID, alias string, log *slog.Logger, emit func(adapteropenai.StreamChunk) error) (RunResult, error) {
-	renderer := adapterrender.NewEventRenderer(requestID, alias, "codex", log)
-	return ParseSSE(bufio.NewReader(body), renderer, emit)
+func ParseTransportStream(body io.Reader, emit func(adapterrender.Event) error) (RunResult, error) {
+	return ParseSSEEvents(bufio.NewReader(body), emit)
 }

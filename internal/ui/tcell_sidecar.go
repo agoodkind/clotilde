@@ -18,20 +18,20 @@ import (
 
 // SidecarPanel is the live view widget for the third "Sidecar" tab.
 type SidecarPanel struct {
-	SessionName     string
-	SessionID       string
-	BridgeURL       string
-	Buffer          []SidecarLine
-	BufferLimit     int
-	Input           *TextInput
-	rect            Rect
-	bodyRect        Rect
-	inputRect       Rect
-	auto            bool // bottom-stick scroll
-	offset          int  // index of first visible line
-	focus           sidecarFocus
-	status          string // last delivery status ("sent", "no listener", "error: ...")
-	OnSend          func(text string) error
+	SessionName string
+	SessionID   string
+	BridgeURL   string
+	Buffer      []SidecarLine
+	BufferLimit int
+	Input       *TextInput
+	rect        Rect
+	bodyRect    Rect
+	inputRect   Rect
+	auto        bool // bottom-stick scroll
+	offset      int  // index of first visible line
+	focus       sidecarFocus
+	status      string // last delivery status ("sent", "no listener", "error: ...")
+	OnSend      func(text string) error
 }
 
 // SidecarLine is one rendered row in the sidecar buffer.
@@ -113,7 +113,7 @@ func (p *SidecarPanel) drawHeader(scr tcell.Screen, r Rect) {
 func (p *SidecarPanel) drawBody(scr tcell.Screen, r Rect) {
 	clearRect(scr, r)
 	if len(p.Buffer) == 0 {
-		drawString(scr, r.X+2, r.Y+1, StyleMuted, "(waiting for transcript lines)", r.W-4)
+		ClockLoadingSpinner("waiting for transcript lines...").Draw(scr, r.X+2, r.Y+1, r.W-4)
 		return
 	}
 	if p.auto {

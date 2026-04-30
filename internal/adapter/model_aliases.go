@@ -6,15 +6,7 @@ const (
 	BackendClaude    = adaptermodel.BackendClaude
 	BackendShunt     = adaptermodel.BackendShunt
 	BackendAnthropic = adaptermodel.BackendAnthropic
-	BackendFallback  = adaptermodel.BackendFallback
 	BackendCodex     = adaptermodel.BackendCodex
-
-	FallbackTriggerExplicit       = adaptermodel.FallbackTriggerExplicit
-	FallbackTriggerOnOAuthFailure = adaptermodel.FallbackTriggerOnOAuthFailure
-	FallbackTriggerBoth           = adaptermodel.FallbackTriggerBoth
-
-	FallbackEscalationFallbackError = adaptermodel.FallbackEscalationFallbackError
-	FallbackEscalationOAuthError    = adaptermodel.FallbackEscalationOAuthError
 
 	EffortLow    = adaptermodel.EffortLow
 	EffortMedium = adaptermodel.EffortMedium

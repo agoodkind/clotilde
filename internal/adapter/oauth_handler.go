@@ -2,25 +2,26 @@ package adapter
 
 import (
 	"context"
-	"log/slog"
-	"net/http"
+	"sync"
 
+	"github.com/google/uuid"
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
 )
 
-// handleOAuth fulfils a chat completion using the direct HTTP
-// anthropic.Client (Bearer token from the oauth manager). Streaming
-// and non-streaming responses mirror the fallback CLI path shape for
-// OpenAI-compatible clients.
-//
-// When escalate is true the function returns a non-nil error
-// without writing the response on transport failures, letting the
-// dispatcher trigger the fallback. When escalate is false the
-// function writes the error to w (preserving the original behavior)
-// and returns nil.
-func (s *Server) handleOAuth(w http.ResponseWriter, r *http.Request, req ChatRequest, model ResolvedModel, effort, reqID string, escalate bool) error {
-	return s.HandleOAuth(w, r, req, model, effort, reqID, escalate)
+var (
+	anthropicProcessSessionOnce sync.Once
+	anthropicProcessSessionVal  string
+)
+
+// anthropicProcessSessionID returns a stable per-daemon-process
+// session UUID used as a final fallback for metadata.user_id when
+// neither cursorConversationId nor req.User is present.
+func anthropicProcessSessionID() string {
+	anthropicProcessSessionOnce.Do(func() {
+		anthropicProcessSessionVal = uuid.NewString()
+	})
+	return anthropicProcessSessionVal
 }
 
 // buildAnthropicWire maps the OpenAI chat request to a native messages body
@@ -46,53 +47,31 @@ func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort
 }
 
 // anthropicIdentity assembles the metadata.user_id payload claude-cli
-// emits. DeviceID is persisted across runs; AccountUUID comes from
-// the OAuth access token; SessionID is the cursorConversationId from
-// the inbound metadata so distinct Cursor conversations remain
-// distinguishable upstream.
+// emits. DeviceID is persisted across runs; AccountUUID is read from
+// claude-cli's ~/.claude.json (Anthropic OAuth tokens are opaque so
+// JWT extraction is not viable). SessionID prefers the inbound
+// metadata.cursorConversationId, falls back to req.User, then to a
+// per-daemon-process UUID so the field is never empty (claude-cli
+// always sends a non-empty session_id).
 func (s *Server) anthropicIdentity(req ChatRequest) anthropic.Identity {
 	id := anthropic.Identity{}
 	if dev, err := anthropic.DeviceID(); err == nil {
 		id.DeviceID = dev
 	}
-	if s.oauthMgr != nil {
+	if uuid, err := anthropic.AccountUUIDFromClaudeConfig(); err == nil && uuid != "" {
+		id.AccountUUID = uuid
+	} else if s.oauthMgr != nil {
 		if tok, err := s.oauthMgr.Token(context.Background()); err == nil {
 			id.AccountUUID = anthropic.AccountUUIDFromAccessToken(tok)
 		}
 	}
-	if v := metadataString(req.Metadata, "cursorConversationId"); v != "" {
-		id.SessionID = v
+	switch {
+	case metadataString(req.Metadata, "cursorConversationId") != "":
+		id.SessionID = metadataString(req.Metadata, "cursorConversationId")
+	case req.User != "":
+		id.SessionID = req.User
+	default:
+		id.SessionID = anthropicProcessSessionID()
 	}
 	return id
-}
-
-// logCacheUsage emits a dedicated adapter.cache.usage slog event when
-// the upstream reports any cache activity. The hit_ratio denominator
-// is input_tokens + cache_read_input_tokens since Anthropic bills
-// input_tokens as the uncached portion only; a value of 1.0 means the
-// entire prompt came from cache. Callers on the OAuth path pass the
-// native anthropic.Usage via logCacheUsageAnthropic; the fallback path
-// passes the fields it already parsed from stream-json result events.
-func (s *Server) logCacheUsage(ctx context.Context, backend, reqID, alias string, inputTokens, cacheCreationTokens, cacheReadTokens int) {
-	if cacheCreationTokens == 0 && cacheReadTokens == 0 {
-		return
-	}
-	denom := inputTokens + cacheReadTokens
-	var hitRatio float64
-	if denom > 0 {
-		hitRatio = float64(cacheReadTokens) / float64(denom)
-	}
-	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.cache.usage",
-		slog.String("backend", backend),
-		slog.String("request_id", reqID),
-		slog.String("alias", alias),
-		slog.Int("input_tokens", inputTokens),
-		slog.Int("cache_creation_tokens", cacheCreationTokens),
-		slog.Int("cache_read_tokens", cacheReadTokens),
-		slog.Float64("hit_ratio", hitRatio),
-	)
-}
-
-func (s *Server) logCacheUsageAnthropic(ctx context.Context, backend, reqID, alias string, u anthropic.Usage) {
-	s.logCacheUsage(ctx, backend, reqID, alias, u.InputTokens, u.CacheCreationInputTokens, u.CacheReadInputTokens)
 }

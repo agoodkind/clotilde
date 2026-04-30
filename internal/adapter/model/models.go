@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
 
 	"goodkind.io/clyde/internal/config"
 )
@@ -22,28 +21,8 @@ const (
 	// construction so the HTTP layer only has to switch on this
 	// single value.
 	BackendAnthropic = "anthropic"
-	// BackendFallback routes the request through the local
-	// `claude` CLI in `-p --output-format stream-json` mode. This
-	// is the third backend, configured via [adapter.fallback];
-	// the dispatcher selects it either explicitly (alias bound to
-	// backend = "fallback") or as an on-oauth-failure escalation.
-	BackendFallback = "fallback"
 	// BackendCodex routes to ChatGPT/Codex-backed model execution.
 	BackendCodex = "codex"
-)
-
-// FallbackTrigger values control when the fallback dispatcher fires.
-const (
-	FallbackTriggerExplicit       = "explicit"
-	FallbackTriggerOnOAuthFailure = "on_oauth_failure"
-	FallbackTriggerBoth           = "both"
-)
-
-// FallbackEscalation values control which error surfaces when both
-// the OAuth attempt and the fallback attempt fail.
-const (
-	FallbackEscalationFallbackError = "fallback_error"
-	FallbackEscalationOAuthError    = "oauth_error"
 )
 
 // Effort tiers (low, medium, high, max). Sent inside output_config
@@ -74,7 +53,7 @@ const (
 type ResolvedModel struct {
 	// Alias is the public name the client sent.
 	Alias string
-	// Backend is one of BackendClaude / BackendShunt / BackendAnthropic / BackendFallback.
+	// Backend is one of BackendClaude / BackendShunt / BackendAnthropic / BackendCodex.
 	Backend string
 	// ClaudeModel names the real Claude snapshot. May carry a
 	// context-window wire suffix (e.g. "[1m]");
@@ -109,12 +88,6 @@ type ResolvedModel struct {
 	// Shunt names an entry inside AdapterConfig.Shunts. Only set
 	// when Backend is BackendShunt.
 	Shunt string
-	// CLIAlias is the short model name passed to `claude -p
-	// --model` when the fallback dispatcher fires. Populated from
-	// cfg.Fallback.CLIAliases[familySlug] during registry
-	// construction; empty when the fallback is disabled or the
-	// family is not whitelisted.
-	CLIAlias string
 	// FamilySlug is the cfg.Families key this alias was generated
 	// from. Empty for user-supplied [adapter.models.<name>] entries
 	// (which carry their own backend/model directly).
@@ -198,20 +171,8 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 	if len(cfg.Families) == 0 {
 		return nil, fmt.Errorf("adapter: no model families declared in [adapter.families]")
 	}
-
-	if err := validateFallbackConfig(cfg); err != nil {
-		return nil, err
-	}
-
-	cliAliases := map[string]string{}
-	allowedFamilies := map[string]struct{}{}
 	if cfg.Fallback.Enabled {
-		for slug, alias := range cfg.Fallback.CLIAliases {
-			cliAliases[slug] = alias
-		}
-		for _, slug := range cfg.Fallback.AllowedFamilies {
-			allowedFamilies[slug] = struct{}{}
-		}
+		return nil, fmt.Errorf("adapter: [adapter.fallback] is no longer supported")
 	}
 
 	models := map[string]ResolvedModel{}
@@ -222,13 +183,7 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 		if len(family.Contexts) == 0 {
 			return nil, fmt.Errorf("adapter: family %q missing contexts", slug)
 		}
-		cliAlias := ""
-		if cfg.Fallback.Enabled {
-			if _, ok := allowedFamilies[slug]; ok {
-				cliAlias = cliAliases[slug]
-			}
-		}
-		generateFamilyAliases(models, slug, family, cliAlias)
+		generateFamilyAliases(models, slug, family)
 	}
 
 	r := &Registry{
@@ -266,6 +221,9 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 	}
 
 	for name, m := range cfg.Models {
+		if strings.EqualFold(strings.TrimSpace(m.Backend), "fallback") {
+			return nil, fmt.Errorf("adapter: [adapter.models.%s].backend = %q is no longer supported", name, m.Backend)
+		}
 		r.models[strings.ToLower(name)] = resolveFromConfig(name, m)
 	}
 	for name, s := range cfg.Shunts {
@@ -311,12 +269,14 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 	return r, nil
 }
 
-// validateAdapterLogprobs enforces the logprobs stanza when the user
-// set at least one backend key. Empty strings mean the stanza is
-// absent or unused; otherwise both backends must be reject or drop.
+// validateAdapterLogprobs enforces the live Anthropic logprobs policy and
+// rejects the removed fallback knob so unsupported config does not go silent.
 func validateAdapterLogprobs(lp config.AdapterLogprobs) error {
 	if lp.Anthropic == "" && lp.Fallback == "" {
 		return nil
+	}
+	if lp.Fallback != "" {
+		return fmt.Errorf("adapter: [adapter.logprobs].fallback is no longer supported")
 	}
 	allowed := map[string]bool{"reject": true, "drop": true}
 	if lp.Anthropic == "" {
@@ -326,14 +286,6 @@ func validateAdapterLogprobs(lp config.AdapterLogprobs) error {
 	}
 	if !allowed[lp.Anthropic] {
 		return fmt.Errorf("adapter: [adapter.logprobs].anthropic %q invalid", lp.Anthropic)
-	}
-	if lp.Fallback == "" {
-		return fmt.Errorf(
-			`adapter: [adapter.logprobs].fallback must be set ("reject" or "drop")`,
-		)
-	}
-	if !allowed[lp.Fallback] {
-		return fmt.Errorf("adapter: [adapter.logprobs].fallback %q invalid", lp.Fallback)
 	}
 	return nil
 }
@@ -346,7 +298,7 @@ func validateAdapterLogprobs(lp config.AdapterLogprobs) error {
 // `thinking-default` and the empty effort sentinel are omitted from
 // the alias name so users get the shortest readable name when those
 // dimensions don't apply.
-func generateFamilyAliases(out map[string]ResolvedModel, slug string, f config.AdapterFamily, cliAlias string) {
+func generateFamilyAliases(out map[string]ResolvedModel, slug string, f config.AdapterFamily) {
 	efforts := []string{""} // always emit a plain alias so callers can choose per-request effort
 	efforts = append(efforts, f.Efforts...)
 	thinking := f.ThinkingModes
@@ -368,117 +320,11 @@ func generateFamilyAliases(out map[string]ResolvedModel, slug string, f config.A
 					MaxOutputTokens: f.MaxOutputTokens,
 					SupportsTools:   *f.SupportsTools,
 					SupportsVision:  *f.SupportsVision,
-					CLIAlias:        cliAlias,
 					FamilySlug:      slug,
 				}
 			}
 		}
 	}
-}
-
-// validateFallbackConfig enforces the no-defaults / fail-loud contract
-// for [adapter.fallback]. Disabled is a no-op; enabled requires every
-// field below to be set, every whitelisted family slug to exist, and
-// every CLIAlias key to map to a real family. The shunt forwarding
-// leg, when enabled, must point at a real shunt.
-func validateFallbackConfig(cfg config.AdapterConfig) error {
-	fb := cfg.Fallback
-	if !fb.Enabled {
-		return nil
-	}
-	switch fb.Trigger {
-	case FallbackTriggerExplicit, FallbackTriggerOnOAuthFailure, FallbackTriggerBoth:
-	case "":
-		return fmt.Errorf("adapter: [adapter.fallback].trigger must be set when enabled")
-	default:
-		return fmt.Errorf(
-			"adapter: [adapter.fallback].trigger %q invalid (allowed: %s, %s, %s)",
-			fb.Trigger,
-			FallbackTriggerExplicit, FallbackTriggerOnOAuthFailure, FallbackTriggerBoth,
-		)
-	}
-	if fb.Timeout == "" {
-		return fmt.Errorf("adapter: [adapter.fallback].timeout must be set when enabled")
-	}
-	d, err := parseFallbackDuration(fb.Timeout)
-	if err != nil {
-		return fmt.Errorf("adapter: [adapter.fallback].timeout %q: %w", fb.Timeout, err)
-	}
-	if d <= 0 {
-		return fmt.Errorf("adapter: [adapter.fallback].timeout must be > 0")
-	}
-	if fb.MaxConcurrent <= 0 {
-		return fmt.Errorf("adapter: [adapter.fallback].max_concurrent must be > 0 when enabled")
-	}
-	if fb.ScratchSubdir == "" {
-		return fmt.Errorf("adapter: [adapter.fallback].scratch_subdir must be set when enabled")
-	}
-	switch fb.FailureEscalation {
-	case FallbackEscalationFallbackError, FallbackEscalationOAuthError:
-	case "":
-		return fmt.Errorf("adapter: [adapter.fallback].failure_escalation must be set when enabled")
-	default:
-		return fmt.Errorf(
-			"adapter: [adapter.fallback].failure_escalation %q invalid (allowed: %s, %s)",
-			fb.FailureEscalation,
-			FallbackEscalationFallbackError, FallbackEscalationOAuthError,
-		)
-	}
-	if len(fb.AllowedFamilies) == 0 {
-		return fmt.Errorf("adapter: [adapter.fallback].allowed_families must be non-empty when enabled")
-	}
-	for _, slug := range fb.AllowedFamilies {
-		if _, ok := cfg.Families[slug]; !ok {
-			return fmt.Errorf(
-				"adapter: [adapter.fallback].allowed_families references unknown family %q",
-				slug,
-			)
-		}
-	}
-	if len(fb.CLIAliases) == 0 {
-		return fmt.Errorf("adapter: [adapter.fallback.cli_aliases] must declare at least one mapping when enabled")
-	}
-	for slug, cliName := range fb.CLIAliases {
-		if _, ok := cfg.Families[slug]; !ok {
-			return fmt.Errorf(
-				"adapter: [adapter.fallback.cli_aliases] references unknown family %q",
-				slug,
-			)
-		}
-		if cliName == "" {
-			return fmt.Errorf(
-				"adapter: [adapter.fallback.cli_aliases].%s must be a non-empty CLI model name",
-				slug,
-			)
-		}
-	}
-	for _, slug := range fb.AllowedFamilies {
-		if _, ok := fb.CLIAliases[slug]; !ok {
-			return fmt.Errorf(
-				"adapter: [adapter.fallback.cli_aliases] missing entry for whitelisted family %q",
-				slug,
-			)
-		}
-	}
-	if fb.ForwardToShunt.Enabled {
-		if fb.ForwardToShunt.Shunt == "" {
-			return fmt.Errorf("adapter: [adapter.fallback.forward_to_shunt].shunt must be set when enabled")
-		}
-		if _, ok := cfg.Shunts[fb.ForwardToShunt.Shunt]; !ok {
-			return fmt.Errorf(
-				"adapter: [adapter.fallback.forward_to_shunt].shunt %q not declared in [adapter.shunts]",
-				fb.ForwardToShunt.Shunt,
-			)
-		}
-	}
-	return nil
-}
-
-// parseFallbackDuration is a thin wrapper that exists so the Registry
-// can validate the duration string without importing time directly
-// in NewRegistry's signature. Kept tiny on purpose.
-func parseFallbackDuration(s string) (time.Duration, error) {
-	return time.ParseDuration(s)
 }
 
 // buildAlias assembles one alias from its components.
@@ -515,13 +361,6 @@ func resolveFromConfig(alias string, m config.AdapterModel) ResolvedModel {
 		Context:     m.Context,
 		Efforts:     m.Efforts,
 		Shunt:       m.Shunt,
-	}
-	// User-supplied backend = "fallback" entries must carry the
-	// short claude-p name in m.Model. The dispatcher reads
-	// ResolvedModel.CLIAlias for the fallback path, so mirror it
-	// here.
-	if backend == BackendFallback {
-		out.CLIAlias = m.Model
 	}
 	return out
 }

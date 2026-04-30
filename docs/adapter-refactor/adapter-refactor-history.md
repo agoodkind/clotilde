@@ -2,6 +2,23 @@
 
 Append only record of completed adapter refactor work. Newest entries on top.
 
+## 2026-04-29
+
+- Removed the last chunk-first provider compatibility surface: `provider.EventWriter` no longer exposes `WriteStreamChunk(...)`, shared provider writers now keep chunk rendering private, and the remaining chunk buffering is limited to adapter-owned collect mergers.
+- Finished Plan 6 render ownership: both live providers now emit normalized `render.Event` values through `provider.EventWriter`, shared provider writers own event rendering plus OpenAI finish/usage framing, and the root Codex dispatcher no longer hand-builds terminal stream chunks.
+- Removed the last production compatibility wrappers from the render migration: deleted `RunTranslatorStream(...)` from the Anthropic backend, deleted `ParseSSE(...)` from Codex, moved the remaining test callers onto event-native helpers, and deleted the dead `internal/adapter/stream_chunk_convert.go` helper.
+- Removed the Anthropic `claude -p` fallback entirely: deleted `internal/adapter/anthropic/fallback/`, deleted `internal/adapter/anthropic_bridge.go`, removed the fallback branch from `internal/adapter/server.go` and `internal/adapter/server_backend_contract.go`, and collapsed `internal/adapter/anthropic_provider_dispatch.go` to direct provider-error surfacing with no fallback escalation.
+- Deleted the last fallback-only model and test plumbing: removed `BackendFallback`, `CLIAlias`, fallback preflight/provider-stats handling, and fallback lock-in tests; `NewRegistry` now rejects `[adapter.fallback]`, fallback model backends, and fallback logprobs knobs as unsupported.
+- Kept `internal/adapter/oauth_handler.go` narrowed to Anthropic request-building and identity assembly only, with no fallback runtime ownership left under the root adapter package.
+- Finished the Anthropic provider cutover entry path: `internal/adapter/server_backend_contract.go` now routes `BackendAnthropic` through `internal/adapter/anthropic/provider.go` and `internal/adapter/anthropic_provider_dispatch.go` for both collect and stream instead of the old top-level Anthropic dispatcher path.
+- Extended the provider boundary for Anthropic by wiring collect and stream callbacks into `anthropic.Provider.Execute`, adding `provider.Result.FinalResponse`, and teaching the provider stream writer to surface native Anthropic/OpenAI SSE error envelopes without losing the existing wire shape.
+- Collapsed Anthropic fallback to one live source of truth in `internal/adapter/anthropic_bridge.go`: the server now owns the fallback request build, transcript-resume preparation, collect/stream execution, and fallback completion/failure logging directly against `internal/adapter/anthropic/fallback/`, and the duplicate backend-owned fallback runtime entrypoints were removed.
+- Removed the stale top-level Anthropic dispatcher entrypoints from `internal/adapter/anthropic/backend/backend.go`; the file now only retains shared fallback error helpers used by the live provider path.
+- Trimmed root Anthropic cruft by deleting unused bridge-style wrappers that no longer had live callers after the provider cutover, while keeping `oauth_handler.go` focused on Anthropic request building, identity derivation, and cache-usage logging.
+- Split cache-usage logging out of `internal/adapter/oauth_handler.go` into `internal/adapter/cache_usage.go`, leaving `oauth_handler.go` narrowed to Anthropic request-building and identity assembly helpers only.
+- Added or updated Anthropic provider lock-in coverage in `internal/adapter/anthropic/provider_test.go`, and reran adapter verification successfully: `go test ./internal/adapter/...`, `make staticcheck`, `make build`, and `make test` all passed on 2026-04-29 after the cutover cleanup.
+- Recorded fresh real Anthropic rate-limit evidence from `~/.local/state/clyde/anthropic.jsonl`: multiple `anthropic.ratelimit` events for `claude-opus-4-7` on 2026-04-29 around 21:30 PDT with `status=429`, `anthropic-ratelimit-unified-status="rejected"`, `anthropic-ratelimit-unified-7d-status="rejected"`, and long `retry_after` values, which validates the live classifier/error-envelope path against current upstream headers.
+
 ## 2026-04-27
 
 - Reconciled Phase 5 and Phase 6 Codex todo lists against actual code state. Work marked complete includes Codex request builder extraction, response assembly behind `MergeChunks(...)`, SSE parsing and tool-call reconstruction, and finish-reason normalization through shared `finishreason` helper.
@@ -184,16 +201,16 @@ Implementation across five commits on main:
 Live verification result on a 3-turn Cursor agent session
 (`gpt-5.4`, conversation `e8ab0f01...`):
 
-| metric | gate | observed |
-|---|---|---|
-| ws_session.opened per conversation | 1 | 1 |
-| Chained `previous_response_id` | yes | warmup ... 425fec ... 42a150 ... 4fe254 ... 5531ac |
-| Delta input rate turn 2 | < 80% of full | 24% (5/21) |
-| Delta input rate turn 3 | < 80% of full | 12% (3/24) |
-| Prompt cache hit rate turn 2 | high | 96.5% (cache_read 36864 / prompt 38198) |
-| Prompt cache hit rate turn 3 | high | 98.2% (cache_read 37888 / prompt 38572) |
-| `Previous response with id ... not found.` errors | 0 | 0 |
-| `adapter.request.failed` events | 0 | 0 |
+| metric                                            | gate          | observed                                           |
+| ------------------------------------------------- | ------------- | -------------------------------------------------- |
+| ws_session.opened per conversation                | 1             | 1                                                  |
+| Chained `previous_response_id`                    | yes           | warmup ... 425fec ... 42a150 ... 4fe254 ... 5531ac |
+| Delta input rate turn 2                           | < 80% of full | 24% (5/21)                                         |
+| Delta input rate turn 3                           | < 80% of full | 12% (3/24)                                         |
+| Prompt cache hit rate turn 2                      | high          | 96.5% (cache_read 36864 / prompt 38198)            |
+| Prompt cache hit rate turn 3                      | high          | 98.2% (cache_read 37888 / prompt 38572)            |
+| `Previous response with id ... not found.` errors | 0             | 0                                                  |
+| `adapter.request.failed` events                   | 0             | 0                                                  |
 
 Plan 5b (the fingerprint matcher) is superseded. CLYDE-123 closes as
 "superseded by CLYDE-126; cross-process `previous_response_id` reuse with

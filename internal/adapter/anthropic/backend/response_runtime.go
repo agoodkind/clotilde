@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 )
 
@@ -36,8 +38,10 @@ type ResponseDispatcher interface {
 	NewAnthropicSSEWriter(http.ResponseWriter) (ResponseSSEWriter, error)
 	AnthropicStreamClient() StreamClient
 	SystemFingerprint() string
-	StreamChunkFromTooltrans(adapteropenai.StreamChunk) adapteropenai.StreamChunk
 	StreamChunkHasVisibleContent(adapteropenai.StreamChunk) bool
+	WriteEvent(adapterrender.Event) error
+	FlushEventWriter() error
+	CollectedChunks() []adapteropenai.StreamChunk
 	TrackAnthropicContextUsage(string, adapteropenai.Usage) TrackedUsage
 	JSONCoercion(ResponseFormatSpec) JSONCoercion
 	WriteJSON(http.ResponseWriter, int, adapteropenai.ChatResponse)
@@ -71,12 +75,10 @@ func CollectResponse(
 		}
 		notice = adapterruntime.EvaluateNoticeFromHeaders(h, d.NoticesEnabled(), d.ClaimNotice)
 	}
-	var buf []adapteropenai.StreamChunk
-	emit := func(ch adapteropenai.StreamChunk) error {
-		buf = append(buf, ch)
-		return nil
+	emit := func(ev adapterrender.Event) error {
+		return d.WriteEvent(ev)
 	}
-	anthUsage, anthStopReason, finishReason, err := RunTranslatorStream(d.AnthropicStreamClient(), ctx, req, model, reqID, emit)
+	anthUsage, anthStopReason, finishReason, err := RunTranslatorEvents(d.AnthropicStreamClient(), ctx, req, model, reqID, emit)
 	if err != nil {
 		adapterruntime.LogFailed(d.Log(), ctx, adapterruntime.FailedAttrs{
 			Backend:    "anthropic",
@@ -133,10 +135,13 @@ func CollectResponse(
 			errMsg,
 		)
 	}
+	if err := d.FlushEventWriter(); err != nil {
+		return err
+	}
 	rawUsage := usageWithContextWindow(UsageFromAnthropic(anthUsage), model.Context)
 	tracked := d.TrackAnthropicContextUsage(trackerKey, rawUsage)
 	u := tracked.Usage
-	resp := MergeStreamChunks(reqID, model.Alias, d.SystemFingerprint(), buf, u, finishReason, d.JSONCoercion(jsonSpec), anthStopReason)
+	resp := MergeStreamChunks(reqID, model.Alias, d.SystemFingerprint(), d.CollectedChunks(), u, finishReason, d.JSONCoercion(jsonSpec), anthStopReason)
 	resp, _ = adapterruntime.NoticeForResponseHeaders(resp, notice, func(kind string, resetsAt time.Time) {
 		d.UnclaimNotice(kind, resetsAt)
 	}, json.Marshal)
@@ -231,11 +236,17 @@ func StreamResponse(
 	d.EmitRequestStreamOpened(r.Context(), model, "oauth", reqID, req.Model, true)
 
 	emittedContent := false
-	emit := func(chunk adapteropenai.StreamChunk) error {
+	emitChunk := func(chunk adapteropenai.StreamChunk) error {
 		if d.StreamChunkHasVisibleContent(chunk) {
 			emittedContent = true
 		}
 		return sw.EmitStreamChunk(d.SystemFingerprint(), chunk)
+	}
+	emitEvent := func(ev adapterrender.Event) error {
+		if eventHasVisibleContent(ev) {
+			emittedContent = true
+		}
+		return d.WriteEvent(ev)
 	}
 	previousOnHeaders := req.OnHeaders
 	req.OnHeaders = func(h http.Header) {
@@ -248,7 +259,7 @@ func StreamResponse(
 			h,
 			d.NoticesEnabled(),
 			func(chunk adapteropenai.StreamChunk) error {
-				return emit(d.StreamChunkFromTooltrans(chunk))
+				return emitChunk(chunk)
 			},
 			d.ClaimNotice,
 			d.UnclaimNotice,
@@ -262,9 +273,7 @@ func StreamResponse(
 			)
 		}
 	}
-	anthUsage, _, finishReason, err := RunTranslatorStream(d.AnthropicStreamClient(), r.Context(), req, model, reqID, func(ch adapteropenai.StreamChunk) error {
-		return emit(d.StreamChunkFromTooltrans(ch))
-	})
+	anthUsage, _, finishReason, err := RunTranslatorEvents(d.AnthropicStreamClient(), r.Context(), req, model, reqID, emitEvent)
 	if err != nil {
 		d.Log().LogAttrs(r.Context(), slog.LevelWarn, "adapter.chat.stream_error",
 			slog.String("backend", "anthropic"),
@@ -287,7 +296,7 @@ func StreamResponse(
 			if ue, ok := anthropic.AsUpstreamError(err); ok {
 				_ = sw.EmitStreamError(buildErrorBodyForUpstream(ue))
 			} else {
-				_ = EmitActionableStreamError(emit, reqID, model.Alias, err)
+				_ = EmitActionableStreamError(emitChunk, reqID, model.Alias, err)
 			}
 			finishReason = "stop"
 		}
@@ -312,7 +321,7 @@ func StreamResponse(
 			slog.String("model", req.Model),
 			slog.Any("err", streamErr),
 		)
-		_ = emit(adapteropenai.StreamChunk{
+		_ = emitChunk(adapteropenai.StreamChunk{
 			ID:      reqID,
 			Object:  "chat.completion.chunk",
 			Created: time.Now().Unix(),
@@ -327,6 +336,7 @@ func StreamResponse(
 		})
 		finishReason = "stop"
 	}
+	_ = d.FlushEventWriter()
 	rawFinalUsage := usageWithContextWindow(UsageFromAnthropic(anthUsage), model.Context)
 	tracked := d.TrackAnthropicContextUsage(trackerKey, rawFinalUsage)
 	finalUsage := tracked.Usage
@@ -423,6 +433,15 @@ func StreamResponse(
 		})
 	}
 	return nil
+}
+
+func eventHasVisibleContent(ev adapterrender.Event) bool {
+	switch ev.Kind {
+	case adapterrender.EventAssistantTextDelta, adapterrender.EventAssistantRefusalDelta, adapterrender.EventReasoningDelta:
+		return strings.TrimSpace(ev.Text) != "" || ev.Text != ""
+	default:
+		return false
+	}
 }
 
 func usageWithContextWindow(u adapteropenai.Usage, contextWindow int) adapteropenai.Usage {

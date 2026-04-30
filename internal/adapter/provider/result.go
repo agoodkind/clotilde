@@ -10,6 +10,11 @@ type Result struct {
 	// provider. The dispatcher reuses this for the OpenAI usage
 	// envelope and the runtime cost log.
 	Usage adapteropenai.Usage
+	// FinalResponse is the provider-owned non-streaming completion
+	// envelope when Execute fully assembled the ChatResponse itself.
+	// Nil means the dispatcher should finalize the response from the
+	// buffered stream chunks instead.
+	FinalResponse *adapteropenai.ChatResponse
 	// FinishReason is the OpenAI-normalized terminal state. Empty
 	// means the provider did not signal a clean termination; the
 	// dispatcher treats that as `"stop"` defensively.
