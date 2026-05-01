@@ -18,7 +18,7 @@ func TestApplyMicrocompactClearsOlderToolResults(t *testing.T) {
 	}
 
 	// Oldest three tool_result blocks now carry the sentinel.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		got := findToolResult(msgs, idForIndex(i)).Content
 		if got != MicrocompactClearedMessage {
 			t.Fatalf("result %d not cleared: %q", i, got)
@@ -90,7 +90,7 @@ func TestApplyMicrocompactSkipsNonCompactableTools(t *testing.T) {
 // as the tool.
 func buildToolConvo(n int) []anthropic.Message {
 	var out []anthropic.Message
-	for i := 0; i < n; i++ {
+	for i := range n {
 		out = append(out, anthropic.Message{
 			Role: "assistant",
 			Content: []anthropic.ContentBlock{{

@@ -116,12 +116,6 @@ type RPCTurnInputItem struct {
 	TextElements []RPCTextElement `json:"text_elements"`
 }
 
-// NewTextInput is the canonical constructor for the Text variant of
-// v2::UserInput.
-func NewTextInput(text string) RPCTurnInputItem {
-	return RPCTurnInputItem{Type: "text", Text: text, TextElements: []RPCTextElement{}}
-}
-
 // RPCTurnStartParams mirrors the v2::TurnStartParams subset Clyde
 // emits. Source:
 // research/codex/codex-rs/app-server-protocol/src/protocol/v2.rs:5158.
@@ -142,11 +136,6 @@ type RPCTurnStartParams struct {
 type RPCThreadArchiveParams struct {
 	ThreadID string `json:"threadId"`
 }
-
-func (RPCInitializeParams) rpcMethod() string    { return "initialize" }
-func (RPCThreadStartParams) rpcMethod() string   { return "thread/start" }
-func (RPCTurnStartParams) rpcMethod() string     { return "turn/start" }
-func (RPCThreadArchiveParams) rpcMethod() string { return "thread/archive" }
 
 type RPCAgentMessageDeltaNotification struct {
 	Delta string `json:"delta"`

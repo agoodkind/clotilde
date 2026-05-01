@@ -8,18 +8,20 @@ import (
 
 func TestNormalizeModelAliasPreservesForegroundAliasParity(t *testing.T) {
 	testCases := map[string]string{
-		"clyde-gpt-5.4-1m-medium":   "clyde-gpt-5.4-1m-medium",
-		"clyde-gpt-5.5-1m-xhigh":    "clyde-gpt-5.5-1m-xhigh",
-		"clyde-codex-gpt-5.4-high":  "clyde-codex-gpt-5.4-high",
-		"clyde-gpt-5.4":             "clyde-gpt-5.4",
-		"gpt-5.4":                   "gpt-5.4",
-		" clyde-gpt-5.4-1m-medium ": "clyde-gpt-5.4-1m-medium",
+		"clyde-gpt-5.4-1m-medium":  "clyde-gpt-5.4-1m-medium",
+		"clyde-gpt-5.5-1m-xhigh":   "clyde-gpt-5.5-1m-xhigh",
+		"clyde-codex-gpt-5.4-high": "clyde-codex-gpt-5.4-high",
+		"clyde-gpt-5.4":            "clyde-gpt-5.4",
+		"gpt-5.4":                  "gpt-5.4",
 	}
 
 	for rawModel, want := range testCases {
 		if got := NormalizeModelAlias(rawModel); got != want {
 			t.Fatalf("NormalizeModelAlias(%q) = %q want %q", rawModel, got, want)
 		}
+	}
+	if got := NormalizeModelAlias(" clyde-gpt-5.4-1m-medium "); got != "clyde-gpt-5.4-1m-medium" {
+		t.Fatalf("NormalizeModelAlias trims surrounding whitespace = %q", got)
 	}
 }
 

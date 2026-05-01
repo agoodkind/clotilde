@@ -3,6 +3,7 @@ package openai
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 )
 
@@ -138,8 +139,8 @@ func summarizeMessage(msg ChatMessage) MsgSummary {
 			if summary.ToolCallID == "" {
 				summary.ToolCallID = tc.ID
 			}
-			appendUniqueString(&summary.ToolCallIDs, tc.ID, maxToolCallSummaryItems)
-			appendUniqueString(&summary.ToolCallNames, tc.Function.Name, maxToolCallSummaryItems)
+			appendUniqueString(&summary.ToolCallIDs, tc.ID)
+			appendUniqueString(&summary.ToolCallNames, tc.Function.Name)
 			summary.ToolCallArgChars += len(tc.Function.Arguments)
 			summarizeToolCallArguments(tc.Function.Arguments, &summary)
 		}
@@ -158,34 +159,25 @@ func summarizeToolCallArguments(raw string, summary *MsgSummary) {
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		appendUniqueString(&summary.ToolCallArgKeys, key, maxToolCallSummaryItems)
+		appendUniqueString(&summary.ToolCallArgKeys, key)
 		switch key {
 		case "path", "file", "filepath", "target_file", "target_directory", "cwd", "workdir", "working_directory":
 			if value, ok := args[key].(string); ok {
-				appendUniqueString(&summary.ToolCallPaths, value, maxToolCallSummaryItems)
+				appendUniqueString(&summary.ToolCallPaths, value)
 			}
 		}
 	}
 }
 
-func appendUniqueString(values *[]string, value string, limit int) {
-	if limit <= 0 || len(*values) >= limit {
+func appendUniqueString(values *[]string, value string) {
+	if len(*values) >= maxToolCallSummaryItems {
 		return
 	}
 	if value == "" {
 		return
 	}
-	for _, existing := range *values {
-		if existing == value {
-			return
-		}
+	if slices.Contains(*values, value) {
+		return
 	}
 	*values = append(*values, value)
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

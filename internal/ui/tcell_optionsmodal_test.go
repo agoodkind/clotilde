@@ -68,12 +68,12 @@ func TestOptionsModalMouseWheelScrollsStatsPane(t *testing.T) {
 	scr.SetSize(100, 20)
 
 	segments := make([][]TextSegment, 0, 40)
-	for i := 0; i < 40; i++ {
+	for i := range 40 {
 		segments = append(segments, []TextSegment{{Text: fmt.Sprintf("line %d", i), Style: StyleDefault}})
 	}
 
 	entries := make([]OptionsModalEntry, 0, 20)
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		entries = append(entries, OptionsModalEntry{
 			Label:  fmt.Sprintf("Entry %d", i),
 			Action: func() {},
@@ -106,7 +106,7 @@ func TestOptionsModalOptionsScrollbarDragScrolls(t *testing.T) {
 	scr.SetSize(70, 12)
 
 	entries := make([]OptionsModalEntry, 0, 30)
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		entries = append(entries, OptionsModalEntry{
 			Label:  fmt.Sprintf("Entry %d", i),
 			Action: func() {},
@@ -135,7 +135,7 @@ func TestOptionsModalKeyboardNavigationScrollsOptionsPane(t *testing.T) {
 	scr.SetSize(70, 12)
 
 	entries := make([]OptionsModalEntry, 0, 30)
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		entries = append(entries, OptionsModalEntry{
 			Label:  fmt.Sprintf("Entry %d", i),
 			Action: func() {},
@@ -144,7 +144,7 @@ func TestOptionsModalKeyboardNavigationScrollsOptionsPane(t *testing.T) {
 	modal := NewOptionsModal("many", entries)
 	modal.Draw(scr, Rect{X: 0, Y: 0, W: 70, H: 12})
 
-	for i := 0; i < 15; i++ {
+	for i := range 15 {
 		if !modal.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone)) {
 			t.Fatalf("down key %d not handled", i)
 		}
@@ -182,7 +182,7 @@ func TestOptionsModalHintKeepsBreathingRoomFromLabel(t *testing.T) {
 	cells, width, _ := scr.GetContents()
 	rowY := modal.entryRects[1].Y
 	row := make([]rune, 0, width)
-	for x := 0; x < width; x++ {
+	for x := range width {
 		cell := cells[rowY*width+x]
 		if len(cell.Runes) == 0 || cell.Runes[0] == 0 {
 			row = append(row, ' ')

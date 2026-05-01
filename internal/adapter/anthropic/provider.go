@@ -2,7 +2,6 @@ package anthropic
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -72,16 +71,17 @@ func (e *ExecuteError) Unwrap() error {
 // Provider.Execute. Streaming still returns ErrLegacyDispatchPath so the
 // legacy dispatcher owns the SSE path until Sitting 2.
 type Provider struct {
-	log     *slog.Logger
-	collect func(context.Context, adapterresolver.ResolvedRequest, string, adapterprovider.EventWriter) (adapterprovider.Result, error)
-	stream  func(context.Context, adapterresolver.ResolvedRequest, string, adapterprovider.EventWriter) (adapterprovider.Result, error)
+	log             *slog.Logger
+	prepare         func(context.Context, adapterresolver.ResolvedRequest, string) (PreparedRequest, error)
+	executePrepared func(context.Context, PreparedRequest, adapterprovider.EventWriter) (adapterprovider.Result, error)
 }
 
 // ProviderOptions binds the construction-time Anthropic-only
-// dependencies that the legacy root dispatcher used to pass per call.
+// dependencies the root adapter currently supplies for the OpenAI
+// ingress adapter.
 type ProviderOptions struct {
-	Collect func(context.Context, adapterresolver.ResolvedRequest, string, adapterprovider.EventWriter) (adapterprovider.Result, error)
-	Stream  func(context.Context, adapterresolver.ResolvedRequest, string, adapterprovider.EventWriter) (adapterprovider.Result, error)
+	Prepare         func(context.Context, adapterresolver.ResolvedRequest, string) (PreparedRequest, error)
+	ExecutePrepared func(context.Context, PreparedRequest, adapterprovider.EventWriter) (adapterprovider.Result, error)
 }
 
 func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
@@ -90,9 +90,9 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 		log = slog.Default()
 	}
 	return &Provider{
-		log:     log.With("component", "adapter", "subcomponent", "anthropic_provider"),
-		collect: opts.Collect,
-		stream:  opts.Stream,
+		log:             log.With("component", "adapter", "subcomponent", "anthropic_provider"),
+		prepare:         opts.Prepare,
+		executePrepared: opts.ExecutePrepared,
 	}
 }
 
@@ -101,27 +101,33 @@ func (p *Provider) ID() adapterresolver.ProviderID {
 	return adapterresolver.ProviderAnthropic
 }
 
-// ErrLegacyDispatchPath signals the dispatcher to use the existing
-// anthropicbackend.Dispatch chain instead of the Provider.Execute
-// path. Removed when the internal Anthropic rewrite (Plan 4 +
-// Plan 6) lands.
-var ErrLegacyDispatchPath = errors.New("anthropic provider: use legacy dispatch path")
-
 func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequest, w adapterprovider.EventWriter) (adapterprovider.Result, error) {
-	if req.OpenAI.Stream {
-		if p == nil || p.stream == nil {
-			return adapterprovider.Result{}, ErrLegacyDispatchPath
-		}
-		reqID := requestIDFromContext(ctx, req.Cursor.RequestID)
-		return p.stream(ctx, req, reqID, w)
-	}
-	if p == nil || p.collect == nil {
+	if p == nil || p.prepare == nil {
 		return adapterprovider.Result{}, &ExecuteError{
 			Status:  http.StatusInternalServerError,
-			Code:    "oauth_unconfigured",
-			Message: "adapter built without anthropic collect provider; set adapter.direct_oauth=true and restart",
+			Code:    "anthropic_prepare_unconfigured",
+			Message: "adapter built without anthropic request preparation; set adapter.direct_oauth=true and restart",
 		}
 	}
 	reqID := requestIDFromContext(ctx, req.Cursor.RequestID)
-	return p.collect(ctx, req, reqID, w)
+	prepared, err := p.prepare(ctx, req, reqID)
+	if err != nil {
+		return adapterprovider.Result{}, err
+	}
+	return p.ExecutePrepared(ctx, prepared, w)
+}
+
+// ExecutePrepared runs a prebuilt native Anthropic request through the
+// provider-owned execution path. Future native `/v1/messages` ingress
+// can call this directly after it decodes and validates the public
+// Anthropic wire shape.
+func (p *Provider) ExecutePrepared(ctx context.Context, req PreparedRequest, w adapterprovider.EventWriter) (adapterprovider.Result, error) {
+	if p == nil || p.executePrepared == nil {
+		return adapterprovider.Result{}, &ExecuteError{
+			Status:  http.StatusInternalServerError,
+			Code:    "oauth_unconfigured",
+			Message: "adapter built without anthropic execution provider; set adapter.direct_oauth=true and restart",
+		}
+	}
+	return p.executePrepared(ctx, req, w)
 }

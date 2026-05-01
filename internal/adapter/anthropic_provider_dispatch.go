@@ -29,23 +29,18 @@ func (s *Server) dispatchAnthropicProvider(
 	if resolvedReq.OpenAI.Stream {
 		return s.dispatchAnthropicProviderStream(ctx, w, reqID, resolvedReq)
 	}
-	return s.dispatchAnthropicProviderCollect(ctx, w, effort, reqID, resolvedReq)
+	return s.dispatchAnthropicProviderCollect(ctx, w, effort, resolvedReq)
 }
 
 func (s *Server) dispatchAnthropicProviderCollect(
 	ctx context.Context,
 	w http.ResponseWriter,
 	_ string,
-	reqID string,
 	resolvedReq adapterresolver.ResolvedRequest,
 ) error {
-	model := anthropicResolvedModelFromRequest(resolvedReq)
-	collector := newProviderCollectorWriter(reqID, model.Alias, "anthropic")
+	collector := newProviderCollectorWriter()
 	result, runErr := s.anthropicProvider.Execute(ctx, resolvedReq, collector)
 	if runErr != nil {
-		if errors.Is(runErr, anthropic.ErrLegacyDispatchPath) {
-			return runErr
-		}
 		writeAnthropicProviderError(w, runErr)
 		return nil
 	}
@@ -71,19 +66,49 @@ func (s *Server) dispatchAnthropicProviderStream(
 	}
 	_, runErr := s.anthropicProvider.Execute(ctx, resolvedReq, streamWriter)
 	if runErr != nil {
-		if errors.Is(runErr, anthropic.ErrLegacyDispatchPath) {
-			return runErr
-		}
 		writeAnthropicProviderError(w, runErr)
 		return nil
 	}
 	return nil
 }
 
-func (s *Server) runAnthropicProviderCollect(
+func (s *Server) prepareAnthropicProviderRequest(
 	ctx context.Context,
 	req adapterresolver.ResolvedRequest,
 	reqID string,
+) (anthropic.PreparedRequest, error) {
+	_ = ctx
+	model := anthropicResolvedModelFromRequest(req)
+	jsonSpec := ParseResponseFormat(req.OpenAI.ResponseFormat)
+	anthReq, err := s.buildAnthropicWire(req.OpenAI, model, req.Effort.String(), jsonSpec, reqID)
+	if err != nil {
+		return anthropic.PreparedRequest{}, &anthropic.ExecuteError{
+			Status:  http.StatusBadRequest,
+			Code:    "invalid_request",
+			Message: err.Error(),
+			Cause:   err,
+		}
+	}
+	jsonCoercion := anthropic.JSONCoercion{}
+	if jsonSpec.Mode != "" {
+		jsonCoercion = anthropic.JSONCoercion{
+			Coerce:   CoerceJSON,
+			Validate: LooksLikeJSON,
+		}
+	}
+	return anthropic.PreparedRequest{
+		Request:      anthReq,
+		Model:        model,
+		RequestID:    reqID,
+		TrackerKey:   requestContextTrackerKey(req.OpenAI, model.Alias),
+		JSONCoercion: jsonCoercion,
+		IncludeUsage: req.OpenAI.StreamOptions != nil && req.OpenAI.StreamOptions.IncludeUsage,
+	}, nil
+}
+
+func (s *Server) executeAnthropicPreparedRequest(
+	ctx context.Context,
+	prepared anthropic.PreparedRequest,
 	writer adapterprovider.EventWriter,
 ) (adapterprovider.Result, error) {
 	if s.anthr == nil {
@@ -102,26 +127,34 @@ func (s *Server) runAnthropicProviderCollect(
 		}
 	}
 	defer s.release()
-
-	model := anthropicResolvedModelFromRequest(req)
-	jsonSpec := responseFormatSpecFromJSONSpec(ParseResponseFormat(req.OpenAI.ResponseFormat))
-	trackerKey := requestContextTrackerKey(req.OpenAI, model.Alias)
-	anthReq, err := s.buildAnthropicWire(req.OpenAI, model, req.Effort.String(), ParseResponseFormat(req.OpenAI.ResponseFormat), reqID)
-	if err != nil {
-		return adapterprovider.Result{}, &anthropic.ExecuteError{
-			Status:  http.StatusBadRequest,
-			Code:    "invalid_request",
-			Message: err.Error(),
-			Cause:   err,
-		}
+	if prepared.Request.Stream {
+		return s.executeAnthropicPreparedStream(ctx, prepared, writer)
 	}
+	return s.executeAnthropicPreparedCollect(ctx, prepared, writer)
+}
 
+func (s *Server) executeAnthropicPreparedCollect(
+	ctx context.Context,
+	prepared anthropic.PreparedRequest,
+	writer adapterprovider.EventWriter,
+) (adapterprovider.Result, error) {
 	dispatcher := &collectResponseDispatcher{
 		server:      s,
 		eventWriter: writer,
 	}
 	started := time.Now()
-	if err := anthropicbackend.CollectResponse(dispatcher, nil, ctx, anthReq, model, reqID, started, jsonSpec, true, trackerKey); err != nil {
+	if err := anthropicbackend.CollectResponse(
+		dispatcher,
+		nil,
+		ctx,
+		prepared.Request,
+		prepared.Model,
+		prepared.RequestID,
+		started,
+		prepared.JSONCoercion,
+		true,
+		prepared.TrackerKey,
+	); err != nil {
 		return adapterprovider.Result{}, err
 	}
 	if dispatcher.finalResponse == nil {
@@ -134,46 +167,17 @@ func (s *Server) runAnthropicProviderCollect(
 	return anthropicProviderResultFromResponse(dispatcher.finalResponse), nil
 }
 
-func (s *Server) runAnthropicProviderStream(
+func (s *Server) executeAnthropicPreparedStream(
 	ctx context.Context,
-	req adapterresolver.ResolvedRequest,
-	reqID string,
+	prepared anthropic.PreparedRequest,
 	writer adapterprovider.EventWriter,
 ) (adapterprovider.Result, error) {
-	if s.anthr == nil {
-		return adapterprovider.Result{}, &anthropic.ExecuteError{
-			Status:  http.StatusInternalServerError,
-			Code:    "oauth_unconfigured",
-			Message: "adapter built without anthropic client; set adapter.direct_oauth=true and restart",
-		}
-	}
 	streamWriter, ok := writer.(*providerStreamWriter)
 	if !ok || streamWriter == nil {
 		return adapterprovider.Result{}, &anthropic.ExecuteError{
 			Status:  http.StatusInternalServerError,
 			Code:    "internal_error",
 			Message: "anthropic stream provider requires a streaming event writer",
-		}
-	}
-	if err := s.acquire(ctx); err != nil {
-		return adapterprovider.Result{}, &anthropic.ExecuteError{
-			Status:  http.StatusTooManyRequests,
-			Code:    "rate_limited",
-			Message: fmt.Sprint(err),
-			Cause:   err,
-		}
-	}
-	defer s.release()
-
-	model := anthropicResolvedModelFromRequest(req)
-	trackerKey := requestContextTrackerKey(req.OpenAI, model.Alias)
-	anthReq, err := s.buildAnthropicWire(req.OpenAI, model, req.Effort.String(), ParseResponseFormat(req.OpenAI.ResponseFormat), reqID)
-	if err != nil {
-		return adapterprovider.Result{}, &anthropic.ExecuteError{
-			Status:  http.StatusBadRequest,
-			Code:    "invalid_request",
-			Message: err.Error(),
-			Cause:   err,
 		}
 	}
 
@@ -184,11 +188,21 @@ func (s *Server) runAnthropicProviderStream(
 	}
 	started := time.Now()
 	request := (&http.Request{}).WithContext(ctx)
-	includeUsage := req.OpenAI.StreamOptions != nil && req.OpenAI.StreamOptions.IncludeUsage
-	if err := anthropicbackend.StreamResponse(dispatcher, nil, request, anthReq, model, reqID, started, true, includeUsage, trackerKey); err != nil {
+	if err := anthropicbackend.StreamResponse(
+		dispatcher,
+		nil,
+		request,
+		prepared.Request,
+		prepared.Model,
+		prepared.RequestID,
+		started,
+		true,
+		prepared.IncludeUsage,
+		prepared.TrackerKey,
+	); err != nil {
 		return adapterprovider.Result{}, err
 	}
-	return adapterprovider.Result{}, nil
+	return adapterprovider.Result{SystemFingerprint: systemFingerprint}, nil
 }
 
 func writeAnthropicProviderError(w http.ResponseWriter, err error) {
@@ -285,26 +299,22 @@ func (d *collectResponseDispatcher) FlushEventWriter() error {
 	return d.eventWriter.Flush()
 }
 
-func (d *collectResponseDispatcher) CollectedChunks() []adapteropenai.StreamChunk {
+func (d *collectResponseDispatcher) CollectedEvents() []adapterrender.Event {
 	collector, ok := d.eventWriter.(*providerCollectorWriter)
 	if !ok || collector == nil {
 		return nil
 	}
-	return collector.chunks
+	return collector.events
 }
 
 func (d *collectResponseDispatcher) TrackAnthropicContextUsage(key string, raw adapteropenai.Usage) anthropicbackend.TrackedUsage {
-	tracked := d.server.ctxUsage.Track(key, Usage(raw))
+	tracked := d.server.ctxUsage.Track(key, raw)
 	return anthropicbackend.TrackedUsage{
-		Usage:      adapteropenai.Usage(tracked.usage),
+		Usage:      tracked.usage,
 		RawPrompt:  tracked.rawPrompt,
 		RawTotal:   tracked.rawTotal,
 		RolledFrom: tracked.rolledFrom,
 	}
-}
-
-func (d *collectResponseDispatcher) JSONCoercion(spec anthropicbackend.ResponseFormatSpec) anthropicbackend.JSONCoercion {
-	return jsonCoercionFromSpec(spec)
 }
 
 func (d *collectResponseDispatcher) WriteJSON(_ http.ResponseWriter, _ int, resp adapteropenai.ChatResponse) {
@@ -387,22 +397,18 @@ func (d *streamResponseDispatcher) FlushEventWriter() error {
 	return d.eventWriter.Flush()
 }
 
-func (d *streamResponseDispatcher) CollectedChunks() []adapteropenai.StreamChunk {
+func (d *streamResponseDispatcher) CollectedEvents() []adapterrender.Event {
 	return nil
 }
 
 func (d *streamResponseDispatcher) TrackAnthropicContextUsage(key string, raw adapteropenai.Usage) anthropicbackend.TrackedUsage {
-	tracked := d.server.ctxUsage.Track(key, Usage(raw))
+	tracked := d.server.ctxUsage.Track(key, raw)
 	return anthropicbackend.TrackedUsage{
-		Usage:      adapteropenai.Usage(tracked.usage),
+		Usage:      tracked.usage,
 		RawPrompt:  tracked.rawPrompt,
 		RawTotal:   tracked.rawTotal,
 		RolledFrom: tracked.rolledFrom,
 	}
-}
-
-func (d *streamResponseDispatcher) JSONCoercion(spec anthropicbackend.ResponseFormatSpec) anthropicbackend.JSONCoercion {
-	return jsonCoercionFromSpec(spec)
 }
 
 func (d *streamResponseDispatcher) WriteJSON(_ http.ResponseWriter, _ int, _ adapteropenai.ChatResponse) {
@@ -476,22 +482,4 @@ func (w *providerAnthropicSSEWriter) WriteStreamDone() error {
 
 func (w *providerAnthropicSSEWriter) HasCommittedHeaders() bool {
 	return w != nil && w.writer != nil && w.writer.headersWritten
-}
-
-func jsonCoercionFromSpec(jsonSpec anthropicbackend.ResponseFormatSpec) anthropicbackend.JSONCoercion {
-	if jsonSpec.Mode == "" {
-		return anthropicbackend.JSONCoercion{}
-	}
-	return anthropicbackend.JSONCoercion{
-		Coerce:   CoerceJSON,
-		Validate: LooksLikeJSON,
-	}
-}
-
-func responseFormatSpecFromJSONSpec(spec JSONResponseSpec) anthropicbackend.ResponseFormatSpec {
-	return anthropicbackend.ResponseFormatSpec{
-		Mode:       spec.Mode,
-		SchemaName: spec.SchemaName,
-		Schema:     spec.Schema,
-	}
 }

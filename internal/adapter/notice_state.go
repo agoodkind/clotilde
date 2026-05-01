@@ -19,41 +19,6 @@ const noticeStateFileName = "notices.json"
 
 var noticeStateMu sync.Mutex
 
-// Already reports whether a notice with this kind and reset time was
-// previously marked as delivered.
-func Already(kind string, resetsAt time.Time) bool {
-	noticeStateMu.Lock()
-	defer noticeStateMu.Unlock()
-
-	state, err := readNoticeStateLocked()
-	if err != nil {
-		// A missing file is the common case on first run; only the
-		// parse / non-ENOENT path is corruption worth surfacing.
-		if !errors.Is(err, os.ErrNotExist) {
-			slog.Warn("adapter.notice.state_read_failed",
-				"subcomponent", "adapter",
-				"path", noticeStatePath(),
-				"err", err.Error(),
-			)
-		}
-		return false
-	}
-	return state[noticeStateKey(kind, resetsAt)] > 0
-}
-
-// Mark stores a notice as delivered for the kind/reset window. It prunes
-// stale entries before writing the file. Kept for callers that need to
-// record delivery without claiming. Most callers should use Claim instead.
-func Mark(kind string, resetsAt time.Time) error {
-	if kind == "" || resetsAt.IsZero() {
-		return nil
-	}
-	noticeStateMu.Lock()
-	defer noticeStateMu.Unlock()
-	_, err := claimLocked(kind, resetsAt, true)
-	return err
-}
-
 // Claim atomically tests whether the kind/reset window was already
 // delivered and, if not, records it as delivered. Returns true when the
 // caller "won" the slot and should emit the notice. Returns false when

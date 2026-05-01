@@ -2,6 +2,10 @@ package adapter
 
 import "testing"
 
+func mustRaw(s string) []byte {
+	return []byte(s)
+}
+
 func TestContextUsageTrackerAccumulatesPriorOutputIntoSurfacedPrompt(t *testing.T) {
 	tracker := newContextUsageTracker()
 	key := "conversation:test"
@@ -79,7 +83,8 @@ func TestRequestContextTrackerKeyFallsBackToFirstUserFingerprint(t *testing.T) {
 	req := ChatRequest{
 		Messages: []ChatMessage{
 			{Role: "system", Content: mustRaw(`"sys"`)},
-			{Role: "user", Content: mustRaw(`"hello"`)}},
+			{Role: "user", Content: mustRaw(`"hello"`)},
+		},
 	}
 	got1 := requestContextTrackerKey(req, "clyde-opus-4-7")
 	got2 := requestContextTrackerKey(req, "clyde-opus-4-7")

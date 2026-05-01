@@ -374,31 +374,6 @@ func TestUX_SessionOptionsIncludeExportWhenCallbackConfigured(t *testing.T) {
 	}
 }
 
-func TestUX_OpenExportSavePromptSeedsDownloadsPath(t *testing.T) {
-	a, _, cleanup := mkAppWithSessions(t, 1)
-	defer cleanup()
-	a.cb.ExportSession = func(*session.Session, SessionExportRequest) ([]byte, error) {
-		return []byte("demo"), nil
-	}
-	home := t.TempDir()
-	oldHome := os.Getenv("HOME")
-	if err := os.Setenv("HOME", home); err != nil {
-		t.Fatalf("set HOME: %v", err)
-	}
-	defer func() { _ = os.Setenv("HOME", oldHome) }()
-
-	sess := a.sessions[a.visibleIdx[0]]
-	a.openExportSavePrompt(sess, SessionExportMarkdown)
-	overlay, ok := a.overlay.(*InputOverlay)
-	if !ok {
-		t.Fatalf("overlay = %T, want *InputOverlay", a.overlay)
-	}
-	want := filepath.Join(home, "Downloads", defaultExportFilename(sess.Name, SessionExportMarkdown))
-	if overlay.Input.Text != want {
-		t.Fatalf("path = %q want %q", overlay.Input.Text, want)
-	}
-}
-
 func TestUX_OpenExportOptionsDoesNotBlockOnExportStats(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 1)
 	defer cleanup()
@@ -748,9 +723,9 @@ func screenText(scr tcell.SimulationScreen) string {
 	scr.Show()
 	cells, cw, ch := scr.GetContents()
 	var b strings.Builder
-	for y := 0; y < ch; y++ {
+	for y := range ch {
 		row := make([]rune, 0, cw)
-		for x := 0; x < cw; x++ {
+		for x := range cw {
 			c := cells[y*cw+x]
 			if len(c.Runes) == 0 || c.Runes[0] == 0 {
 				row = append(row, ' ')

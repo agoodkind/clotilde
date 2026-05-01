@@ -5,8 +5,10 @@ import (
 	"strings"
 )
 
-const openAIBetaHeader = "OpenAI-Beta"
-const responsesWebsocketsV2BetaHeaderValue = "responses_websockets=2026-02-06"
+const (
+	openAIBetaHeader                     = "OpenAI-Beta"
+	responsesWebsocketsV2BetaHeaderValue = "responses_websockets=2026-02-06"
+)
 
 type ResponsesWebsocketHeaderConfig struct {
 	RequestID            string

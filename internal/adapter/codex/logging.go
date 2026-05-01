@@ -7,10 +7,7 @@ package codex
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
-	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,14 +64,11 @@ func CodexLogPath() string {
 var (
 	codexFileLoggerOnce sync.Once
 	codexFileLogger     *slog.Logger
-	codexFileLoggerPath string
 )
 
 // dedicatedCodexLogger returns a JSON slog handler writing to
 // CodexLogPath(). Best effort: a missing log dir never blocks traffic.
-// The handler is bound to the path observed at first call. Tests that
-// override $CLYDE_CODEX_LOG_PATH can call resetCodexLogger between
-// runs to force re-init.
+// The handler is bound to the path observed at first call.
 func dedicatedCodexLogger() *slog.Logger {
 	codexFileLoggerOnce.Do(func() {
 		path := CodexLogPath()
@@ -86,18 +80,8 @@ func dedicatedCodexLogger() *slog.Logger {
 			return
 		}
 		codexFileLogger = slog.New(slog.NewJSONHandler(f, &slog.HandlerOptions{Level: slog.LevelDebug}))
-		codexFileLoggerPath = path
 	})
 	return codexFileLogger
-}
-
-// resetCodexLogger clears the once-init so tests that swap
-// $CLYDE_CODEX_LOG_PATH see a fresh sink. Not exported; tests that
-// need it call it via export_test.go.
-func resetCodexLogger() {
-	codexFileLoggerOnce = sync.Once{}
-	codexFileLogger = nil
-	codexFileLoggerPath = ""
 }
 
 // requestEvent is the typed payload for each codex.responses.request
@@ -182,64 +166,6 @@ func (e requestEvent) toSlogAttrs() []slog.Attr {
 	return attrs
 }
 
-// responseEventCodex is the typed payload for codex.responses.response
-// log lines. Mirrors anthropic's responseEvent in shape.
-type responseEventCodex struct {
-	Subcomponent  string
-	Transport     string
-	Method        string
-	RequestID     string
-	Alias         string
-	Model         string
-	Status        int
-	BodyBytes     int
-	DurationMs    int64
-	Body          string
-	BodyB64       string
-	BodyTruncated bool
-	Err           string
-}
-
-func (e responseEventCodex) toSlogAttrs() []slog.Attr {
-	attrs := make([]slog.Attr, 0, 16)
-	if e.Subcomponent != "" {
-		attrs = append(attrs, slog.String("subcomponent", e.Subcomponent))
-	}
-	if e.Transport != "" {
-		attrs = append(attrs, slog.String("transport", e.Transport))
-	}
-	if e.Method != "" {
-		attrs = append(attrs, slog.String("method", e.Method))
-	}
-	if e.RequestID != "" {
-		attrs = append(attrs, slog.String("request_id", e.RequestID))
-	}
-	if e.Alias != "" {
-		attrs = append(attrs, slog.String("alias", e.Alias))
-	}
-	if e.Model != "" {
-		attrs = append(attrs, slog.String("model", e.Model))
-	}
-	if e.Status != 0 {
-		attrs = append(attrs, slog.Int("status", e.Status))
-	}
-	attrs = append(attrs, slog.Int("body_bytes", e.BodyBytes))
-	attrs = append(attrs, slog.Int64("duration_ms", e.DurationMs))
-	if e.Body != "" {
-		attrs = append(attrs, slog.String("body", e.Body))
-	}
-	if e.BodyB64 != "" {
-		attrs = append(attrs, slog.String("body_b64", e.BodyB64))
-	}
-	if e.BodyTruncated {
-		attrs = append(attrs, slog.Bool("body_truncated", true))
-	}
-	if e.Err != "" {
-		attrs = append(attrs, slog.String("err", e.Err))
-	}
-	return attrs
-}
-
 // logCodexEvent writes the event to both slog.Default() (which the
 // daemon configures to fan out to clyde-daemon.jsonl) and the
 // dedicated codex.jsonl sink. The dedicated file is best effort.
@@ -303,21 +229,6 @@ func stringMapAttrs(values map[string]string) []slog.Attr {
 	return attrs
 }
 
-// summarizeHTTPRequest builds a body summary for the HTTP transport
-// payload (response create body). Used under "summary" or "whitelist".
-func summarizeHTTPRequest(payload HTTPTransportRequest) *codexBodySummary {
-	return &codexBodySummary{
-		Model:             payload.Model,
-		InputCount:        len(payload.Input),
-		ToolCount:         len(payload.Tools),
-		HasInstructions:   strings.TrimSpace(payload.Instructions) != "",
-		InstructionsBytes: len(payload.Instructions),
-		PromptCacheKey:    payload.PromptCache,
-		Stream:            payload.Stream,
-		ServiceTier:       payload.ServiceTier,
-	}
-}
-
 // summarizeWsRequest builds a body summary for a websocket frame.
 func summarizeWsRequest(payload ResponseCreateWsRequest) *codexBodySummary {
 	return &codexBodySummary{
@@ -365,110 +276,4 @@ func truncateCodexBody(body []byte, maxBytes int) (string, bool) {
 		return string(body), false
 	}
 	return string(body[:maxBytes]), true
-}
-
-// redactedCodexOutboundHeaders mirrors anthropic.redactedOutboundHeaders.
-// Strips bearer tokens, OpenAI/Codex account identifiers, cookies, and
-// proxy auth. Other headers pass through joined by ", ".
-func redactedCodexOutboundHeaders(h http.Header) map[string]string {
-	out := make(map[string]string, len(h))
-	for key, values := range h {
-		lk := strings.ToLower(key)
-		joined := strings.Join(values, ", ")
-		switch lk {
-		case "authorization":
-			tail := joined
-			if strings.HasPrefix(joined, "Bearer ") {
-				tail = strings.TrimPrefix(joined, "Bearer ")
-			}
-			out[lk] = fmt.Sprintf("Bearer <redacted len=%d>", len(tail))
-		case "x-codex-account-id", "x-api-key", "cookie", "proxy-authorization":
-			out[lk] = "<redacted>"
-		default:
-			out[lk] = joined
-		}
-	}
-	return out
-}
-
-// redactedRPCParams strips known token-bearing fields from JSON-RPC
-// params before logging. The Codex app server's `initialize` and
-// `thread/start` payloads do not currently carry secrets, but this
-// keeps the door closed defensively.
-func redactedRPCParams(params json.RawMessage) json.RawMessage {
-	if len(params) == 0 {
-		return params
-	}
-	out, ok := redactRPCJSON(params)
-	if !ok {
-		return params
-	}
-	return out
-}
-
-func redactRPCJSON(raw json.RawMessage) (json.RawMessage, bool) {
-	trimmed := strings.TrimSpace(string(raw))
-	if trimmed == "" {
-		return raw, true
-	}
-	if strings.HasPrefix(trimmed, "{") {
-		return redactRPCJSONObject(raw)
-	}
-	if strings.HasPrefix(trimmed, "[") {
-		return redactRPCJSONArray(raw)
-	}
-	return raw, true
-}
-
-func redactRPCJSONObject(raw json.RawMessage) (json.RawMessage, bool) {
-	var generic map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &generic); err != nil {
-		return raw, false
-	}
-	for _, key := range []string{"token", "auth_token", "access_token", "authorization", "apiKey", "api_key"} {
-		if _, ok := generic[key]; ok {
-			generic[key] = json.RawMessage(`"<redacted>"`)
-		}
-	}
-	for key, value := range generic {
-		if isRPCSecretKey(key) {
-			continue
-		}
-		redacted, ok := redactRPCJSON(value)
-		if ok {
-			generic[key] = redacted
-		}
-	}
-	out, err := json.Marshal(generic)
-	if err != nil {
-		return raw, false
-	}
-	return out, true
-}
-
-func redactRPCJSONArray(raw json.RawMessage) (json.RawMessage, bool) {
-	var values []json.RawMessage
-	if err := json.Unmarshal(raw, &values); err != nil {
-		return raw, false
-	}
-	for i, value := range values {
-		redacted, ok := redactRPCJSON(value)
-		if ok {
-			values[i] = redacted
-		}
-	}
-	out, err := json.Marshal(values)
-	if err != nil {
-		return raw, false
-	}
-	return out, true
-}
-
-func isRPCSecretKey(key string) bool {
-	switch key {
-	case "token", "auth_token", "access_token", "authorization", "apiKey", "api_key":
-		return true
-	default:
-		return false
-	}
 }

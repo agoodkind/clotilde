@@ -13,9 +13,9 @@ import (
 
 var _ = Describe("Cleanup", func() {
 	var (
-		tempDir      string
-		clydeRoot string
-		projectDir   string
+		tempDir    string
+		clydeRoot  string
+		projectDir string
 	)
 
 	BeforeEach(func() {

@@ -168,6 +168,54 @@ func TestBuildRequestHaikuEnabledStaysManual(t *testing.T) {
 	}
 }
 
+func TestBuildRequestThinkingAdaptiveKeepsSummarizedDisplay(t *testing.T) {
+	req := requestBuilderChatRequest()
+	model := adaptermodel.ResolvedModel{
+		Alias:           "clyde-opus-4-7-thinking-adaptive",
+		ClaudeModel:     "claude-opus-4-7",
+		MaxOutputTokens: 32000,
+		Thinking:        adaptermodel.ThinkingAdaptive,
+	}
+
+	out, err := BuildRequest(context.Background(), req, model, "", requestBuilderConfig(), "req-test")
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	if out.Thinking == nil {
+		t.Fatal("Thinking is nil")
+	}
+	if out.Thinking.Type != "adaptive" {
+		t.Fatalf("Thinking.Type = %q want adaptive", out.Thinking.Type)
+	}
+	if out.Thinking.Display != "summarized" {
+		t.Fatalf("Thinking.Display = %q want summarized", out.Thinking.Display)
+	}
+}
+
+func TestBuildRequestThinkingDisabledHasNoDisplay(t *testing.T) {
+	req := requestBuilderChatRequest()
+	model := adaptermodel.ResolvedModel{
+		Alias:           "clyde-opus-4-7-thinking-disabled",
+		ClaudeModel:     "claude-opus-4-7",
+		MaxOutputTokens: 32000,
+		Thinking:        adaptermodel.ThinkingDisabled,
+	}
+
+	out, err := BuildRequest(context.Background(), req, model, "", requestBuilderConfig(), "req-test")
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	if out.Thinking == nil {
+		t.Fatal("Thinking is nil")
+	}
+	if out.Thinking.Type != "disabled" {
+		t.Fatalf("Thinking.Type = %q want disabled", out.Thinking.Type)
+	}
+	if out.Thinking.Display != "" {
+		t.Fatalf("Thinking.Display = %q want empty", out.Thinking.Display)
+	}
+}
+
 func TestBuildRequestAddsJSONPromptWithoutDuplicatingPrefix(t *testing.T) {
 	req := requestBuilderChatRequest()
 	cfg := requestBuilderConfig()

@@ -41,9 +41,8 @@ type ResponseDispatcher interface {
 	StreamChunkHasVisibleContent(adapteropenai.StreamChunk) bool
 	WriteEvent(adapterrender.Event) error
 	FlushEventWriter() error
-	CollectedChunks() []adapteropenai.StreamChunk
+	CollectedEvents() []adapterrender.Event
 	TrackAnthropicContextUsage(string, adapteropenai.Usage) TrackedUsage
-	JSONCoercion(ResponseFormatSpec) JSONCoercion
 	WriteJSON(http.ResponseWriter, int, adapteropenai.ChatResponse)
 	WriteErrorJSON(http.ResponseWriter, int, adapteropenai.ErrorResponse)
 	LogTerminal(context.Context, adapterruntime.RequestEvent)
@@ -54,6 +53,159 @@ type ResponseDispatcher interface {
 	UnclaimNotice(string, time.Time)
 }
 
+type ExecutionRuntime interface {
+	Log() *slog.Logger
+	AnthropicStreamClient() StreamClient
+	TrackAnthropicContextUsage(string, adapteropenai.Usage) TrackedUsage
+	LogTerminal(context.Context, adapterruntime.RequestEvent)
+	LogCacheUsageAnthropic(context.Context, string, string, string, anthropic.Usage)
+	CacheTTL() string
+}
+
+type CollectExecutionResult struct {
+	Events              []adapterrender.Event
+	Usage               adapteropenai.Usage
+	FinishReason        string
+	AnthropicStopReason string
+	AnthropicUsage      anthropic.Usage
+}
+
+type StreamExecutionResult struct {
+	Usage          adapteropenai.Usage
+	FinishReason   string
+	AnthropicUsage anthropic.Usage
+	EmittedContent bool
+}
+
+func RunCollectExecution(
+	rt ExecutionRuntime,
+	ctx context.Context,
+	req anthropic.Request,
+	model adaptermodel.ResolvedModel,
+	reqID string,
+	started time.Time,
+	trackerKey string,
+	emit func(adapterrender.Event) error,
+	flush func() error,
+	collectedEvents func() []adapterrender.Event,
+) (CollectExecutionResult, error) {
+	anthUsage, anthStopReason, finishReason, err := RunTranslatorEvents(rt.AnthropicStreamClient(), ctx, req, model, reqID, emit)
+	if err != nil {
+		return CollectExecutionResult{}, err
+	}
+	if err := flush(); err != nil {
+		return CollectExecutionResult{}, err
+	}
+	rawUsage := usageWithContextWindow(UsageFromAnthropic(anthUsage), model.Context)
+	tracked := rt.TrackAnthropicContextUsage(trackerKey, rawUsage)
+	u := tracked.Usage
+	if u.PromptTokens != rawUsage.PromptTokens || u.TotalTokens != rawUsage.TotalTokens {
+		rt.Log().LogAttrs(ctx, slog.LevelInfo, "adapter.context_usage.tracked",
+			slog.String("backend", "anthropic"),
+			slog.String("request_id", reqID),
+			slog.String("alias", model.Alias),
+			slog.Int("raw_prompt_tokens", tracked.RawPrompt),
+			slog.Int("raw_total_tokens", tracked.RawTotal),
+			slog.Int("rolled_output_tokens", tracked.RolledFrom),
+			slog.Int("surfaced_prompt_tokens", u.PromptTokens),
+			slog.Int("surfaced_total_tokens", u.TotalTokens),
+		)
+	}
+	rt.LogCacheUsageAnthropic(ctx, "anthropic", reqID, model.Alias, anthUsage)
+	adapterruntime.LogCompleted(rt.Log(), ctx, adapterruntime.CompletedAttrs{
+		Backend:             "anthropic",
+		Provider:            "anthropic-oauth",
+		Path:                "oauth",
+		SessionID:           reqID,
+		RequestID:           reqID,
+		Alias:               model.Alias,
+		ModelID:             req.Model,
+		FinishReason:        finishReason,
+		TokensIn:            u.PromptTokens,
+		TokensOut:           u.CompletionTokens,
+		CacheReadTokens:     anthUsage.CacheReadInputTokens,
+		CacheCreationTokens: anthUsage.CacheCreationInputTokens,
+		CacheTTL:            rt.CacheTTL(),
+		DurationMs:          time.Since(started).Milliseconds(),
+		Stream:              false,
+	})
+	breakdown := adapterruntime.EstimateCost(adapterruntime.CostInputs{
+		ModelID:             req.Model,
+		TTL:                 rt.CacheTTL(),
+		InputTokens:         u.PromptTokens,
+		OutputTokens:        u.CompletionTokens,
+		CacheCreationTokens: anthUsage.CacheCreationInputTokens,
+		CacheReadTokens:     anthUsage.CacheReadInputTokens,
+	})
+	rt.LogTerminal(ctx, adapterruntime.RequestEvent{
+		Stage:               adapterruntime.RequestStageCompleted,
+		Provider:            "anthropic-oauth",
+		Backend:             model.Backend,
+		RequestID:           reqID,
+		Alias:               model.Alias,
+		ModelID:             req.Model,
+		Stream:              false,
+		FinishReason:        finishReason,
+		TokensIn:            u.PromptTokens,
+		TokensOut:           u.CompletionTokens,
+		CacheReadTokens:     anthUsage.CacheReadInputTokens,
+		CacheCreationTokens: anthUsage.CacheCreationInputTokens,
+		CostMicrocents:      breakdown.TotalMicrocents,
+		DurationMs:          time.Since(started).Milliseconds(),
+	})
+	var events []adapterrender.Event
+	if collectedEvents != nil {
+		events = collectedEvents()
+	}
+	return CollectExecutionResult{
+		Events:              events,
+		Usage:               u,
+		FinishReason:        finishReason,
+		AnthropicStopReason: anthStopReason,
+		AnthropicUsage:      anthUsage,
+	}, nil
+}
+
+func RunStreamExecution(
+	rt ExecutionRuntime,
+	ctx context.Context,
+	req anthropic.Request,
+	model adaptermodel.ResolvedModel,
+	reqID string,
+	trackerKey string,
+	emit func(adapterrender.Event) error,
+) (StreamExecutionResult, error) {
+	emittedContent := false
+	emitTracked := func(ev adapterrender.Event) error {
+		if eventHasVisibleContent(ev) {
+			emittedContent = true
+		}
+		return emit(ev)
+	}
+	anthUsage, _, finishReason, err := RunTranslatorEvents(rt.AnthropicStreamClient(), ctx, req, model, reqID, emitTracked)
+	rawFinalUsage := usageWithContextWindow(UsageFromAnthropic(anthUsage), model.Context)
+	tracked := rt.TrackAnthropicContextUsage(trackerKey, rawFinalUsage)
+	finalUsage := tracked.Usage
+	if finalUsage.PromptTokens != rawFinalUsage.PromptTokens || finalUsage.TotalTokens != rawFinalUsage.TotalTokens {
+		rt.Log().LogAttrs(ctx, slog.LevelInfo, "adapter.context_usage.tracked",
+			slog.String("backend", "anthropic"),
+			slog.String("request_id", reqID),
+			slog.String("alias", model.Alias),
+			slog.Int("raw_prompt_tokens", tracked.RawPrompt),
+			slog.Int("raw_total_tokens", tracked.RawTotal),
+			slog.Int("rolled_output_tokens", tracked.RolledFrom),
+			slog.Int("surfaced_prompt_tokens", finalUsage.PromptTokens),
+			slog.Int("surfaced_total_tokens", finalUsage.TotalTokens),
+		)
+	}
+	return StreamExecutionResult{
+		Usage:          finalUsage,
+		FinishReason:   finishReason,
+		AnthropicUsage: anthUsage,
+		EmittedContent: emittedContent,
+	}, err
+}
+
 func CollectResponse(
 	d ResponseDispatcher,
 	w http.ResponseWriter,
@@ -62,7 +214,7 @@ func CollectResponse(
 	model adaptermodel.ResolvedModel,
 	reqID string,
 	started time.Time,
-	jsonSpec ResponseFormatSpec,
+	jsonCoercion anthropic.JSONCoercion,
 	escalate bool,
 	trackerKey string,
 ) error {
@@ -78,7 +230,18 @@ func CollectResponse(
 	emit := func(ev adapterrender.Event) error {
 		return d.WriteEvent(ev)
 	}
-	anthUsage, anthStopReason, finishReason, err := RunTranslatorEvents(d.AnthropicStreamClient(), ctx, req, model, reqID, emit)
+	result, err := RunCollectExecution(
+		d,
+		ctx,
+		req,
+		model,
+		reqID,
+		started,
+		trackerKey,
+		emit,
+		d.FlushEventWriter,
+		d.CollectedEvents,
+	)
 	if err != nil {
 		adapterruntime.LogFailed(d.Log(), ctx, adapterruntime.FailedAttrs{
 			Backend:    "anthropic",
@@ -135,71 +298,20 @@ func CollectResponse(
 			errMsg,
 		)
 	}
-	if err := d.FlushEventWriter(); err != nil {
-		return err
-	}
-	rawUsage := usageWithContextWindow(UsageFromAnthropic(anthUsage), model.Context)
-	tracked := d.TrackAnthropicContextUsage(trackerKey, rawUsage)
-	u := tracked.Usage
-	resp := MergeStreamChunks(reqID, model.Alias, d.SystemFingerprint(), d.CollectedChunks(), u, finishReason, d.JSONCoercion(jsonSpec), anthStopReason)
+	resp := MergeCollectedEvents(
+		reqID,
+		model.Alias,
+		d.SystemFingerprint(),
+		result.Events,
+		result.Usage,
+		result.FinishReason,
+		backendJSONCoercion(jsonCoercion),
+		result.AnthropicStopReason,
+	)
 	resp, _ = adapterruntime.NoticeForResponseHeaders(resp, notice, func(kind string, resetsAt time.Time) {
 		d.UnclaimNotice(kind, resetsAt)
 	}, json.Marshal)
 	d.WriteJSON(w, http.StatusOK, resp)
-	if u.PromptTokens != rawUsage.PromptTokens || u.TotalTokens != rawUsage.TotalTokens {
-		d.Log().LogAttrs(ctx, slog.LevelInfo, "adapter.context_usage.tracked",
-			slog.String("backend", "anthropic"),
-			slog.String("request_id", reqID),
-			slog.String("alias", model.Alias),
-			slog.Int("raw_prompt_tokens", tracked.RawPrompt),
-			slog.Int("raw_total_tokens", tracked.RawTotal),
-			slog.Int("rolled_output_tokens", tracked.RolledFrom),
-			slog.Int("surfaced_prompt_tokens", u.PromptTokens),
-			slog.Int("surfaced_total_tokens", u.TotalTokens),
-		)
-	}
-	d.LogCacheUsageAnthropic(ctx, "anthropic", reqID, model.Alias, anthUsage)
-	adapterruntime.LogCompleted(d.Log(), ctx, adapterruntime.CompletedAttrs{
-		Backend:             "anthropic",
-		Provider:            "anthropic-oauth",
-		Path:                "oauth",
-		SessionID:           reqID,
-		RequestID:           reqID,
-		Alias:               model.Alias,
-		ModelID:             req.Model,
-		FinishReason:        finishReason,
-		TokensIn:            u.PromptTokens,
-		TokensOut:           u.CompletionTokens,
-		CacheReadTokens:     anthUsage.CacheReadInputTokens,
-		CacheCreationTokens: anthUsage.CacheCreationInputTokens,
-		CacheTTL:            d.CacheTTL(),
-		DurationMs:          time.Since(started).Milliseconds(),
-		Stream:              false,
-	})
-	breakdown := adapterruntime.EstimateCost(adapterruntime.CostInputs{
-		ModelID:             req.Model,
-		TTL:                 d.CacheTTL(),
-		InputTokens:         u.PromptTokens,
-		OutputTokens:        u.CompletionTokens,
-		CacheCreationTokens: anthUsage.CacheCreationInputTokens,
-		CacheReadTokens:     anthUsage.CacheReadInputTokens,
-	})
-	d.LogTerminal(ctx, adapterruntime.RequestEvent{
-		Stage:               adapterruntime.RequestStageCompleted,
-		Provider:            "anthropic-oauth",
-		Backend:             model.Backend,
-		RequestID:           reqID,
-		Alias:               model.Alias,
-		ModelID:             req.Model,
-		Stream:              false,
-		FinishReason:        finishReason,
-		TokensIn:            u.PromptTokens,
-		TokensOut:           u.CompletionTokens,
-		CacheReadTokens:     anthUsage.CacheReadInputTokens,
-		CacheCreationTokens: anthUsage.CacheCreationInputTokens,
-		CostMicrocents:      breakdown.TotalMicrocents,
-		DurationMs:          time.Since(started).Milliseconds(),
-	})
 	return nil
 }
 
@@ -243,9 +355,6 @@ func StreamResponse(
 		return sw.EmitStreamChunk(d.SystemFingerprint(), chunk)
 	}
 	emitEvent := func(ev adapterrender.Event) error {
-		if eventHasVisibleContent(ev) {
-			emittedContent = true
-		}
 		return d.WriteEvent(ev)
 	}
 	previousOnHeaders := req.OnHeaders
@@ -273,7 +382,10 @@ func StreamResponse(
 			)
 		}
 	}
-	anthUsage, _, finishReason, err := RunTranslatorEvents(d.AnthropicStreamClient(), r.Context(), req, model, reqID, emitEvent)
+	result, err := RunStreamExecution(d, r.Context(), req, model, reqID, trackerKey, emitEvent)
+	anthUsage := result.AnthropicUsage
+	finishReason := result.FinishReason
+	emittedContent = result.EmittedContent
 	if err != nil {
 		d.Log().LogAttrs(r.Context(), slog.LevelWarn, "adapter.chat.stream_error",
 			slog.String("backend", "anthropic"),
@@ -337,15 +449,13 @@ func StreamResponse(
 		finishReason = "stop"
 	}
 	_ = d.FlushEventWriter()
-	rawFinalUsage := usageWithContextWindow(UsageFromAnthropic(anthUsage), model.Context)
-	tracked := d.TrackAnthropicContextUsage(trackerKey, rawFinalUsage)
-	finalUsage := tracked.Usage
+	finalUsage := result.Usage
 	finishChunk := adapteropenai.StreamChunk{
 		ID:      reqID,
 		Object:  "chat.completion.chunk",
 		Created: time.Now().Unix(),
 		Model:   model.Alias,
-		Choices: []adapteropenai.StreamChoice{{Index: 0, Delta: adapteropenai.StreamDelta{}, FinishReason: stringPtr(finishReason)}},
+		Choices: []adapteropenai.StreamChoice{{Index: 0, Delta: adapteropenai.StreamDelta{}, FinishReason: &finishReason}},
 	}
 	if includeUsage {
 		finishChunk.Usage = &finalUsage
@@ -362,18 +472,6 @@ func StreamResponse(
 			slog.Int("raw_output_tokens", anthUsage.OutputTokens),
 			slog.Int("raw_cache_read_tokens", anthUsage.CacheReadInputTokens),
 			slog.Int("raw_cache_creation_tokens", anthUsage.CacheCreationInputTokens),
-		)
-	}
-	if finalUsage.PromptTokens != rawFinalUsage.PromptTokens || finalUsage.TotalTokens != rawFinalUsage.TotalTokens {
-		d.Log().LogAttrs(r.Context(), slog.LevelInfo, "adapter.context_usage.tracked",
-			slog.String("backend", "anthropic"),
-			slog.String("request_id", reqID),
-			slog.String("alias", model.Alias),
-			slog.Int("raw_prompt_tokens", tracked.RawPrompt),
-			slog.Int("raw_total_tokens", tracked.RawTotal),
-			slog.Int("rolled_output_tokens", tracked.RolledFrom),
-			slog.Int("surfaced_prompt_tokens", finalUsage.PromptTokens),
-			slog.Int("surfaced_total_tokens", finalUsage.TotalTokens),
 		)
 	}
 	if includeUsage {
@@ -444,14 +542,19 @@ func eventHasVisibleContent(ev adapterrender.Event) bool {
 	}
 }
 
+func backendJSONCoercion(coercion anthropic.JSONCoercion) JSONCoercion {
+	return JSONCoercion{
+		Coerce:   coercion.Coerce,
+		Validate: coercion.Validate,
+	}
+}
+
 func usageWithContextWindow(u adapteropenai.Usage, contextWindow int) adapteropenai.Usage {
 	if contextWindow > 0 {
 		u.MaxTokens = contextWindow
 	}
 	return u
 }
-
-func stringPtr(v string) *string { return &v }
 
 // buildErrorBodyForUpstream maps a typed Anthropic *UpstreamError into
 // the OpenAI ErrorBody shape used by both the SSE native error frame

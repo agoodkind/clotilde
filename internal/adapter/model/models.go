@@ -3,6 +3,8 @@ package model
 import (
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"strings"
 
 	"goodkind.io/clyde/internal/config"
@@ -600,19 +602,12 @@ func (r *Registry) List() []ResolvedModel {
 
 func (r *Registry) Models() map[string]ResolvedModel {
 	out := make(map[string]ResolvedModel, len(r.models))
-	for alias, resolved := range r.models {
-		out[alias] = resolved
-	}
+	maps.Copy(out, r.models)
 	return out
 }
 
 func contains(s []string, v string) bool {
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(s, v)
 }
 
 // ClaudeEffortFlag translates an effort tier into the string passed

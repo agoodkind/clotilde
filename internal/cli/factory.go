@@ -73,14 +73,8 @@ func NewSystemFactory(build BuildInfo) *Factory {
 			return "claude"
 		},
 		Verbose: func() bool { return verbose },
-		Config: func() (*config.Config, error) {
-			return config.LoadGlobalOrDefault()
-		},
-		Store: func() (*session.FileStore, error) {
-			return session.NewGlobalFileStore()
-		},
-		Daemon: func(ctx context.Context) (*daemon.Client, error) {
-			return daemon.ConnectOrStart(ctx)
-		},
+		Config:  config.LoadGlobalOrDefault,
+		Store:   session.NewGlobalFileStore,
+		Daemon:  daemon.ConnectOrStart,
 	}
 }

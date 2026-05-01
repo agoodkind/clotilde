@@ -2,6 +2,7 @@ package anthropicbackend
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
@@ -112,8 +113,8 @@ func ApplyCacheBreakpoints(msgs []anthropic.Message, tools []anthropic.Tool, emi
 	lastCCMsg := -1
 	markerIndex := len(msgs) - 1
 	msg := &msgs[markerIndex]
-	for j := len(msg.Content) - 1; j >= 0; j-- {
-		if !CacheableMessageBoundaryBlock(msg.Role, msg.Content[j].Type) {
+	for j, block := range slices.Backward(msg.Content) {
+		if !CacheableMessageBoundaryBlock(msg.Role, block.Type) {
 			continue
 		}
 		msg.Content[j].CacheControl = ephemeral
@@ -123,7 +124,7 @@ func ApplyCacheBreakpoints(msgs []anthropic.Message, tools []anthropic.Tool, emi
 	if lastCCMsg < 0 {
 		return stats
 	}
-	for i := 0; i < lastCCMsg; i++ {
+	for i := range lastCCMsg {
 		if msgs[i].Role != "user" {
 			continue
 		}

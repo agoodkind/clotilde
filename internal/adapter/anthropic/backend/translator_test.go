@@ -15,13 +15,16 @@ func newTranslatorForTest() *StreamTranslator {
 
 func TestStreamTranslatorThinkingEmitsBlockquoteContent(t *testing.T) {
 	tr := newTranslatorForTest()
+	renderer := adapterrender.NewEventRenderer("req1", "clyde-test", "anthropic", nil)
 	var out []adapteropenai.StreamChunk
 	emit := func(name string, payload []byte) {
-		chunks, _, _, _, err := tr.HandleEvent(name, payload)
+		events, _, _, _, err := tr.HandleEventEvents(name, payload)
 		if err != nil {
-			t.Fatalf("HandleEvent: %v", err)
+			t.Fatalf("HandleEventEvents: %v", err)
 		}
-		out = append(out, chunks...)
+		for _, event := range events {
+			out = append(out, renderer.HandleEvent(event)...)
+		}
 	}
 	msgStart, err := json.Marshal(struct {
 		Message struct {
@@ -78,13 +81,16 @@ func TestStreamTranslatorThinkingEmitsBlockquoteContent(t *testing.T) {
 func TestStreamTextTranslator(t *testing.T) {
 	t.Parallel()
 	tr := NewStreamTranslator("chatcmpl-s", "alias")
+	renderer := adapterrender.NewEventRenderer("chatcmpl-s", "alias", "anthropic", nil)
 	var all []adapteropenai.StreamChunk
 	feed := func(name string, payload string) {
-		chunks, finished, reason, _, err := tr.HandleEvent(name, []byte(payload))
+		events, finished, reason, _, err := tr.HandleEventEvents(name, []byte(payload))
 		if err != nil {
 			t.Fatalf("event %s: %v", name, err)
 		}
-		all = append(all, chunks...)
+		for _, event := range events {
+			all = append(all, renderer.HandleEvent(event)...)
+		}
 		if name == "message_stop" {
 			if !finished || reason != "stop" {
 				t.Fatalf("finish finished=%v reason=%q", finished, reason)
@@ -117,14 +123,17 @@ func TestStreamTextTranslator(t *testing.T) {
 func TestStreamToolTranslator(t *testing.T) {
 	t.Parallel()
 	tr := NewStreamTranslator("chatcmpl-t", "alias")
+	renderer := adapterrender.NewEventRenderer("chatcmpl-t", "alias", "anthropic", nil)
 	var all []adapteropenai.StreamChunk
 	var finishReason string
 	feed := func(name string, payload string) {
-		chunks, finished, reason, _, err := tr.HandleEvent(name, []byte(payload))
+		events, finished, reason, _, err := tr.HandleEventEvents(name, []byte(payload))
 		if err != nil {
 			t.Fatalf("event %s: %v", name, err)
 		}
-		all = append(all, chunks...)
+		for _, event := range events {
+			all = append(all, renderer.HandleEvent(event)...)
+		}
 		if finished {
 			finishReason = reason
 		}

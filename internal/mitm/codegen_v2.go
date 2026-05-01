@@ -212,17 +212,17 @@ func constantHeaderValue(flavor FlavorShape, name string) string {
 // codegen'd.
 func constantStaticHeaders(flavor FlavorShape) []WireHeaderEmit {
 	excluded := map[string]bool{
-		"user-agent":                   true,
-		"anthropic-beta":               true,
-		"anthropic-version":            true,
-		"authorization":                true,
-		"x-claude-code-session-id":     true,
-		"content-length":               true,
-		"content-type":                 true,
-		"accept":                       true,
-		"accept-encoding":              true,
-		"connection":                   true,
-		"host":                         true,
+		"user-agent":               true,
+		"anthropic-beta":           true,
+		"anthropic-version":        true,
+		"authorization":            true,
+		"x-claude-code-session-id": true,
+		"content-length":           true,
+		"content-type":             true,
+		"accept":                   true,
+		"accept-encoding":          true,
+		"connection":               true,
+		"host":                     true,
 	}
 	out := make([]WireHeaderEmit, 0, len(flavor.Headers))
 	for _, h := range flavor.Headers {

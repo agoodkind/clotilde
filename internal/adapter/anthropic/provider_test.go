@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
@@ -17,7 +18,7 @@ func TestProviderIDIsAnthropic(t *testing.T) {
 	}
 }
 
-func TestProviderExecuteReturnsLegacyDispatchSentinel(t *testing.T) {
+func TestProviderExecuteRequiresPrepare(t *testing.T) {
 	p := NewProvider(adapterprovider.Deps{}, ProviderOptions{})
 	req := adapterresolver.ResolvedRequest{
 		Provider: adapterresolver.ProviderAnthropic,
@@ -26,17 +27,28 @@ func TestProviderExecuteReturnsLegacyDispatchSentinel(t *testing.T) {
 		OpenAI:   adapteropenai.ChatRequest{Stream: true},
 	}
 	_, err := p.Execute(context.Background(), req, nil)
-	if !errors.Is(err, ErrLegacyDispatchPath) {
-		t.Fatalf("Execute() err = %v, want ErrLegacyDispatchPath", err)
+	var execErr *ExecuteError
+	if !errors.As(err, &execErr) || execErr.Code != "anthropic_prepare_unconfigured" {
+		t.Fatalf("Execute() err = %v, want anthropic_prepare_unconfigured", err)
 	}
 }
 
 func TestProviderExecuteCollectBuildsFinalResponse(t *testing.T) {
 	t.Parallel()
 	provider := NewProvider(adapterprovider.Deps{}, ProviderOptions{
-		Collect: func(_ context.Context, _ adapterresolver.ResolvedRequest, reqID string, _ adapterprovider.EventWriter) (adapterprovider.Result, error) {
+		Prepare: func(_ context.Context, req adapterresolver.ResolvedRequest, reqID string) (PreparedRequest, error) {
+			return PreparedRequest{
+				RequestID: reqID,
+				Model: adaptermodel.ResolvedModel{
+					Alias:       req.Model,
+					Backend:     adaptermodel.BackendAnthropic,
+					ClaudeModel: req.Model,
+				},
+			}, nil
+		},
+		ExecutePrepared: func(_ context.Context, req PreparedRequest, _ adapterprovider.EventWriter) (adapterprovider.Result, error) {
 			resp := &adapteropenai.ChatResponse{
-				ID:                reqID,
+				ID:                req.RequestID,
 				Object:            "chat.completion",
 				Model:             "claude-test",
 				SystemFingerprint: "fp-test",
@@ -97,10 +109,21 @@ func TestProviderExecuteStreamUsesStreamCallback(t *testing.T) {
 
 	called := false
 	provider := NewProvider(adapterprovider.Deps{}, ProviderOptions{
-		Stream: func(_ context.Context, _ adapterresolver.ResolvedRequest, reqID string, _ adapterprovider.EventWriter) (adapterprovider.Result, error) {
+		Prepare: func(_ context.Context, req adapterresolver.ResolvedRequest, reqID string) (PreparedRequest, error) {
+			return PreparedRequest{
+				RequestID: reqID,
+				Request:   Request{Stream: req.OpenAI.Stream},
+				Model: adaptermodel.ResolvedModel{
+					Alias:       req.Model,
+					Backend:     adaptermodel.BackendAnthropic,
+					ClaudeModel: req.Model,
+				},
+			}, nil
+		},
+		ExecutePrepared: func(_ context.Context, req PreparedRequest, _ adapterprovider.EventWriter) (adapterprovider.Result, error) {
 			called = true
-			if reqID != "req-stream" {
-				t.Fatalf("reqID = %q want req-stream", reqID)
+			if req.RequestID != "req-stream" {
+				t.Fatalf("reqID = %q want req-stream", req.RequestID)
 			}
 			return adapterprovider.Result{FinishReason: "stop"}, nil
 		},
@@ -118,6 +141,40 @@ func TestProviderExecuteStreamUsesStreamCallback(t *testing.T) {
 	}
 	if !called {
 		t.Fatalf("stream callback was not called")
+	}
+	if result.FinishReason != "stop" {
+		t.Fatalf("finish_reason = %q want stop", result.FinishReason)
+	}
+}
+
+func TestProviderExecutePreparedUsesPreparedCallback(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	provider := NewProvider(adapterprovider.Deps{}, ProviderOptions{
+		ExecutePrepared: func(_ context.Context, req PreparedRequest, _ adapterprovider.EventWriter) (adapterprovider.Result, error) {
+			called = true
+			if req.RequestID != "req-native" {
+				t.Fatalf("reqID = %q want req-native", req.RequestID)
+			}
+			return adapterprovider.Result{FinishReason: "stop"}, nil
+		},
+	})
+
+	result, err := provider.ExecutePrepared(context.Background(), PreparedRequest{
+		RequestID: "req-native",
+		Request:   Request{Model: "claude-test", Stream: true},
+		Model: adaptermodel.ResolvedModel{
+			Alias:       "claude-test",
+			Backend:     adaptermodel.BackendAnthropic,
+			ClaudeModel: "claude-test",
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("ExecutePrepared() err = %v", err)
+	}
+	if !called {
+		t.Fatalf("prepared callback was not called")
 	}
 	if result.FinishReason != "stop" {
 		t.Fatalf("finish_reason = %q want stop", result.FinishReason)

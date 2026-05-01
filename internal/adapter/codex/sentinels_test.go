@@ -1,4 +1,4 @@
-package tooltrans
+package codex
 
 import "testing"
 

@@ -7,9 +7,10 @@ import (
 	"goodkind.io/clyde/internal/config"
 )
 
-func boolPtr(b bool) *bool {
-	return &b
-}
+var (
+	testBoolTrue  = true
+	testBoolFalse = false
+)
 
 func TestNewRegistryCapabilitiesValidation(t *testing.T) {
 	cases := []struct {
@@ -24,7 +25,7 @@ func TestNewRegistryCapabilitiesValidation(t *testing.T) {
 					Model:           "claude-haiku-4-5-20251001",
 					ThinkingModes:   []string{"default"},
 					MaxOutputTokens: 16000,
-					SupportsVision:  boolPtr(true),
+					SupportsVision:  &testBoolTrue,
 					Contexts:        []config.AdapterModelContext{{Tokens: 200000}},
 				}
 			},
@@ -37,7 +38,7 @@ func TestNewRegistryCapabilitiesValidation(t *testing.T) {
 					Model:           "claude-haiku-4-5-20251001",
 					ThinkingModes:   []string{"default"},
 					MaxOutputTokens: 16000,
-					SupportsTools:   boolPtr(true),
+					SupportsTools:   &testBoolTrue,
 					Contexts:        []config.AdapterModelContext{{Tokens: 200000}},
 				}
 			},
@@ -83,8 +84,8 @@ func TestNewRegistryHappyPathCapabilitiesPropagated(t *testing.T) {
 		Model:           "claude-haiku-4-5-20251001",
 		ThinkingModes:   []string{"default"},
 		MaxOutputTokens: 16000,
-		SupportsTools:   boolPtr(true),
-		SupportsVision:  boolPtr(false),
+		SupportsTools:   &testBoolTrue,
+		SupportsVision:  &testBoolFalse,
 		Contexts:        []config.AdapterModelContext{{Tokens: 200000}},
 	}
 	r, err := NewRegistry(cfg)

@@ -34,7 +34,7 @@ func TestExportPanelDefaultsToLatestCompactionPlusVisible(t *testing.T) {
 	if panel.historyStart != 2 {
 		t.Fatalf("historyStart = %d want 2", panel.historyStart)
 	}
-	if got := panel.historySlider(); got != "[C1........C2........[C3]========VISIBLE]" {
+	if got := panel.historyMarkedSlider().Render(); got != "[C1........C2........[C3]========VISIBLE]" {
 		t.Fatalf("slider = %q", got)
 	}
 }
@@ -44,7 +44,7 @@ func TestExportPanelDefaultsToVisibleOnlyWithoutCompactions(t *testing.T) {
 	if panel.historyStart != 0 {
 		t.Fatalf("historyStart = %d want 0", panel.historyStart)
 	}
-	if got := panel.historySlider(); got != "[[VISIBLE]]" {
+	if got := panel.historyMarkedSlider().Render(); got != "[[VISIBLE]]" {
 		t.Fatalf("slider = %q", got)
 	}
 }

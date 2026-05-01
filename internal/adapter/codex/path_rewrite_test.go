@@ -77,27 +77,3 @@ func TestRewriteWorkspacePathDoesNotMashUnboundedSubstring(t *testing.T) {
 		}
 	})
 }
-
-func TestPathBoundedContainsBoundaries(t *testing.T) {
-	cases := []struct {
-		haystack string
-		needle   string
-		want     bool
-	}{
-		{"/foo/bar", "/foo", true},
-		{"/foo/bar", "/bar", true},
-		{"/foo", "/foo", true},
-		{"/foobar", "/foo", false},
-		{"path is /foo/bar", "/foo", true},
-		{"path is /foo", "/foo", true},
-		{`"/foo/bar"`, "/foo", true},
-		{"foobar", "foo", false},
-		{"", "/foo", false},
-		{"/foo", "", false},
-	}
-	for _, tc := range cases {
-		if got := pathBoundedContains(tc.haystack, tc.needle); got != tc.want {
-			t.Errorf("pathBoundedContains(%q, %q) = %v, want %v", tc.haystack, tc.needle, got, tc.want)
-		}
-	}
-}

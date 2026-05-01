@@ -25,9 +25,9 @@ type Entry struct {
 	IsSummary  bool // isCompactSummary flag
 
 	// Message body. Lazily decoded into typed views.
-	Role    string
-	Content []ContentBlock // [] when message.content is a plain string
-	TextOnly string        // populated when message.content was a string
+	Role     string
+	Content  []ContentBlock // [] when message.content is a plain string
+	TextOnly string         // populated when message.content was a string
 }
 
 // ContentBlock is one element of an Anthropic-style content array.
@@ -48,9 +48,9 @@ type ContentBlock struct {
 	ImageBytes     int
 
 	// type=tool_use
-	ToolUseID   string
-	ToolName    string
-	ToolInput   json.RawMessage
+	ToolUseID string
+	ToolName  string
+	ToolInput json.RawMessage
 
 	// type=tool_result
 	ToolUseRefID string
@@ -64,12 +64,12 @@ type ContentBlock struct {
 
 // Slice is the post-boundary view of a session.
 type Slice struct {
-	Path           string
-	AllEntries     []Entry // every parsed line, in file order
-	BoundaryLine   int     // file line index of the most-recent compact_boundary; -1 if none
-	BoundaryUUID   string  // uuid of that boundary entry
-	BoundaryTime   time.Time
-	PostBoundary   []Entry // entries strictly after BoundaryLine
+	Path         string
+	AllEntries   []Entry // every parsed line, in file order
+	BoundaryLine int     // file line index of the most-recent compact_boundary; -1 if none
+	BoundaryUUID string  // uuid of that boundary entry
+	BoundaryTime time.Time
+	PostBoundary []Entry // entries strictly after BoundaryLine
 
 	// PairIndex maps a tool_use id to the (postBoundaryIdx, blockIdx) of
 	// the matching tool_result block, when one exists in PostBoundary.

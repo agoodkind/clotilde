@@ -79,10 +79,7 @@ func (p *SidecarPanel) Draw(scr tcell.Screen, r Rect) {
 	}
 	headerH := 2
 	inputH := 2
-	bodyH := r.H - headerH - inputH
-	if bodyH < 1 {
-		bodyH = 1
-	}
+	bodyH := max(r.H-headerH-inputH, 1)
 	headerRect := Rect{X: r.X, Y: r.Y, W: r.W, H: headerH}
 	bodyRect := Rect{X: r.X, Y: r.Y + headerH, W: r.W, H: bodyH}
 	inputRect := Rect{X: r.X, Y: r.Y + headerH + bodyH, W: r.W, H: inputH}
@@ -119,10 +116,7 @@ func (p *SidecarPanel) drawBody(scr tcell.Screen, r Rect) {
 	if p.auto {
 		p.offset = imax(0, len(p.Buffer)-r.H)
 	}
-	end := p.offset + r.H
-	if end > len(p.Buffer) {
-		end = len(p.Buffer)
-	}
+	end := min(p.offset+r.H, len(p.Buffer))
 	y := r.Y
 	for i := p.offset; i < end; i++ {
 		line := p.Buffer[i]

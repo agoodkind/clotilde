@@ -79,11 +79,11 @@ func TestShapeConversationConversationOnlyStripsImagePlaceholderLines(t *testing
 }
 
 func TestRenderJSONUsesShapedConversation(t *testing.T) {
-	body, err := RenderJSON([]Message{{
+	body, err := RenderJSONWithOptions([]Message{{
 		Role:     "assistant",
 		HasTools: true,
 		Tools:    []ToolCall{{Name: "Bash"}},
-	}})
+	}}, DefaultShapeOptions())
 	if err != nil {
 		t.Fatalf("RenderJSON: %v", err)
 	}

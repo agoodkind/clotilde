@@ -166,8 +166,8 @@ func TestQA_AllWidgets(t *testing.T) {
 			}
 			defer scr.Fini()
 			scr.SetSize(tc.w, tc.h)
-			for y := 0; y < tc.h; y++ {
-				for x := 0; x < tc.w; x++ {
+			for y := range tc.h {
+				for x := range tc.w {
 					scr.SetContent(x, y, ' ', nil, tcell.StyleDefault)
 				}
 			}
@@ -177,9 +177,9 @@ func TestQA_AllWidgets(t *testing.T) {
 			cells, cw, _ := scr.GetContents()
 			var b strings.Builder
 			fmt.Fprintf(&b, "# qa/%s.txt  size=%dx%d\n\n", tc.name, tc.w, tc.h)
-			for y := 0; y < tc.h; y++ {
+			for y := range tc.h {
 				row := make([]rune, 0, tc.w)
-				for x := 0; x < tc.w; x++ {
+				for x := range tc.w {
 					c := cells[y*cw+x]
 					if len(c.Runes) == 0 || c.Runes[0] == 0 {
 						row = append(row, ' ')

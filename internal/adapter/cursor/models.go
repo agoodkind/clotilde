@@ -35,8 +35,8 @@ func NormalizeSessionSettingsModel(rawModel string) string {
 		return normalized
 	}
 	for _, suffix := range []string{"-low", "-medium", "-high", "-xhigh"} {
-		if strings.HasSuffix(normalized, suffix) {
-			return strings.TrimSuffix(normalized, suffix)
+		if trimmed, ok := strings.CutSuffix(normalized, suffix); ok {
+			return trimmed
 		}
 	}
 	return normalized

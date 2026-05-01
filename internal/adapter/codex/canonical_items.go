@@ -2,7 +2,6 @@ package codex
 
 import (
 	"encoding/json"
-	"strconv"
 	"strings"
 )
 
@@ -19,26 +18,6 @@ type continuationEvent struct {
 	Name     string
 	Text     string
 	Payload  string
-}
-
-func (e continuationEvent) Summary() string {
-	parts := []string{"kind=" + e.Kind}
-	if e.Identity != "" {
-		parts = append(parts, "id="+e.Identity)
-	}
-	if e.Role != "" {
-		parts = append(parts, "role="+e.Role)
-	}
-	if e.Name != "" {
-		parts = append(parts, "name="+e.Name)
-	}
-	if e.Text != "" {
-		parts = append(parts, "text_len="+strconv.Itoa(len(e.Text)))
-	}
-	if e.Payload != "" {
-		parts = append(parts, "payload_len="+strconv.Itoa(len(e.Payload)))
-	}
-	return strings.Join(parts, " ")
 }
 
 // continuationItemEqual reports whether two Codex input items refer
@@ -284,20 +263,6 @@ func canonicalContinuationJSON(raw any) string {
 		return ""
 	}
 	return string(encoded)
-}
-
-func cloneInput(in []map[string]any) []map[string]any {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]map[string]any, len(in))
-	for i, item := range in {
-		raw, _ := json.Marshal(item)
-		var cloned map[string]any
-		_ = json.Unmarshal(raw, &cloned)
-		out[i] = cloned
-	}
-	return out
 }
 
 func jsonEqual(a, b any) bool {

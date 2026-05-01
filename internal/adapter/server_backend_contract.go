@@ -18,7 +18,7 @@ func (s *Server) applyBackendOverride(w http.ResponseWriter, r *http.Request, re
 		return model, true
 	}
 
-	original := string(model.Backend)
+	original := model.Backend
 	switch override {
 	case BackendAnthropic, BackendShunt, BackendCodex:
 		model.Backend = override
@@ -55,7 +55,7 @@ func (s *Server) dispatchResolvedChat(
 	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.backend.dispatching",
 		slog.String("request_id", reqID),
 		slog.String("alias", req.Model),
-		slog.String("backend", string(model.Backend)),
+		slog.String("backend", model.Backend),
 		slog.String("resolved_model", model.ClaudeModel),
 		slog.String("effort", effort),
 		slog.Bool("stream", req.Stream),
@@ -75,7 +75,9 @@ func (s *Server) dispatchResolvedChat(
 				"resolver did not map this request to the anthropic provider")
 			return
 		}
-		s.dispatchAnthropicProvider(w, r, effort, reqID, resolvedReq)
+		if err := s.dispatchAnthropicProvider(w, r, effort, reqID, resolvedReq); err != nil {
+			writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
+		}
 		return
 	case BackendCodex:
 		if s.codexProvider == nil {

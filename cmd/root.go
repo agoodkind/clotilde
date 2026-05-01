@@ -31,9 +31,7 @@ import (
 	"goodkind.io/clyde/internal/claude"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/daemon"
-	"goodkind.io/clyde/internal/outputstyle"
 	"goodkind.io/clyde/internal/session"
-	"goodkind.io/clyde/internal/transcript"
 	"goodkind.io/clyde/internal/ui"
 	"goodkind.io/clyde/internal/util"
 )
@@ -155,35 +153,6 @@ func consumeTUIReturnSession() *session.Session {
 		"session", sess.Name,
 		"session_id", sess.Metadata.SessionID)
 	return sess
-}
-
-// runDiscoveryAdoption walks ~/.claude/projects and creates registry
-// entries for any transcript whose UUID is unknown. Errors are
-// swallowed because this is a best-effort startup task.
-func runDiscoveryAdoption(store *session.FileStore) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return
-	}
-	projects := filepath.Join(home, ".claude", "projects")
-	if _, err := os.Stat(projects); err != nil {
-		return
-	}
-	results, err := session.ScanProjects(projects)
-	if err != nil {
-		return
-	}
-	adopted, err := session.AdoptUnknown(store, results)
-	if err != nil {
-		return
-	}
-	if len(adopted) > 0 {
-		slog.Info("dashboard.discovery.adopted",
-			"component", "tui",
-			"count", len(adopted),
-		)
-		daemon.NudgeDiscoveryScan()
-	}
 }
 
 // buildAppCallbacks wires store + helpers into a ui.AppCallbacks.
@@ -1100,116 +1069,9 @@ func resumeSession(sess *session.Session, store session.Store, allowSelfReload b
 	return err
 }
 
-// deleteSession deletes a session's metadata, its claude transcripts
-// and agent logs, and (when present) the per-session output style.
-// Prefers the daemon path so subscribers (open dashboards) get the
-// SESSION_DELETED event immediately; falls back to the local store
-// when the daemon is unreachable.
-func deleteSession(sess *session.Session, store session.Store) error {
-	allDeletedFiles := &claude.DeletedFiles{
-		Transcript: []string{},
-		AgentLogs:  []string{},
-	}
-
-	projClydeRoot := projectClydeRootForSession(sess)
-
-	deleted, err := claude.DeleteSessionData(projClydeRoot, sess.Metadata.SessionID, sess.Metadata.TranscriptPath)
-	if err != nil {
-		_, _ = fmt.Fprintln(os.Stdout, ui.Warning(fmt.Sprintf("Failed to delete Claude data for current session: %v", err)))
-		slog.Error("session.delete.current_data_failed",
-			"component", "cli",
-			"session", sess.Name,
-			"session_id", sess.Metadata.SessionID,
-			"err", err,
-		)
-	} else {
-		allDeletedFiles.Transcript = append(allDeletedFiles.Transcript, deleted.Transcript...)
-		allDeletedFiles.AgentLogs = append(allDeletedFiles.AgentLogs, deleted.AgentLogs...)
-	}
-
-	for _, prevSessionID := range sess.Metadata.PreviousSessionIDs {
-		deleted, err := claude.DeleteSessionData(projClydeRoot, prevSessionID, "")
-		if err != nil {
-			_, _ = fmt.Fprintln(os.Stdout, ui.Warning(fmt.Sprintf("Failed to delete Claude data for previous session %s: %v", prevSessionID, err)))
-			slog.Error("session.delete.previous_data_failed",
-				"component", "cli",
-				"session", sess.Name,
-				"previous_session_id", prevSessionID,
-				"err", err,
-			)
-		} else {
-			allDeletedFiles.Transcript = append(allDeletedFiles.Transcript, deleted.Transcript...)
-			allDeletedFiles.AgentLogs = append(allDeletedFiles.AgentLogs, deleted.AgentLogs...)
-		}
-	}
-
-	outcome, err := daemon.DeleteSessionViaDaemonOutcome(context.Background(), sess.Name)
-	switch outcome {
-	case daemon.LifecycleOutcomeReady:
-	case daemon.LifecycleOutcomeDegradedOffline:
-		if err := store.Delete(sess.Name); err != nil {
-			return fmt.Errorf("failed to delete session: %w", err)
-		}
-	case daemon.LifecycleOutcomeFailed:
-		return daemonLifecycleError("delete", outcome, err)
-	default:
-		return daemonLifecycleError("delete", outcome, err)
-	}
-
-	if sess.Metadata.HasCustomOutputStyle {
-		if err := outputstyle.DeleteCustomStyleFile(config.GlobalOutputStyleRoot(), sess.Name); err != nil {
-			_, _ = fmt.Fprintln(os.Stdout, ui.Warning(fmt.Sprintf("Failed to delete output style file: %v", err)))
-			slog.Error("session.delete.style_failed",
-				"component", "cli",
-				"session", sess.Name,
-				"err", err,
-			)
-		}
-	}
-
-	transcriptCount := len(allDeletedFiles.Transcript)
-	agentLogCount := len(allDeletedFiles.AgentLogs)
-	_, _ = fmt.Fprintln(os.Stdout, ui.Success(fmt.Sprintf("Deleted session '%s'", sess.Name)))
-	_, _ = fmt.Fprintf(os.Stdout, "  Session folder, %d transcript(s), %d agent log(s)\n", transcriptCount, agentLogCount)
-	slog.Info("session.deleted",
-		"component", "cli",
-		"session", sess.Name,
-		"transcripts", transcriptCount,
-		"agent_logs", agentLogCount,
-	)
-
-	return nil
-}
-
 func daemonLifecycleError(action string, outcome daemon.LifecycleOutcome, err error) error {
 	if err == nil {
 		return fmt.Errorf("daemon %s %s", action, outcome)
 	}
 	return fmt.Errorf("daemon %s %s: %w", action, outcome, err)
-}
-
-// loadSessionMessages loads parsed messages from all transcripts for
-// a session. Used by the TUI's ViewContent callback.
-func loadSessionMessages(sess *session.Session) ([]transcript.Message, error) {
-	homeDir, err := util.HomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("could not determine home directory: %w", err)
-	}
-	clydeRoot := projectClydeRootForSession(sess)
-	paths := allTranscriptPaths(sess, clydeRoot, homeDir)
-
-	var allMessages []transcript.Message
-	for _, path := range paths {
-		f, openErr := os.Open(path)
-		if openErr != nil {
-			continue
-		}
-		messages, parseErr := transcript.Parse(f)
-		_ = f.Close()
-		if parseErr != nil {
-			continue
-		}
-		allMessages = append(allMessages, messages...)
-	}
-	return allMessages, nil
 }

@@ -13,28 +13,28 @@ import (
 // This is a diagnostic type. It is logged once per inbound request to
 // produce empirical evidence of what Cursor server actually sends.
 type RequestDiscovery struct {
-	TopLevelKeys             []string `json:"top_level_keys"`
-	UnknownKeys              []string `json:"unknown_keys"`
-	MetadataKeys             []string `json:"metadata_keys,omitempty"`
-	MetadataIsObject         bool     `json:"metadata_is_object,omitempty"`
-	MessageFieldKeys         []string `json:"message_field_keys,omitempty"`
-	InputItemKeys            []string `json:"input_item_keys,omitempty"`
-	InputItemRoles           []string `json:"input_item_roles,omitempty"`
-	InputItemTypes           []string `json:"input_item_types,omitempty"`
-	InputContentTypes        []string `json:"input_content_types,omitempty"`
-	ToolCount                int      `json:"tool_count"`
-	ToolKinds                []string `json:"tool_kinds,omitempty"`
-	ToolFieldKeys            []string `json:"tool_field_keys,omitempty"`
-	ToolFunctionKeys         []string `json:"tool_function_keys,omitempty"`
-	ToolFunctionTopKeys      []string `json:"tool_function_top_keys,omitempty"`
-	ToolCustomTopKeys        []string `json:"tool_custom_top_keys,omitempty"`
-	ToolCustomFormatKeys     []string `json:"tool_custom_format_keys,omitempty"`
-	ToolFunctionNames        []string `json:"tool_function_names,omitempty"`
-	ToolCustomNames          []string `json:"tool_custom_names,omitempty"`
-	MCPToolNames             []string `json:"mcp_tool_names,omitempty"`
-	HasMCPLikeFields         bool     `json:"has_mcp_like_fields,omitempty"`
-	MCPLikeFieldNames        []string `json:"mcp_like_field_names,omitempty"`
-	BodyBytes                int      `json:"body_bytes"`
+	TopLevelKeys         []string `json:"top_level_keys"`
+	UnknownKeys          []string `json:"unknown_keys"`
+	MetadataKeys         []string `json:"metadata_keys,omitempty"`
+	MetadataIsObject     bool     `json:"metadata_is_object,omitempty"`
+	MessageFieldKeys     []string `json:"message_field_keys,omitempty"`
+	InputItemKeys        []string `json:"input_item_keys,omitempty"`
+	InputItemRoles       []string `json:"input_item_roles,omitempty"`
+	InputItemTypes       []string `json:"input_item_types,omitempty"`
+	InputContentTypes    []string `json:"input_content_types,omitempty"`
+	ToolCount            int      `json:"tool_count"`
+	ToolKinds            []string `json:"tool_kinds,omitempty"`
+	ToolFieldKeys        []string `json:"tool_field_keys,omitempty"`
+	ToolFunctionKeys     []string `json:"tool_function_keys,omitempty"`
+	ToolFunctionTopKeys  []string `json:"tool_function_top_keys,omitempty"`
+	ToolCustomTopKeys    []string `json:"tool_custom_top_keys,omitempty"`
+	ToolCustomFormatKeys []string `json:"tool_custom_format_keys,omitempty"`
+	ToolFunctionNames    []string `json:"tool_function_names,omitempty"`
+	ToolCustomNames      []string `json:"tool_custom_names,omitempty"`
+	MCPToolNames         []string `json:"mcp_tool_names,omitempty"`
+	HasMCPLikeFields     bool     `json:"has_mcp_like_fields,omitempty"`
+	MCPLikeFieldNames    []string `json:"mcp_like_field_names,omitempty"`
+	BodyBytes            int      `json:"body_bytes"`
 }
 
 // HeaderNames returns a sorted list of HTTP header names from the supplied

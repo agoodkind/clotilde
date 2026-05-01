@@ -26,7 +26,7 @@ func TestStartOnListenerServesHealth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- srv.StartOnListener(ctx, lis) }()
@@ -61,8 +61,7 @@ func TestShutdownClosesIdleKeepaliveConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	done := make(chan error, 1)
 	go func() { done <- srv.StartOnListener(ctx, lis) }()
 
@@ -128,8 +127,7 @@ func TestCloseForceClosesActiveConnection(t *testing.T) {
 		case <-r.Context().Done():
 		}
 	})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	done := make(chan error, 1)
 	go func() { done <- srv.StartOnListener(ctx, lis) }()
 

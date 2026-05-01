@@ -2,12 +2,11 @@ package codex
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -79,61 +78,6 @@ func TestApplyBodyModeRawIncludesB64(t *testing.T) {
 	}
 }
 
-func TestRedactedCodexOutboundHeadersStripsAuth(t *testing.T) {
-	h := http.Header{}
-	h.Set("Authorization", "Bearer abc.def.ghi")
-	h.Set("X-Codex-Account-Id", "acct-123")
-	h.Set("Cookie", "session=secret")
-	h.Set("Content-Type", "application/json")
-	h.Set("X-Custom", "ok")
-
-	out := redactedCodexOutboundHeaders(h)
-	if got := out["authorization"]; !strings.HasPrefix(got, "Bearer <redacted len=") {
-		t.Errorf("authorization=%q want redacted token", got)
-	}
-	if got := out["x-codex-account-id"]; got != "<redacted>" {
-		t.Errorf("x-codex-account-id=%q want <redacted>", got)
-	}
-	if got := out["cookie"]; got != "<redacted>" {
-		t.Errorf("cookie=%q want <redacted>", got)
-	}
-	if got := out["content-type"]; got != "application/json" {
-		t.Errorf("content-type=%q want application/json (passthrough)", got)
-	}
-	if got := out["x-custom"]; got != "ok" {
-		t.Errorf("x-custom=%q want ok (passthrough)", got)
-	}
-}
-
-func TestRedactedRPCParamsStripsTokens(t *testing.T) {
-	in := json.RawMessage(`{"token":"secret","auth_token":"x","apiKey":"y","clientInfo":{"name":"clyde","access_token":"nested"},"items":[{"authorization":"Bearer z"}]}`)
-	out := redactedRPCParams(in)
-	var parsed map[string]any
-	if err := json.Unmarshal(out, &parsed); err != nil {
-		t.Fatalf("unmarshal redacted: %v", err)
-	}
-	for _, key := range []string{"token", "auth_token", "apiKey"} {
-		got, _ := parsed[key].(string)
-		if got != "<redacted>" {
-			t.Errorf("key=%s value=%q want <redacted>", key, got)
-		}
-	}
-	if _, ok := parsed["clientInfo"]; !ok {
-		t.Errorf("non-secret nested object dropped")
-	}
-	if strings.Contains(string(out), "nested") || strings.Contains(string(out), "Bearer z") {
-		t.Fatalf("nested secrets were not redacted: %s", string(out))
-	}
-}
-
-func TestRedactedRPCParamsPassthroughOnInvalidJSON(t *testing.T) {
-	in := json.RawMessage(`not-json`)
-	out := redactedRPCParams(in)
-	if string(out) != string(in) {
-		t.Fatalf("invalid json should pass through verbatim")
-	}
-}
-
 func TestCodexLogPathHonorsOverride(t *testing.T) {
 	tmp := filepath.Join(t.TempDir(), "codex.jsonl")
 	t.Setenv("CLYDE_CODEX_LOG_PATH", tmp)
@@ -155,8 +99,12 @@ func TestLogCodexEventDoubleWritesToDedicatedSink(t *testing.T) {
 	dir := t.TempDir()
 	sinkPath := filepath.Join(dir, "codex.jsonl")
 	t.Setenv("CLYDE_CODEX_LOG_PATH", sinkPath)
-	resetCodexLogger()
-	t.Cleanup(resetCodexLogger)
+	codexFileLoggerOnce = sync.Once{}
+	codexFileLogger = nil
+	t.Cleanup(func() {
+		codexFileLoggerOnce = sync.Once{}
+		codexFileLogger = nil
+	})
 
 	ev := requestEvent{
 		Subcomponent: "codex",
@@ -183,34 +131,6 @@ func TestLogCodexEventDoubleWritesToDedicatedSink(t *testing.T) {
 	}
 	if !strings.Contains(string(got), `"body":"{\"hello\":\"world\"}"`) {
 		t.Errorf("sink missing body bytes: %s", string(got))
-	}
-}
-
-func TestSummarizeHTTPRequestCarriesShapeFields(t *testing.T) {
-	payload := HTTPTransportRequest{
-		Model:        "gpt-5.4",
-		Instructions: "rules go here",
-		Input: []map[string]any{
-			{"type": "message", "role": "user"},
-			{"type": "message", "role": "user"},
-		},
-		Tools:       []any{map[string]any{"name": "read_file"}},
-		PromptCache: "cursor:conv-1",
-		Stream:      true,
-		ServiceTier: "priority",
-	}
-	s := summarizeHTTPRequest(payload)
-	if s == nil {
-		t.Fatalf("summary nil")
-	}
-	if s.Model != "gpt-5.4" || s.InputCount != 2 || s.ToolCount != 1 {
-		t.Errorf("summary basic mismatch: %+v", s)
-	}
-	if !s.HasInstructions || s.InstructionsBytes != len(payload.Instructions) {
-		t.Errorf("summary instructions mismatch: %+v", s)
-	}
-	if s.PromptCacheKey != "cursor:conv-1" || !s.Stream || s.ServiceTier != "priority" {
-		t.Errorf("summary metadata mismatch: %+v", s)
 	}
 }
 

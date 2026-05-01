@@ -127,6 +127,7 @@ type fakeResponseDispatcher struct {
 	log          *slog.Logger
 	sseWriter    *fakeResponseSSEWriter
 	renderer     *adapterrender.EventRenderer
+	events       []adapterrender.Event
 	streamEvents func(context.Context, anthropic.Request, anthropic.EventSink) (anthropic.Usage, string, error)
 	actionables  int
 }
@@ -176,13 +177,13 @@ func (d *fakeResponseDispatcher) StreamChunkHasVisibleContent(chunk adapteropena
 }
 
 func (d *fakeResponseDispatcher) WriteEvent(ev adapterrender.Event) error {
-	if d.sseWriter == nil {
-		d.sseWriter = &fakeResponseSSEWriter{}
+	d.events = append(d.events, ev)
+	if d.sseWriter != nil {
+		if d.renderer == nil {
+			d.renderer = adapterrender.NewEventRenderer("req-test", "alias-test", "anthropic", nil)
+		}
+		d.sseWriter.chunks = append(d.sseWriter.chunks, d.renderer.HandleEvent(ev)...)
 	}
-	if d.renderer == nil {
-		d.renderer = adapterrender.NewEventRenderer("req-test", "alias-test", "anthropic", nil)
-	}
-	d.sseWriter.chunks = append(d.sseWriter.chunks, d.renderer.HandleEvent(ev)...)
 	return nil
 }
 
@@ -193,19 +194,12 @@ func (d *fakeResponseDispatcher) FlushEventWriter() error {
 	return nil
 }
 
-func (d *fakeResponseDispatcher) CollectedChunks() []adapteropenai.StreamChunk {
-	if d.sseWriter == nil {
-		return nil
-	}
-	return d.sseWriter.chunks
+func (d *fakeResponseDispatcher) CollectedEvents() []adapterrender.Event {
+	return d.events
 }
 
 func (d *fakeResponseDispatcher) TrackAnthropicContextUsage(string, adapteropenai.Usage) TrackedUsage {
 	return TrackedUsage{}
-}
-
-func (d *fakeResponseDispatcher) JSONCoercion(ResponseFormatSpec) JSONCoercion {
-	return JSONCoercion{}
 }
 
 func (d *fakeResponseDispatcher) WriteJSON(http.ResponseWriter, int, adapteropenai.ChatResponse) {

@@ -2,7 +2,6 @@ package hook
 
 import (
 	"context"
-
 	"log/slog"
 
 	"github.com/spf13/cobra"
@@ -28,7 +27,7 @@ Handles fork registration, session ID updates, and context injection.`,
 
 			store, err := f.Store()
 			if err != nil {
-				return nil
+				return err
 			}
 
 			_, err = hookpkg.ProcessSessionStart(

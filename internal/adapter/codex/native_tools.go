@@ -388,21 +388,6 @@ func UnwrapApplyPatchInput(input string) string {
 	return input
 }
 
-func ToolSpecCounts(specs []any) (nativeShell, nativeCustom, function int) {
-	for _, spec := range specs {
-		m, _ := spec.(map[string]any)
-		switch strings.TrimSpace(StringArg(m, "type")) {
-		case "local_shell":
-			nativeShell++
-		case "custom":
-			nativeCustom++
-		case "function":
-			function++
-		}
-	}
-	return nativeShell, nativeCustom, function
-}
-
 func detectedShellName() string {
 	shell := strings.TrimSpace(os.Getenv("SHELL"))
 	if shell == "" {

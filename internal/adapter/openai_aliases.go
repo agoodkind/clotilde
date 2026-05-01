@@ -45,10 +45,10 @@ const (
 )
 
 var (
-	FlattenContent      = adapteropenai.FlattenContent
-	NormalizeContent    = adapteropenai.NormalizeContent
-	SummarizeChatBody   = adapteropenai.SummarizeChatBody
+	FlattenContent       = adapteropenai.FlattenContent
+	NormalizeContent     = adapteropenai.NormalizeContent
+	SummarizeChatBody    = adapteropenai.SummarizeChatBody
 	SummarizeChatRequest = adapteropenai.SummarizeChatRequest
-	DiscoverRequest     = adapteropenai.DiscoverRequest
-	HeaderNames         = adapteropenai.HeaderNames
+	DiscoverRequest      = adapteropenai.DiscoverRequest
+	HeaderNames          = adapteropenai.HeaderNames
 )

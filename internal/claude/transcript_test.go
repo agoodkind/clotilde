@@ -8,7 +8,7 @@ import (
 	"goodkind.io/clyde/internal/claude"
 )
 
-func TestExtractModelAndLastTime(t *testing.T) {
+func TestExtractRawModelAndLastTimeFormatsFamily(t *testing.T) {
 	tests := []struct {
 		name          string
 		transcript    string
@@ -59,7 +59,8 @@ func TestExtractModelAndLastTime(t *testing.T) {
 				t.Fatalf("write: %v", err)
 			}
 
-			model, ts := claude.ExtractModelAndLastTime(path)
+			rawModel, ts := claude.ExtractRawModelAndLastTime(path)
+			model := claude.FormatModelFamily(rawModel)
 			if model != tt.expectedModel {
 				t.Errorf("model: got %q, want %q", model, tt.expectedModel)
 			}
@@ -73,8 +74,8 @@ func TestExtractModelAndLastTime(t *testing.T) {
 	}
 }
 
-func TestExtractModelAndLastTime_NonExistentFile(t *testing.T) {
-	model, ts := claude.ExtractModelAndLastTime("/non/existent/path")
+func TestExtractRawModelAndLastTime_NonExistentFile(t *testing.T) {
+	model, ts := claude.ExtractRawModelAndLastTime("/non/existent/path")
 	if model != "" {
 		t.Errorf("expected empty model, got %q", model)
 	}
@@ -83,8 +84,8 @@ func TestExtractModelAndLastTime_NonExistentFile(t *testing.T) {
 	}
 }
 
-func TestExtractModelAndLastTime_EmptyPath(t *testing.T) {
-	model, ts := claude.ExtractModelAndLastTime("")
+func TestExtractRawModelAndLastTime_EmptyPath(t *testing.T) {
+	model, ts := claude.ExtractRawModelAndLastTime("")
 	if model != "" {
 		t.Errorf("expected empty model, got %q", model)
 	}

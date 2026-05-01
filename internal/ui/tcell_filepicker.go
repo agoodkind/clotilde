@@ -152,14 +152,8 @@ func (p *FilePickerOverlay) syncOffsetForCursorWithHeight(listH int) {
 }
 
 func (p *FilePickerOverlay) Draw(scr tcell.Screen, r Rect) {
-	w := 70
-	if w > r.W-4 {
-		w = r.W - 4
-	}
-	h := 22
-	if h > r.H-2 {
-		h = r.H - 2
-	}
+	w := min(70, r.W-4)
+	h := min(22, r.H-2)
 	box := Rect{X: r.X + (r.W-w)/2, Y: r.Y + (r.H-h)/2, W: w, H: h}
 	p.rect = box
 

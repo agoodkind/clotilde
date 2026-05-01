@@ -28,9 +28,9 @@ func (f *fakeRunner) run(_ string, args ...string) ([]byte, error) {
 func TestWorkspaceProbeReturnsAllFields(t *testing.T) {
 	r := &fakeRunner{
 		out: map[string][]byte{
-			"config":     []byte("git@github.com:agoodkind/clyde.git\n"),
-			"rev-parse":  []byte("95d28dd0fdef4d87a64b29283e39605ce759c4cc\n"),
-			"status":     []byte(" M Makefile\n"),
+			"config":    []byte("git@github.com:agoodkind/clyde.git\n"),
+			"rev-parse": []byte("95d28dd0fdef4d87a64b29283e39605ce759c4cc\n"),
+			"status":    []byte(" M Makefile\n"),
 		},
 	}
 	now := time.Unix(0, 0)

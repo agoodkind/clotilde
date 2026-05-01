@@ -76,10 +76,6 @@ var (
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("33")).
 			Padding(0, 1)
-	styleMutedBox = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("244")).
-			Padding(0, 1)
 )
 
 func ribbon(m Mode) string {
@@ -130,10 +126,7 @@ func RenderUpfrontPanel(w io.Writer, s UpfrontStats) {
 
 	shrinkBy := s.CurrentTotal - s.Target
 	floorSum := s.StaticFloor + s.Reserved
-	budget := s.Target - floorSum
-	if budget < 0 {
-		budget = 0
-	}
+	budget := max(0, s.Target-floorSum)
 
 	rows := []string{
 		styleTitle.Render("compact") + "   " + ribbon(s.Mode),
@@ -356,10 +349,7 @@ func (p *progressView) composePanelLines(
 		phase = "n/a"
 	}
 	alwaysKept := p.upfront.StaticFloor + p.upfront.Reserved
-	messageBudget := p.target - alwaysKept
-	if messageBudget < 0 {
-		messageBudget = 0
-	}
+	messageBudget := max(p.target-alwaysKept, 0)
 	currentTotal := rec.CtxTotal
 	messageTokensNowCount := rec.TailTokens
 	delta := rec.Delta
@@ -574,9 +564,7 @@ func stackedBar(width int, segs []segment, total int) string {
 			break
 		}
 		c := s.count * width / total
-		if c > remaining {
-			c = remaining
-		}
+		c = min(c, remaining)
 		cells = append(cells, c)
 		remaining -= c
 	}
@@ -609,7 +597,7 @@ func (p *progressView) Update(r compactengine.IterationRecord) {
 
 	// Non TTY fallback. One line per iteration, no ANSI.
 	step := strings.TrimSpace(r.Step)
-	tag := "OK"
+	var tag string
 	if r.Delta > 0 {
 		tag = fmt.Sprintf("+%d over", r.Delta)
 	} else {
@@ -642,15 +630,6 @@ func (p *progressView) Complete(res *compactengine.PlanResult, static, reserved 
 	if p.isTTY {
 		p.draw()
 	}
-}
-
-// LastRecord returns the final iteration's record so callers can
-// carry the end-state breakdown into the result box without keeping
-// a separate reference.
-func (p *progressView) LastRecord() compactengine.IterationRecord {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.lastRec
 }
 
 // finalBreakdownRows renders the same four-category breakdown the

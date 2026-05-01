@@ -31,13 +31,13 @@ func findRealClaude() (string, error) {
 				"subcomponent", "claude_path",
 				"path", cachedRealClaudePath,
 			)
-			} else {
-				slog.Error("daemon.claude.resolve_binary.not_found",
-					"component", "daemon",
-					"subcomponent", "claude_path",
-					"err", "not_found",
-				)
-			}
+		} else {
+			slog.Error("daemon.claude.resolve_binary.not_found",
+				"component", "daemon",
+				"subcomponent", "claude_path",
+				"err", "not_found",
+			)
+		}
 	})
 	if cachedRealClaudePath == "" {
 		return "", fmt.Errorf("real claude binary not found in PATH (is it installed?)")

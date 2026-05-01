@@ -69,8 +69,8 @@ func TestEffortValid(t *testing.T) {
 
 func TestParseEffort(t *testing.T) {
 	cases := []struct {
-		raw   string
-		want  Effort
+		raw    string
+		want   Effort
 		wantOK bool
 	}{
 		{"", EffortUnset, true},

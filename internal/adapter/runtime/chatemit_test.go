@@ -11,113 +11,6 @@ import (
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
-func TestEmitUsageChunk(t *testing.T) {
-	t.Parallel()
-	var got StreamChunk
-	u := Usage{PromptTokens: 2, CompletionTokens: 3, TotalTokens: 5}
-	err := EmitUsageChunk(func(sc StreamChunk) error {
-		got = sc
-		return nil
-	}, "req-1", "alias", 123, u)
-	if err != nil {
-		t.Fatalf("EmitUsageChunk returned err: %v", err)
-	}
-	if got.ID != "req-1" || got.Model != "alias" || got.Created != 123 {
-		t.Fatalf("unexpected chunk header: %+v", got)
-	}
-	if len(got.Choices) != 0 {
-		t.Fatalf("expected no choices, got %d", len(got.Choices))
-	}
-	if got.Usage == nil || got.Usage.PromptTokens != 2 {
-		t.Fatalf("usage missing or wrong: %+v", got.Usage)
-	}
-}
-
-func TestEmitFinishChunk(t *testing.T) {
-	t.Parallel()
-	var got StreamChunk
-	err := EmitFinishChunk(func(sc StreamChunk) error {
-		got = sc
-		return nil
-	}, "req-1", "alias", 456, "stop")
-	if err != nil {
-		t.Fatalf("EmitFinishChunk returned err: %v", err)
-	}
-	if got.ID != "req-1" || got.Model != "alias" || got.Created != 456 {
-		t.Fatalf("unexpected chunk header: %+v", got)
-	}
-	if len(got.Choices) != 1 {
-		t.Fatalf("expected 1 choice, got %d", len(got.Choices))
-	}
-	if got.Choices[0].FinishReason == nil || *got.Choices[0].FinishReason != "stop" {
-		t.Fatalf("expected finish_reason stop, got %+v", got.Choices[0].FinishReason)
-	}
-}
-
-func TestBuildAssistantMessageWithToolCallsUsesNullContent(t *testing.T) {
-	t.Parallel()
-	msg := BuildAssistantMessage(AssistantMessageParts{
-		ToolCalls: []ToolCall{{
-			ID:   "call_1",
-			Type: "function",
-			Function: ToolCallFunction{
-				Name:      "Read",
-				Arguments: `{"path":"README.md"}`,
-			},
-		}},
-	})
-	if string(msg.Content) != "null" {
-		t.Fatalf("content = %s want null", msg.Content)
-	}
-	if len(msg.ToolCalls) != 1 || msg.ToolCalls[0].Function.Name != "Read" {
-		t.Fatalf("tool calls = %+v", msg.ToolCalls)
-	}
-}
-
-func TestBuildAssistantMessageWithTextQuotesJSON(t *testing.T) {
-	t.Parallel()
-	msg := BuildAssistantMessage(AssistantMessageParts{Text: "hello\nworld"})
-	var text string
-	if err := json.Unmarshal(msg.Content, &text); err != nil {
-		t.Fatalf("unmarshal content: %v", err)
-	}
-	if text != "hello\nworld" {
-		t.Fatalf("text = %q", text)
-	}
-}
-
-func TestBuildChatCompletion(t *testing.T) {
-	t.Parallel()
-	resp := BuildChatCompletion(
-		"req-1",
-		"alias",
-		"fp",
-		BuildAssistantMessage(AssistantMessageParts{Text: "ok"}),
-		"stop",
-		Usage{PromptTokens: 1, CompletionTokens: 2, TotalTokens: 3},
-	)
-	if resp.ID != "req-1" || resp.Model != "alias" || resp.SystemFingerprint != "fp" {
-		t.Fatalf("unexpected response header: %+v", resp)
-	}
-	if len(resp.Choices) != 1 || resp.Choices[0].FinishReason != "stop" {
-		t.Fatalf("unexpected choices: %+v", resp.Choices)
-	}
-	if resp.Usage == nil || resp.Usage.TotalTokens != 3 {
-		t.Fatalf("unexpected usage: %+v", resp.Usage)
-	}
-}
-
-func TestBuildDeltaChunk(t *testing.T) {
-	t.Parallel()
-	chunk := BuildDeltaChunk("req-1", "alias", 123, StreamDelta{Role: "assistant", Content: "hi"})
-	if chunk.ID != "req-1" || chunk.Model != "alias" || chunk.Created != 123 {
-		t.Fatalf("unexpected chunk header: %+v", chunk)
-	}
-	if len(chunk.Choices) != 1 || chunk.Choices[0].Delta.Content != "hi" {
-		t.Fatalf("unexpected choices: %+v", chunk.Choices)
-	}
-}
-
 func TestNoticeForResponseHeadersSuccess(t *testing.T) {
 	t.Parallel()
 	resp := ChatResponse{
@@ -271,7 +164,7 @@ func TestEscalateOrWrite(t *testing.T) {
 		"code",
 		"msg",
 	)
-	if got != escalateErr {
+	if !errors.Is(got, escalateErr) {
 		t.Fatalf("expected escalate return, got %v", got)
 	}
 	if wasWritten {

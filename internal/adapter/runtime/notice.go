@@ -11,9 +11,11 @@ import (
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
-type noticeClaimer func(kind string, resetsAt time.Time) bool
-type noticeUnclaimer func(kind string, resetsAt time.Time)
-type encodeJSON func(any) ([]byte, error)
+type (
+	noticeClaimer   func(kind string, resetsAt time.Time) bool
+	noticeUnclaimer func(kind string, resetsAt time.Time)
+	encodeJSON      func(any) ([]byte, error)
+)
 
 // EvaluateNoticeFromHeaders checks the Anthropic headers and claims a notice slot.
 func EvaluateNoticeFromHeaders(h http.Header, noticesEnabled bool, claim noticeClaimer) *anthropic.Notice {

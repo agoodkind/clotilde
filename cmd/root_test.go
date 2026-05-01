@@ -34,7 +34,7 @@ func TestSessionEventFromProtoMapsBinaryUpdate(t *testing.T) {
 
 func TestConsumeTUIReturnSessionRestoresAndClearsEnv(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
-	store := session.NewFileStoreReadOnly(config.GlobalDataDir())
+	store := session.NewFileStore(config.GlobalDataDir())
 	want := session.NewSession("chat-one", "session-uuid")
 	if err := store.Create(want); err != nil {
 		t.Fatalf("create session: %v", err)

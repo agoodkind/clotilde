@@ -89,7 +89,7 @@ func (p *providerStreamWriter) finalizeStream(result adapterprovider.Result, inc
 		Choices: []adapteropenai.StreamChoice{{
 			Index:        0,
 			Delta:        adapteropenai.StreamDelta{},
-			FinishReason: stringPtrLocal(finishReason),
+			FinishReason: &finishReason,
 		}},
 	}
 	if includeUsage {
@@ -118,41 +118,30 @@ func (p *providerStreamWriter) finalizeStream(result adapterprovider.Result, inc
 var _ adapterprovider.EventWriter = (*providerStreamWriter)(nil)
 
 // providerCollectorWriter implements provider.EventWriter for the
-// non-streaming response path. It buffers adapter-rendered chunks in
-// memory because the collect-mode reducers still merge chunk-shaped
-// state into final ChatResponses.
+// non-streaming response path. It buffers normalized events in memory;
+// provider-specific collect reducers assemble final ChatResponses from
+// those events after Execute returns.
 type providerCollectorWriter struct {
-	chunks   []adapteropenai.StreamChunk
-	renderer *adapterrender.EventRenderer
+	events []adapterrender.Event
 }
 
-func newProviderCollectorWriter(reqID string, modelAlias string, backend string) *providerCollectorWriter {
-	return &providerCollectorWriter{
-		renderer: adapterrender.NewEventRenderer(reqID, modelAlias, backend, nil),
-	}
+func newProviderCollectorWriter() *providerCollectorWriter {
+	return &providerCollectorWriter{}
 }
 
-func (p *providerCollectorWriter) appendRenderedChunk(chunk adapteropenai.StreamChunk) error {
-	p.chunks = append(p.chunks, chunk)
+func (p *providerCollectorWriter) appendEvent(ev adapterrender.Event) error {
+	p.events = append(p.events, ev)
 	return nil
 }
 
 func (p *providerCollectorWriter) WriteEvent(ev adapterrender.Event) error {
-	if p == nil || p.renderer == nil {
+	if p == nil {
 		return nil
 	}
-	for _, chunk := range p.renderer.HandleEvent(ev) {
-		if err := p.appendRenderedChunk(chunk); err != nil {
-			return err
-		}
-	}
-	return nil
+	return p.appendEvent(ev)
 }
 
 func (p *providerCollectorWriter) Flush() error {
-	if p != nil && p.renderer != nil {
-		p.renderer.Flush()
-	}
 	return nil
 }
 

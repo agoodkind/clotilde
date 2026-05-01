@@ -14,6 +14,8 @@ import (
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 )
 
+const structuredOutputShuntParseFailedEvent = "shunt structured-output parse failed; retrying"
+
 func (s *Server) forwardShunt(w http.ResponseWriter, r *http.Request, model ResolvedModel, body []byte) {
 	started := time.Now()
 	reqID := newRequestID()

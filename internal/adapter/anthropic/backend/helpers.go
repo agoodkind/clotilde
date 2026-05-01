@@ -15,8 +15,8 @@ func EffectiveThinkingMode(model adaptermodel.ResolvedModel, strippedModel strin
 }
 
 func StripContextSuffix(model string) string {
-	if idx := strings.Index(model, "["); idx >= 0 {
-		return strings.TrimSpace(model[:idx])
+	if prefix, _, ok := strings.Cut(model, "["); ok {
+		return strings.TrimSpace(prefix)
 	}
 	return strings.TrimSpace(model)
 }

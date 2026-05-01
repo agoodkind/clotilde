@@ -2,12 +2,12 @@ package anthropicbackend
 
 import (
 	"encoding/json"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
 
 // JSONCoercion captures the optional JSON-coercion contract a caller
@@ -35,71 +35,30 @@ type ResponseFormatSpec struct {
 	Mode       string
 	SchemaName string
 	// TODO replace with a deeply enumerated named type
-	Schema     json.RawMessage
+	Schema json.RawMessage
 }
 
-// MergeStreamChunks reconstructs the final ChatResponse from a buffer
-// of streamed OpenAI chunks emitted by the Anthropic translator.
+// MergeCollectedEvents reconstructs the final ChatResponse from a
+// buffer of normalized events emitted by the Anthropic translator.
 //
-// The merger reassembles assistant text, reasoning (preferring
-// `delta.reasoning`, falling back to `delta.reasoning_content`), refusal
-// text, and tool-call deltas into the OpenAI non-streaming response
-// shape. Anthropic's distinct `stop_reason == "refusal"` is mapped onto
-// `message.refusal` when no explicit refusal delta arrived.
+// The merger reassembles assistant text, reasoning, refusal text, and
+// tool-call deltas into the OpenAI non-streaming response shape.
+// Anthropic's distinct `stop_reason == "refusal"` is mapped onto
+// `message.refusal` when no explicit refusal event arrived.
 //
 // JSON coercion is opt-in: callers that requested a structured
 // `response_format` pass a JSONCoercion with both Coerce and Validate
 // set; otherwise the merger leaves assistant text untouched.
-func MergeStreamChunks(
+func MergeCollectedEvents(
 	reqID, modelAlias, systemFingerprint string,
-	chunks []adapteropenai.StreamChunk,
+	events []adapterrender.Event,
 	usage adapteropenai.Usage,
 	finishReason string,
 	json JSONCoercion,
 	anthropicStopReason string,
 ) adapteropenai.ChatResponse {
-	var text strings.Builder
-	var reasoning strings.Builder
-	var refusalText strings.Builder
-	type toolSlot struct {
-		id   string
-		typ  string
-		name string
-		args string
-	}
-	toolAcc := make(map[int]*toolSlot)
-	for _, ch := range chunks {
-		if len(ch.Choices) == 0 {
-			continue
-		}
-		delta := ch.Choices[0].Delta
-		text.WriteString(delta.Content)
-		if delta.Reasoning != "" {
-			reasoning.WriteString(delta.Reasoning)
-		} else {
-			reasoning.WriteString(delta.ReasoningContent)
-		}
-		refusalText.WriteString(delta.Refusal)
-		for _, tc := range delta.ToolCalls {
-			slot := toolAcc[tc.Index]
-			if slot == nil {
-				slot = &toolSlot{}
-				toolAcc[tc.Index] = slot
-			}
-			if tc.ID != "" {
-				slot.id = tc.ID
-			}
-			if tc.Type != "" {
-				slot.typ = tc.Type
-			}
-			if tc.Function.Name != "" {
-				slot.name = tc.Function.Name
-			}
-			slot.args += tc.Function.Arguments
-		}
-	}
-
-	outText := text.String()
+	collected := adapterrender.CollectMessage(events)
+	outText := collected.Text
 	if json.Coerce != nil {
 		coerced := json.Coerce(outText)
 		if json.Validate == nil || json.Validate(coerced) {
@@ -111,36 +70,16 @@ func MergeStreamChunks(
 		Role:    "assistant",
 		Content: jsonRawQuoted(outText),
 	}
-	if reasoning.Len() > 0 {
-		msg.Reasoning = reasoning.String()
-		msg.ReasoningContent = reasoning.String()
+	if collected.Reasoning != "" {
+		msg.Reasoning = collected.Reasoning
+		msg.ReasoningContent = collected.Reasoning
 	}
-	if refusalText.Len() > 0 {
-		msg.Refusal = refusalText.String()
+	if collected.Refusal != "" {
+		msg.Refusal = collected.Refusal
 	} else if strings.EqualFold(anthropicStopReason, "refusal") && strings.TrimSpace(outText) != "" {
 		msg.Refusal = outText
 	}
-	var order []int
-	for k := range toolAcc {
-		order = append(order, k)
-	}
-	sort.Ints(order)
-	for _, i := range order {
-		slot := toolAcc[i]
-		typ := slot.typ
-		if typ == "" {
-			typ = "function"
-		}
-		msg.ToolCalls = append(msg.ToolCalls, adapteropenai.ToolCall{
-			Index: i,
-			ID:    slot.id,
-			Type:  typ,
-			Function: adapteropenai.ToolCallFunction{
-				Name:      slot.name,
-				Arguments: slot.args,
-			},
-		})
-	}
+	msg.ToolCalls = append(msg.ToolCalls, collected.ToolCalls...)
 
 	return adapteropenai.ChatResponse{
 		ID:                reqID,

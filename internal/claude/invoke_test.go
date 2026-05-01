@@ -14,7 +14,7 @@ import (
 
 var _ = Describe("defaultSessionUsed", func() {
 	var (
-		tempDir      string
+		tempDir   string
 		clydeRoot string
 	)
 

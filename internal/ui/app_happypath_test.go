@@ -46,7 +46,7 @@ func TestHappyPath_LaunchAndNavigate(t *testing.T) {
 	}
 
 	// Down x3 → row 2 (first Down arms row 0).
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		a.handleKey(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
 	}
 	if a.table.SelectedRow != 2 {
@@ -255,7 +255,7 @@ func TestHappyPath_ResumeFromOptionsPopup(t *testing.T) {
 func mkAppWithSessions(t *testing.T, n int) (*App, tcell.SimulationScreen, func()) {
 	t.Helper()
 	sessions := make([]*session.Session, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		// Workspace must NOT be under a temp prefix or
 		// isEphemeralSession will hide the session from rebuildVisible.
 		// Use a stable Sites-style path that the filter accepts.
@@ -309,9 +309,9 @@ func snapshotApp(t *testing.T, a *App, scr tcell.SimulationScreen, name string) 
 	cells, cw, ch := scr.GetContents()
 	var b strings.Builder
 	fmt.Fprintf(&b, "# qa/%s.txt  size=%dx%d\n\n", name, cw, ch)
-	for y := 0; y < ch; y++ {
+	for y := range ch {
 		row := make([]rune, 0, cw)
-		for x := 0; x < cw; x++ {
+		for x := range cw {
 			c := cells[y*cw+x]
 			if len(c.Runes) == 0 || c.Runes[0] == 0 {
 				row = append(row, ' ')

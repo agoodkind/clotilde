@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -78,9 +79,7 @@ func Resume(
 	env := map[string]string{
 		"CLYDE_SESSION_NAME": sess.Name,
 	}
-	for key, value := range extraEnvironment {
-		env[key] = value
-	}
+	maps.Copy(env, extraEnvironment)
 	applyMITMEnv(env)
 
 	if sess.Metadata.IsIncognito {
@@ -121,9 +120,7 @@ func applyMITMEnv(env map[string]string) {
 		slog.Warn("wrapper.mitm.claude_env_failed", "component", "wrapper", "err", err)
 		return
 	}
-	for key, value := range extra {
-		env[key] = value
-	}
+	maps.Copy(env, extra)
 }
 
 // ClaudeBinaryPathFunc is a function that returns the path to the claude binary.
@@ -270,7 +267,7 @@ func monitorDaemon(
 			if acqErr == nil && state.sawConnectionError {
 				state.reloadRequested.Store(true)
 				state.sawConnectionError = false
-					slog.Debug("wrapper.self_reload.requested",
+				slog.Debug("wrapper.self_reload.requested",
 					"component", "wrapper",
 					"session", sessionName,
 					"wrapper_id", wrapperID,

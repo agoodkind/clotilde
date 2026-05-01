@@ -17,7 +17,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -181,7 +180,7 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	}
 	if len(req.ExtraBetas) > 0 {
 		existing := map[string]struct{}{}
-		for _, f := range strings.Split(beta, ",") {
+		for f := range strings.SplitSeq(beta, ",") {
 			existing[strings.TrimSpace(f)] = struct{}{}
 		}
 		for _, extra := range req.ExtraBetas {
@@ -294,7 +293,7 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		// headers; fall back to the headerless "extra usage required"
 		// entitlement message; fall back to the raw body otherwise.
 		class := Classify(resp, nil)
-		message := ""
+		var message string
 		switch {
 		case FormatRateLimitMessage(resp.Header) != "":
 			message = FormatRateLimitMessage(resp.Header)
@@ -336,7 +335,7 @@ func probeDropSet() map[string]struct{} {
 		return nil
 	}
 	out := map[string]struct{}{}
-	for _, part := range strings.Split(raw, ",") {
+	for part := range strings.SplitSeq(raw, ",") {
 		name := strings.ToLower(strings.TrimSpace(part))
 		if name != "" {
 			out[name] = struct{}{}
@@ -400,38 +399,6 @@ func (c *Client) stainlessTimeout() string {
 		return "600"
 	}
 	return strconv.Itoa(int(c.http.Timeout / time.Second))
-}
-
-func stainlessOS() string {
-	return stainlessOSFromGOOS(runtime.GOOS)
-}
-
-func stainlessOSFromGOOS(goos string) string {
-	switch goos {
-	case "darwin":
-		return "MacOS"
-	case "linux":
-		return "Linux"
-	case "windows":
-		return "Windows"
-	default:
-		return "Unknown"
-	}
-}
-
-func stainlessArch() string {
-	return stainlessArchFromGOARCH(runtime.GOARCH)
-}
-
-func stainlessArchFromGOARCH(goarch string) string {
-	switch goarch {
-	case "amd64":
-		return "x64"
-	case "arm64":
-		return "arm64"
-	default:
-		return goarch
-	}
 }
 
 // redactedOutboundHeaders returns a flat map[string]string of the

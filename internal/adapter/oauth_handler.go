@@ -24,9 +24,9 @@ func anthropicProcessSessionID() string {
 	return anthropicProcessSessionVal
 }
 
-// buildAnthropicWire maps the OpenAI chat request to a native messages body
-// via tooltrans, then applies thinking and effort knobs that are not part of
-// the OpenAI wire shape.
+// buildAnthropicWire maps the OpenAI chat request to a native messages body,
+// then applies thinking and effort knobs that are not part of the OpenAI wire
+// shape.
 func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort string, jsonSpec JSONResponseSpec, reqID string) (anthropic.Request, error) {
 	return anthropicbackend.BuildRequest(context.Background(), req, model, effort, anthropicbackend.BuildRequestConfig{
 		SystemPromptPrefix:              s.anthr.SystemPromptPrefix(),

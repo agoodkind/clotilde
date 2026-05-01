@@ -115,66 +115,63 @@ func dispatchSSE(
 		}
 	case "content_block_start":
 		var ev streamContentBlockStartEvent
-		if err := json.Unmarshal([]byte(data), &ev); err != nil {
-			return nil
-		}
-		t := ev.ContentBlock.Type
-		blockTypes[ev.Index] = t
-		switch t {
-		case "tool_use":
-			return sink(StreamEvent{
-				Kind:        "tool_use_start",
-				BlockIndex:  ev.Index,
-				ToolUseID:   ev.ContentBlock.ID,
-				ToolUseName: ev.ContentBlock.Name,
-			})
-		case "thinking":
-			return sink(StreamEvent{
-				Kind:       "thinking",
-				BlockIndex: ev.Index,
-			})
+		if err := json.Unmarshal([]byte(data), &ev); err == nil {
+			t := ev.ContentBlock.Type
+			blockTypes[ev.Index] = t
+			switch t {
+			case "tool_use":
+				return sink(StreamEvent{
+					Kind:        "tool_use_start",
+					BlockIndex:  ev.Index,
+					ToolUseID:   ev.ContentBlock.ID,
+					ToolUseName: ev.ContentBlock.Name,
+				})
+			case "thinking":
+				return sink(StreamEvent{
+					Kind:       "thinking",
+					BlockIndex: ev.Index,
+				})
+			}
 		}
 	case "content_block_delta":
 		var ev streamContentBlockDeltaEvent
-		if err := json.Unmarshal([]byte(data), &ev); err != nil {
-			return nil
-		}
-		switch ev.Delta.Type {
-		case "text_delta":
-			if ev.Delta.Text == "" {
-				return nil
+		if err := json.Unmarshal([]byte(data), &ev); err == nil {
+			switch ev.Delta.Type {
+			case "text_delta":
+				if ev.Delta.Text == "" {
+					return nil
+				}
+				return sink(StreamEvent{
+					Kind:       "text",
+					Text:       ev.Delta.Text,
+					BlockIndex: ev.Index,
+				})
+			case "input_json_delta":
+				return sink(StreamEvent{
+					Kind:        "tool_use_arg_delta",
+					BlockIndex:  ev.Index,
+					PartialJSON: ev.Delta.PartialJSON,
+				})
+			case "thinking_delta":
+				return sink(StreamEvent{
+					Kind:       "thinking",
+					Text:       ev.Delta.Thinking,
+					BlockIndex: ev.Index,
+				})
 			}
-			return sink(StreamEvent{
-				Kind:       "text",
-				Text:       ev.Delta.Text,
-				BlockIndex: ev.Index,
-			})
-		case "input_json_delta":
-			return sink(StreamEvent{
-				Kind:        "tool_use_arg_delta",
-				BlockIndex:  ev.Index,
-				PartialJSON: ev.Delta.PartialJSON,
-			})
-		case "thinking_delta":
-			return sink(StreamEvent{
-				Kind:       "thinking",
-				Text:       ev.Delta.Thinking,
-				BlockIndex: ev.Index,
-			})
 		}
 	case "content_block_stop":
 		var ev streamContentBlockStopEvent
-		if err := json.Unmarshal([]byte(data), &ev); err != nil {
-			return nil
-		}
-		if blockTypes[ev.Index] == "tool_use" {
+		if err := json.Unmarshal([]byte(data), &ev); err == nil {
+			if blockTypes[ev.Index] == "tool_use" {
+				delete(blockTypes, ev.Index)
+				return sink(StreamEvent{
+					Kind:       "tool_use_stop",
+					BlockIndex: ev.Index,
+				})
+			}
 			delete(blockTypes, ev.Index)
-			return sink(StreamEvent{
-				Kind:       "tool_use_stop",
-				BlockIndex: ev.Index,
-			})
 		}
-		delete(blockTypes, ev.Index)
 	case "message_delta":
 		var ev streamMessageDeltaEvent
 		if err := json.Unmarshal([]byte(data), &ev); err == nil {

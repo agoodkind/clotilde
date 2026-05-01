@@ -129,13 +129,13 @@ func (s *Server) dispatchCodexProviderStream(
 func (s *Server) dispatchCodexProviderCollect(
 	ctx context.Context,
 	w http.ResponseWriter,
-	req ChatRequest,
+	_ ChatRequest,
 	model ResolvedModel,
 	reqID string,
 	started time.Time,
 	resolvedReq adapterresolver.ResolvedRequest,
 ) {
-	collector := newProviderCollectorWriter(reqID, model.Alias, "codex")
+	collector := newProviderCollectorWriter()
 	result, runErr := s.codexProvider.Execute(ctx, resolvedReq, collector)
 	if runErr != nil {
 		adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
@@ -159,7 +159,7 @@ func (s *Server) dispatchCodexProviderCollect(
 		ReasoningVisible:           result.ReasoningVisible,
 		DerivedCacheCreationTokens: result.DerivedCacheCreationTokens,
 	}
-	merged := adaptercodex.MergeChunks(reqID, model.Alias, systemFingerprint, collector.chunks, runResult)
+	merged := adaptercodex.MergeEvents(reqID, model.Alias, systemFingerprint, collector.events, runResult)
 	usage := result.Usage
 	if model.Context > 0 {
 		usage.MaxTokens = model.Context
@@ -200,5 +200,3 @@ func (s *Server) dispatchCodexProviderCollect(
 		DurationMs:                 time.Since(started).Milliseconds(),
 	})
 }
-
-func stringPtrLocal(v string) *string { return &v }

@@ -1,4 +1,4 @@
-package session_test
+package session
 
 import (
 	"os"
@@ -6,8 +6,6 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-
-	"goodkind.io/clyde/internal/session"
 )
 
 var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
@@ -15,7 +13,7 @@ var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
 		clydeRoot    string
 		projectsRoot string
 		projDir      string
-		store        *session.FileStore
+		store        *FileStore
 	)
 
 	const uuid = "22a95bc5-eb24-4302-8f2f-2253bc587cb5"
@@ -28,7 +26,10 @@ var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
 
 		Expect(os.MkdirAll(filepath.Join(clydeRoot, "sessions"), 0o755)).To(Succeed())
 
-		store = session.NewFileStoreWithDiscovery(clydeRoot, projectsRoot)
+		store = &FileStore{
+			clydeRoot:      clydeRoot,
+			discoveryCache: newDiscoveryCache(projectsRoot, nil, 0),
+		}
 	})
 
 	writeTranscript := func(id, customTitle string) {
@@ -109,7 +110,7 @@ var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
 
 	It("skips tier 4 when the store is constructed read-only", func() {
 		writeTranscript(uuid, "merry-swan")
-		readOnly := session.NewFileStoreReadOnly(clydeRoot)
+		readOnly := &FileStore{clydeRoot: clydeRoot, noAdopt: true}
 
 		sess, err := readOnly.Resolve("merry-swan")
 		Expect(err).ToNot(HaveOccurred())

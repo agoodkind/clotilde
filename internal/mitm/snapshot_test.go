@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -17,13 +18,13 @@ func TestExtractSnapshotFromSyntheticTranscript(t *testing.T) {
 			"t":    1700000000,
 			"url":  "wss://chatgpt.com/backend-api/codex/responses",
 			"request_headers": map[string]string{
-				"Authorization":            "Bearer eyJabc.def",
-				"openai-beta":              "responses_websockets=2026-02-06",
-				"originator":               "codex_exec",
-				"x-codex-window-id":        "019d-conv:0",
-				"x-codex-installation-id":  "0c9613dc-cdd4-4733-a798-a59b96181e4f",
-				"x-client-request-id":      "019d-conv",
-				"session_id":               "019d-conv",
+				"Authorization":           "Bearer eyJabc.def",
+				"openai-beta":             "responses_websockets=2026-02-06",
+				"originator":              "codex_exec",
+				"x-codex-window-id":       "019d-conv:0",
+				"x-codex-installation-id": "0c9613dc-cdd4-4733-a798-a59b96181e4f",
+				"x-client-request-id":     "019d-conv",
+				"session_id":              "019d-conv",
 			},
 			"response_headers": map[string]string{
 				"upgrade": "websocket",
@@ -154,12 +155,7 @@ func mustWriteLines(t *testing.T, path string, records []map[string]any) {
 }
 
 func containsString(haystack []string, needle string) bool {
-	for _, v := range haystack {
-		if v == needle {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(haystack, needle)
 }
 
 func headerValue(headers []SnapshotHeader, name string) string {

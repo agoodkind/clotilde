@@ -10,7 +10,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -101,16 +100,6 @@ func (s *Server) Addr() string {
 		port = DefaultPort
 	}
 	return net.JoinHostPort(host, strconv.Itoa(port))
-}
-
-// Start binds the listener and serves until ctx is done.
-func (s *Server) Start(ctx context.Context) error {
-	addr := s.Addr()
-	lis, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("webapp listen %s: %w", addr, err)
-	}
-	return s.StartOnListener(ctx, lis)
 }
 
 // StartOnListener serves the dashboard on an already-bound listener.

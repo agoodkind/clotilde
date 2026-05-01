@@ -60,7 +60,7 @@ help: ## Show this help message
 # Build
 # ---------------------------------------------------------------------------
 
-build: dist/clyde ## Build and signing-check the clyde binary without leaving a repo-local executable
+build: lint staticcheck deadcode dist/clyde ## Build and signing-check the clyde binary without leaving a repo-local executable
 	@echo "Building clyde..."
 	@tmp="$$(mktemp -t clyde-build.XXXXXX)"; \
 	trap 'rm -f "$$tmp"' EXIT; \

@@ -35,11 +35,9 @@ const DefaultPort = 11434
 // interface unless the user explicitly sets AdapterConfig.Host.
 const DefaultHost = "::1"
 
-// DefaultMaxConcurrent caps the number of in flight claude
-// subprocesses when the config omits a value.
-// TODO remove this ? we dont need a max
+// DefaultMaxConcurrent caps the number of in-flight adapter requests when the
+// config omits a value.
 const DefaultMaxConcurrent = 4
-const defaultCodexBaseURL = "https://chatgpt.com/backend-api/codex/responses"
 
 type rawChatLogEvent struct {
 	RequestID     string
@@ -204,8 +202,8 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 			Config: cfg,
 			Logger: log.With("subcomponent", "anthropic_provider"),
 		}, anthropic.ProviderOptions{
-			Collect: s.runAnthropicProviderCollect,
-			Stream:  s.runAnthropicProviderStream,
+			Prepare:         s.prepareAnthropicProviderRequest,
+			ExecutePrepared: s.executeAnthropicPreparedRequest,
 		})
 		s.providerRegistry.Register(s.anthropicProvider)
 		s.log.LogAttrs(context.Background(), slog.LevelInfo, "adapter.provider_registry.registered",
@@ -233,27 +231,8 @@ func resolveCodexAuthFile(path string) string {
 	return path
 }
 
-func (s *Server) codexBaseURL() string {
-	u := strings.TrimSpace(s.cfg.Codex.BaseURL)
-	if u == "" {
-		return defaultCodexBaseURL
-	}
-	return u
-}
-
 func (s *Server) codexWebsocketEnabled() bool {
 	return s.cfg.Codex.WebsocketEnabled
-}
-
-func (s *Server) codexWebsocketURL() string {
-	base := strings.TrimSpace(s.codexBaseURL())
-	if strings.HasPrefix(base, "https://") {
-		return "wss://" + strings.TrimPrefix(base, "https://")
-	}
-	if strings.HasPrefix(base, "http://") {
-		return "ws://" + strings.TrimPrefix(base, "http://")
-	}
-	return base
 }
 
 type codexAuthFile struct {
@@ -300,14 +279,6 @@ func (a codexAuthLookup) Token(_ context.Context) (string, error) {
 		return "", errors.New("codex auth lookup: nil server")
 	}
 	return a.server.readCodexAccessToken()
-}
-
-func (s *Server) readCodexAccountID() string {
-	doc, err := s.readCodexAuthFile()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(doc.Tokens.AccountID)
 }
 
 // Addr returns the host:port the adapter will bind when Start is

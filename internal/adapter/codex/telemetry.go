@@ -59,4 +59,3 @@ func LogTransportPrepared(ctx context.Context, log *slog.Logger, telemetry Trans
 		"context_window_error", telemetry.ContextWindowError,
 	)
 }
-

@@ -14,7 +14,25 @@ import (
 	"github.com/gorilla/websocket"
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
+
+func runWebsocketTransportForTest(
+	ctx context.Context,
+	cfg WebsocketTransportConfig,
+	payload ResponseCreateWsRequest,
+	emit func(adapteropenai.StreamChunk) error,
+) (RunResult, error) {
+	renderer := adapterrender.NewEventRenderer(cfg.RequestID, cfg.Alias, "codex", nil)
+	return RunWebsocketTransportEvents(ctx, cfg, payload, func(event adapterrender.Event) error {
+		for _, chunk := range renderer.HandleEvent(event) {
+			if err := emit(chunk); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
 
 func TestResponseCreateRequestFromHTTPUsesResponseCreateShape(t *testing.T) {
 	req := HTTPTransportRequest{
@@ -142,7 +160,7 @@ func TestRunWebsocketTransportReturnsFallbackOnUpgradeRequired(t *testing.T) {
 	ts := httptest.NewServer(server)
 	defer ts.Close()
 
-	_, err := RunWebsocketTransport(context.Background(), WebsocketTransportConfig{
+	_, err := runWebsocketTransportForTest(context.Background(), WebsocketTransportConfig{
 		URL:       "ws" + strings.TrimPrefix(ts.URL, "http"),
 		Token:     "test-token",
 		RequestID: "req-1",
@@ -222,7 +240,7 @@ func TestRunWebsocketTransportParsesTextAndCompletion(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	var chunks []adapteropenai.StreamChunk
-	result, err := RunWebsocketTransport(context.Background(), WebsocketTransportConfig{
+	result, err := runWebsocketTransportForTest(context.Background(), WebsocketTransportConfig{
 		URL:            wsURL,
 		Token:          "test-token",
 		AccountID:      "acct-123",
@@ -289,7 +307,7 @@ func TestRunWebsocketTransportReturnsTopLevelErrorFrame(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := RunWebsocketTransport(context.Background(), WebsocketTransportConfig{
+	_, err := runWebsocketTransportForTest(context.Background(), WebsocketTransportConfig{
 		URL:       "ws" + strings.TrimPrefix(server.URL, "http"),
 		Token:     "test-token",
 		RequestID: "req-ws",
@@ -320,7 +338,7 @@ func TestRunWebsocketTransportCacheReusesConnectionAndChainsResponseIDs(t *testi
 		// Server expects 4 frames: warmup + 3 real turns. Each
 		// completion carries the matching response_id so the client
 		// can chain previous_response_id.
-		for idx := 0; idx < 4; idx++ {
+		for idx := range 4 {
 			_, body, err := conn.ReadMessage()
 			if err != nil {
 				return
@@ -361,7 +379,7 @@ func TestRunWebsocketTransportCacheReusesConnectionAndChainsResponseIDs(t *testi
 	}
 
 	turn := func(items []map[string]any) {
-		_, err := RunWebsocketTransport(context.Background(), cfg, ResponseCreateWsRequest{
+		_, err := runWebsocketTransportForTest(context.Background(), cfg, ResponseCreateWsRequest{
 			Type:  "response.create",
 			Model: "gpt-5.4",
 			Input: items,
@@ -439,7 +457,7 @@ func TestRunWebsocketTransportPrewarmsAndReusesConnection(t *testing.T) {
 		defer conn.Close()
 
 		var requests []map[string]any
-		for idx := 0; idx < 2; idx++ {
+		for idx := range 2 {
 			_, requestBody, err := conn.ReadMessage()
 			if err != nil {
 				t.Fatalf("read request %d: %v", idx, err)
@@ -476,7 +494,7 @@ func TestRunWebsocketTransportPrewarmsAndReusesConnection(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	var chunks []adapteropenai.StreamChunk
-	result, err := RunWebsocketTransport(context.Background(), WebsocketTransportConfig{
+	result, err := runWebsocketTransportForTest(context.Background(), WebsocketTransportConfig{
 		URL:            wsURL,
 		Token:          "test-token",
 		RequestID:      "req-ws",
@@ -583,7 +601,7 @@ func TestRunWebsocketTransportReconnectsAfterPrewarmFailure(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	var chunks []adapteropenai.StreamChunk
-	result, err := RunWebsocketTransport(context.Background(), WebsocketTransportConfig{
+	result, err := runWebsocketTransportForTest(context.Background(), WebsocketTransportConfig{
 		URL:            wsURL,
 		Token:          "test-token",
 		RequestID:      "req-ws",
@@ -671,7 +689,7 @@ func TestRunWebsocketTransportTimesOutHungPrewarmAndRunsGeneratedRequest(t *test
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	var chunks []adapteropenai.StreamChunk
-	result, err := RunWebsocketTransport(context.Background(), WebsocketTransportConfig{
+	result, err := runWebsocketTransportForTest(context.Background(), WebsocketTransportConfig{
 		URL:            wsURL,
 		Token:          "test-token",
 		RequestID:      "req-ws",

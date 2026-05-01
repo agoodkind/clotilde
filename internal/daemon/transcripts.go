@@ -16,8 +16,8 @@ import (
 // subscribers. Reference counted: the first subscriber starts the
 // tailer; the last one to leave stops it.
 type transcriptHub struct {
-	mu       sync.Mutex
-	entries  map[string]*hubEntry
+	mu      sync.Mutex
+	entries map[string]*hubEntry
 }
 
 type transcriptSubscriberState bool

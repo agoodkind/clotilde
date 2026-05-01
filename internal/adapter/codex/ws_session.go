@@ -31,15 +31,15 @@ type WebsocketSession struct {
 // conversation_id. Take/Put serializes concurrent requests on the
 // same conversation. The lifecycle contract:
 //
-// - Take removes the entry from the cache and returns it. A second
-//   Take before Put returns (nil, false) so concurrent callers do
-//   not share a single websocket frame stream.
-// - Put returns the entry to the cache. LastUsed is bumped to now.
-// - Invalidate closes the connection synchronously and drops the
-//   entry. Subsequent Take returns (nil, false).
-// - Idle expiry: Take returns (nil, false) and closes the entry if
-//   LastUsed plus idleTTL is in the past.
-// - CloseAll closes every entry. Called on daemon shutdown.
+//   - Take removes the entry from the cache and returns it. A second
+//     Take before Put returns (nil, false) so concurrent callers do
+//     not share a single websocket frame stream.
+//   - Put returns the entry to the cache. LastUsed is bumped to now.
+//   - Invalidate closes the connection synchronously and drops the
+//     entry. Subsequent Take returns (nil, false).
+//   - Idle expiry: Take returns (nil, false) and closes the entry if
+//     LastUsed plus idleTTL is in the past.
+//   - CloseAll closes every entry. Called on daemon shutdown.
 type WebsocketSessionCache struct {
 	mu      sync.Mutex
 	entries map[string]*WebsocketSession

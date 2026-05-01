@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -215,13 +216,7 @@ func TestCompactPanelStatusLegendUsesEnumActions(t *testing.T) {
 	if len(actions) == 0 {
 		t.Fatalf("expected compact panel legend actions")
 	}
-	hasSelect := false
-	for _, action := range actions {
-		if action == LegendSelect {
-			hasSelect = true
-			break
-		}
-	}
+	hasSelect := slices.Contains(actions, LegendSelect)
 	if !hasSelect {
 		t.Fatalf("expected compact panel legend actions to include LegendSelect")
 	}
@@ -229,19 +224,6 @@ func TestCompactPanelStatusLegendUsesEnumActions(t *testing.T) {
 		if action == LegendPreview || action == LegendApply || action == LegendUndo {
 			t.Fatalf("expected compact panel legend actions to stay succinct, got action %v", action)
 		}
-	}
-}
-
-func TestCompactPanelRenderActionsLooksLikeButtons(t *testing.T) {
-	panel := NewCompactPanel("demo")
-	panel.focusGroup = 3
-	panel.actionIdx = 1
-	rendered := panel.renderActions()
-	if !strings.Contains(rendered, "[ Preview ]") {
-		t.Fatalf("expected preview button rendering, got %q", rendered)
-	}
-	if !strings.Contains(rendered, "[> Apply <]") {
-		t.Fatalf("expected focused apply button rendering, got %q", rendered)
 	}
 }
 
@@ -400,26 +382,6 @@ func TestCompactPanelMouseWheelScrollsProgressLog(t *testing.T) {
 	}
 }
 
-func TestCompactPanelVisibleIterationLinesShowsLatestSteps(t *testing.T) {
-	panel := NewCompactPanel("demo")
-	panel.iterationHistory = []CompactIteration{
-		{Iteration: 1, Step: "baseline", CtxTotal: 975789, Delta: 475789},
-		{Iteration: 2, Step: "drop thinking", CtxTotal: 975700, Delta: 475700},
-		{Iteration: 3, Step: "drop tools", CtxTotal: 506400, Delta: 6400},
-	}
-
-	lines := panel.visibleIterationLines(2)
-	if len(lines) != 2 {
-		t.Fatalf("expected 2 lines, got %d", len(lines))
-	}
-	if !strings.Contains(lines[0], "iter 2") || !strings.Contains(lines[0], "drop thinking") {
-		t.Fatalf("unexpected first visible line: %q", lines[0])
-	}
-	if !strings.Contains(lines[1], "iter 3") || !strings.Contains(lines[1], "506,400") || !strings.Contains(lines[1], "+6,400") {
-		t.Fatalf("unexpected second visible line: %q", lines[1])
-	}
-}
-
 func TestCompactPanelApplyCompactEventTracksIterationHistory(t *testing.T) {
 	panel := NewCompactPanel("demo")
 	panel.ApplyCompactEvent(CompactEvent{
@@ -459,9 +421,9 @@ func TestCompactPanelApplyCompactEventTracksIterationHistory(t *testing.T) {
 
 func findStringCell(scr tcell.SimulationScreen, target string) (int, int, bool) {
 	cells, width, height := scr.GetContents()
-	for y := 0; y < height; y++ {
+	for y := range height {
 		var row strings.Builder
-		for x := 0; x < width; x++ {
+		for x := range width {
 			cell := cells[y*width+x]
 			if len(cell.Runes) == 0 || cell.Runes[0] == 0 {
 				row.WriteRune(' ')
@@ -479,8 +441,8 @@ func findStringCell(scr tcell.SimulationScreen, target string) (int, int, bool) 
 func compactPanelScreenText(scr tcell.SimulationScreen) string {
 	cells, width, height := scr.GetContents()
 	var b strings.Builder
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
+	for y := range height {
+		for x := range width {
 			cell := cells[y*width+x]
 			if len(cell.Runes) == 0 || cell.Runes[0] == 0 {
 				b.WriteRune(' ')

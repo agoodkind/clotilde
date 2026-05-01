@@ -37,7 +37,7 @@ func mergeTypeFlag(s *compactengine.Strippers, csv string) error {
 	if csv == "" {
 		return nil
 	}
-	for _, raw := range strings.Split(csv, ",") {
+	for raw := range strings.SplitSeq(csv, ",") {
 		raw = strings.TrimSpace(raw)
 		switch raw {
 		case "":

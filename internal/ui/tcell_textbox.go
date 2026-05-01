@@ -86,16 +86,16 @@ func (tb *TextBox) wrappedLines(w int) [][]TextSegment {
 	var out [][]TextSegment
 	for _, line := range src {
 		// Flatten to a string plus style per rune for easy splitting.
-		plain := ""
+		var plain strings.Builder
 		for _, seg := range line {
-			plain += seg.Text
+			plain.WriteString(seg.Text)
 		}
-		if runeCount(plain) <= w {
+		if runeCount(plain.String()) <= w {
 			out = append(out, line)
 			continue
 		}
 		// Wrap by words; simple approach, splits on spaces.
-		words := strings.Fields(plain)
+		words := strings.Fields(plain.String())
 		var cur string
 		for _, word := range words {
 			candidate := cur
@@ -167,7 +167,7 @@ func (tb *TextBox) Draw(scr tcell.Screen, r Rect) {
 	maxOff := imax(0, len(lines)-rows)
 	tb.Offset = clamp(tb.Offset, 0, maxOff)
 
-	for i := 0; i < rows; i++ {
+	for i := range rows {
 		idx := tb.Offset + i
 		if idx >= len(lines) {
 			break
@@ -201,10 +201,7 @@ func (tb *TextBox) JumpToScrollbarY(y int) {
 	if tb.ScrollbarRect.H <= 0 {
 		return
 	}
-	rel := y - tb.ScrollbarRect.Y
-	if rel < 0 {
-		rel = 0
-	}
+	rel := max(y-tb.ScrollbarRect.Y, 0)
 	if rel >= tb.ScrollbarRect.H {
 		rel = tb.ScrollbarRect.H - 1
 	}

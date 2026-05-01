@@ -31,8 +31,8 @@ func baseConfig() config.AdapterConfig {
 				Model:           "claude-haiku-4-5-20251001",
 				ThinkingModes:   []string{"default"},
 				MaxOutputTokens: 16000,
-				SupportsTools:   boolPtr(true),
-				SupportsVision:  boolPtr(true),
+				SupportsTools:   &testBoolTrue,
+				SupportsVision:  &testBoolTrue,
 				Contexts: []config.AdapterModelContext{
 					{Tokens: 200000},
 				},
@@ -87,6 +87,7 @@ func TestNewRegistryRejectsFallbackModelBackend(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
 func modelMatrixConfig() config.AdapterConfig {
 	cfg := baseConfig()
 	cfg.DefaultModel = "clyde-opus-4-7"
@@ -95,8 +96,8 @@ func modelMatrixConfig() config.AdapterConfig {
 		Efforts:         []string{EffortLow, EffortMedium, EffortHigh, EffortMax},
 		ThinkingModes:   []string{ThinkingDefault, ThinkingAdaptive, ThinkingEnabled, ThinkingDisabled},
 		MaxOutputTokens: 128000,
-		SupportsTools:   boolPtr(true),
-		SupportsVision:  boolPtr(true),
+		SupportsTools:   &testBoolTrue,
+		SupportsVision:  &testBoolTrue,
 		Contexts: []config.AdapterModelContext{
 			{Tokens: 200000},
 			{Tokens: 1000000, AliasSuffix: "1m", WireSuffix: "[1m]"},
@@ -107,8 +108,8 @@ func modelMatrixConfig() config.AdapterConfig {
 		Efforts:         []string{EffortLow, EffortMedium, EffortHigh, EffortMax},
 		ThinkingModes:   []string{ThinkingDefault, ThinkingAdaptive, ThinkingEnabled, ThinkingDisabled},
 		MaxOutputTokens: 128000,
-		SupportsTools:   boolPtr(true),
-		SupportsVision:  boolPtr(true),
+		SupportsTools:   &testBoolTrue,
+		SupportsVision:  &testBoolTrue,
 		Contexts: []config.AdapterModelContext{
 			{Tokens: 200000},
 			{Tokens: 1000000, AliasSuffix: "1m", WireSuffix: "[1m]"},
@@ -343,8 +344,8 @@ func TestResolveDoesNotRouteClydeOpusAliasesToCodex(t *testing.T) {
 				Contexts:        []config.AdapterModelContext{{AliasSuffix: "", Tokens: 200000}},
 				Efforts:         []string{"medium"},
 				ThinkingModes:   []string{"", "enabled"},
-				SupportsTools:   boolPtr(true),
-				SupportsVision:  boolPtr(true),
+				SupportsTools:   &testBoolTrue,
+				SupportsVision:  &testBoolTrue,
 				MaxOutputTokens: 8192,
 			},
 		},
@@ -525,8 +526,8 @@ func TestNewRegistrySupportsOpus46FamilyAliases(t *testing.T) {
 		Efforts:         []string{EffortLow, EffortMedium, EffortHigh, EffortMax},
 		ThinkingModes:   []string{ThinkingDefault, ThinkingAdaptive, ThinkingEnabled, ThinkingDisabled},
 		MaxOutputTokens: 128000,
-		SupportsTools:   boolPtr(true),
-		SupportsVision:  boolPtr(true),
+		SupportsTools:   &testBoolTrue,
+		SupportsVision:  &testBoolTrue,
 		Contexts: []config.AdapterModelContext{
 			{Tokens: 200000},
 			{Tokens: 1000000, AliasSuffix: "1m", WireSuffix: "[1m]"},

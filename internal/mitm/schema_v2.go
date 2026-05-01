@@ -28,13 +28,13 @@ type V2Upstream struct {
 
 // FlavorShape is one observed caller-flavor of an upstream.
 type FlavorShape struct {
-	Slug        string         `toml:"slug" json:"slug"`
-	Signature   V2Signature    `toml:"signature" json:"signature"`
-	RecordCount int            `toml:"record_count" json:"record_count"`
-	Methods     []string       `toml:"methods" json:"methods"`
-	Paths       []string       `toml:"paths" json:"paths"`
-	Headers     []V2Header     `toml:"headers" json:"headers"`
-	Body        V2Body         `toml:"body" json:"body"`
+	Slug        string      `toml:"slug" json:"slug"`
+	Signature   V2Signature `toml:"signature" json:"signature"`
+	RecordCount int         `toml:"record_count" json:"record_count"`
+	Methods     []string    `toml:"methods" json:"methods"`
+	Paths       []string    `toml:"paths" json:"paths"`
+	Headers     []V2Header  `toml:"headers" json:"headers"`
+	Body        V2Body      `toml:"body" json:"body"`
 }
 
 type V2Signature struct {
@@ -91,10 +91,10 @@ const (
 )
 
 type V2Field struct {
-	Name           string      `toml:"name" json:"name"`
-	Kind           V2FieldKind `toml:"kind" json:"kind"`
+	Name           string           `toml:"name" json:"name"`
+	Kind           V2FieldKind      `toml:"kind" json:"kind"`
 	Presence       V2HeaderPresence `toml:"presence" json:"presence"`
-	OccurrenceRate float64     `toml:"occurrence_rate" json:"occurrence_rate"`
+	OccurrenceRate float64          `toml:"occurrence_rate" json:"occurrence_rate"`
 	// SubFields populates when Kind is object. Each entry describes
 	// one observed nested key.
 	SubFields []V2Field `toml:"sub_fields,omitempty" json:"sub_fields,omitempty"`

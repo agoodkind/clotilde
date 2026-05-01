@@ -4,7 +4,9 @@ Append only record of completed adapter refactor work. Newest entries on top.
 
 ## 2026-04-29
 
-- Removed the last chunk-first provider compatibility surface: `provider.EventWriter` no longer exposes `WriteStreamChunk(...)`, shared provider writers now keep chunk rendering private, and the remaining chunk buffering is limited to adapter-owned collect mergers.
+- Finished the remaining root-cruft cleanup after Plan 6: collect-mode assembly now merges normalized `render.Event` values directly in Anthropic and Codex, `internal/adapter/server_streaming.go` is deleted, and the surviving shared SSE shim lives in a small root helper file.
+- Deleted `internal/adapter/tooltrans/` completely by inlining the last sentinel cleanup helpers into `internal/adapter/codex/`, and moved the actionable stream-error test coverage into `internal/adapter/anthropic/backend/stream_errors_test.go`.
+- Removed the last chunk-first provider compatibility surface: `provider.EventWriter` no longer exposes `WriteStreamChunk(...)`, shared provider writers now keep chunk rendering private, and the collect path no longer buffers rendered chunks.
 - Finished Plan 6 render ownership: both live providers now emit normalized `render.Event` values through `provider.EventWriter`, shared provider writers own event rendering plus OpenAI finish/usage framing, and the root Codex dispatcher no longer hand-builds terminal stream chunks.
 - Removed the last production compatibility wrappers from the render migration: deleted `RunTranslatorStream(...)` from the Anthropic backend, deleted `ParseSSE(...)` from Codex, moved the remaining test callers onto event-native helpers, and deleted the dead `internal/adapter/stream_chunk_convert.go` helper.
 - Removed the Anthropic `claude -p` fallback entirely: deleted `internal/adapter/anthropic/fallback/`, deleted `internal/adapter/anthropic_bridge.go`, removed the fallback branch from `internal/adapter/server.go` and `internal/adapter/server_backend_contract.go`, and collapsed `internal/adapter/anthropic_provider_dispatch.go` to direct provider-error surfacing with no fallback escalation.

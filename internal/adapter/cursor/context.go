@@ -1,10 +1,6 @@
 package cursor
 
-import (
-	"strings"
-
-	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
-)
+import "strings"
 
 type Context struct {
 	User           string
@@ -12,12 +8,6 @@ type Context struct {
 	ConversationID string
 	WorkspacePath  string
 }
-
-func FromRequest(req adapteropenai.ChatRequest) Context {
-	return TranslateRequest(req).Context()
-}
-
-func FromTranslatedRequest(req Request) Context { return req.Context() }
 
 func (c Context) StrongConversationKey() string {
 	if strings.TrimSpace(c.ConversationID) == "" {

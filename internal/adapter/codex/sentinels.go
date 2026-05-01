@@ -1,13 +1,15 @@
-package tooltrans
+package codex
 
 import (
 	"regexp"
 	"strings"
 )
 
-var noticeSentinelRE = regexp.MustCompile(`(?s)<!--clyde-notice-->.*?<!--/clyde-notice-->\s*`)
-var activitySentinelRE = regexp.MustCompile(`(?s)<!--clyde-activity-->.*?<!--/clyde-activity-->\s*`)
-var thinkingBlockquoteRE = regexp.MustCompile(`(?s)<!--clyde-thinking-->.*?<!--/clyde-thinking-->\s*`)
+var (
+	noticeSentinelRE     = regexp.MustCompile(`(?s)<!--clyde-notice-->.*?<!--/clyde-notice-->\s*`)
+	activitySentinelRE   = regexp.MustCompile(`(?s)<!--clyde-activity-->.*?<!--/clyde-activity-->\s*`)
+	thinkingBlockquoteRE = regexp.MustCompile(`(?s)<!--clyde-thinking-->.*?<!--/clyde-thinking-->\s*`)
+)
 
 // StripNoticeSentinel removes the clyde notice envelope.
 func StripNoticeSentinel(text string) string {

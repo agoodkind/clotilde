@@ -12,16 +12,16 @@ import (
 // snapshot version (v1 vs v2) is auto-detected. UA / body-key filters
 // apply only to v2.
 type DriftCheckOptions struct {
-	Upstream         string
-	Reference        string
-	CaptureRoot      string
-	CACertPath       string
-	DriftLogPath     string
-	IncludeUA        []string
-	ExcludeUA        []string
-	RequireBodyKeys  []string
-	ForbidBodyKeys   []string
-	Log              *slog.Logger
+	Upstream        string
+	Reference       string
+	CaptureRoot     string
+	CACertPath      string
+	DriftLogPath    string
+	IncludeUA       []string
+	ExcludeUA       []string
+	RequireBodyKeys []string
+	ForbidBodyKeys  []string
+	Log             *slog.Logger
 }
 
 // RunDriftCheck performs the full capture + snapshot + diff cycle for

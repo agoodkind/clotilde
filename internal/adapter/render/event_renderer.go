@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -370,10 +371,7 @@ func formatToolLifecycle(ev Event) string {
 }
 
 func formatFileChangeLifecycle(ev Event) string {
-	count := ev.ChangeCount
-	if count < 1 {
-		count = 1
-	}
+	count := max(ev.ChangeCount, 1)
 	switch ev.Kind {
 	case EventFileChangeStarted:
 		return fmt.Sprintf("File change started: %d file(s)", count)
@@ -471,10 +469,8 @@ func appendUniqueLogValue(values *[]string, value string, limit int) {
 	if value == "" || limit <= 0 || len(*values) >= limit {
 		return
 	}
-	for _, existing := range *values {
-		if existing == value {
-			return
-		}
+	if slices.Contains(*values, value) {
+		return
 	}
 	*values = append(*values, value)
 }

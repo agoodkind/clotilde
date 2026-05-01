@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -195,9 +196,9 @@ func validateAppendedJSONL(path string, preOffset int64) error {
 }
 
 func lastChainUUID(slice *Slice) string {
-	for i := len(slice.AllEntries) - 1; i >= 0; i-- {
-		if slice.AllEntries[i].UUID != "" {
-			return slice.AllEntries[i].UUID
+	for _, entry := range slices.Backward(slice.AllEntries) {
+		if entry.UUID != "" {
+			return entry.UUID
 		}
 	}
 	return ""

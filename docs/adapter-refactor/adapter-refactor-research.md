@@ -184,9 +184,10 @@ The `internal/adapter/tooltrans/` package once held Anthropic request translatio
 - `internal/adapter/tooltrans/types_openai_local.go`
 - `internal/adapter/tooltrans/thinking_inline.go`
 
-### Remaining content
+### Final removal
 
-`tooltrans` now contains only cross-backend sentinel cleanup helpers in `sentinels.go` and their tests. These handle Clyde-injected notice/activity/thinking envelope cleanup that applies across all backends.
+The last sentinel cleanup helpers were inlined into `internal/adapter/codex/`,
+and `internal/adapter/tooltrans/` was deleted.
 
 ### Justification
 

@@ -10,38 +10,38 @@ import (
 
 func TestLegendForCompactNoLongerUsesTabHint(t *testing.T) {
 	segs := legendForStatus(&StatusBarWidget{Mode: StatusCompact, DaemonOnline: true})
-	joined := ""
+	var joined strings.Builder
 	for _, seg := range segs {
-		joined += seg.Text
+		joined.WriteString(seg.Text)
 	}
-	if strings.Contains(joined, "tab") {
-		t.Fatalf("expected compact legend to avoid tab hint: %q", joined)
+	if strings.Contains(joined.String(), "tab") {
+		t.Fatalf("expected compact legend to avoid tab hint: %q", joined.String())
 	}
-	if !strings.Contains(joined, "enter/spc") {
-		t.Fatalf("expected compact legend to include enter/spc: %q", joined)
+	if !strings.Contains(joined.String(), "enter/spc") {
+		t.Fatalf("expected compact legend to include enter/spc: %q", joined.String())
 	}
 }
 
 func TestLegendForBrowseStaysLean(t *testing.T) {
 	segs := legendForStatus(&StatusBarWidget{Mode: StatusBrowse, DaemonOnline: true})
-	joined := ""
+	var joined strings.Builder
 	for _, seg := range segs {
-		joined += seg.Text
+		joined.WriteString(seg.Text)
 	}
-	if !strings.Contains(joined, "j/k move") {
-		t.Fatalf("expected browse legend to keep movement hint: %q", joined)
+	if !strings.Contains(joined.String(), "j/k move") {
+		t.Fatalf("expected browse legend to keep movement hint: %q", joined.String())
 	}
-	if !strings.Contains(joined, "/ filter") {
-		t.Fatalf("expected browse legend to keep filter hint: %q", joined)
+	if !strings.Contains(joined.String(), "/ filter") {
+		t.Fatalf("expected browse legend to keep filter hint: %q", joined.String())
 	}
-	if strings.Contains(joined, "enter/O") {
-		t.Fatalf("expected browse legend to omit enter option hint: %q", joined)
+	if strings.Contains(joined.String(), "enter/O") {
+		t.Fatalf("expected browse legend to omit enter option hint: %q", joined.String())
 	}
-	if strings.Contains(joined, "space select detail") {
-		t.Fatalf("expected browse legend to omit space detail hint: %q", joined)
+	if strings.Contains(joined.String(), "space select detail") {
+		t.Fatalf("expected browse legend to omit space detail hint: %q", joined.String())
 	}
-	if strings.Contains(joined, "g/G top/bot") {
-		t.Fatalf("expected browse legend to omit top/bot hint: %q", joined)
+	if strings.Contains(joined.String(), "g/G top/bot") {
+		t.Fatalf("expected browse legend to omit top/bot hint: %q", joined.String())
 	}
 }
 
@@ -72,7 +72,7 @@ func TestLegendActionAtFindsRefreshHint(t *testing.T) {
 	bar := &StatusBarWidget{Mode: StatusBrowse, DaemonOnline: true}
 	r := Rect{X: 0, Y: 0, W: 120, H: 1}
 	found := false
-	for x := 0; x < r.W; x++ {
+	for x := range r.W {
 		action, ok := legendActionAt(bar, r, x)
 		if ok && action == LegendRefresh {
 			found = true

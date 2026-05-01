@@ -171,8 +171,8 @@ func BuildRequest(req adapteropenai.ChatRequest, model adaptermodel.ResolvedMode
 	include := RequestInclude(req.Include, reasoning != nil)
 	outputControls := BuildOutputControls(req)
 	return HTTPTransportRequest{
-		Model:                modelName,
-		Instructions:         instructions,
+		Model:        modelName,
+		Instructions: instructions,
 		// Store MUST be false for ChatGPT Pro Codex. The upstream
 		// rejects store=true with "Store must be set to false" on
 		// this auth path. Empirical (2026-04-27 capture). This
@@ -374,17 +374,6 @@ func rewriteWorkspacePath(text, workspacePath string) string {
 	// rewrite substrings inside unrelated identifiers (e.g. `/var`
 	// inside `/variable`), which is the original mashing failure.
 	return pathBoundedReplaceAll(text, cwd, workspacePath)
-}
-
-// pathBoundedContains reports whether `needle` appears in `haystack`
-// at a position where it is bounded by the start of the string, the
-// end of the string, or a non-identifier character. When `needle`
-// begins with a path separator, the leading `/` itself counts as the
-// preceding boundary so suffix matches like `/bar` in `/foo/bar`
-// resolve correctly.
-func pathBoundedContains(haystack, needle string) bool {
-	_, found := pathBoundedFirstMatch(haystack, needle, 0)
-	return found
 }
 
 // pathBoundedReplaceAll replaces every bounded occurrence of needle

@@ -1,7 +1,6 @@
 package adapter
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,12 +8,10 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
-	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 )
 
 // CountNormalizedTools counts tools that arrived without a `function` key
@@ -238,7 +235,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	resolveAttrs := []slog.Attr{
 		slog.String("request_id", reqID),
 		slog.String("alias", req.Model),
-		slog.String("backend", string(model.Backend)),
+		slog.String("backend", model.Backend),
 		slog.String("resolved_model", model.ClaudeModel),
 		slog.String("effort", effort),
 		slog.Int("context_window", model.Context),
@@ -293,7 +290,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	attrs := []slog.Attr{
 		slog.String("request_id", reqID),
 		slog.String("alias", req.Model),
-		slog.String("backend", string(model.Backend)),
+		slog.String("backend", model.Backend),
 		slog.Int("message_count", len(req.Messages)),
 		slog.Int("tool_count", len(req.Tools)+len(req.Functions)),
 		slog.Any("tool_names", toolNames),
@@ -383,7 +380,7 @@ func buildWhitelistBody(req ChatRequest, maxBytes int) (string, bool) {
 		payload["functions"] = functions
 	}
 	if req.ToolChoice != nil {
-		payload["tool_choice"] = json.RawMessage(req.ToolChoice)
+		payload["tool_choice"] = req.ToolChoice
 	}
 	if req.ParallelTools != nil {
 		payload["parallel_tool_calls"] = req.ParallelTools
@@ -512,69 +509,6 @@ func normalizeInputParts(parts []map[string]any) (json.RawMessage, error) {
 		return nil, fmt.Errorf("failed to normalize input content: %w", err)
 	}
 	return buf, nil
-}
-
-func (s *Server) collectChat(w http.ResponseWriter, ctx context.Context, req ChatRequest, model ResolvedModel, stdout io.ReadCloser, reqID string, started time.Time, jsonSpec JSONResponseSpec) {
-	text, usage, err := CollectStream(stdout)
-	if err != nil {
-		adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
-			Stage:      adapterruntime.RequestStageFailed,
-			Provider:   providerName(model, ""),
-			Backend:    model.Backend,
-			RequestID:  reqID,
-			Alias:      model.Alias,
-			ModelID:    model.ClaudeModel,
-			Stream:     false,
-			DurationMs: time.Since(started).Milliseconds(),
-			Err:        err.Error(),
-		})
-		writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
-		return
-	}
-	finalText, usage, jsonRetried := s.legacyCollectApplyStructuredOutput(ctx, req, model, text, usage, jsonSpec, reqID)
-	resp := ChatResponse{
-		ID:                reqID,
-		Object:            "chat.completion",
-		Created:           time.Now().Unix(),
-		Model:             model.Alias,
-		SystemFingerprint: systemFingerprint,
-		Choices: []ChatChoice{{
-			Index: 0,
-			Message: ChatMessage{
-				Role:    "assistant",
-				Content: json.RawMessage(strconv.Quote(finalText)),
-			},
-			FinishReason: "stop",
-		}},
-		Usage: &usage,
-	}
-	writeJSON(w, http.StatusOK, resp)
-	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.completed",
-		slog.String("request_id", reqID),
-		slog.String("model", model.Alias),
-		slog.Int("prompt_tokens", usage.PromptTokens),
-		slog.Int("completion_tokens", usage.CompletionTokens),
-		slog.Int("cache_read_tokens", usage.CachedTokens()),
-		slog.Int64("duration_ms", time.Since(started).Milliseconds()),
-		slog.Bool("stream", false),
-		slog.String("json_mode", jsonSpec.Mode),
-		slog.Bool("json_retried", jsonRetried),
-	)
-	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
-		Stage:               adapterruntime.RequestStageCompleted,
-		Provider:            providerName(model, ""),
-		Backend:             model.Backend,
-		RequestID:           reqID,
-		Alias:               model.Alias,
-		ModelID:             model.ClaudeModel,
-		Stream:              false,
-		FinishReason:        "stop",
-		TokensIn:            usage.PromptTokens,
-		TokensOut:           usage.CompletionTokens,
-		CacheReadTokens:     usage.CachedTokens(),
-		CacheCreationTokens: 0,
-		DurationMs:          time.Since(started).Milliseconds(),
-	})
 }
 
 func (s *Server) handleLegacy(w http.ResponseWriter, r *http.Request) {

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -24,15 +23,6 @@ var (
 	openAIUpstream    = "https://api.openai.com"
 	chatGPTUpstream   = "https://chatgpt.com"
 )
-
-// setChatGPTUpstreamForTest swaps the chatGPTUpstream value and
-// returns the previous one. Test-only hook to exercise the proxy
-// against an httptest backend without binding the real domain.
-func setChatGPTUpstreamForTest(value string) string {
-	prev := chatGPTUpstream
-	chatGPTUpstream = value
-	return prev
-}
 
 type Proxy struct {
 	log    *slog.Logger
@@ -59,7 +49,7 @@ func EnsureStarted(cfg config.MITMConfig, log *slog.Logger) (*Proxy, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	ln, err := net.Listen("tcp", "[::1]:0")
+	ln, err := net.Listen("tcp", "[::1]:0") // TODO: make this configurable
 	if err != nil {
 		return nil, err
 	}
@@ -92,9 +82,7 @@ func (p *Proxy) config() config.MITMConfig {
 	return p.cfg
 }
 
-func (p *Proxy) ClaudeBaseURL() string       { return p.base }
-func (p *Proxy) CodexOpenAIBaseURL() string  { return p.base + "/v1" }
-func (p *Proxy) CodexChatGPTBaseURL() string { return p.base + "/backend-api" }
+func (p *Proxy) ClaudeBaseURL() string { return p.base }
 
 func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
@@ -426,30 +414,4 @@ func ClaudeEnv(ctx context.Context, cfg config.MITMConfig, log *slog.Logger) (ma
 
 type CodexOverlay struct {
 	Home string
-}
-
-func PrepareCodexOverlay(ctx context.Context, cfg config.MITMConfig, log *slog.Logger, sourceHome string) (*CodexOverlay, error) {
-	if !cfg.EnabledDefault || !cfg.EnabledFor("codex") {
-		return nil, nil
-	}
-	proxy, err := EnsureStarted(cfg, log)
-	if err != nil {
-		return nil, err
-	}
-	dir, err := os.MkdirTemp("", "clyde-codex-home-*")
-	if err != nil {
-		return nil, err
-	}
-	authSrc := filepath.Join(strings.TrimSpace(sourceHome), "auth.json")
-	if data, readErr := os.ReadFile(authSrc); readErr == nil {
-		if err := os.WriteFile(filepath.Join(dir, "auth.json"), data, 0o600); err != nil {
-			return nil, err
-		}
-	}
-	configText := fmt.Sprintf("openai_base_url = %q\nchatgpt_base_url = %q\n", proxy.CodexOpenAIBaseURL(), proxy.CodexChatGPTBaseURL())
-	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(configText), 0o644); err != nil {
-		return nil, err
-	}
-	_ = ctx
-	return &CodexOverlay{Home: dir}, nil
 }

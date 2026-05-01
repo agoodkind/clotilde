@@ -21,28 +21,3 @@ func TestSSEWriterWriteHeadersIdempotent(t *testing.T) {
 		t.Fatalf("content-type %q", ct)
 	}
 }
-
-func TestStructuredOutputFirstPassJSONObject(t *testing.T) {
-	coerced, ok := structuredOutputFirstPass(`{"a":1}`)
-	if !ok {
-		t.Fatal("expected JSON ok")
-	}
-	if coerced == "" {
-		t.Fatal("empty coerced")
-	}
-}
-
-func TestShuntStructuredOutputNeedsRetry(t *testing.T) {
-	if !shuntStructuredOutputNeedsRetry("json_schema", true, false) {
-		t.Fatal("expected retry")
-	}
-	if shuntStructuredOutputNeedsRetry("", true, false) {
-		t.Fatal("no mode")
-	}
-	if shuntStructuredOutputNeedsRetry("json_schema", false, false) {
-		t.Fatal("not ok status")
-	}
-	if shuntStructuredOutputNeedsRetry("json_schema", true, true) {
-		t.Fatal("coercion ok")
-	}
-}

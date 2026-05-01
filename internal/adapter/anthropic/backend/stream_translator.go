@@ -11,12 +11,14 @@ import (
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
 
-type OpenAIStreamChunk = adapteropenai.StreamChunk
-type OpenAIStreamChoice = adapteropenai.StreamChoice
-type OpenAIStreamDelta = adapteropenai.StreamDelta
-type OpenAIUsage = adapteropenai.Usage
-type EventRenderer = adapterrender.EventRenderer
-type Event = adapterrender.Event
+type (
+	OpenAIStreamChunk  = adapteropenai.StreamChunk
+	OpenAIStreamChoice = adapteropenai.StreamChoice
+	OpenAIStreamDelta  = adapteropenai.StreamDelta
+	OpenAIUsage        = adapteropenai.Usage
+	EventRenderer      = adapterrender.EventRenderer
+	Event              = adapterrender.Event
+)
 
 const (
 	EventAssistantTextDelta = adapterrender.EventAssistantTextDelta
@@ -30,7 +32,6 @@ var NewEventRenderer = adapterrender.NewEventRenderer
 
 // StreamTranslator converts Anthropic SSE events into normalized render events.
 type StreamTranslator struct {
-	blockIndex         int
 	currentBlockType   string
 	toolCallIndex      int
 	toolCallByBlockIdx map[int]int
@@ -228,32 +229,4 @@ func (t *StreamTranslator) HandleEventEvents(eventName string, dataJSON []byte) 
 	default:
 		return nil, false, "", nil, nil
 	}
-}
-
-// HandleEvent preserves the chunk-oriented test helper surface while the live
-// runtime moves to normalized render.Event emission.
-func (t *StreamTranslator) HandleEvent(eventName string, dataJSON []byte) (
-	chunks []OpenAIStreamChunk,
-	finished bool,
-	finishReason string,
-	usage *OpenAIUsage,
-	err error,
-) {
-	events, finished, finishReason, usage, err := t.HandleEventEvents(eventName, dataJSON)
-	if err != nil {
-		if t.renderer != nil {
-			t.renderer.Flush()
-		}
-		return nil, finished, finishReason, usage, err
-	}
-	if t.renderer == nil {
-		return nil, finished, finishReason, usage, nil
-	}
-	for _, ev := range events {
-		chunks = append(chunks, t.renderer.HandleEvent(ev)...)
-	}
-	if finished {
-		t.renderer.Flush()
-	}
-	return chunks, finished, finishReason, usage, nil
 }

@@ -244,10 +244,8 @@ These are removed as part of the refactor. Do not add new code under them.
 - `internal/adapter/codex_runtime.go` and `codex_sessions.go`.
 - `internal/adapter/oauth_handler.go` (most of it; auth lookup moves into
   provider construction).
-- `internal/adapter/server_response.go` and `server_streaming.go` (merge and
-  framing helpers; framing moves into `openai/`, merge dies with the bridges).
-- `internal/adapter/tooltrans/` (the residual sentinel cleanup helpers move
-  into the provider that needs them, or get inlined).
+- `internal/adapter/server_response.go` and `server_streaming.go`.
+- `internal/adapter/tooltrans/`.
 - `internal/adapter/finishreason/` may dissolve into the providers. Each
   provider already owns its own finish-reason mapping logic.
 
@@ -505,8 +503,8 @@ suffix-extension matcher described in step 5 above. CLYDE-123
       `HandleEventEvents(...)`, `RunTranslatorEvents(...)`, and
       `ParseSSEEvents(...)` rather than direct `StreamChunk` emission.
       The temporary `EventWriter.WriteStreamChunk(...)` compatibility hook is
-      gone; chunk rendering stays adapter-owned inside the shared writers until
-      the collect mergers stop buffering chunk-shaped state.
+      gone, and collect-mode response assembly now consumes normalized events
+      directly instead of buffering rendered chunks.
 - [x] All OpenAI SSE framing lives in `openai/`. `render/` consumes events,
       `openai/` writes the wire format.
 - [x] Tests at this layer: backend tests assert event production. Render
@@ -531,10 +529,10 @@ After items 1 through 6 land, the bridges become unused.
       Anthropic request-building and identity helpers that still have no
       better home.
 - [x] Deleted `internal/adapter/server_response.go` merge helpers.
-- [x] Reduced `internal/adapter/server_streaming.go` to legacy non-provider
-      helpers only. Provider-owned stream paths no longer depend on it.
-- [ ] Delete `internal/adapter/tooltrans/`. Inline the sentinel helpers where
-      they are used.
+- [x] Deleted `internal/adapter/server_streaming.go`. The surviving SSE writer
+      shim and stream-visibility helper live in a tiny shared root file.
+- [x] Deleted `internal/adapter/tooltrans/`. The remaining sentinel cleanup
+      helpers were inlined into `internal/adapter/codex/`.
 - [ ] Sweep unused imports and dead types.
 
 ### 8. Test layout

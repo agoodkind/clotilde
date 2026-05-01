@@ -1,10 +1,6 @@
 package cursor
 
-import (
-	"strings"
-
-	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
-)
+import "strings"
 
 const permissionsInstructions = `<permissions_instructions>
 Filesystem sandboxing defines which files can be read or written. ` + "`sandbox_mode`" + ` is ` + "`danger-full-access`" + `: No filesystem sandboxing - all commands are permitted. Network access is enabled.
@@ -75,8 +71,4 @@ func CodexPromptContext(req Request, systemSections []string, environmentText st
 		DeveloperSections: developerSections,
 		UserSections:      userSections,
 	}
-}
-
-func FlattenContent(raw []byte) string {
-	return adapteropenai.FlattenContent(raw)
 }

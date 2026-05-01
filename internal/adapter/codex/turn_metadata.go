@@ -13,10 +13,10 @@ import (
 // observed payload is `{session_id, thread_source, turn_id, sandbox}`.
 // The Desktop payload adds `workspaces: { <abs_path>: ... }`.
 type TurnMetadata struct {
-	SessionID    string                            `json:"session_id"`
-	ThreadSource string                            `json:"thread_source"`
-	TurnID       string                            `json:"turn_id"`
-	Sandbox      string                            `json:"sandbox"`
+	SessionID    string                           `json:"session_id"`
+	ThreadSource string                           `json:"thread_source"`
+	TurnID       string                           `json:"turn_id"`
+	Sandbox      string                           `json:"sandbox"`
 	Workspaces   map[string]TurnMetadataWorkspace `json:"workspaces,omitempty"`
 }
 

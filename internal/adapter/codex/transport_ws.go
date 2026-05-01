@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
 
@@ -216,7 +215,7 @@ func writeAndParseWebsocketRequest(
 		return NewRunResult("stop"), err
 	}
 	synthetic := streamWebsocketAsSyntheticSSE(conn)
-	result, err := ParseTransportStream(synthetic, emit)
+	result, err := ParseSSEEvents(synthetic, emit)
 	if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 		return result, nil
 	}
@@ -255,7 +254,7 @@ func logWebsocketFrame(ctx context.Context, cfg WebsocketTransportConfig, payloa
 	logCodexEvent(ctx, slog.LevelDebug, "codex.responses.request", ev.toSlogAttrs())
 }
 
-func dialResponsesWebsocket(ctx context.Context, cfg WebsocketTransportConfig) (*websocket.Conn, *http.Response, error) {
+func dialResponsesWebsocket(ctx context.Context, cfg WebsocketTransportConfig) (*websocket.Conn, int, error) {
 	dialer := websocket.Dialer{}
 	installationID, _ := LoadInstallationID()
 	turnMetadataJSON := ""
@@ -274,10 +273,17 @@ func dialResponsesWebsocket(ctx context.Context, cfg WebsocketTransportConfig) (
 		TurnMetadata:   turnMetadataJSON,
 	})
 	conn, resp, err := dialer.DialContext(ctx, cfg.URL, header)
+	statusCode := 0
 	if resp != nil && cfg.TurnState != nil {
 		cfg.TurnState.CaptureFromHeaders(resp.Header)
 	}
-	return conn, resp, err
+	if resp != nil {
+		statusCode = resp.StatusCode
+	}
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	return conn, statusCode, err
 }
 
 func logWebsocketPrepared(ctx context.Context, cfg WebsocketTransportConfig, payload ResponseCreateWsRequest, telemetry TransportTelemetry) {
@@ -307,23 +313,6 @@ func RunWebsocketTransportEvents(
 	return runWebsocketFreshDial(ctx, cfg, payload, emit)
 }
 
-func RunWebsocketTransport(
-	ctx context.Context,
-	cfg WebsocketTransportConfig,
-	payload ResponseCreateWsRequest,
-	emit func(adapteropenai.StreamChunk) error,
-) (RunResult, error) {
-	renderer := adapterrender.NewEventRenderer(cfg.RequestID, cfg.Alias, "codex", nil)
-	return RunWebsocketTransportEvents(ctx, cfg, payload, func(ev adapterrender.Event) error {
-		for _, chunk := range renderer.HandleEvent(ev) {
-			if err := emit(chunk); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
 // runWebsocketFreshDial is the legacy path. Dial a fresh websocket,
 // optionally warm up, send one frame, close. Preserved so tests and
 // non-cache callers do not break. Tagged for removal once all
@@ -334,8 +323,8 @@ func runWebsocketFreshDial(
 	payload ResponseCreateWsRequest,
 	emit func(adapterrender.Event) error,
 ) (RunResult, error) {
-	conn, resp, err := dialResponsesWebsocket(ctx, cfg)
-	if resp != nil && resp.StatusCode == http.StatusUpgradeRequired {
+	conn, statusCode, err := dialResponsesWebsocket(ctx, cfg)
+	if statusCode == http.StatusUpgradeRequired {
 		logWebsocketPrepared(ctx, cfg, payload, TransportTelemetry{FallbackToHTTP: true})
 		return NewRunResult("stop"), ErrWebsocketFallbackToHTTP
 	}
@@ -367,8 +356,8 @@ func runWebsocketFreshDial(
 		} else {
 			prewarmFailed = true
 			_ = conn.Close()
-			conn, resp, err = dialResponsesWebsocket(ctx, cfg)
-			if resp != nil && resp.StatusCode == http.StatusUpgradeRequired {
+			conn, statusCode, err = dialResponsesWebsocket(ctx, cfg)
+			if statusCode == http.StatusUpgradeRequired {
 				logWebsocketPrepared(ctx, cfg, payload, TransportTelemetry{
 					FallbackToHTTP:         true,
 					WebsocketPrewarmFailed: prewarmFailed,
@@ -501,8 +490,8 @@ func openSessionAndWarmup(
 	log *slog.Logger,
 ) (*WebsocketSession, error) {
 	conv := strings.TrimSpace(cfg.ConversationID)
-	conn, resp, err := dialResponsesWebsocket(ctx, cfg)
-	if resp != nil && resp.StatusCode == http.StatusUpgradeRequired {
+	conn, statusCode, err := dialResponsesWebsocket(ctx, cfg)
+	if statusCode == http.StatusUpgradeRequired {
 		return nil, ErrWebsocketFallbackToHTTP
 	}
 	if err != nil {

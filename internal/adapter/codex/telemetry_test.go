@@ -53,4 +53,3 @@ func TestLogTransportPreparedIncludesParityFields(t *testing.T) {
 		}
 	}
 }
-

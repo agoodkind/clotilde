@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -79,27 +80,6 @@ func slugifyUA(ua string) string {
 	return clean
 }
 
-// ClassifyRecord computes the FlavorSignature for one CaptureRecord.
-// Returns the zero signature for non-request records (responses,
-// ws_msg etc.) since those don't carry caller identity directly.
-func ClassifyRecord(rec CaptureRecord) FlavorSignature {
-	if rec.Kind != RecordHTTPRequest {
-		return FlavorSignature{}
-	}
-	headers := rec.RequestHeaders
-	if headers == nil {
-		headers = rec.Headers
-	}
-	ua := strings.TrimSpace(headers[lookupHeader(headers, "user-agent")])
-	beta := strings.TrimSpace(headers[lookupHeader(headers, "anthropic-beta")])
-	keys := bodyKeysFromRecord(rec)
-	return FlavorSignature{
-		UserAgent:       ua,
-		BetaFingerprint: betaFingerprint(beta),
-		BodyKeys:        keys,
-	}
-}
-
 // betaFingerprint reduces a comma-joined Anthropic-Beta header value
 // to a stable canonical form: lowercase, trim each flag, sort.
 // Different orderings of the same flag set produce identical
@@ -121,71 +101,6 @@ func betaFingerprint(raw string) string {
 	return strings.Join(cleaned, ",")
 }
 
-// bodyKeysFromRecord pulls the top-level body field names from a
-// captured request record. The proxy emits these as
-// `request_body.keys` in summary mode and as the full JSON in raw
-// mode; this helper handles both shapes.
-func bodyKeysFromRecord(rec CaptureRecord) []string {
-	// Try the typed CaptureRecord.BodyText first (raw mode).
-	if rec.BodyText != "" {
-		if keys := bodyKeysFromJSONString(rec.BodyText); len(keys) > 0 {
-			return keys
-		}
-	}
-	return nil
-}
-
-func bodyKeysFromJSONString(_ string) []string {
-	// Intentionally minimal. The summary-mode body lives in the raw
-	// map under request_body.keys, which the typed CaptureRecord
-	// schema does not expose. Callers that want the keys should use
-	// the richer extraction in snapshot_v2.go which reads the raw
-	// JSONL line. For now this path returns nil and the human-prefix
-	// logic in flavorHumanPrefix degrades gracefully.
-	return nil
-}
-
 func hasKey(keys []string, target string) bool {
-	for _, k := range keys {
-		if k == target {
-			return true
-		}
-	}
-	return false
-}
-
-func lookupHeader(headers map[string]string, name string) string {
-	if headers == nil {
-		return ""
-	}
-	lower := strings.ToLower(name)
-	for k := range headers {
-		if strings.ToLower(k) == lower {
-			return k
-		}
-	}
-	return ""
-}
-
-// GroupByFlavor partitions a list of records by FlavorSignature.
-// Each group's slug becomes the key. Non-request records (responses,
-// ws_msg, ws_start, ws_end) are passed through to every group whose
-// flavor we observed in the same temporal neighborhood; for the
-// simple case this is acceptable because ws transcripts are
-// single-flavor and HTTP transcripts only need request-based
-// classification.
-func GroupByFlavor(records []CaptureRecord) map[string][]CaptureRecord {
-	out := map[string][]CaptureRecord{}
-	for _, rec := range records {
-		sig := ClassifyRecord(rec)
-		slug := sig.FlavorSlug()
-		if rec.Kind != RecordHTTPRequest {
-			// Attach to the most recent flavor seen, fall back to "unclassified".
-			if slug == "" {
-				slug = "unclassified"
-			}
-		}
-		out[slug] = append(out[slug], rec)
-	}
-	return out
+	return slices.Contains(keys, target)
 }

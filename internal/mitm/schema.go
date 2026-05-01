@@ -30,10 +30,10 @@ type CaptureRecord struct {
 	URL  string            `json:"url,omitempty"`
 
 	// HTTP fields.
-	Method   string            `json:"method,omitempty"`
-	Status   int               `json:"status,omitempty"`
-	Headers  map[string]string `json:"headers,omitempty"`
-	BodyLen  int               `json:"body_len,omitempty"`
+	Method  string            `json:"method,omitempty"`
+	Status  int               `json:"status,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+	BodyLen int               `json:"body_len,omitempty"`
 	// Body is the captured payload. Shape varies by BodyMode in
 	// the producing proxy: raw mode writes a string, summary mode
 	// writes a structured object (e.g. {"keys": [...], "messages":
@@ -74,14 +74,14 @@ type Snapshot struct {
 }
 
 type SnapshotUpstream struct {
-	Name      string `toml:"name" json:"name"`
-	Version   string `toml:"version" json:"version"`
+	Name       string `toml:"name" json:"name"`
+	Version    string `toml:"version" json:"version"`
 	CapturedAt string `toml:"captured_at" json:"captured_at"`
 }
 
 type SnapshotHandshake struct {
-	URLPattern string                 `toml:"url_pattern" json:"url_pattern"`
-	Headers    []SnapshotHeader       `toml:"headers" json:"headers"`
+	URLPattern string           `toml:"url_pattern" json:"url_pattern"`
+	Headers    []SnapshotHeader `toml:"headers" json:"headers"`
 }
 
 type SnapshotHeader struct {
@@ -104,21 +104,21 @@ type SnapshotFrameSequence struct {
 }
 
 type SnapshotFrameDescriptor struct {
-	Generate            string `toml:"generate" json:"generate"`
-	HasPrev             bool   `toml:"has_prev" json:"has_prev"`
-	InputCountMin       int    `toml:"input_count_min" json:"input_count_min"`
-	InputCountMax       int    `toml:"input_count_max" json:"input_count_max"`
-	ToolsCountMin       int    `toml:"tools_count_min" json:"tools_count_min"`
-	ToolsCountMax       int    `toml:"tools_count_max" json:"tools_count_max"`
-	StoreFieldRequired  bool   `toml:"store_field_required" json:"store_field_required"`
-	StoreValueObserved  string `toml:"store_value_observed" json:"store_value_observed"`
+	Generate           string `toml:"generate" json:"generate"`
+	HasPrev            bool   `toml:"has_prev" json:"has_prev"`
+	InputCountMin      int    `toml:"input_count_min" json:"input_count_min"`
+	InputCountMax      int    `toml:"input_count_max" json:"input_count_max"`
+	ToolsCountMin      int    `toml:"tools_count_min" json:"tools_count_min"`
+	ToolsCountMax      int    `toml:"tools_count_max" json:"tools_count_max"`
+	StoreFieldRequired bool   `toml:"store_field_required" json:"store_field_required"`
+	StoreValueObserved string `toml:"store_value_observed" json:"store_value_observed"`
 }
 
 type SnapshotConstants struct {
-	Originator             string `toml:"originator" json:"originator"`
-	OpenAIBeta             string `toml:"openai_beta" json:"openai_beta"`
-	UserAgent              string `toml:"user_agent" json:"user_agent"`
-	BetaFeatures           string `toml:"beta_features" json:"beta_features"`
+	Originator              string `toml:"originator" json:"originator"`
+	OpenAIBeta              string `toml:"openai_beta" json:"openai_beta"`
+	UserAgent               string `toml:"user_agent" json:"user_agent"`
+	BetaFeatures            string `toml:"beta_features" json:"beta_features"`
 	StainlessPackageVersion string `toml:"stainless_package_version" json:"stainless_package_version"`
 }
 
@@ -127,10 +127,10 @@ type SnapshotConstants struct {
 // Empty Mismatches means the two are equivalent under the
 // snapshot's contract.
 type DiffReport struct {
-	Upstream    string         `json:"upstream"`
-	Mismatches  []DiffMismatch `json:"mismatches"`
-	Extra       []DiffMismatch `json:"extra"`
-	Missing     []DiffMismatch `json:"missing"`
+	Upstream   string         `json:"upstream"`
+	Mismatches []DiffMismatch `json:"mismatches"`
+	Extra      []DiffMismatch `json:"extra"`
+	Missing    []DiffMismatch `json:"missing"`
 }
 
 type DiffMismatch struct {

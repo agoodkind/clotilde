@@ -3,6 +3,7 @@ package codex
 import (
 	"encoding/json"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,14 +13,23 @@ import (
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
 
-type ChatRequest = adapteropenai.ChatRequest
-type ChatMessage = adapteropenai.ChatMessage
-type Tool = adapteropenai.Tool
-type ToolFunctionSchema = adapteropenai.ToolFunctionSchema
-type ToolCall = adapteropenai.ToolCall
-type ToolCallFunction = adapteropenai.ToolCallFunction
-type ResolvedModel = adaptermodel.ResolvedModel
-type codexInputItem = map[string]any
+type (
+	ChatRequest        = adapteropenai.ChatRequest
+	ChatMessage        = adapteropenai.ChatMessage
+	Tool               = adapteropenai.Tool
+	ToolFunctionSchema = adapteropenai.ToolFunctionSchema
+	ToolCall           = adapteropenai.ToolCall
+	ToolCallFunction   = adapteropenai.ToolCallFunction
+	ResolvedModel      = adaptermodel.ResolvedModel
+	codexInputItem     = map[string]any
+)
+
+type managedPromptPlanForTest struct {
+	System            string
+	FullPrompt        string
+	IncrementalPrompt string
+	AssistantAnchor   string
+}
 
 const (
 	EffortMedium = adaptermodel.EffortMedium
@@ -31,8 +41,120 @@ func mustRaw(s string) []byte {
 	return []byte(s)
 }
 
-func buildManagedPromptPlanForTest(messages []ChatMessage) ManagedPromptPlan {
-	return BuildManagedPromptPlan(messages, buildPromptForTest, adapteropenai.FlattenContent, SanitizeForUpstreamCache)
+func buildManagedPromptPlanForTest(messages []ChatMessage) managedPromptPlanForTest {
+	system, fullPrompt := buildPromptForTest(messages)
+	lastAssistant := -1
+	for idx, message := range slices.Backward(messages) {
+		if strings.EqualFold(strings.TrimSpace(message.Role), "assistant") {
+			lastAssistant = idx
+			break
+		}
+	}
+	incrementalMessages := messages
+	assistantAnchor := ""
+	if lastAssistant >= 0 {
+		incrementalMessages = messages[lastAssistant+1:]
+		assistantAnchor = strings.TrimSpace(SanitizeForUpstreamCache(adapteropenai.FlattenContent(messages[lastAssistant].Content)))
+	}
+	_, incrementalPrompt := buildPromptForTest(incrementalMessages)
+	incrementalPrompt = strings.TrimSpace(incrementalPrompt)
+	if incrementalPrompt == "" {
+		incrementalPrompt = strings.TrimSpace(fullPrompt)
+	}
+	return managedPromptPlanForTest{
+		System:            system,
+		FullPrompt:        strings.TrimSpace(fullPrompt),
+		IncrementalPrompt: incrementalPrompt,
+		AssistantAnchor:   assistantAnchor,
+	}
+}
+
+func deriveCacheCreationTokensForTest(previousCachedInputTokens, currentCachedInputTokens int) int {
+	derived := currentCachedInputTokens - previousCachedInputTokens
+	if derived < 0 {
+		return 0
+	}
+	return derived
+}
+
+func clientMetadataForTest(installationID, windowID string) map[string]string {
+	return ClientMetadataWithTurn(installationID, windowID, "")
+}
+
+func lifecycleEventForTest(item RPCThreadItem, completed bool) (adapterrender.Event, bool) {
+	itemType := strings.TrimSpace(item.Type)
+	status := strings.TrimSpace(item.Status)
+	switch itemType {
+	case "commandExecution", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "contextCompaction":
+		kind := adapterrender.EventToolStarted
+		if completed {
+			kind = adapterrender.EventToolCompleted
+		}
+		toolName := strings.TrimSpace(item.Command)
+		if toolName == "" {
+			toolName = strings.TrimSpace(item.Tool)
+		}
+		if toolName == "" {
+			toolName = strings.Trim(strings.Join([]string{strings.TrimSpace(item.Server), strings.TrimSpace(item.Tool)}, "/"), "/")
+		}
+		if toolName == "" {
+			toolName = itemType
+		}
+		if toolName == "" {
+			toolName = "tool"
+		}
+		return adapterrender.Event{
+			Kind:       kind,
+			ItemType:   itemType,
+			ItemStatus: status,
+			ItemID:     item.ID,
+			ToolName:   toolName,
+			ServerName: item.Server,
+			Command:    item.Command,
+			Completed:  completed,
+		}, true
+	case "fileChange":
+		changeCount := len(item.Changes)
+		if changeCount == 0 {
+			changeCount = 1
+		}
+		kind := adapterrender.EventFileChangeStarted
+		if completed {
+			kind = adapterrender.EventFileChangeCompleted
+		}
+		return adapterrender.Event{
+			Kind:        kind,
+			ItemType:    itemType,
+			ItemStatus:  status,
+			ItemID:      item.ID,
+			ChangeCount: changeCount,
+			Completed:   completed,
+		}, true
+	default:
+		return adapterrender.Event{}, false
+	}
+}
+
+func planEventForTest(explanation string, plan []RPCTurnPlanStep) (adapterrender.Event, bool) {
+	event := adapterrender.Event{
+		Kind:            adapterrender.EventPlanUpdated,
+		PlanExplanation: strings.TrimSpace(explanation),
+		Plan:            make([]adapterrender.EventPlanStep, 0, len(plan)),
+	}
+	for _, step := range plan {
+		label := strings.TrimSpace(step.Step)
+		if label == "" {
+			continue
+		}
+		event.Plan = append(event.Plan, adapterrender.EventPlanStep{
+			Step:   label,
+			Status: strings.TrimSpace(step.Status),
+		})
+	}
+	if event.PlanExplanation == "" && len(event.Plan) == 0 {
+		return adapterrender.Event{}, false
+	}
+	return event, true
 }
 
 func buildPromptForTest(messages []ChatMessage) (system, prompt string) {
@@ -832,7 +954,7 @@ func TestBuildCodexRequestPrefersCursorConversationPromptCacheKey(t *testing.T) 
 }
 
 func TestCodexClientMetadataIncludesInstallationAndWindowIDs(t *testing.T) {
-	got := ClientMetadata("acct-123", "cursor:conv-123:0")
+	got := clientMetadataForTest("acct-123", "cursor:conv-123:0")
 	if got["x-codex-installation-id"] != "acct-123" {
 		t.Fatalf("installation id=%q", got["x-codex-installation-id"])
 	}
@@ -883,7 +1005,7 @@ func TestCodexLifecycleEventSummarizesFileChange(t *testing.T) {
 			{Path: "b.txt", Kind: "update", Diff: "@@ b"},
 		},
 	}
-	got, ok := LifecycleEvent(item, true)
+	got, ok := lifecycleEventForTest(item, true)
 	if !ok {
 		t.Fatalf("expected lifecycle event")
 	}
@@ -896,7 +1018,7 @@ func TestCodexLifecycleEventSummarizesFileChange(t *testing.T) {
 }
 
 func TestCodexPlanEventFormatsSteps(t *testing.T) {
-	got, ok := PlanEvent("Clarifying tool usage", []RPCTurnPlanStep{
+	got, ok := planEventForTest("Clarifying tool usage", []RPCTurnPlanStep{
 		{Step: "inspect payloads", Status: "completed"},
 		{Step: "render tool output", Status: "inProgress"},
 	})
@@ -912,13 +1034,13 @@ func TestCodexPlanEventFormatsSteps(t *testing.T) {
 }
 
 func TestDeriveCodexCacheCreationTokens(t *testing.T) {
-	if got := DeriveCacheCreationTokens(0, 4096); got != 4096 {
+	if got := deriveCacheCreationTokensForTest(0, 4096); got != 4096 {
 		t.Fatalf("DeriveCacheCreationTokens first turn=%d want 4096", got)
 	}
-	if got := DeriveCacheCreationTokens(4096, 6144); got != 2048 {
+	if got := deriveCacheCreationTokensForTest(4096, 6144); got != 2048 {
 		t.Fatalf("DeriveCacheCreationTokens growth=%d want 2048", got)
 	}
-	if got := DeriveCacheCreationTokens(6144, 2048); got != 0 {
+	if got := deriveCacheCreationTokensForTest(6144, 2048); got != 0 {
 		t.Fatalf("DeriveCacheCreationTokens shrink=%d want 0", got)
 	}
 }
@@ -1257,8 +1379,10 @@ func TestParseCodexSSESeparatesSummaryFromReasoningBody(t *testing.T) {
 
 func TestCodexRendererSeparatesSummarySections(t *testing.T) {
 	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
-	firstChunks := r.HandleEvent(adapterrender.Event{Kind: adapterrender.EventReasoningDelta, Text: "First heading", ReasoningKind: "summary", SummaryIndex: codexIntPtr(0)})
-	secondChunks := r.HandleEvent(adapterrender.Event{Kind: adapterrender.EventReasoningDelta, Text: "Second heading", ReasoningKind: "summary", SummaryIndex: codexIntPtr(1)})
+	firstSummaryIndex := 0
+	secondSummaryIndex := 1
+	firstChunks := r.HandleEvent(adapterrender.Event{Kind: adapterrender.EventReasoningDelta, Text: "First heading", ReasoningKind: "summary", SummaryIndex: &firstSummaryIndex})
+	secondChunks := r.HandleEvent(adapterrender.Event{Kind: adapterrender.EventReasoningDelta, Text: "Second heading", ReasoningKind: "summary", SummaryIndex: &secondSummaryIndex})
 	first := firstChunks[0].Choices[0].Delta.Content
 	second := secondChunks[0].Choices[0].Delta.Content
 	if !strings.Contains(first, "<!--clyde-thinking-->") {
@@ -1325,10 +1449,6 @@ func collectToolCalls(chunks []adapteropenai.StreamChunk) []adapteropenai.ToolCa
 		out = append(out, ch.Choices[0].Delta.ToolCalls...)
 	}
 	return out
-}
-
-func codexIntPtr(v int) *int {
-	return &v
 }
 
 func codexInputContentType(item codexInputItem) string {

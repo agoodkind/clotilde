@@ -42,10 +42,10 @@ func DefaultEmptySettings() EmptySettings {
 
 // Options configures prune operations.
 type Options struct {
-	DryRun       bool
-	SkipConfirm  bool
-	Input        io.Reader
-	Empty        EmptySettings
+	DryRun         bool
+	SkipConfirm    bool
+	Input          io.Reader
+	Empty          EmptySettings
 	AutonameMinAge time.Duration
 }
 

@@ -25,6 +25,8 @@ type (
 	Registry      = adaptermodel.Registry
 )
 
-var NewRegistry = adaptermodel.NewRegistry
-var ClaudeEffortFlag = adaptermodel.ClaudeEffortFlag
-var ResolveFromConfig = adaptermodel.ResolveFromConfig
+var (
+	NewRegistry       = adaptermodel.NewRegistry
+	ClaudeEffortFlag  = adaptermodel.ClaudeEffortFlag
+	ResolveFromConfig = adaptermodel.ResolveFromConfig
+)

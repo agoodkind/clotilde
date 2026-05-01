@@ -104,18 +104,16 @@ func TestCacheConcurrentTakePutInvalidateRaceFree(t *testing.T) {
 	c := NewWebsocketSessionCache(nil, time.Minute)
 	c.Put(&WebsocketSession{ConversationID: "conv-1", OpenedAt: time.Now(), LastUsed: time.Now()})
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 50; j++ {
+	for range 8 {
+		wg.Go(func() {
+			for range 50 {
 				if s, ok := c.Take("conv-1"); ok {
 					c.Put(s)
 				}
 				_ = c.Size()
 				c.Invalidate("conv-other", "noop")
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }

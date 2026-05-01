@@ -33,7 +33,8 @@ func TestHealthOK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.StatusCode != 200 {
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("got %d", resp.StatusCode)
 	}
 }
@@ -45,7 +46,7 @@ func TestShutdownClosesIdleKeepaliveConnection(t *testing.T) {
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	s := New(config.WebAppConfig{}, Deps{}, log)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- s.StartOnListener(ctx, lis) }()
@@ -108,7 +109,7 @@ func TestCloseForceClosesActiveConnection(t *testing.T) {
 		case <-r.Context().Done():
 		}
 	})
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- s.StartOnListener(ctx, lis) }()
@@ -234,17 +235,19 @@ func TestTokenAuthEnforced(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.StatusCode != 401 {
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("no token status = %d, want 401", resp.StatusCode)
 	}
 
-	req, _ := http.NewRequest("GET", ts.URL+"/api/bridges", nil)
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/bridges", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	r2, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r2.StatusCode != 200 {
+	defer r2.Body.Close()
+	if r2.StatusCode != http.StatusOK {
 		t.Fatalf("with token = %d, want 200", r2.StatusCode)
 	}
 }

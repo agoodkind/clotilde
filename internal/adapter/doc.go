@@ -6,7 +6,7 @@
 //	OpenAI-compatible API input
 //	  -> Cursor normalization
 //	  -> backend routing
-//	  -> Anthropic / Codex / fallback execution
+//	  -> Anthropic / Codex execution
 //	  -> shared render + streaming output
 //
 // Root package responsibilities stay narrow:
@@ -22,14 +22,12 @@
 //   - `cursor`: Cursor-specific metadata/workspace normalization
 //   - `model`: registry and resolved model capabilities
 //   - `render`: normalized event rendering and Cursor/OpenAI-facing UX
-//   - `anthropic/backend`: Anthropic orchestration and Anthropic-local fallback policy
-//   - `codex`: Codex orchestration and Codex-local direct/app fallback policy
+//   - `anthropic/backend`: Anthropic orchestration
+//   - `codex`: Codex orchestration
 //   - `anthropic`: low-level Anthropic `/v1/messages` client
 //   - `oauth`: OAuth token lifecycle
-//   - `fallback`: CLI subprocess transport primitives
-//   - `tooltrans`: translation helpers and compatibility shims
 //   - `finishreason`: stop-reason mapping
 //
-// The root package still contains compatibility wrappers while the refactor is
-// in flight, but new adapter logic should prefer the focused subpackages above.
+// The root package keeps only thin shared shims where the daemon-facing facade
+// still needs them, such as SSE writer construction and legacy collect helpers.
 package adapter

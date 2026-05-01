@@ -5,34 +5,16 @@ import (
 	"strings"
 )
 
-// RenderPlainText formats messages as readable plain text.
-// Tool-only assistant turns render as compact summaries by default.
-func RenderPlainText(messages []Message) string {
-	return RenderPlainTextWithOptions(messages, DefaultShapeOptions())
-}
-
 func RenderPlainTextWithOptions(messages []Message, opts ShapeOptions) string {
 	return renderConversationMessages(ShapeConversation(messages, opts), -1)
-}
-
-func RenderMarkdown(messages []Message) string {
-	return RenderMarkdownWithOptions(messages, DefaultShapeOptions())
 }
 
 func RenderMarkdownWithOptions(messages []Message, opts ShapeOptions) string {
 	return RenderMarkdownConversation(ShapeConversation(messages, opts))
 }
 
-func RenderHTML(messages []Message) string {
-	return RenderHTMLWithOptions(messages, DefaultShapeOptions())
-}
-
 func RenderHTMLWithOptions(messages []Message, opts ShapeOptions) string {
 	return RenderHTMLConversation(ShapeConversation(messages, opts))
-}
-
-func RenderJSON(messages []Message) ([]byte, error) {
-	return RenderJSONWithOptions(messages, DefaultShapeOptions())
 }
 
 func RenderJSONWithOptions(messages []Message, opts ShapeOptions) ([]byte, error) {

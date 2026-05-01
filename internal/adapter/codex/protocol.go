@@ -12,7 +12,6 @@ import (
 	"goodkind.io/clyde/internal/adapter/finishreason"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
-	"goodkind.io/clyde/internal/adapter/tooltrans"
 )
 
 type Reasoning struct {
@@ -79,12 +78,12 @@ type transportResponse struct {
 	Status            string `json:"status,omitempty"`
 	IncompleteDetails struct {
 		Reason string `json:"reason,omitempty"`
-	} `json:"incomplete_details,omitempty"`
+	} `json:"incomplete_details"`
 	Usage struct {
 		OutputTokensDetails struct {
 			ReasoningTokens int `json:"reasoning_tokens,omitempty"`
-		} `json:"output_tokens_details,omitempty"`
-	} `json:"usage,omitempty"`
+		} `json:"output_tokens_details"`
+	} `json:"usage"`
 }
 
 type transportErrorBody struct {
@@ -108,14 +107,10 @@ type toolCallState struct {
 }
 
 func SanitizeForUpstreamCache(text string) string {
-	text = tooltrans.StripNoticeSentinel(text)
-	text = tooltrans.StripActivitySentinel(text)
-	text = tooltrans.StripThinkingSentinel(text)
+	text = StripNoticeSentinel(text)
+	text = StripActivitySentinel(text)
+	text = StripThinkingSentinel(text)
 	return text
-}
-
-func ClientMetadata(installationID, windowID string) map[string]string {
-	return ClientMetadataWithTurn(installationID, windowID, "")
 }
 
 // ClientMetadataWithTurn extends ClientMetadata with the
@@ -192,27 +187,6 @@ func EffectiveReasoning(req adapteropenai.ChatRequest, effort string) *Reasoning
 		return nil
 	}
 	return &out
-}
-
-// EffectiveAppEffort returns the reasoning effort the app transport
-// should use, or ReasoningEffortUnset if not configured. Callers
-// serialize via json `omitempty`, which drops the field when empty.
-// The string-typed enum mirrors codex_protocol::openai_models::ReasoningEffort.
-func EffectiveAppEffort(req adapteropenai.ChatRequest) ReasoningEffort {
-	if r := EffectiveReasoning(req, ""); r != nil {
-		return ReasoningEffort(r.Effort)
-	}
-	return ReasoningEffortUnset
-}
-
-// EffectiveAppSummary returns the reasoning summary mode for the app
-// transport, or ReasoningSummaryUnset if not configured. Mirrors
-// codex_protocol::config_types::ReasoningSummary.
-func EffectiveAppSummary(req adapteropenai.ChatRequest) ReasoningSummary {
-	if r := EffectiveReasoning(req, ""); r != nil {
-		return ReasoningSummary(r.Summary)
-	}
-	return ReasoningSummaryUnset
 }
 
 func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunResult, error) {
@@ -325,7 +299,8 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 			if eventNameLocal == "response.output_item.added" || eventNameLocal == "response.output_item.done" {
 				item := raw.Item
 				itemType := item.string("type")
-				if itemType == "function_call" {
+				switch itemType {
+				case "function_call":
 					itemID := strings.TrimSpace(item.string("id"))
 					callID := strings.TrimSpace(item.string("call_id"))
 					if itemID == "" {
@@ -381,7 +356,7 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 						}
 						state.ArgumentsEmitted = true
 					}
-				} else if itemType == "local_shell_call" {
+				case "local_shell_call":
 					if eventNameLocal == "response.output_item.done" && item != nil {
 						out.OutputItems = append(out.OutputItems, item.cloneMap())
 					}
@@ -406,7 +381,7 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 							slog.String("tool_name", "Shell"),
 						)
 					}
-				} else if itemType == "custom_tool_call" {
+				case "custom_tool_call":
 					if eventNameLocal == "response.output_item.done" && item != nil {
 						out.OutputItems = append(out.OutputItems, item.cloneMap())
 					}
@@ -440,8 +415,10 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 							slog.String("tool_name", cursorName),
 						)
 					}
-				} else if eventNameLocal == "response.output_item.done" && item != nil {
-					out.OutputItems = append(out.OutputItems, item.cloneMap())
+				default:
+					if eventNameLocal == "response.output_item.done" && item != nil {
+						out.OutputItems = append(out.OutputItems, item.cloneMap())
+					}
 				}
 				continue
 			}
@@ -545,12 +522,12 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 			}
 			continue
 		}
-		if strings.HasPrefix(line, "event:") {
-			eventName = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		if value, ok := strings.CutPrefix(line, "event:"); ok {
+			eventName = strings.TrimSpace(value)
 			continue
 		}
-		if strings.HasPrefix(line, "data:") {
-			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		if value, ok := strings.CutPrefix(line, "data:"); ok {
+			dataLines = append(dataLines, strings.TrimSpace(value))
 		}
 	}
 	if err := sc.Err(); err != nil {
