@@ -113,7 +113,7 @@ fingerprint-baseline approach was structurally wrong. Cross-process
 `previous_response_id` reuse with `store: false` is not supported by
 the upstream. The replacement approach is a persistent ws session
 cache with intra-connection `previous_response_id` chaining and a
-suffix-extension delta-input matcher. See Plan step 5 and `ISSUE-126`.
+suffix-extension delta-input matcher. See Plan step 5 and `CLYDE-145`.
 
 **Unresolved.** No `system` role observed on input items. The system
 prompt path is unknown. Likely a `developer`-role item flushed before the
@@ -192,7 +192,7 @@ Claude Code base URL because the public ingress is still OpenAI-shaped.
 Tracking:
 
 - `CLYDE-134` owns the inbound Claude-native ingress slice under `EPIC-8`.
-- `ISSUE-105` and `ISSUE-124` remain the adjacent outbound/provider-parity
+- `CLYDE-149` and `CLYDE-150` remain the adjacent outbound/provider-parity
   workstreams this depends on and reuses.
 
 Already done:
@@ -399,7 +399,7 @@ The Codex provider implements a strict superset of the wire behaviors observed
 across `codex` CLI (interactive), `codex exec` non-interactive, and Codex
 Desktop. Reference captures live in
 `research/codex/captures/2026-04-27/`. Implementation tracked in
-**ISSUE-126**. Drift detection harness is **ISSUE-125**.
+**CLYDE-145**. Drift detection harness is **CLYDE-144**.
 
 Transport. Direct websocket via gorilla/websocket (`transport_ws.go`)
 hitting `wss://chatgpt.com/backend-api/codex/responses` with the OAuth
@@ -410,7 +410,7 @@ Empirical timings. The websocket path is ~5x faster per turn than the
 subprocess (median ~860ms vs ~5300ms for a trivial completion against
 `gpt-5.3-codex`).
 
-Connection lifecycle (NEW, `ISSUE-126`).
+Connection lifecycle (NEW, `CLYDE-145`).
 
 - The provider maintains a per-conversation `WebsocketSessionCache`
   keyed on `cursorConversationId`. Each entry holds the live
@@ -430,7 +430,7 @@ Connection lifecycle (NEW, `ISSUE-126`).
   baseline divergence, idle timeout (default 10 minutes), or daemon
   shutdown.
 
-Identity headers (NEW, `ISSUE-126`).
+Identity headers (NEW, `CLYDE-145`).
 
 - `originator: clyde` (own first-party identity, not spoofed
   `codex_exec` or `Codex Desktop`).
@@ -457,7 +457,7 @@ Status of deletions (DONE 2026-04-27).
 - [x] Dropped `Codex.AppServerPath`, `Codex.AppFallback`,
       `Codex.AppFallbackTimeout`, `Codex.WebsocketEnabled`.
 
-Outstanding (`ISSUE-126`). All done as of 2026-04-28.
+Outstanding (`CLYDE-145`). All done as of 2026-04-28.
 
 - [x] `internal/adapter/codex/installation.go` reads
       `~/.codex/installation_id` or generates a persisted clyde uuid.
@@ -491,9 +491,9 @@ cross-connection `previous_response_id` reuse with `store: false` is
 structurally not supported by the upstream. The 1/6 hit rate observed
 from the existing fingerprint matcher is misleading; even the 1 "hit"
 would have failed at the upstream had the prior connection actually
-closed. The fingerprint approach was solving the wrong problem. `ISSUE-126`
+closed. The fingerprint approach was solving the wrong problem. `CLYDE-145`
 replaces it with the persistent ws session cache plus delta-input
-suffix-extension matcher described in step 5 above. `ISSUE-123`
+suffix-extension matcher described in step 5 above. `CLYDE-147`
 (continuation hit rate) closes as superseded.
 
 ### 6. Render layer is the only OpenAI framing owner

@@ -143,8 +143,8 @@ The current best guess for the first useful compatibility slice is:
 3. A native model-list surface if Claude Code calls it on the same base
    URL during startup or validation
 
-This remains separate from outbound parity work. `ISSUE-105` and
-`ISSUE-124` cover provider ownership and byte-identical claude-cli wire
+This remains separate from outbound parity work. `CLYDE-149` and
+`CLYDE-150` cover provider ownership and byte-identical claude-cli wire
 calls. `CLYDE-134` is the inbound facade slice that lets Claude Code
 point at Clyde directly.
 

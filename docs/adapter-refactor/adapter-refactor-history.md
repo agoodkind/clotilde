@@ -166,7 +166,7 @@ Event renderer audit underway. All call sites now import types directly from `in
 
 Codex tests relocated to package files. Root tests narrowed to routing and auth concerns.
 
-## 2026-04-27. Codex parity superset (`ISSUE-126`).
+## 2026-04-27. Codex parity superset (`CLYDE-145`).
 
 A MITM investigation against `codex` CLI (interactive plus `codex exec`) and
 Codex Desktop established the wire contract our adapter was missing. Captures
@@ -214,14 +214,14 @@ Live verification result on a 3-turn Cursor agent session
 | `Previous response with id ... not found.` errors | 0             | 0                                                  |
 | `adapter.request.failed` events                   | 0             | 0                                                  |
 
-Plan 5b (the fingerprint matcher) is superseded. `ISSUE-123` closes as
-"superseded by `ISSUE-126`; cross-process `previous_response_id` reuse with
+Plan 5b (the fingerprint matcher) is superseded. `CLYDE-147` closes as
+"superseded by `CLYDE-145`; cross-process `previous_response_id` reuse with
 `store: false` is structurally not supported by the upstream; the persistent
 ws session cache plus delta-input matcher is the correct fix."
 
 Follow-ups (not blocking):
 
-- `ISSUE-125` MITM harness still open. Captures from this session seed it.
+- `CLYDE-144` MITM harness still open. Captures from this session seed it.
 - `ContinuationStore` remains in tree on the legacy fresh-dial path; remove
   once that path also routes through the cache.
 - The `workspaces` block in `x-codex-turn-metadata` is empty for Cursor
