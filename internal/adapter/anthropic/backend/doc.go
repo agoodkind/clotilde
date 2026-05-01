@@ -1,4 +1,4 @@
 // Package anthropicbackend owns Anthropic backend orchestration, including
-// request execution, response assembly, notice/error surfacing, and
-// Anthropic-local fallback escalation policy above the low-level client.
+// request execution, response assembly, and notice/error surfacing above
+// the low-level client.
 package anthropicbackend

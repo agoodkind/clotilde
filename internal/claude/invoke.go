@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	claudeartifacts "goodkind.io/clyde/internal/claude/artifacts"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/mitm"
@@ -35,6 +36,135 @@ const (
 type monitorState struct {
 	sawConnectionError bool
 	reloadRequested    atomic.Bool
+}
+
+type SessionSettingsStore interface {
+	LoadSettings(name string) (*session.Settings, error)
+	SaveSettings(name string, settings *session.Settings) error
+}
+
+type ResumeOptions struct {
+	CurrentWorkDir   string
+	AdditionalArgs   []string
+	ExtraEnvironment map[string]string
+	EnableSelfReload bool
+}
+
+var (
+	startNewInteractiveFunc     = StartNewInteractive
+	resumeInteractiveFunc       = Resume
+	resumeOpaqueInteractiveFunc = ResumeByName
+)
+
+// Lifecycle keeps Claude-specific session follow-through below the generic
+// session launch contract.
+type Lifecycle struct {
+	settingsStore SessionSettingsStore
+}
+
+var (
+	_ session.SessionLauncher           = (*Lifecycle)(nil)
+	_ session.SessionResumer            = (*Lifecycle)(nil)
+	_ session.OpaqueSessionResumer      = (*Lifecycle)(nil)
+	_ session.ResumeInstructionProvider = (*Lifecycle)(nil)
+	_ session.ContextMessageProvider    = (*Lifecycle)(nil)
+	_ session.ArtifactCleaner           = (*Lifecycle)(nil)
+)
+
+func NewLifecycle(settingsStore SessionSettingsStore) *Lifecycle {
+	return &Lifecycle{settingsStore: settingsStore}
+}
+
+func (l *Lifecycle) StartInteractive(_ context.Context, req session.StartRequest) error {
+	if req.Launch.Intent != "" && req.Launch.Intent != session.LaunchIntentNewSession {
+		return fmt.Errorf("unsupported launch intent for claude lifecycle: %q", req.Launch.Intent)
+	}
+
+	sessionID := util.GenerateUUID()
+	env := map[string]string{
+		"CLYDE_SESSION_NAME": req.SessionName,
+	}
+	if strings.TrimSpace(req.Launch.WorkDir) != "" {
+		env["CLYDE_LAUNCH_CWD"] = req.Launch.WorkDir
+	}
+
+	if err := startNewInteractiveFunc(env, "", req.Launch.WorkDir, req.Launch.EnableRemoteControl, sessionID); err != nil {
+		return err
+	}
+	if !req.Launch.EnableRemoteControl || l.settingsStore == nil {
+		return nil
+	}
+	if err := PersistRemoteControlSetting(l.settingsStore, req.SessionName); err != nil {
+		slog.Warn("claude.session.start.persist_remote_control_failed",
+			"component", "claude",
+			"session", req.SessionName,
+			"err", err,
+		)
+		return nil
+	}
+	slog.Info("claude.session.start.remote_control_persisted",
+		"component", "claude",
+		"session", req.SessionName,
+		"remote_control", true,
+	)
+	return nil
+}
+
+func (l *Lifecycle) ResumeInteractive(_ context.Context, req session.ResumeRequest) error {
+	if req.Session == nil {
+		return fmt.Errorf("nil session")
+	}
+	return resumeInteractiveFunc(config.GlobalDataDir(), req.Session, ResumeOptions{
+		CurrentWorkDir:   req.Options.CurrentWorkDir,
+		EnableSelfReload: req.Options.EnableSelfReload,
+	})
+}
+
+func (l *Lifecycle) ResumeOpaqueInteractive(_ context.Context, req session.OpaqueResumeRequest) error {
+	return resumeOpaqueInteractiveFunc(req.Query, req.AdditionalArgs)
+}
+
+func (l *Lifecycle) ResumeInstructions(sess *session.Session) []string {
+	if sess == nil {
+		return nil
+	}
+	sessionID := strings.TrimSpace(sess.Metadata.SessionID)
+	if sessionID == "" {
+		return nil
+	}
+	return []string{fmt.Sprintf("claude --resume %s", sessionID)}
+}
+
+func (l *Lifecycle) RecentContextMessages(sess *session.Session, limit, maxLen int) []session.ContextMessage {
+	if sess == nil || strings.TrimSpace(sess.Metadata.TranscriptPath) == "" {
+		return nil
+	}
+	recent := ExtractRecentMessages(sess.Metadata.TranscriptPath, limit, maxLen)
+	out := make([]session.ContextMessage, 0, len(recent))
+	for _, msg := range recent {
+		out = append(out, session.ContextMessage{
+			Role: msg.Role,
+			Text: msg.Text,
+		})
+	}
+	return out
+}
+
+func (l *Lifecycle) DeleteArtifacts(_ context.Context, req session.DeleteArtifactsRequest) error {
+	if req.Session == nil {
+		return fmt.Errorf("nil session")
+	}
+	deleted, err := deleteSessionArtifacts(req.ClydeRoot, req.Session)
+	if err != nil {
+		return err
+	}
+	slog.Info("claude.session.artifacts_deleted",
+		"component", "claude",
+		"session", req.Session.Name,
+		"transcript_count", len(deleted.Transcript),
+		"agent_log_count", len(deleted.AgentLogs),
+	)
+	return nil
 }
 
 // appendCommonArgs adds settings flags and global defaults to the arg list.
@@ -64,22 +194,58 @@ func remoteControlEnabled(settingsFile string) bool {
 	return err == nil && cfg.Defaults.RemoteControl
 }
 
+func sessionSettingsFile(clydeRoot string, sessionName string) string {
+	if strings.TrimSpace(clydeRoot) == "" || strings.TrimSpace(sessionName) == "" {
+		return ""
+	}
+	settingsPath := filepath.Join(config.GetSessionDir(clydeRoot, sessionName), "settings.json")
+	if !util.FileExists(settingsPath) {
+		return ""
+	}
+	return settingsPath
+}
+
+func resumeAdditionalArgs(sess *session.Session, currentWorkDir string) []string {
+	currentWorkDir = strings.TrimSpace(currentWorkDir)
+	if currentWorkDir == "" {
+		return nil
+	}
+	if sess == nil || sess.Metadata.WorkspaceRoot == "" {
+		return nil
+	}
+	if currentWorkDir == sess.Metadata.WorkspaceRoot {
+		return nil
+	}
+	return []string{"--add-dir", currentWorkDir}
+}
+
+func PersistRemoteControlSetting(store SessionSettingsStore, sessionName string) error {
+	settings, err := store.LoadSettings(sessionName)
+	if err != nil {
+		return err
+	}
+	if settings == nil {
+		settings = &session.Settings{}
+	}
+	settings.RemoteControl = true
+	return store.SaveSettings(sessionName, settings)
+}
+
 // Resume invokes claude CLI to resume an existing session.
-func Resume(
-	clydeRoot string,
-	sess *session.Session,
-	settingsFile string,
-	additionalArgs []string,
-	extraEnvironment map[string]string,
-) error {
+func Resume(clydeRoot string, sess *session.Session, opts ResumeOptions) error {
+	settingsFile := sessionSettingsFile(clydeRoot, sess.Name)
 	args := []string{"--resume", sess.Metadata.SessionID, "-n", sess.Name}
 	args = appendCommonArgs(args, settingsFile)
-	args = append(args, additionalArgs...)
+	args = append(args, resumeAdditionalArgs(sess, opts.CurrentWorkDir)...)
+	args = append(args, opts.AdditionalArgs...)
 
 	env := map[string]string{
 		"CLYDE_SESSION_NAME": sess.Name,
 	}
-	maps.Copy(env, extraEnvironment)
+	if opts.EnableSelfReload {
+		env[envEnableSelfReload] = "1"
+	}
+	maps.Copy(env, opts.ExtraEnvironment)
 	applyMITMEnv(env)
 
 	if sess.Metadata.IsIncognito {
@@ -345,19 +511,9 @@ func invokeWithCleanup(clydeRoot string, sess *session.Session, args []string, e
 // cleanupIncognitoSession deletes session folder and Claude data.
 // Returns DeletedFiles with info about what was deleted.
 func cleanupIncognitoSession(clydeRoot string, sess *session.Session) (*DeletedFiles, error) {
-	deleted := &DeletedFiles{
-		Transcript: []string{},
-		AgentLogs:  []string{},
-	}
-
-	// Delete Claude data (transcript + agent logs)
-	claudeDeleted, err := DeleteSessionData(clydeRoot, sess.Metadata.SessionID, sess.Metadata.TranscriptPath)
+	deleted, err := deleteSessionArtifacts(clydeRoot, sess)
 	if err != nil {
-		// Log but continue - session folder cleanup is more important
 		fmt.Fprintf(os.Stderr, "Warning: failed to delete Claude data: %v\n", err)
-	} else {
-		deleted.Transcript = append(deleted.Transcript, claudeDeleted.Transcript...)
-		deleted.AgentLogs = append(deleted.AgentLogs, claudeDeleted.AgentLogs...)
 	}
 
 	// Delete session folder
@@ -367,6 +523,10 @@ func cleanupIncognitoSession(clydeRoot string, sess *session.Session) (*DeletedF
 	}
 
 	return deleted, nil
+}
+
+func deleteSessionArtifacts(clydeRoot string, sess *session.Session) (*DeletedFiles, error) {
+	return claudeartifacts.DeleteSessionArtifacts(clydeRoot, sess)
 }
 
 // DefaultSessionUsed checks if a Claude Code session was actually used by looking

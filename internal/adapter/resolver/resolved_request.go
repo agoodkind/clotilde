@@ -3,6 +3,7 @@ package resolver
 import (
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	"goodkind.io/clyde/internal/correlation"
 )
 
 // ContextBudget describes the advertised token budget for a resolved
@@ -26,7 +27,10 @@ type ContextBudget struct {
 //   - the resolved model identity (Provider, Family, Model, Effort,
 //     Verbosity, ContextBudget) that the dispatcher uses to look up
 //     the right provider and that the provider uses to populate its
-//     wire payload.
+//     wire payload;
+//   - the adapter-generated request id (RequestID), when the HTTP
+//     boundary has one, for cross-layer logging and upstream request
+//     correlation.
 //
 // Every field is typed. There is no any, no interface{}, no
 // map[string]any.
@@ -37,6 +41,8 @@ type ResolvedRequest struct {
 	Effort        Effort
 	Verbosity     string
 	ContextBudget ContextBudget
+	RequestID     string
+	Correlation   correlation.Context
 
 	Cursor adaptercursor.Request
 	OpenAI adapteropenai.ChatRequest

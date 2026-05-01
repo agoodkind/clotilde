@@ -41,4 +41,7 @@ type Result struct {
 	// tokens that contributed to a new prompt-cache entry. Used by
 	// the cost log; not part of the OpenAI wire usage block.
 	DerivedCacheCreationTokens int
+	// UpstreamResponseID is the provider-native response id when the
+	// upstream exposes one. It is logged for cross-layer correlation.
+	UpstreamResponseID string
 }

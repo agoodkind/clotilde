@@ -1,19 +1,22 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
 	"github.com/spf13/cobra"
 
-	"goodkind.io/clyde/internal/claude"
+	"goodkind.io/clyde/internal/session"
+	sessionlifecycle "goodkind.io/clyde/internal/session/lifecycle"
 )
 
 // NewResumeCmd implements `clyde resume <name|uuid>`. It resolves the
 // argument against the clyde session store (by name, UUID, display
-// name, or fuzzy match) and shells out to `claude --resume <real-uuid>`.
-// When nothing matches, it forwards the raw argument to
-// claude.ResumeByName so Claude-native sessions resume transparently.
+// name, or fuzzy match) and shells out through the provider runtime with the
+// resolved provider session id. When nothing matches, it forwards the raw
+// query to the default provider runtime so upstream-native sessions resume
+// transparently.
 //
 // `clyde -r <uuid>` and `clyde --resume <uuid>` are rewritten to this
 // verb by ClassifyArgs in dispatch.go, so all three forms share one
@@ -21,7 +24,7 @@ import (
 func NewResumeCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:                "resume <name|uuid>",
-		Short:              "Resolve a clyde session name to its UUID and resume it via claude",
+		Short:              "Resolve a clyde session name to its provider session id and resume it",
 		Args:               cobra.ExactArgs(1),
 		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -39,13 +42,19 @@ func NewResumeCmd() *cobra.Command {
 				return err
 			}
 			if sess == nil {
-				slog.Info("cli.resume.unknown_session.forwarding_to_claude",
+				slog.Info("cli.resume.unknown_session.forwarding_to_provider",
 					"component", "cli",
 					"query", query,
 				)
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(),
-					"Session '%s' not in clyde; forwarding to claude.\n\n", query)
-				return claude.ResumeByName(query, nil)
+					"Session '%s' not in clyde; forwarding to the default provider.\n\n", query)
+				runtime, err := sessionlifecycle.Default(store)
+				if err != nil {
+					return err
+				}
+				return runtime.ResumeOpaqueInteractive(context.Background(), session.OpaqueResumeRequest{
+					Query: query,
+				})
 			}
 			slog.Info("cli.resume.resolved",
 				"component", "cli",

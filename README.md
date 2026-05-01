@@ -1,6 +1,6 @@
 # Clyde
 
-Clyde is a thin wrapper around Claude Code.
+Clyde is a thick wrapper around Claude Code and Codex.
 
 It keeps human-readable session names, adds append-only compaction, and
 provides a daemon-backed dashboard for managing Claude sessions without
@@ -290,8 +290,6 @@ reinstalling keeps the same path and code-signing identity.
 curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b "$(go env GOPATH)/bin"
 ```
 
-## About the Name
+## License
 
-Clyde is a short ASCII project name that stays easy to type.
-
-Built with [Claude Code](https://claude.ai/code).
+This project is licensed under the MIT License. See `LICENSE`.

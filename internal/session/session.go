@@ -1,11 +1,8 @@
 package session
 
-import (
-	"slices"
-	"time"
-)
+import "time"
 
-// Session represents a named Claude Code session.
+// Session represents a named provider session.
 type Session struct {
 	Name     string
 	Metadata Metadata
@@ -13,19 +10,20 @@ type Session struct {
 
 // Metadata represents the session metadata stored in metadata.json.
 type Metadata struct {
-	Name                 string    `json:"name"`
-	SessionID            string    `json:"sessionId"`
-	TranscriptPath       string    `json:"transcriptPath,omitempty"`
-	WorkDir              string    `json:"workDir,omitempty"`
-	Created              time.Time `json:"created"`
-	LastAccessed         time.Time `json:"lastAccessed"`
-	ParentSession        string    `json:"parentSession,omitempty"`
-	IsForkedSession      bool      `json:"isForkedSession"`
-	IsIncognito          bool      `json:"isIncognito"`
-	PreviousSessionIDs   []string  `json:"previousSessionIds,omitempty"`
-	Context              string    `json:"context,omitempty"`
-	HasCustomOutputStyle bool      `json:"hasCustomOutputStyle,omitempty"`
-	WorkspaceRoot        string    `json:"workspaceRoot,omitempty"`
+	Name                 string     `json:"name"`
+	Provider             ProviderID `json:"provider,omitempty"`
+	SessionID            string     `json:"sessionId"`
+	TranscriptPath       string     `json:"transcriptPath,omitempty"`
+	WorkDir              string     `json:"workDir,omitempty"`
+	Created              time.Time  `json:"created"`
+	LastAccessed         time.Time  `json:"lastAccessed"`
+	ParentSession        string     `json:"parentSession,omitempty"`
+	IsForkedSession      bool       `json:"isForkedSession"`
+	IsIncognito          bool       `json:"isIncognito"`
+	PreviousSessionIDs   []string   `json:"previousSessionIds,omitempty"`
+	Context              string     `json:"context,omitempty"`
+	HasCustomOutputStyle bool       `json:"hasCustomOutputStyle,omitempty"`
+	WorkspaceRoot        string     `json:"workspaceRoot,omitempty"`
 
 	// ContextMessageCount is the message count at the moment Context was
 	// last generated. The TUI uses it to decide when the summary is stale
@@ -69,6 +67,7 @@ func NewSession(name, sessionID string) *Session {
 		Name: name,
 		Metadata: Metadata{
 			Name:            name,
+			Provider:        ProviderClaude,
 			SessionID:       sessionID,
 			Created:         now,
 			LastAccessed:    now,
@@ -82,15 +81,63 @@ func (s *Session) UpdateLastAccessed() {
 	s.Metadata.LastAccessed = time.Now()
 }
 
+// ProviderID returns the normalized provider for the session.
+func (s *Session) ProviderID() ProviderID {
+	return s.Metadata.ProviderID()
+}
+
+// Identity returns the provider-aware identity for the session.
+func (s *Session) Identity() SessionIdentity {
+	return s.Metadata.Identity(s.Name)
+}
+
+// SessionProviderCapabilities returns the capabilities for the session provider.
+func (s *Session) SessionProviderCapabilities() ProviderCapabilities {
+	return ProviderInfo(s.ProviderID()).Capabilities
+}
+
+// ProviderID returns the normalized provider for stored metadata.
+func (m Metadata) ProviderID() ProviderID {
+	return NormalizeProviderID(m.Provider)
+}
+
+// Identity returns the provider-aware identity for stored metadata.
+func (m Metadata) Identity(name string) SessionIdentity {
+	previous := make([]ProviderSessionID, 0, len(m.PreviousSessionIDs))
+	provider := m.ProviderID()
+	for _, previousSessionID := range m.PreviousSessionIDs {
+		previous = append(previous, ProviderSessionID{
+			Provider: provider,
+			ID:       previousSessionID,
+		})
+	}
+	return SessionIdentity{
+		Name: name,
+		Current: ProviderSessionID{
+			Provider: provider,
+			ID:       m.SessionID,
+		},
+		Previous: previous,
+	}
+}
+
+// RotateIdentity records the current provider session id as historical state and
+// replaces it with the new primary identity.
+func (s *Session) RotateIdentity(next ProviderSessionID) {
+	identity := s.Identity()
+	next = next.Normalized()
+	if current := identity.Current.Normalized(); !current.IsZero() && current != next {
+		s.Metadata.PreviousSessionIDs = appendUniqueString(s.Metadata.PreviousSessionIDs, current.ID)
+	}
+	s.Metadata.Provider = next.Provider
+	s.Metadata.SessionID = next.ID
+}
+
 // AddPreviousSessionID appends the current session ID to the history and updates to the new ID.
 // This is idempotent - won't add duplicates.
 func (s *Session) AddPreviousSessionID(newSessionID string) {
-	// Only add current ID to history if it's not empty and different from new ID
-	if s.Metadata.SessionID != "" && s.Metadata.SessionID != newSessionID {
-		if !slices.Contains(s.Metadata.PreviousSessionIDs, s.Metadata.SessionID) {
-			s.Metadata.PreviousSessionIDs = append(s.Metadata.PreviousSessionIDs, s.Metadata.SessionID)
-		}
-	}
-
-	s.Metadata.SessionID = newSessionID
+	s.RotateIdentity(ProviderSessionID{
+		Provider: s.ProviderID(),
+		ID:       newSessionID,
+	})
 }

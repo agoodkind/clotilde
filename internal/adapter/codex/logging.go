@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"goodkind.io/clyde/internal/correlation"
 )
 
 // BodyLogConfig controls how much of the outbound Codex request bytes
@@ -93,6 +95,8 @@ type requestEvent struct {
 	Transport          string
 	Method             string
 	RequestID          string
+	CursorRequestID    string
+	Correlation        correlation.Context
 	Alias              string
 	Model              string
 	URL                string
@@ -123,6 +127,10 @@ func (e requestEvent) toSlogAttrs() []slog.Attr {
 	if e.RequestID != "" {
 		attrs = append(attrs, slog.String("request_id", e.RequestID))
 	}
+	if e.CursorRequestID != "" {
+		attrs = append(attrs, slog.String("cursor_request_id", e.CursorRequestID))
+	}
+	attrs = append(attrs, e.Correlation.Attrs()...)
 	if e.Alias != "" {
 		attrs = append(attrs, slog.String("alias", e.Alias))
 	}

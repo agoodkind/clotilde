@@ -107,15 +107,16 @@ func TestLogCodexEventDoubleWritesToDedicatedSink(t *testing.T) {
 	})
 
 	ev := requestEvent{
-		Subcomponent: "codex",
-		Transport:    "responses_http",
-		RequestID:    "req-test",
-		Alias:        "gpt-5",
-		Model:        "gpt-5",
-		URL:          "https://example/codex/v1/responses",
-		BodyBytes:    42,
-		Body:         `{"hello":"world"}`,
-		BodyB64:      "eyJoZWxsbyI6IndvcmxkIn0=",
+		Subcomponent:    "codex",
+		Transport:       "responses_http",
+		RequestID:       "req-test",
+		CursorRequestID: "cursor-req-test",
+		Alias:           "gpt-5",
+		Model:           "gpt-5",
+		URL:             "https://example/codex/v1/responses",
+		BodyBytes:       42,
+		Body:            `{"hello":"world"}`,
+		BodyB64:         "eyJoZWxsbyI6IndvcmxkIn0=",
 	}
 	logCodexEvent(context.Background(), slog.LevelDebug, "codex.responses.request", ev.toSlogAttrs())
 
@@ -128,6 +129,9 @@ func TestLogCodexEventDoubleWritesToDedicatedSink(t *testing.T) {
 	}
 	if !strings.Contains(string(got), `"request_id":"req-test"`) {
 		t.Errorf("sink missing request_id: %s", string(got))
+	}
+	if !strings.Contains(string(got), `"cursor_request_id":"cursor-req-test"`) {
+		t.Errorf("sink missing cursor_request_id: %s", string(got))
 	}
 	if !strings.Contains(string(got), `"body":"{\"hello\":\"world\"}"`) {
 		t.Errorf("sink missing body bytes: %s", string(got))

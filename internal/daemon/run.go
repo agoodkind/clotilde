@@ -191,7 +191,10 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
 	}
 	defer srv.Close()
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(daemonUnaryCorrelationInterceptor(log)),
+		grpc.StreamInterceptor(daemonStreamCorrelationInterceptor(log)),
+	)
 	clydev1.RegisterClydeServiceServer(grpcServer, srv)
 
 	rt := &daemonRuntime{listener: listener}

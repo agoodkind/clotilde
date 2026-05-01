@@ -15,7 +15,7 @@ const defaultProviderFinishReason = "stop"
 // shared OpenAI SSE writer. Providers emit normalized render events;
 // the adapter renders them into streamed OpenAI chunks privately.
 type providerStreamWriter struct {
-	sse               *sseWriter
+	sse               *adapteropenai.SSEWriter
 	systemFingerprint string
 	headersWritten    bool
 	flusher           http.Flusher
@@ -31,7 +31,7 @@ func newProviderStreamWriter(
 	modelAlias string,
 	backend string,
 ) (*providerStreamWriter, error) {
-	sse, err := newSSEWriter(w)
+	sse, err := adapteropenai.NewSSEWriter(w)
 	if err != nil {
 		return nil, err
 	}

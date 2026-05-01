@@ -18,6 +18,8 @@ import (
 type WebsocketSession struct {
 	Conn               *websocket.Conn
 	ConversationID     string
+	Model              string
+	PromptCacheKey     string
 	LastResponseID     string
 	LastInputItems     []map[string]any
 	OpenedAt           time.Time

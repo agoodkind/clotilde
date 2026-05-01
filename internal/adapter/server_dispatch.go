@@ -12,6 +12,7 @@ import (
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
+	"goodkind.io/clyde/internal/correlation"
 )
 
 // CountNormalizedTools counts tools that arrived without a `function` key
@@ -87,7 +88,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reqID := newRequestID()
-	w.Header().Set("x-clyde-request-id", reqID)
+	corr := correlation.FromHTTPHeader(r.Header, reqID)
+	corr.SetHTTPHeaders(w.Header())
+	ctx := correlation.WithContext(r.Context(), corr)
+	r = r.WithContext(ctx)
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 8<<20))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "failed to read body")
@@ -95,7 +99,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	bodyBytes := len(body)
-	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.chat.ingress",
+	ingressAttrs := []slog.Attr{
 		slog.String("request_id", reqID),
 		slog.String("method", r.Method),
 		slog.String("path", r.URL.Path),
@@ -104,9 +108,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		slog.String("user_agent", r.UserAgent()),
 		slog.String("cf_ray", r.Header.Get("Cf-Ray")),
 		slog.String("cf_connecting_ip", r.Header.Get("Cf-Connecting-Ip")),
-	)
+	}
+	ingressAttrs = append(ingressAttrs, corr.Attrs()...)
+	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.ingress", ingressAttrs...)
 	discovery := DiscoverRequest(body)
-	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.chat.discovery",
+	discoveryAttrs := []slog.Attr{
 		slog.String("request_id", reqID),
 		slog.Int("body_bytes", discovery.BodyBytes),
 		slog.Any("top_level_keys", discovery.TopLevelKeys),
@@ -128,7 +134,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		slog.Bool("has_mcp_like_fields", discovery.HasMCPLikeFields),
 		slog.Any("mcp_like_field_names", discovery.MCPLikeFieldNames),
 		slog.Any("header_names", HeaderNames(r.Header)),
-	)
+	}
+	discoveryAttrs = append(discoveryAttrs, corr.Attrs()...)
+	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.discovery", discoveryAttrs...)
 	rawAttrs := rawChatLogEvent{
 		RequestID:  reqID,
 		Method:     r.Method,
@@ -218,6 +226,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		req.ReasoningEffort = strings.TrimSpace(req.Reasoning.Effort)
 	}
 	cursorReq := adaptercursor.TranslateRequest(req)
+	corr = corr.WithCursor(cursorReq.RequestID, cursorReq.ConversationID)
+	ctx = correlation.WithContext(ctx, corr)
+	r = r.WithContext(ctx)
 	req.Model = cursorReq.NormalizedModel
 
 	model, effort, err := s.registry.Resolve(req.Model, req.ReasoningEffort)
@@ -228,6 +239,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			slog.String("err", err.Error()),
 		}
 		attrs = append(attrs, adaptercursor.BoundaryLogAttrs(cursorReq, cursorReq.OpenAI.Model, nil)...)
+		attrs = append(attrs, corr.Attrs()...)
 		s.log.LogAttrs(r.Context(), slog.LevelWarn, "adapter.model.resolve_failed", attrs...)
 		writeModelResolutionError(w, err.Error())
 		return
@@ -242,6 +254,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		slog.Bool("stream", req.Stream),
 	}
 	resolveAttrs = append(resolveAttrs, adaptercursor.BoundaryLogAttrs(cursorReq, cursorReq.OpenAI.Model, nil)...)
+	resolveAttrs = append(resolveAttrs, corr.Attrs()...)
 	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.model.resolved", resolveAttrs...)
 
 	// Step D: build the typed resolver.ResolvedRequest alongside the
@@ -257,7 +270,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			slog.String("err", resolverErr.Error()),
 		)
 	} else {
-		s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.resolver.resolved",
+		resolvedReq.RequestID = reqID
+		resolvedReq.Correlation = corr
+		resolverAttrs := []slog.Attr{
 			slog.String("request_id", reqID),
 			slog.String("alias", req.Model),
 			slog.String("provider", resolvedReq.Provider.String()),
@@ -271,7 +286,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			slog.Bool("has_create_plan_tool", cursorReq.HasCreatePlanTool),
 			slog.Bool("has_apply_patch_tool", cursorReq.HasApplyPatchTool),
 			slog.Int("mcp_tool_count", len(cursorReq.MCPToolNames)),
-		)
+		}
+		resolverAttrs = append(resolverAttrs, corr.Attrs()...)
+		s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.resolver.resolved", resolverAttrs...)
 	}
 	var ok bool
 	model, ok = s.applyBackendOverride(w, r, req, model, reqID)
@@ -303,6 +320,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		attrs = append(attrs, slog.String("cursor_request_id", cursor.RequestID))
 	}
 	attrs = append(attrs, adaptercursor.BoundaryLogAttrs(cursorReq, cursorReq.OpenAI.Model, toolNames)...)
+	attrs = append(attrs, corr.Attrs()...)
 	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.chat.received",
 		attrs...,
 	)

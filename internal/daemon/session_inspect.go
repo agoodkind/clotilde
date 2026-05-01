@@ -5,10 +5,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -16,7 +14,6 @@ import (
 	"time"
 
 	itranscript "goodkind.io/clyde/internal/transcript"
-	"goodkind.io/clyde/internal/util"
 )
 
 type inspectMessage struct {
@@ -48,11 +45,6 @@ type inspectExportStats struct {
 	SystemPrompts         int
 	Compactions           int
 	TranscriptSizeBytes   int64
-}
-
-type daemonDeletedFiles struct {
-	Transcript []string
-	AgentLogs  []string
 }
 
 var daemonModelFamilyRegex = regexp.MustCompile(`claude-(?:\d+-)*(\w+)-\d+`)
@@ -483,63 +475,4 @@ func inspectForEachTailLine(transcriptPath string, tailSize int, fn func(line []
 			return readErr
 		}
 	}
-}
-
-func daemonDeleteSessionData(clydeRoot, sessionID, transcriptPath string) error {
-	deleted := &daemonDeletedFiles{}
-	var claudeProjectDir string
-	if transcriptPath != "" {
-		if util.FileExists(transcriptPath) {
-			if err := os.Remove(transcriptPath); err != nil {
-				return fmt.Errorf("delete transcript: %w", err)
-			}
-			deleted.Transcript = append(deleted.Transcript, transcriptPath)
-		}
-		claudeProjectDir = filepath.Dir(transcriptPath)
-	} else {
-		projectRoot := filepath.Dir(filepath.Dir(clydeRoot))
-		encoded := strings.ReplaceAll(strings.ReplaceAll(projectRoot, "/", "-"), ".", "-")
-		home, err := util.HomeDir()
-		if err != nil {
-			return err
-		}
-		claudeProjectDir = filepath.Join(home, ".claude", "projects", encoded)
-		path := filepath.Join(claudeProjectDir, sessionID+".jsonl")
-		if util.FileExists(path) {
-			if err := os.Remove(path); err != nil {
-				return fmt.Errorf("delete transcript: %w", err)
-			}
-			deleted.Transcript = append(deleted.Transcript, path)
-		}
-	}
-	matches, err := filepath.Glob(filepath.Join(claudeProjectDir, "agent-*.jsonl"))
-	if err != nil {
-		return err
-	}
-	for _, path := range matches {
-		contains, err := inspectFileContains(path, sessionID)
-		if err != nil || !contains {
-			continue
-		}
-		if err := os.Remove(path); err != nil {
-			return err
-		}
-		deleted.AgentLogs = append(deleted.AgentLogs, path)
-	}
-	return nil
-}
-
-func inspectFileContains(path, needle string) (bool, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return false, err
-	}
-	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		if strings.Contains(scanner.Text(), needle) {
-			return true, nil
-		}
-	}
-	return false, scanner.Err()
 }

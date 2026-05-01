@@ -119,7 +119,9 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		WebsocketURL:     codexWebsocketURL(p.cfg.BaseURL),
 		Token:            token,
 		AccountID:        p.accountID,
-		RequestID:        req.Cursor.RequestID,
+		RequestID:        codexRequestID(req),
+		CursorRequestID:  req.Cursor.RequestID,
+		Correlation:      req.Correlation,
 		WorkspacePath:    req.Cursor.WorkspacePath,
 		WorkspaceProbe:   p.workspaceProbe,
 		SessionCache:     p.sessionCache,
@@ -145,7 +147,15 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		ReasoningSignaled:          runResult.ReasoningSignaled,
 		ReasoningVisible:           runResult.ReasoningVisible,
 		DerivedCacheCreationTokens: runResult.DerivedCacheCreationTokens,
+		UpstreamResponseID:         runResult.ResponseID,
 	}, nil
+}
+
+func codexRequestID(req adapterresolver.ResolvedRequest) string {
+	if strings.TrimSpace(req.RequestID) != "" {
+		return strings.TrimSpace(req.RequestID)
+	}
+	return strings.TrimSpace(req.Cursor.RequestID)
 }
 
 // resolvedModelFromRequest reconstructs the legacy

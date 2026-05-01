@@ -28,7 +28,7 @@ var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
 
 		store = &FileStore{
 			clydeRoot:      clydeRoot,
-			discoveryCache: newDiscoveryCache(projectsRoot, nil, 0),
+			discoveryCache: newDiscoveryCache([]DiscoveryScanner{newClaudeDiscoveryScanner(projectsRoot)}, 0),
 		}
 	})
 

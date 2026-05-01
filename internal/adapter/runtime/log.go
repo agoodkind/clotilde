@@ -3,6 +3,8 @@ package runtime
 import (
 	"context"
 	"log/slog"
+
+	"goodkind.io/clyde/internal/correlation"
 )
 
 type RequestStage string
@@ -32,6 +34,7 @@ type RequestEvent struct {
 	CostMicrocents             int64
 	DurationMs                 int64
 	Err                        string
+	Correlation                correlation.Context
 }
 
 type RequestEventSink func(context.Context, RequestEvent)
@@ -51,20 +54,19 @@ type CompletedAttrs struct {
 	Stream                     bool
 
 	// Path tags which dispatch leg handled the request so aggregators
-	// can compare costs across backends. Known values: "oauth",
-	// "fallback_prompt" (claude -p with full history in prompt),
-	// "fallback_resume" (claude -p --resume against synthesized
-	// transcript). Leave empty when the leg cannot be identified.
+	// can compare costs across backends. Known values include "oauth"
+	// for the direct Anthropic bucket. Leave empty when the leg cannot
+	// be identified.
 	Path string
 	// SessionID, when set, links log lines from the same conversation
 	// across requests. For OAuth this is the adapter-generated
-	// request-scoped id; for fallback it is the deterministic session
-	// id passed to claude -p.
+	// request-scoped id.
 	SessionID string
 	// CacheTTL records the ttl used on cache_control markers ("",
 	// "5m", "1h"). Drives the cache-write rate when estimating cost.
-	CacheTTL string
-	Provider string
+	CacheTTL    string
+	Provider    string
+	Correlation correlation.Context
 }
 
 // LogCompleted emits a normalized adapter chat completion log with model_id
@@ -90,6 +92,10 @@ func LogCompleted(log *slog.Logger, ctx context.Context, attrs CompletedAttrs) {
 	hitRatio := 0.0
 	if denom := attrs.TokensIn + attrs.CacheReadTokens; denom > 0 {
 		hitRatio = float64(attrs.CacheReadTokens) / float64(denom)
+	}
+	corr := attrs.Correlation
+	if corr.TraceID == "" {
+		corr = correlation.FromContext(ctx)
 	}
 	args := []slog.Attr{
 		slog.String("backend", attrs.Backend),
@@ -117,25 +123,20 @@ func LogCompleted(log *slog.Logger, ctx context.Context, attrs CompletedAttrs) {
 		slog.Int64("cost_nocache_microcents", breakdown.HypotheticalNoCacheMicrocents),
 		slog.Int64("cost_cache_savings_microcents", breakdown.CacheSavingsMicrocents),
 	}
-	switch attrs.Backend {
-	case "anthropic":
-		args = append(args, slog.String("model", attrs.ModelID))
-	case "fallback":
-		args = append(args, slog.String("cli_model", attrs.ModelID))
-	default:
-		args = append(args, slog.String("model", attrs.ModelID))
-	}
+	args = append(args, corr.Attrs()...)
+	args = append(args, slog.String("model", attrs.ModelID))
 	log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.completed", args...)
 }
 
 type FailedAttrs struct {
-	Backend    string
-	RequestID  string
-	Alias      string
-	ModelID    string
-	Err        error
-	DurationMs int64
-	Provider   string
+	Backend     string
+	RequestID   string
+	Alias       string
+	ModelID     string
+	Err         error
+	DurationMs  int64
+	Provider    string
+	Correlation correlation.Context
 }
 
 // LogFailed emits shared failure metadata for chat handlers.
@@ -146,7 +147,14 @@ func LogFailed(log *slog.Logger, ctx context.Context, attrs FailedAttrs) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	log.LogAttrs(ctx, slog.LevelError, "adapter.chat.failed", []slog.Attr{
+	corr := attrs.Correlation
+	if corr.TraceID == "" {
+		corr = correlation.FromContext(ctx)
+	}
+	for _, attr := range corr.Attrs() {
+		log = log.With(attr)
+	}
+	log.LogAttrs(ctx, slog.LevelError, "adapter.chat.failed",
 		slog.String("backend", attrs.Backend),
 		slog.String("provider", attrs.Provider),
 		slog.String("request_id", attrs.RequestID),
@@ -154,16 +162,17 @@ func LogFailed(log *slog.Logger, ctx context.Context, attrs FailedAttrs) {
 		slog.String("model", attrs.ModelID),
 		slog.Int64("duration_ms", attrs.DurationMs),
 		slog.Any("err", attrs.Err),
-	}...)
+	)
 }
 
 type StartedAttrs struct {
-	Provider  string
-	Backend   string
-	RequestID string
-	Alias     string
-	ModelID   string
-	Stream    bool
+	Provider    string
+	Backend     string
+	RequestID   string
+	Alias       string
+	ModelID     string
+	Stream      bool
+	Correlation correlation.Context
 }
 
 func LogStarted(log *slog.Logger, ctx context.Context, sink RequestEventSink, attrs StartedAttrs) {
@@ -173,34 +182,42 @@ func LogStarted(log *slog.Logger, ctx context.Context, sink RequestEventSink, at
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	log.LogAttrs(ctx, slog.LevelInfo, "adapter.request.started", []slog.Attr{
+	corr := attrs.Correlation
+	if corr.TraceID == "" {
+		corr = correlation.FromContext(ctx)
+	}
+	logAttrs := []slog.Attr{
 		slog.String("provider", attrs.Provider),
 		slog.String("backend", attrs.Backend),
 		slog.String("request_id", attrs.RequestID),
 		slog.String("alias", attrs.Alias),
 		slog.String("model", attrs.ModelID),
 		slog.Bool("stream", attrs.Stream),
-	}...)
+	}
+	logAttrs = append(logAttrs, corr.Attrs()...)
+	log.LogAttrs(ctx, slog.LevelInfo, "adapter.request.started", logAttrs...)
 	if sink != nil {
 		sink(ctx, RequestEvent{
-			Stage:     RequestStageStarted,
-			Provider:  attrs.Provider,
-			Backend:   attrs.Backend,
-			RequestID: attrs.RequestID,
-			Alias:     attrs.Alias,
-			ModelID:   attrs.ModelID,
-			Stream:    attrs.Stream,
+			Stage:       RequestStageStarted,
+			Provider:    attrs.Provider,
+			Backend:     attrs.Backend,
+			RequestID:   attrs.RequestID,
+			Alias:       attrs.Alias,
+			ModelID:     attrs.ModelID,
+			Stream:      attrs.Stream,
+			Correlation: corr,
 		})
 	}
 }
 
 type StreamOpenedAttrs struct {
-	Provider  string
-	Backend   string
-	RequestID string
-	Alias     string
-	ModelID   string
-	Stream    bool
+	Provider    string
+	Backend     string
+	RequestID   string
+	Alias       string
+	ModelID     string
+	Stream      bool
+	Correlation correlation.Context
 }
 
 func LogStreamOpened(log *slog.Logger, ctx context.Context, sink RequestEventSink, attrs StreamOpenedAttrs) {
@@ -210,23 +227,30 @@ func LogStreamOpened(log *slog.Logger, ctx context.Context, sink RequestEventSin
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	log.LogAttrs(ctx, slog.LevelInfo, "adapter.request.stream_opened", []slog.Attr{
+	corr := attrs.Correlation
+	if corr.TraceID == "" {
+		corr = correlation.FromContext(ctx)
+	}
+	logAttrs := []slog.Attr{
 		slog.String("provider", attrs.Provider),
 		slog.String("backend", attrs.Backend),
 		slog.String("request_id", attrs.RequestID),
 		slog.String("alias", attrs.Alias),
 		slog.String("model", attrs.ModelID),
 		slog.Bool("stream", attrs.Stream),
-	}...)
+	}
+	logAttrs = append(logAttrs, corr.Attrs()...)
+	log.LogAttrs(ctx, slog.LevelInfo, "adapter.request.stream_opened", logAttrs...)
 	if sink != nil {
 		sink(ctx, RequestEvent{
-			Stage:     RequestStageStreamOpened,
-			Provider:  attrs.Provider,
-			Backend:   attrs.Backend,
-			RequestID: attrs.RequestID,
-			Alias:     attrs.Alias,
-			ModelID:   attrs.ModelID,
-			Stream:    attrs.Stream,
+			Stage:       RequestStageStreamOpened,
+			Provider:    attrs.Provider,
+			Backend:     attrs.Backend,
+			RequestID:   attrs.RequestID,
+			Alias:       attrs.Alias,
+			ModelID:     attrs.ModelID,
+			Stream:      attrs.Stream,
+			Correlation: corr,
 		})
 	}
 }
@@ -247,7 +271,11 @@ func LogTerminal(log *slog.Logger, ctx context.Context, sink RequestEventSink, e
 	case RequestStageCancelled:
 		msg = "adapter.request.cancelled"
 	}
-	log.LogAttrs(ctx, level, msg, []slog.Attr{
+	corr := ev.Correlation
+	if corr.TraceID == "" {
+		corr = correlation.FromContext(ctx)
+	}
+	logAttrs := []slog.Attr{
 		slog.String("provider", ev.Provider),
 		slog.String("backend", ev.Backend),
 		slog.String("request_id", ev.RequestID),
@@ -263,8 +291,11 @@ func LogTerminal(log *slog.Logger, ctx context.Context, sink RequestEventSink, e
 		slog.Int64("cost_microcents", ev.CostMicrocents),
 		slog.Int64("duration_ms", ev.DurationMs),
 		slog.String("error", ev.Err),
-	}...)
+	}
+	logAttrs = append(logAttrs, corr.Attrs()...)
+	log.LogAttrs(ctx, level, msg, logAttrs...)
 	if sink != nil {
+		ev.Correlation = corr
 		sink(ctx, ev)
 	}
 }

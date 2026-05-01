@@ -12,6 +12,7 @@ import (
 	"time"
 
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
+	"goodkind.io/clyde/internal/correlation"
 )
 
 const structuredOutputShuntParseFailedEvent = "shunt structured-output parse failed; retrying"
@@ -19,6 +20,13 @@ const structuredOutputShuntParseFailedEvent = "shunt structured-output parse fai
 func (s *Server) forwardShunt(w http.ResponseWriter, r *http.Request, model ResolvedModel, body []byte) {
 	started := time.Now()
 	reqID := newRequestID()
+	corr := correlation.FromContext(r.Context()).Child().WithRequestID(reqID)
+	if corr.TraceID == "" {
+		corr = correlation.FromHTTPHeader(r.Header, reqID)
+	}
+	corr.SetHTTPHeaders(w.Header())
+	ctx := correlation.WithContext(r.Context(), corr)
+	r = r.WithContext(ctx)
 	streamRequested := false
 	shunt, ok := s.registry.Shunt(model.Shunt)
 	if !ok || shunt.BaseURL == "" {
@@ -57,11 +65,11 @@ func (s *Server) forwardShunt(w http.ResponseWriter, r *http.Request, model Reso
 		}
 		body, _ = json.Marshal(rawReq)
 	}
-	s.emitRequestStarted(r.Context(), model, "", reqID, model.Alias, streamRequested)
+	s.emitRequestStarted(ctx, model, "", reqID, model.Alias, streamRequested)
 
-	respBody, status, hdr, err := shuntCall(r.Context(), shunt.BaseURL, apiKey, body)
+	respBody, status, hdr, err := shuntCall(ctx, shunt.BaseURL, apiKey, body)
 	if err != nil {
-		adapterruntime.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, adapterruntime.RequestEvent{
+		adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
 			Stage:      adapterruntime.RequestStageFailed,
 			Provider:   providerName(model, ""),
 			Backend:    model.Backend,
@@ -77,17 +85,19 @@ func (s *Server) forwardShunt(w http.ResponseWriter, r *http.Request, model Reso
 	}
 	contentType := strings.ToLower(strings.TrimSpace(hdr.Get("Content-Type")))
 	if streamRequested || strings.Contains(contentType, "text/event-stream") {
-		s.emitRequestStreamOpened(r.Context(), model, "", reqID, model.Alias, true)
+		s.emitRequestStreamOpened(ctx, model, "", reqID, model.Alias, true)
 	}
 
 	if jsonSpec.Mode != "" && status == http.StatusOK {
 		coerced, ok := coerceShuntJSON(respBody)
 		if !ok {
-			s.log.LogAttrs(r.Context(), slog.LevelWarn, structuredOutputShuntParseFailedEvent,
+			attrs := []slog.Attr{
 				slog.String("model", model.Alias),
 				slog.String("shunt", model.Shunt),
 				slog.Int("first_attempt_bytes", len(respBody)),
-			)
+			}
+			attrs = append(attrs, corr.Attrs()...)
+			s.log.LogAttrs(ctx, slog.LevelWarn, structuredOutputShuntParseFailedEvent, attrs...)
 			injectJSONSystemMessage(rawReq, jsonSpec.SystemPrompt(true))
 			body2, _ := json.Marshal(rawReq)
 			rb2, st2, h2, err2 := shuntCall(r.Context(), shunt.BaseURL, apiKey, body2)
@@ -123,7 +133,7 @@ func (s *Server) forwardShunt(w http.ResponseWriter, r *http.Request, model Reso
 		stage = adapterruntime.RequestStageFailed
 		terminalErr = "upstream returned status " + strconv.Itoa(status)
 	}
-	adapterruntime.LogTerminal(s.log, r.Context(), s.deps.RequestEvents, adapterruntime.RequestEvent{
+	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
 		Stage:               stage,
 		Provider:            providerName(model, ""),
 		Backend:             model.Backend,

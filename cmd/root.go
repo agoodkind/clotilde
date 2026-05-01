@@ -20,7 +20,6 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -28,12 +27,10 @@ import (
 	"github.com/spf13/cobra"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
-	"goodkind.io/clyde/internal/claude"
-	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/session"
+	sessionlifecycle "goodkind.io/clyde/internal/session/lifecycle"
 	"goodkind.io/clyde/internal/ui"
-	"goodkind.io/clyde/internal/util"
 )
 
 // RunDashboard is the entrypoint for `clyde` with no subcommand. It
@@ -952,7 +949,8 @@ func nextChatSessionName(store session.Store) (string, error) {
 	return name, nil
 }
 
-// startNewSessionInDir launches claude for a new named session in workDir.
+// startNewSessionInDir launches the default interactive provider for a new named
+// session in workDir.
 // basedir may be empty; dashboardFallbackCWD is used when the trimmed path is empty.
 func startNewSessionInDir(basedir string, store session.Store, dashboardFallbackCWD string, enableRemoteControl bool) error {
 	workDir := strings.TrimSpace(basedir)
@@ -971,12 +969,6 @@ func startNewSessionInDir(basedir string, store session.Store, dashboardFallback
 	if err != nil {
 		return err
 	}
-	sessionID := util.GenerateUUID()
-
-	env := map[string]string{
-		"CLYDE_SESSION_NAME": name,
-		"CLYDE_LAUNCH_CWD":   workDir,
-	}
 	_, _ = fmt.Fprintf(os.Stdout, "Starting new session %q in %s\n\n", name, workDir)
 	slog.Info("session.new.started",
 		"component", "cli",
@@ -985,40 +977,23 @@ func startNewSessionInDir(basedir string, store session.Store, dashboardFallback
 		"remote_control", enableRemoteControl,
 	)
 
-	err = claude.StartNewInteractive(env, "", workDir, enableRemoteControl, sessionID)
+	runtime, err := sessionlifecycle.Default(store)
+	if err != nil {
+		return err
+	}
+	err = runtime.StartInteractive(context.Background(), session.StartRequest{
+		SessionName: name,
+		Launch: session.LaunchOptions{
+			WorkDir:             workDir,
+			Intent:              session.LaunchIntentNewSession,
+			EnableRemoteControl: enableRemoteControl,
+		},
+	})
 	if err != nil {
 		return err
 	}
 	sess, gerr := store.Get(name)
 	if gerr == nil && sess != nil {
-		if enableRemoteControl {
-			settings, lerr := store.LoadSettings(name)
-			if lerr != nil {
-				slog.Warn("session.new.load_settings_failed",
-					"component", "cli",
-					"session", name,
-					slog.Any("err", lerr),
-				)
-			} else {
-				if settings == nil {
-					settings = &session.Settings{}
-				}
-				settings.RemoteControl = true
-				if serr := store.SaveSettings(name, settings); serr != nil {
-					slog.Warn("session.new.save_settings_failed",
-						"component", "cli",
-						"session", name,
-						slog.Any("err", serr),
-					)
-				} else {
-					slog.Info("session.new.remote_control_persisted",
-						"component", "cli",
-						"session", name,
-						"remote_control", true,
-					)
-				}
-			}
-		}
 		if fs, ok := store.(*session.FileStore); ok {
 			autoUpdateContext(fs, sess)
 		}
@@ -1027,25 +1002,14 @@ func startNewSessionInDir(basedir string, store session.Store, dashboardFallback
 	return nil
 }
 
-// resumeSession runs claude --resume against an existing clyde
-// session, reattaching its workspace add-dir if the user invoked from
-// a different cwd. Shared by the resume cobra verb and the TUI
-// dashboard's resume callback.
+// resumeSession resumes an existing clyde session through the provider-owned
+// lifecycle, reattaching its workspace add-dir if the user invoked from a
+// different cwd. Shared by the resume cobra verb and the TUI dashboard's
+// resume callback.
 func resumeSession(sess *session.Session, store session.Store, allowSelfReload bool) error {
-	globalRoot := config.GlobalDataDir()
-	sessionDir := config.GetSessionDir(globalRoot, sess.Name)
-
-	var settingsFile string
-	settingsPath := filepath.Join(sessionDir, "settings.json")
-	if util.FileExists(settingsPath) {
-		settingsFile = settingsPath
-	}
-
-	var additionalArgs []string
+	currentWorkDir := ""
 	if cwd, cwdErr := os.Getwd(); cwdErr == nil {
-		if sess.Metadata.WorkspaceRoot != "" && cwd != sess.Metadata.WorkspaceRoot {
-			additionalArgs = append(additionalArgs, "--add-dir", cwd)
-		}
+		currentWorkDir = cwd
 	}
 
 	_, _ = fmt.Fprintf(os.Stdout, "Resuming session '%s' (%s)\n\n", sess.Name, sess.Metadata.SessionID)
@@ -1057,11 +1021,17 @@ func resumeSession(sess *session.Session, store session.Store, allowSelfReload b
 		"session_id", sess.Metadata.SessionID,
 	)
 
-	extraEnvironment := map[string]string{}
-	if allowSelfReload {
-		extraEnvironment["CLYDE_ENABLE_SELF_RELOAD"] = "1"
+	runtime, err := sessionlifecycle.ForSession(sess, store)
+	if err != nil {
+		return err
 	}
-	err := claude.Resume(globalRoot, sess, settingsFile, additionalArgs, extraEnvironment)
+	err = runtime.ResumeInteractive(context.Background(), session.ResumeRequest{
+		Session: sess,
+		Options: session.ResumeOptions{
+			CurrentWorkDir:   currentWorkDir,
+			EnableSelfReload: allowSelfReload,
+		},
+	})
 	if fs, ok := store.(*session.FileStore); ok {
 		autoUpdateContext(fs, sess)
 	}

@@ -16,7 +16,7 @@ import (
 // Rates below assume the standard Messages API list price. They do
 // NOT represent what the user is billed when running against a Max
 // subscription bucket; they are the reference rates used to compare
-// costs ACROSS paths (e.g. OAuth vs fallback vs shunted) so the
+// costs across paths (e.g. Anthropic OAuth vs shunted) so the
 // user can pick the cheapest effective route for a given workload.
 type ModelRates struct {
 	InputPerToken        int64

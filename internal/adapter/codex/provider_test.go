@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
@@ -93,6 +94,29 @@ func TestCodexWebsocketURLConversion(t *testing.T) {
 		if got := codexWebsocketURL(tc.in); got != tc.want {
 			t.Errorf("codexWebsocketURL(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestCodexRequestIDPrefersAdapterID(t *testing.T) {
+	req := adapterresolver.ResolvedRequest{
+		RequestID: "chatcmpl-adapter",
+		Cursor: adaptercursor.Request{
+			RequestID: "cursor-request",
+		},
+	}
+	if got := codexRequestID(req); got != "chatcmpl-adapter" {
+		t.Fatalf("codexRequestID() = %q, want adapter id", got)
+	}
+}
+
+func TestCodexRequestIDFallsBackToCursorID(t *testing.T) {
+	req := adapterresolver.ResolvedRequest{
+		Cursor: adaptercursor.Request{
+			RequestID: "cursor-request",
+		},
+	}
+	if got := codexRequestID(req); got != "cursor-request" {
+		t.Fatalf("codexRequestID() = %q, want cursor id", got)
 	}
 }
 

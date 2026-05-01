@@ -407,6 +407,8 @@ func connect(ctx context.Context) (*Client, error) {
 
 	conn, err := grpc.NewClient(target,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithUnaryInterceptor(daemonUnaryClientCorrelationInterceptor()),
+		grpc.WithStreamInterceptor(daemonStreamClientCorrelationInterceptor()),
 	)
 	if err != nil {
 		log.DebugContext(ctx, "daemon.client.connect.new_client_failed", "err", err)

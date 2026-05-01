@@ -14,6 +14,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
+	"goodkind.io/clyde/internal/correlation"
 )
 
 type ResponseCreateClientMetadata map[string]string
@@ -110,16 +111,19 @@ func MarshalResponseCreateWsRequest(req ResponseCreateWsRequest) ([]byte, error)
 }
 
 type WebsocketTransportConfig struct {
-	URL            string
-	Token          string
-	AccountID      string
-	RequestID      string
-	Alias          string
-	ConversationID string
-	TurnState      *TurnState
-	Prewarm        bool
-	PrewarmTimeout time.Duration
-	BodyLog        BodyLogConfig
+	URL             string
+	Token           string
+	AccountID       string
+	RequestID       string
+	CursorRequestID string
+	Correlation     correlation.Context
+	Alias           string
+	ConversationID  string
+	TurnState       *TurnState
+	TurnMetadata    string
+	Prewarm         bool
+	PrewarmTimeout  time.Duration
+	BodyLog         BodyLogConfig
 
 	// SessionCache enables persistent ws session reuse when set. The
 	// transport takes the cached session for ConversationID, sends a
@@ -200,6 +204,7 @@ func streamWebsocketAsSyntheticSSE(conn *websocket.Conn) io.Reader {
 }
 
 func writeAndParseWebsocketRequest(
+	ctx context.Context,
 	conn *websocket.Conn,
 	cfg WebsocketTransportConfig,
 	payload ResponseCreateWsRequest,
@@ -210,12 +215,24 @@ func writeAndParseWebsocketRequest(
 	if err != nil {
 		return NewRunResult("stop"), err
 	}
-	logWebsocketFrame(context.Background(), cfg, payload, raw, warmup)
+	logWebsocketFrame(ctx, cfg, payload, raw, warmup)
 	if err := conn.WriteMessage(websocket.TextMessage, raw); err != nil {
 		return NewRunResult("stop"), err
 	}
 	synthetic := streamWebsocketAsSyntheticSSE(conn)
 	result, err := ParseSSEEvents(synthetic, emit)
+	if strings.TrimSpace(result.ResponseID) != "" {
+		corr := cfg.Correlation.WithUpstreamResponseID(result.ResponseID)
+		attrs := []slog.Attr{
+			slog.String("component", "adapter"),
+			slog.String("subcomponent", "codex"),
+			slog.String("request_id", cfg.RequestID),
+			slog.String("conversation_id", cfg.ConversationID),
+			slog.Bool("warmup", warmup),
+		}
+		attrs = append(attrs, corr.Attrs()...)
+		logCodexEvent(ctx, slog.LevelInfo, "adapter.codex.response.received", attrs)
+	}
 	if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 		return result, nil
 	}
@@ -235,6 +252,8 @@ func logWebsocketFrame(ctx context.Context, cfg WebsocketTransportConfig, payloa
 		Subcomponent:       "codex",
 		Transport:          "responses_websocket",
 		RequestID:          cfg.RequestID,
+		CursorRequestID:    cfg.CursorRequestID,
+		Correlation:        cfg.Correlation,
 		Alias:              cfg.Alias,
 		Model:              payload.Model,
 		URL:                cfg.URL,
@@ -257,9 +276,9 @@ func logWebsocketFrame(ctx context.Context, cfg WebsocketTransportConfig, payloa
 func dialResponsesWebsocket(ctx context.Context, cfg WebsocketTransportConfig) (*websocket.Conn, int, error) {
 	dialer := websocket.Dialer{}
 	installationID, _ := LoadInstallationID()
-	turnMetadataJSON := ""
+	turnMetadataJSON := strings.TrimSpace(cfg.TurnMetadata)
 	conv := strings.TrimSpace(cfg.ConversationID)
-	if conv != "" {
+	if conv != "" && turnMetadataJSON == "" {
 		if json, err := NewTurnMetadata(conv, "").MarshalCompact(); err == nil {
 			turnMetadataJSON = json
 		}
@@ -267,6 +286,7 @@ func dialResponsesWebsocket(ctx context.Context, cfg WebsocketTransportConfig) (
 	header := BuildResponsesWebsocketHeaders(ResponsesWebsocketHeaderConfig{
 		RequestID:      cfg.RequestID,
 		ConversationID: cfg.ConversationID,
+		Correlation:    cfg.Correlation,
 		Token:          cfg.Token,
 		InstallationID: installationID,
 		TurnState:      cfg.TurnState,
@@ -288,6 +308,8 @@ func dialResponsesWebsocket(ctx context.Context, cfg WebsocketTransportConfig) (
 
 func logWebsocketPrepared(ctx context.Context, cfg WebsocketTransportConfig, payload ResponseCreateWsRequest, telemetry TransportTelemetry) {
 	telemetry.RequestID = cfg.RequestID
+	telemetry.CursorRequestID = cfg.CursorRequestID
+	telemetry.Correlation = cfg.Correlation
 	telemetry.Alias = cfg.Alias
 	telemetry.UpstreamModel = payload.Model
 	telemetry.Transport = "responses_websocket"
@@ -345,7 +367,7 @@ func runWebsocketFreshDial(
 			prewarmTimeout = defaultWebsocketPrewarmTimeout
 		}
 		_ = conn.SetReadDeadline(time.Now().Add(prewarmTimeout))
-		warmupResult, warmupErr := writeAndParseWebsocketRequest(conn, cfg, warmup, func(adapterrender.Event) error {
+		warmupResult, warmupErr := writeAndParseWebsocketRequest(ctx, conn, cfg, warmup, func(adapterrender.Event) error {
 			return nil
 		}, true)
 		_ = conn.SetReadDeadline(time.Time{})
@@ -377,7 +399,7 @@ func runWebsocketFreshDial(
 		WebsocketConnectionReuse: connectionReused,
 	})
 
-	return writeAndParseWebsocketRequest(conn, cfg, payload, emit, false)
+	return writeAndParseWebsocketRequest(ctx, conn, cfg, payload, emit, false)
 }
 
 // runWebsocketWithCache implements the parity-superset path. The
@@ -407,9 +429,16 @@ func runWebsocketWithCache(
 			"subcomponent", "codex",
 			"conversation_id", conv,
 			"last_response_id", session.LastResponseID,
+			"session_model", session.Model,
+			"request_model", payload.Model,
 			"frame_count", session.FrameCount,
 			"age_ms", time.Since(session.OpenedAt).Milliseconds(),
 		)
+	}
+	if hit && !websocketSessionCompatible(session, payload) {
+		cfg.SessionCache.invalidateEntry(session, "model_mismatch")
+		session = nil
+		hit = false
 	}
 	if hit {
 		delta := ComputeDelta(session.LastInputItems, fullInput)
@@ -417,11 +446,11 @@ func runWebsocketWithCache(
 		case delta.Ok:
 			payload = WithPreviousResponseID(payload, session.LastResponseID, delta.Items)
 		case delta.Reason == "no_extension":
-			cfg.SessionCache.Invalidate(conv, "no_extension")
+			cfg.SessionCache.invalidateEntry(session, "no_extension")
 			session = nil
 			hit = false
 		default:
-			cfg.SessionCache.Invalidate(conv, delta.Reason)
+			cfg.SessionCache.invalidateEntry(session, delta.Reason)
 			session = nil
 			hit = false
 		}
@@ -452,7 +481,7 @@ func runWebsocketWithCache(
 		"is_warmup", false,
 	)
 
-	result, err := writeAndParseWebsocketRequest(session.Conn, cfg, payload, emit, false)
+	result, err := writeAndParseWebsocketRequest(ctx, session.Conn, cfg, payload, emit, false)
 	if err != nil {
 		cfg.SessionCache.Invalidate(conv, "ws_io_error")
 		return result, err
@@ -465,6 +494,8 @@ func runWebsocketWithCache(
 		cfg.SessionCache.Invalidate(conv, "missing_response_id")
 		return result, nil
 	}
+	session.Model = payload.Model
+	session.PromptCacheKey = payload.PromptCacheKey
 	session.LastInputItems = cloneInputItems(fullInput)
 	session.FrameCount++
 	cfg.SessionCache.Put(session)
@@ -507,7 +538,7 @@ func openSessionAndWarmup(
 		prewarmTimeout = defaultWebsocketPrewarmTimeout
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(prewarmTimeout))
-	warmupResult, warmupErr := writeAndParseWebsocketRequest(conn, cfg, warmup, func(adapterrender.Event) error {
+	warmupResult, warmupErr := writeAndParseWebsocketRequest(ctx, conn, cfg, warmup, func(adapterrender.Event) error {
 		return nil
 	}, true)
 	_ = conn.SetReadDeadline(time.Time{})
@@ -519,6 +550,8 @@ func openSessionAndWarmup(
 	session := &WebsocketSession{
 		Conn:           conn,
 		ConversationID: conv,
+		Model:          payload.Model,
+		PromptCacheKey: payload.PromptCacheKey,
 		LastResponseID: warmupResult.ResponseID,
 		OpenedAt:       now,
 		LastUsed:       now,
@@ -532,4 +565,21 @@ func openSessionAndWarmup(
 		)
 	}
 	return session, nil
+}
+
+func websocketSessionCompatible(session *WebsocketSession, payload ResponseCreateWsRequest) bool {
+	if session == nil {
+		return false
+	}
+	sessionModel := strings.TrimSpace(session.Model)
+	requestModel := strings.TrimSpace(payload.Model)
+	if sessionModel != "" && requestModel != "" && sessionModel != requestModel {
+		return false
+	}
+	sessionPromptCacheKey := strings.TrimSpace(session.PromptCacheKey)
+	requestPromptCacheKey := strings.TrimSpace(payload.PromptCacheKey)
+	if sessionPromptCacheKey != "" && requestPromptCacheKey != "" && sessionPromptCacheKey != requestPromptCacheKey {
+		return false
+	}
+	return true
 }

@@ -10,6 +10,7 @@ import (
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
+	"goodkind.io/clyde/internal/correlation"
 )
 
 type DirectConfig struct {
@@ -20,6 +21,8 @@ type DirectConfig struct {
 	Token            string
 	AccountID        string
 	RequestID        string
+	CursorRequestID  string
+	Correlation      correlation.Context
 	// WorkspacePath is the absolute path to the Cursor-active
 	// workspace, used to populate the `workspaces` block in
 	// `x-codex-turn-metadata`. Empty when Cursor did not supply a
@@ -68,16 +71,19 @@ func RunDirect(
 	}
 	wsReq := ResponseCreateRequestFromHTTP(transportPayload)
 	wsCfg := WebsocketTransportConfig{
-		URL:            cfg.WebsocketURL,
-		Token:          cfg.Token,
-		AccountID:      cfg.AccountID,
-		RequestID:      cfg.RequestID,
-		Alias:          model.Alias,
-		ConversationID: conversationID,
-		TurnState:      NewTurnState(),
-		BodyLog:        cfg.BodyLog,
-		SessionCache:   cfg.SessionCache,
-		Log:            cfg.Log,
+		URL:             cfg.WebsocketURL,
+		Token:           cfg.Token,
+		AccountID:       cfg.AccountID,
+		RequestID:       cfg.RequestID,
+		CursorRequestID: cfg.CursorRequestID,
+		Correlation:     cfg.Correlation,
+		Alias:           model.Alias,
+		ConversationID:  conversationID,
+		TurnState:       NewTurnState(),
+		TurnMetadata:    transportPayload.ClientMetadata[CodexTurnMetadataHeader],
+		BodyLog:         cfg.BodyLog,
+		SessionCache:    cfg.SessionCache,
+		Log:             cfg.Log,
 	}
 	return RunWebsocketTransportEvents(ctx, wsCfg, wsReq, emit)
 }

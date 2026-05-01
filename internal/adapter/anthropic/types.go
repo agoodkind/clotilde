@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 // MaxOutputTokens is the upper bound the adapter requests when the
@@ -99,6 +100,24 @@ type ImageSource struct {
 type Message struct {
 	Role    string         `json:"role"`
 	Content []ContentBlock `json:"content"`
+}
+
+func (m *Message) UnmarshalJSON(raw []byte) error {
+	type messageWire struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	}
+	var wire messageWire
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return err
+	}
+	content, err := decodeContentBlocks(wire.Content)
+	if err != nil {
+		return err
+	}
+	m.Role = wire.Role
+	m.Content = content
+	return nil
 }
 
 // MarshalJSON emits a string "content" when there is exactly one text
@@ -203,6 +222,43 @@ type Request struct {
 	ExtraBetas []string `json:"-"`
 }
 
+func (r *Request) UnmarshalJSON(raw []byte) error {
+	type requestWire struct {
+		Model             string             `json:"model"`
+		System            json.RawMessage    `json:"system"`
+		Messages          []Message          `json:"messages"`
+		MaxTokens         int                `json:"max_tokens"`
+		Stream            bool               `json:"stream"`
+		OutputConfig      *OutputConfig      `json:"output_config,omitempty"`
+		Thinking          *Thinking          `json:"thinking,omitempty"`
+		Tools             []Tool             `json:"tools,omitempty"`
+		ToolChoice        *ToolChoice        `json:"tool_choice,omitempty"`
+		Metadata          *RequestMetadata   `json:"metadata,omitempty"`
+		ContextManagement *ContextManagement `json:"context_management,omitempty"`
+	}
+	var wire requestWire
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return err
+	}
+	system, blocks, err := decodeSystemPrompt(wire.System)
+	if err != nil {
+		return err
+	}
+	r.Model = wire.Model
+	r.System = system
+	r.SystemBlocks = blocks
+	r.Messages = wire.Messages
+	r.MaxTokens = wire.MaxTokens
+	r.Stream = wire.Stream
+	r.OutputConfig = wire.OutputConfig
+	r.Thinking = wire.Thinking
+	r.Tools = wire.Tools
+	r.ToolChoice = wire.ToolChoice
+	r.Metadata = wire.Metadata
+	r.ContextManagement = wire.ContextManagement
+	return nil
+}
+
 // MarshalJSON emits SystemBlocks as an array under "system" when
 // present so typed blocks with cache_control markers land on the
 // wire. Falls back to the plain string form otherwise.
@@ -291,4 +347,90 @@ type Result struct {
 	Text  string
 	Usage Usage
 	Stop  string
+}
+
+type MessageResponse struct {
+	ID           string         `json:"id"`
+	Type         string         `json:"type"`
+	Role         string         `json:"role"`
+	Content      []ContentBlock `json:"content"`
+	Model        string         `json:"model"`
+	StopReason   string         `json:"stop_reason,omitempty"`
+	StopSequence string         `json:"stop_sequence,omitempty"`
+	Usage        ResponseUsage  `json:"usage"`
+}
+
+type ResponseUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+}
+
+type ErrorEnvelope struct {
+	Type  string      `json:"type"`
+	Error ErrorDetail `json:"error"`
+}
+
+type ErrorDetail struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
+type CountTokensResponse struct {
+	InputTokens int `json:"input_tokens"`
+}
+
+func decodeContentBlocks(raw json.RawMessage) ([]ContentBlock, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return nil, nil
+	}
+	if trimmed[0] == '"' {
+		var text string
+		if err := json.Unmarshal(raw, &text); err != nil {
+			return nil, err
+		}
+		return []ContentBlock{{Type: "text", Text: text}}, nil
+	}
+	if trimmed[0] == '[' {
+		var blocks []ContentBlock
+		if err := json.Unmarshal(raw, &blocks); err != nil {
+			return nil, err
+		}
+		for i := range blocks {
+			if strings.TrimSpace(blocks[i].Type) == "" {
+				blocks[i].Type = "text"
+			}
+		}
+		return blocks, nil
+	}
+	return nil, fmt.Errorf("anthropic: content must be a string or array")
+}
+
+func decodeSystemPrompt(raw json.RawMessage) (string, []SystemBlock, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return "", nil, nil
+	}
+	if trimmed[0] == '"' {
+		var text string
+		if err := json.Unmarshal(raw, &text); err != nil {
+			return "", nil, err
+		}
+		return text, nil, nil
+	}
+	if trimmed[0] == '[' {
+		var blocks []SystemBlock
+		if err := json.Unmarshal(raw, &blocks); err != nil {
+			return "", nil, err
+		}
+		for i := range blocks {
+			if strings.TrimSpace(blocks[i].Type) == "" {
+				blocks[i].Type = "text"
+			}
+		}
+		return "", blocks, nil
+	}
+	return "", nil, fmt.Errorf("anthropic: system must be a string or array")
 }

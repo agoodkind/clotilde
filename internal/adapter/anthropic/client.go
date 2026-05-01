@@ -121,6 +121,13 @@ func (c *Client) StreamEvents(ctx context.Context, req Request, sink EventSink) 
 	return usage, stopReason, nil
 }
 
+// Do executes a native `/v1/messages` request and returns the decoded
+// upstream HTTP response for callers that need to preserve Anthropic JSON
+// or SSE framing at the adapter boundary.
+func (c *Client) Do(ctx context.Context, req Request) (*http.Response, error) {
+	return c.do(ctx, req)
+}
+
 func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	if c.oauth == nil {
 		return nil, errors.New("anthropic client missing oauth source")

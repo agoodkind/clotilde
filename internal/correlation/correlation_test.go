@@ -1,0 +1,103 @@
+package correlation
+
+import (
+	"context"
+	"log/slog"
+	"net/http"
+	"testing"
+
+	"google.golang.org/grpc/metadata"
+)
+
+func TestNewCreatesValidTraceAndSpan(t *testing.T) {
+	t.Parallel()
+
+	corr := New("req-1")
+	if !corr.Valid() {
+		t.Fatalf("correlation should be valid: %#v", corr)
+	}
+	if corr.RequestID != "req-1" {
+		t.Fatalf("request id = %q, want req-1", corr.RequestID)
+	}
+	if corr.Traceparent() == "" {
+		t.Fatalf("traceparent should be populated")
+	}
+}
+
+func TestFromHTTPHeaderUsesTraceparentAsParent(t *testing.T) {
+	t.Parallel()
+
+	header := http.Header{}
+	header.Set(HeaderTraceparent, "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01")
+	corr := FromHTTPHeader(header, "req-2")
+
+	if corr.TraceID != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("trace id = %q", corr.TraceID)
+	}
+	if corr.ParentSpanID != "0123456789abcdef" {
+		t.Fatalf("parent span id = %q", corr.ParentSpanID)
+	}
+	if corr.SpanID == "" || corr.SpanID == corr.ParentSpanID {
+		t.Fatalf("span id should be a new child span: %#v", corr)
+	}
+}
+
+func TestAttrsIncludesCorrelationFields(t *testing.T) {
+	t.Parallel()
+
+	corr := Context{
+		TraceID:              "0123456789abcdef0123456789abcdef",
+		SpanID:               "0123456789abcdef",
+		ParentSpanID:         "fedcba9876543210",
+		RequestID:            "req-3",
+		CursorRequestID:      "cursor-req",
+		CursorConversationID: "cursor-conv",
+		UpstreamRequestID:    "upstream-req",
+		UpstreamResponseID:   "upstream-resp",
+	}
+	got := attrMap(corr.Attrs())
+	for _, key := range []string{
+		"trace_id",
+		"span_id",
+		"parent_span_id",
+		"request_id",
+		"cursor_request_id",
+		"cursor_conversation_id",
+		"upstream_request_id",
+		"upstream_response_id",
+	} {
+		if got[key] == "" {
+			t.Fatalf("missing attr %q in %#v", key, got)
+		}
+	}
+}
+
+func TestMetadataRoundTripCreatesChildSpan(t *testing.T) {
+	t.Parallel()
+
+	parent := Context{
+		TraceID:   "0123456789abcdef0123456789abcdef",
+		SpanID:    "0123456789abcdef",
+		RequestID: "req-4",
+	}
+	ctx := metadata.NewIncomingContext(context.Background(), parent.Metadata())
+	child := FromIncomingMetadata(ctx)
+
+	if child.TraceID != parent.TraceID {
+		t.Fatalf("trace id = %q, want %q", child.TraceID, parent.TraceID)
+	}
+	if child.ParentSpanID != parent.SpanID {
+		t.Fatalf("parent span id = %q, want %q", child.ParentSpanID, parent.SpanID)
+	}
+	if child.SpanID == "" || child.SpanID == parent.SpanID {
+		t.Fatalf("child span should differ from parent: %#v", child)
+	}
+}
+
+func attrMap(attrs []slog.Attr) map[string]string {
+	out := make(map[string]string, len(attrs))
+	for _, attr := range attrs {
+		out[attr.Key] = attr.Value.String()
+	}
+	return out
+}

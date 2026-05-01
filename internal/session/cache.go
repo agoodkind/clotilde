@@ -2,6 +2,7 @@ package session
 
 import (
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 )
@@ -16,40 +17,29 @@ import (
 // named Claude Code chat is discoverable almost immediately.
 const defaultDiscoveryCacheTTL = 60 * time.Second
 
-// discoveryScanner is the scan function the cache calls when it needs
-// to refresh. Injected so tests can substitute a deterministic fixture.
-type discoveryScanner func(projectsDir string) ([]DiscoveryResult, error)
-
-// discoveryCache memoizes the result of ScanProjects so tier-4 resolve
-// misses do not re-walk ~/.claude/projects on every call. The cache is
-// per-FileStore, keyed implicitly by projectsDir. Access is serialized
+// discoveryCache memoizes the result of provider scanners so tier-4
+// resolve misses do not re-walk provider transcript roots on every
+// call. Access is serialized
 // with a mutex; refreshes block concurrent callers rather than racing
 // multiple scans, which would multiply the disk cost during a burst.
 type discoveryCache struct {
-	mu          sync.Mutex
-	projectsDir string
-	scan        discoveryScanner
-	ttl         time.Duration
-	results     []DiscoveryResult
-	loaded      time.Time
+	mu       sync.Mutex
+	scanners []DiscoveryScanner
+	ttl      time.Duration
+	results  []DiscoveryResult
+	loaded   time.Time
 }
 
-// newDiscoveryCache constructs a cache bound to a specific Claude Code
-// projects directory. A zero TTL falls back to the package default so
-// callers can elect the standard behavior without naming the constant.
-// A nil scanner falls back to ScanProjects, which is the production
-// path; tests override with a fixture builder.
-func newDiscoveryCache(projectsDir string, scan discoveryScanner, ttl time.Duration) *discoveryCache {
-	if scan == nil {
-		scan = ScanProjects
+func newDiscoveryCache(scanners []DiscoveryScanner, ttl time.Duration) *discoveryCache {
+	if len(scanners) == 0 {
+		return nil
 	}
 	if ttl <= 0 {
 		ttl = defaultDiscoveryCacheTTL
 	}
 	return &discoveryCache{
-		projectsDir: projectsDir,
-		scan:        scan,
-		ttl:         ttl,
+		scanners: scanners,
+		ttl:      ttl,
 	}
 }
 
@@ -69,7 +59,7 @@ func (c *discoveryCache) Get() ([]DiscoveryResult, error) {
 		slog.Debug("session.resolve.cache_hit",
 			"component", "session",
 			"subcomponent", "resolve_cache",
-			"projects_dir", c.projectsDir,
+			"providers", c.providerNames(),
 			"results", len(c.results),
 			"age_ms", time.Since(c.loaded).Milliseconds(),
 			"ttl_ms", c.ttl.Milliseconds(),
@@ -78,13 +68,13 @@ func (c *discoveryCache) Get() ([]DiscoveryResult, error) {
 	}
 
 	started := time.Now()
-	results, err := c.scan(c.projectsDir)
+	results, err := c.scanAll()
 	elapsedMs := time.Since(started).Milliseconds()
 	if err != nil {
 		slog.Warn("session.resolve.cache_refresh_failed",
 			"component", "session",
 			"subcomponent", "resolve_cache",
-			"projects_dir", c.projectsDir,
+			"providers", c.providerNames(),
 			"duration_ms", elapsedMs,
 			"err", err,
 		)
@@ -97,7 +87,7 @@ func (c *discoveryCache) Get() ([]DiscoveryResult, error) {
 	slog.Debug("session.resolve.cache_refresh",
 		"component", "session",
 		"subcomponent", "resolve_cache",
-		"projects_dir", c.projectsDir,
+		"providers", c.providerNames(),
 		"results", len(results),
 		"duration_ms", elapsedMs,
 	)
@@ -118,6 +108,26 @@ func (c *discoveryCache) Invalidate() {
 	slog.Debug("session.resolve.cache_invalidated",
 		"component", "session",
 		"subcomponent", "resolve_cache",
-		"projects_dir", c.projectsDir,
+		"providers", c.providerNames(),
 	)
+}
+
+func (c *discoveryCache) scanAll() ([]DiscoveryResult, error) {
+	results := make([]DiscoveryResult, 0)
+	for _, scanner := range c.scanners {
+		scanned, err := scanner.Scan()
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, scanned...)
+	}
+	return results, nil
+}
+
+func (c *discoveryCache) providerNames() string {
+	names := make([]string, 0, len(c.scanners))
+	for _, scanner := range c.scanners {
+		names = append(names, string(scanner.Provider()))
+	}
+	return strings.Join(names, ",")
 }

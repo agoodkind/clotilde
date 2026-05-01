@@ -178,7 +178,14 @@ func TestReloadDaemonRequiresProcessLock(t *testing.T) {
 }
 
 func TestInheritedListenerFilesIncludesDaemonAdapterAndWebapp(t *testing.T) {
-	socketDir := t.TempDir()
+	// Unix socket paths are short on macOS, and t.TempDir can exceed the limit.
+	socketDir, err := os.MkdirTemp("/tmp", "clyde-daemon-*") //nolint:usetesting
+	if err != nil {
+		t.Fatalf("mkdir socket dir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(socketDir)
+	})
 	daemonLis, err := net.Listen("unix", filepath.Join(socketDir, "d.sock"))
 	if err != nil {
 		t.Fatalf("listen daemon: %v", err)

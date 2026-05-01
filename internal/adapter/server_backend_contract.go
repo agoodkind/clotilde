@@ -7,6 +7,7 @@ import (
 
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
+	"goodkind.io/clyde/internal/correlation"
 )
 
 // applyBackendOverride keeps backend selection in the root adapter so request
@@ -28,12 +29,14 @@ func (s *Server) applyBackendOverride(w http.ResponseWriter, r *http.Request, re
 		return model, false
 	}
 
-	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.backend.overridden",
+	attrs := []slog.Attr{
 		slog.String("request_id", reqID),
 		slog.String("alias", req.Model),
 		slog.String("from", original),
 		slog.String("to", override),
-	)
+	}
+	attrs = append(attrs, correlation.AttrsFromContext(r.Context())...)
+	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.backend.overridden", attrs...)
 	return model, true
 }
 
@@ -52,14 +55,16 @@ func (s *Server) dispatchResolvedChat(
 	resolvedReq adapterresolver.ResolvedRequest,
 	resolverErr error,
 ) {
-	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.backend.dispatching",
+	attrs := []slog.Attr{
 		slog.String("request_id", reqID),
 		slog.String("alias", req.Model),
 		slog.String("backend", model.Backend),
 		slog.String("resolved_model", model.ClaudeModel),
 		slog.String("effort", effort),
 		slog.Bool("stream", req.Stream),
-	)
+	}
+	attrs = append(attrs, correlation.AttrsFromContext(r.Context())...)
+	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.backend.dispatching", attrs...)
 	switch model.Backend {
 	case BackendShunt:
 		s.forwardShunt(w, r, model, body)

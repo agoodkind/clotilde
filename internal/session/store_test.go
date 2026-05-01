@@ -205,6 +205,59 @@ var _ = Describe("FileStore", func() {
 			Expect(sessions[0].Name).To(Equal("unified-session-resolution"))
 			Expect(sessions[0].Metadata.SessionID).To(Equal("uuid-shared"))
 		})
+
+		It("keeps same direct session ids from different providers distinct", func() {
+			claude := &session.Session{
+				Name: "claude-session",
+				Metadata: session.Metadata{
+					Name:         "claude-session",
+					Provider:     session.ProviderClaude,
+					SessionID:    "shared-session-id",
+					LastAccessed: time.Date(2026, 4, 21, 22, 10, 0, 0, time.UTC),
+					Created:      time.Date(2026, 4, 20, 15, 25, 0, 0, time.UTC),
+				},
+			}
+			codexLike := &session.Session{
+				Name: "other-provider-session",
+				Metadata: session.Metadata{
+					Name:         "other-provider-session",
+					Provider:     session.ProviderID("other-provider"),
+					SessionID:    "shared-session-id",
+					LastAccessed: time.Date(2026, 4, 21, 17, 17, 0, 0, time.UTC),
+					Created:      time.Date(2026, 4, 20, 22, 26, 0, 0, time.UTC),
+				},
+			}
+
+			Expect(store.Create(claude)).To(Succeed())
+			Expect(store.Create(codexLike)).To(Succeed())
+
+			sessions, err := store.List()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(sessions).To(HaveLen(2))
+		})
+	})
+
+	Describe("Resolve", func() {
+		It("resolves an exact direct session id without UUID parsing", func() {
+			s := session.NewSession("alpha-session", "provider-session-001")
+			Expect(store.Create(s)).To(Succeed())
+
+			resolved, err := store.Resolve("provider-session-001")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resolved).NotTo(BeNil())
+			Expect(resolved.Name).To(Equal("alpha-session"))
+		})
+
+		It("resolves a previous direct session id without UUID parsing", func() {
+			s := session.NewSession("history-session", "provider-session-current")
+			s.Metadata.PreviousSessionIDs = []string{"provider-session-old"}
+			Expect(store.Create(s)).To(Succeed())
+
+			resolved, err := store.Resolve("provider-session-old")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resolved).NotTo(BeNil())
+			Expect(resolved.Name).To(Equal("history-session"))
+		})
 	})
 
 	Describe("ListForWorkspace", func() {

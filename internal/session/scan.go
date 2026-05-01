@@ -1,8 +1,6 @@
 package session
 
 import (
-	"bufio"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -12,10 +10,16 @@ import (
 	"time"
 )
 
+type DiscoveryScanner interface {
+	Provider() ProviderID
+	Scan() ([]DiscoveryResult, error)
+}
+
 // DiscoveryResult captures the outcome of a single transcript discovery.
 // The TranscriptPath is always populated; the rest depend on whether the
 // first entry could be parsed.
 type DiscoveryResult struct {
+	Provider       ProviderID
 	TranscriptPath string
 	SessionID      string
 	WorkspaceRoot  string
@@ -66,165 +70,6 @@ func isClydeScratch(path string) bool {
 	return false
 }
 
-// transcriptHeader is the minimum subset we need from the first entry of a
-// jsonl transcript to map it into the registry.
-type transcriptHeader struct {
-	SessionID   string `json:"sessionId"`
-	CWD         string `json:"cwd"`
-	Entrypoint  string `json:"entrypoint"`
-	Timestamp   string `json:"timestamp"`
-	Type        string `json:"type"`
-	Content     string `json:"content"`     // present on queue-operation entries
-	CustomTitle string `json:"customTitle"` // present on custom-title entries
-	ForkedFrom  struct {
-		SessionID string `json:"sessionId"`
-	} `json:"forkedFrom"`
-}
-
-// ScanProjects walks ~/.claude/projects/<encoded-cwd>/*.jsonl and returns
-// one DiscoveryResult per transcript. Subagent transcripts (anywhere under
-// a subagents/ directory) are flagged but still returned so callers can
-// decide whether to surface them. The walk is best-effort: unreadable
-// files are skipped silently.
-func ScanProjects(claudeProjectsDir string) ([]DiscoveryResult, error) {
-	started := time.Now()
-	var out []DiscoveryResult
-	var withTitle int
-	err := filepath.WalkDir(claudeProjectsDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			// Skip permission errors but keep walking other branches.
-			if os.IsPermission(err) {
-				return nil
-			}
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(d.Name(), ".jsonl") {
-			return nil
-		}
-		dr, ok := readTranscriptHeader(path)
-		if !ok {
-			return nil
-		}
-		if dr.CustomTitle != "" {
-			withTitle++
-		}
-		out = append(out, dr)
-		return nil
-	})
-	if err != nil {
-		slog.Warn("session.scan.walk_failed",
-			"component", "session",
-			"subcomponent", "scan",
-			"projects_dir", claudeProjectsDir,
-			"err", err,
-		)
-		return nil, err
-	}
-	slog.Debug("session.scan.completed",
-		"component", "session",
-		"subcomponent", "scan",
-		"projects_dir", claudeProjectsDir,
-		"transcripts", len(out),
-		"with_custom_title", withTitle,
-		"duration_ms", time.Since(started).Milliseconds(),
-	)
-	return out, nil
-}
-
-// ReadTranscriptHeader is the exported entry point for
-// readTranscriptHeader, used by hook and other callers outside the
-// package to learn the sessionId, workspace root, and customTitle of a
-// transcript on disk without walking the full projects directory.
-func ReadTranscriptHeader(path string) (DiscoveryResult, bool) {
-	return readTranscriptHeader(path)
-}
-
-// readTranscriptHeader reads enough of a jsonl transcript to identify the
-// session it belongs to. The function returns ok=false when the file is
-// unreadable or contains no recognizable entries.
-func readTranscriptHeader(path string) (DiscoveryResult, bool) {
-	f, err := os.Open(path)
-	if err != nil {
-		return DiscoveryResult{}, false
-	}
-	defer f.Close()
-
-	dr := DiscoveryResult{TranscriptPath: path}
-	if strings.Contains(path, string(os.PathSeparator)+"subagents"+string(os.PathSeparator)) {
-		dr.IsSubagent = true
-	}
-
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		var h transcriptHeader
-		if err := json.Unmarshal(line, &h); err != nil {
-			continue
-		}
-		// queue-operation entries come first in clyde-wrapped sessions
-		// and carry the auto-name prompt as their content. They never
-		// have a cwd or entrypoint so they cannot stand alone.
-		if h.Type == "queue-operation" {
-			if !dr.IsAutoName && looksLikeAutoNamePrompt(h.Content) {
-				dr.IsAutoName = true
-			}
-			continue
-		}
-		// custom-title entries carry the user-given chat name. They may
-		// appear on line 1 of user-named transcripts, or later when a
-		// name is set or changed mid-session. The latest value wins so
-		// DisplayTitle reflects the current Claude Code name.
-		if h.Type == "custom-title" {
-			if h.CustomTitle != "" {
-				dr.CustomTitle = h.CustomTitle
-			}
-			if h.SessionID != "" && dr.SessionID == "" {
-				dr.SessionID = h.SessionID
-			}
-			if h.ForkedFrom.SessionID != "" && dr.ForkParentID == "" {
-				dr.ForkParentID = h.ForkedFrom.SessionID
-				dr.IsForked = true
-			}
-			continue
-		}
-		if h.SessionID != "" && dr.SessionID == "" {
-			dr.SessionID = h.SessionID
-		}
-		if h.ForkedFrom.SessionID != "" && dr.ForkParentID == "" {
-			dr.ForkParentID = h.ForkedFrom.SessionID
-			dr.IsForked = true
-		}
-		if h.CWD != "" && dr.WorkspaceRoot == "" {
-			dr.WorkspaceRoot = h.CWD
-		}
-		if h.Entrypoint != "" && dr.Entrypoint == "" {
-			dr.Entrypoint = h.Entrypoint
-		}
-		if h.Timestamp != "" && dr.FirstEntryTime.IsZero() {
-			if t, err := time.Parse(time.RFC3339, h.Timestamp); err == nil {
-				dr.FirstEntryTime = t
-			}
-		}
-		if dr.SessionID != "" && dr.WorkspaceRoot != "" && dr.Entrypoint != "" && !dr.FirstEntryTime.IsZero() {
-			break
-		}
-	}
-	if dr.SessionID == "" {
-		return DiscoveryResult{}, false
-	}
-	if dr.Entrypoint == "sdk-cli" {
-		dr.IsAutoName = true
-	}
-	return dr, true
-}
-
 // looksLikeAutoNamePrompt heuristically detects the prompts clyde
 // dispatches to haiku for session naming. The prompt always asks for a
 // kebab-case label and includes the words "kebab-case" and "Output ONLY".
@@ -241,9 +86,9 @@ func looksLikeAutoNamePrompt(content string) bool {
 // are skipped so the dashboard does not fill with noise. The function
 // returns the list of adopted sessions.
 func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession, error) {
-	known, err := buildKnownUUIDSet(store)
+	known, err := buildKnownIdentitySet(store)
 	if err != nil {
-		slog.Warn("session.adopt.known_uuids_failed",
+		slog.Warn("session.adopt.known_identities_failed",
 			"component", "session",
 			"subcomponent", "adopt",
 			"err", err,
@@ -264,7 +109,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 	sort.SliceStable(ordered, func(i int, j int) bool {
 		left := ordered[i]
 		right := ordered[j]
-		if left.SessionID == right.SessionID {
+		if left.ProviderSessionKey() == right.ProviderSessionKey() {
 			if left.CustomTitle != "" && right.CustomTitle == "" {
 				return true
 			}
@@ -281,8 +126,8 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 				return false
 			}
 		}
-		if left.SessionID != right.SessionID {
-			return left.SessionID < right.SessionID
+		if left.ProviderSessionKey() != right.ProviderSessionKey() {
+			return left.ProviderSessionKey() < right.ProviderSessionKey()
 		}
 		return left.TranscriptPath < right.TranscriptPath
 	})
@@ -291,7 +136,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 		"component", "session",
 		"subcomponent", "adopt",
 		"candidates", len(ordered),
-		"known_uuids", len(known),
+		"known_identities", len(known),
 		"existing_names", len(existingNames),
 	)
 
@@ -314,7 +159,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 			skippedNoSessionID++
 			continue
 		}
-		if _, ok := known[r.SessionID]; ok {
+		if _, ok := known[r.ProviderSessionKey()]; ok {
 			skippedKnown++
 			continue
 		}
@@ -323,6 +168,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 
 		md := Metadata{
 			Name:            name,
+			Provider:        NormalizeProviderID(r.Provider),
 			SessionID:       r.SessionID,
 			TranscriptPath:  r.TranscriptPath,
 			WorkspaceRoot:   r.WorkspaceRoot,
@@ -331,7 +177,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 			IsForkedSession: r.IsForked,
 		}
 		if r.IsForked && r.ForkParentID != "" {
-			if parentName, ok := known[r.ForkParentID]; ok {
+			if parentName, ok := known[providerSessionKey(r.Provider, r.ForkParentID)]; ok {
 				md.ParentSession = parentName
 			}
 		}
@@ -358,6 +204,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 				"component", "session",
 				"subcomponent", "adopt",
 				"session", name,
+				"provider", md.Provider,
 				"session_id", r.SessionID,
 				"transcript", r.TranscriptPath,
 				"err", err,
@@ -368,6 +215,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 			"component", "session",
 			"subcomponent", "adopt",
 			"session", name,
+			"provider", md.Provider,
 			"session_id", r.SessionID,
 			"forked", md.IsForkedSession,
 			"parent_session", md.ParentSession,
@@ -377,7 +225,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 			"display_title", r.CustomTitle,
 		)
 		adopted = append(adopted, AdoptedSession{Name: name, Metadata: md})
-		known[r.SessionID] = name
+		known[r.ProviderSessionKey()] = name
 	}
 	slog.Debug("session.adopt.completed",
 		"component", "session",
@@ -434,10 +282,7 @@ func pickAdoptedName(r DiscoveryResult, taken map[string]bool) (string, string) 
 	return fallback, "workspace_uuid_fallback"
 }
 
-// buildKnownUUIDSet returns the set of UUIDs the store already manages.
-// Both current and previous IDs are included so a session that has gone
-// through /clear cycles is not double-adopted.
-func buildKnownUUIDSet(store *FileStore) (map[string]string, error) {
+func buildKnownIdentitySet(store *FileStore) (map[string]string, error) {
 	all, err := store.List()
 	if err != nil {
 		return nil, err
@@ -445,10 +290,10 @@ func buildKnownUUIDSet(store *FileStore) (map[string]string, error) {
 	out := make(map[string]string, len(all)*2)
 	for _, s := range all {
 		if s.Metadata.SessionID != "" {
-			out[s.Metadata.SessionID] = s.Name
+			out[providerSessionKey(metadataProvider(s.Metadata), s.Metadata.SessionID)] = s.Name
 		}
 		for _, id := range s.Metadata.PreviousSessionIDs {
-			out[id] = s.Name
+			out[providerSessionKey(metadataProvider(s.Metadata), id)] = s.Name
 		}
 	}
 	return out, nil
@@ -505,4 +350,20 @@ func safeShortUUID(id string) string {
 		return id[:8]
 	}
 	return id
+}
+
+func (r DiscoveryResult) ProviderSessionKey() string {
+	return providerSessionKey(r.Provider, r.SessionID)
+}
+
+func providerSessionKey(provider ProviderID, sessionID string) string {
+	normalizedID := strings.TrimSpace(sessionID)
+	if normalizedID == "" {
+		return ""
+	}
+	return string(NormalizeProviderID(provider)) + ":sid:" + normalizedID
+}
+
+func metadataProvider(md Metadata) ProviderID {
+	return md.ProviderID()
 }

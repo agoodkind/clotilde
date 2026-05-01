@@ -15,8 +15,8 @@
 //     that is reasonable to retry: 429 rate limit, 502/503/504, or a
 //     transport error that callers may treat as transient. The error
 //     itself is still terminal for this attempt; the class only
-//     advertises that an automated retry, fallback escalation, or
-//     wait-and-retry instruction is appropriate.
+//     advertises that an automated retry or wait-and-retry instruction
+//     is appropriate.
 //
 //  3. ResponseClassSuccessWithWarning. The upstream returned 200 OK,
 //     but the unified rate-limit headers indicate a non-fatal warning

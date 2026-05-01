@@ -365,6 +365,7 @@ func ShellQuote(arg string) string {
 
 func ApplyPatchArgs(input string) (string, bool) {
 	input = UnwrapApplyPatchInput(input)
+	input = RepairApplyPatchInput(input)
 	if strings.TrimSpace(input) == "" {
 		return "", false
 	}
@@ -386,6 +387,35 @@ func UnwrapApplyPatchInput(input string) string {
 		}
 	}
 	return input
+}
+
+func RepairApplyPatchInput(input string) string {
+	if strings.TrimSpace(input) == "" {
+		return ""
+	}
+	lines := strings.SplitAfter(input, "\n")
+	if len(lines) == 0 {
+		return input
+	}
+	out := make([]string, 0, len(lines))
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "*** Update File: ") && i+1 < len(lines) {
+			next := strings.TrimSpace(lines[i+1])
+			if startsPatchHunkHeader(next) {
+				continue
+			}
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "")
+}
+
+func startsPatchHunkHeader(line string) bool {
+	return strings.HasPrefix(line, "*** Add File: ") ||
+		strings.HasPrefix(line, "*** Delete File: ") ||
+		strings.HasPrefix(line, "*** Update File: ")
 }
 
 func detectedShellName() string {

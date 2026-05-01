@@ -14,7 +14,8 @@ type requestIDContextKey struct{}
 
 // WithRequestID binds the adapter-generated request id into ctx so the
 // provider can preserve the existing response IDs and log correlation
-// fields while moving collect execution off the legacy root dispatcher.
+// fields while the root dispatcher delegates Anthropic execution through
+// Provider.Execute.
 func WithRequestID(ctx context.Context, requestID string) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
@@ -25,16 +26,16 @@ func WithRequestID(ctx context.Context, requestID string) context.Context {
 	return context.WithValue(ctx, requestIDContextKey{}, requestID)
 }
 
-func requestIDFromContext(ctx context.Context, fallback string) string {
+func requestIDFromContext(ctx context.Context, defaultRequestID string) string {
 	if ctx != nil {
 		if value, ok := ctx.Value(requestIDContextKey{}).(string); ok && strings.TrimSpace(value) != "" {
 			return strings.TrimSpace(value)
 		}
 	}
-	return strings.TrimSpace(fallback)
+	return strings.TrimSpace(defaultRequestID)
 }
 
-// ExecuteError preserves the legacy collect-path HTTP status/code
+// ExecuteError preserves the existing collect-path HTTP status/code
 // decisions for pre-wire failures now that Provider.Execute no longer
 // writes directly to the response writer.
 type ExecuteError struct {
@@ -66,10 +67,6 @@ func (e *ExecuteError) Unwrap() error {
 
 // Provider is the Anthropic direct-OAuth implementation of the
 // upstream-agnostic adapter/provider.Provider contract.
-//
-// Sitting 1 of Plan 4 only moves non-streaming Collect requests onto
-// Provider.Execute. Streaming still returns ErrLegacyDispatchPath so the
-// legacy dispatcher owns the SSE path until Sitting 2.
 type Provider struct {
 	log             *slog.Logger
 	prepare         func(context.Context, adapterresolver.ResolvedRequest, string) (PreparedRequest, error)

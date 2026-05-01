@@ -363,6 +363,22 @@ func newDiffCmd(f *cli.Factory) *cobra.Command {
 		Short: "Diff a candidate snapshot against a committed reference",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if isV2Snapshot(args[0]) {
+				ref, err := mitmpkg.LoadSnapshotV2TOML(args[0])
+				if err != nil {
+					return fmt.Errorf("load v2 reference: %w", err)
+				}
+				cand, err := mitmpkg.LoadSnapshotV2TOML(args[1])
+				if err != nil {
+					return fmt.Errorf("load v2 candidate: %w", err)
+				}
+				report := mitmpkg.DiffSnapshotsV2(ref, cand)
+				fmt.Fprintln(out(f), report.SummaryString())
+				if report.HasDiverged() {
+					return fmt.Errorf("snapshot parity drift detected")
+				}
+				return nil
+			}
 			ref, err := mitmpkg.LoadSnapshotTOML(args[0])
 			if err != nil {
 				return fmt.Errorf("load reference: %w", err)

@@ -35,6 +35,7 @@ import (
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/outputstyle"
 	"goodkind.io/clyde/internal/session"
+	sessionartifacts "goodkind.io/clyde/internal/session/artifacts"
 	"goodkind.io/clyde/internal/sessionctx"
 	"goodkind.io/clyde/internal/util"
 )
@@ -437,24 +438,17 @@ func (s *Server) DeleteSession(ctx context.Context, req *clydev1.DeleteSessionRe
 	if sess == nil {
 		return nil, status.Errorf(codes.NotFound, "session %q not found", req.Name)
 	}
-	projClydeRoot := daemonProjectClydeRootForSession(sess)
-	if err := daemonDeleteSessionData(projClydeRoot, sess.Metadata.SessionID, sess.Metadata.TranscriptPath); err != nil {
-		s.log.Warn("daemon.session_delete.current_data_failed",
+	if err := sessionartifacts.Delete(ctx, session.DeleteArtifactsRequest{
+		Session:   sess,
+		ClydeRoot: daemonProjectClydeRootForSession(sess),
+	}); err != nil {
+		s.log.Warn("daemon.session_delete.provider_artifacts_failed",
 			"component", "daemon",
 			"subcomponent", "sessions",
 			"session", sess.Name,
-			"session_id", sess.Metadata.SessionID,
-			"err", err)
-	}
-	for _, prevID := range sess.Metadata.PreviousSessionIDs {
-		if err := daemonDeleteSessionData(projClydeRoot, prevID, ""); err != nil {
-			s.log.Warn("daemon.session_delete.previous_data_failed",
-				"component", "daemon",
-				"subcomponent", "sessions",
-				"session", sess.Name,
-				"previous_session_id", prevID,
-				"err", err)
-		}
+			"provider", sess.ProviderID(),
+			"err", err,
+		)
 	}
 	if sess.Metadata.HasCustomOutputStyle {
 		if err := outputstyle.DeleteCustomStyleFile(config.GlobalOutputStyleRoot(), sess.Name); err != nil {

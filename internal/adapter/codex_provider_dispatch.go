@@ -10,6 +10,7 @@ import (
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
+	"goodkind.io/clyde/internal/correlation"
 )
 
 // dispatchCodexProvider routes a Codex-bound request through the new
@@ -77,6 +78,8 @@ func (s *Server) dispatchCodexProviderStream(
 		writeError(w, http.StatusBadGateway, "upstream_error", runErr.Error())
 		return
 	}
+	corr := correlation.FromContext(ctx).WithUpstreamResponseID(result.UpstreamResponseID)
+	ctx = correlation.WithContext(ctx, corr)
 	usage := result.Usage
 	if model.Context > 0 {
 		usage.MaxTokens = model.Context
@@ -93,7 +96,7 @@ func (s *Server) dispatchCodexProviderStream(
 		return
 	}
 
-	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.completed",
+	completedAttrs := []slog.Attr{
 		slog.String("request_id", reqID),
 		slog.String("model", model.Alias),
 		slog.Int("prompt_tokens", usage.PromptTokens),
@@ -107,7 +110,9 @@ func (s *Server) dispatchCodexProviderStream(
 		slog.String("provider_path", "provider"),
 		slog.Bool("reasoning_signaled", result.ReasoningSignaled),
 		slog.Bool("reasoning_visible", result.ReasoningVisible),
-	)
+	}
+	completedAttrs = append(completedAttrs, corr.Attrs()...)
+	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.completed", completedAttrs...)
 	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
 		Stage:                      adapterruntime.RequestStageCompleted,
 		Provider:                   "codex_direct",
@@ -123,6 +128,7 @@ func (s *Server) dispatchCodexProviderStream(
 		CacheCreationTokens:        0,
 		DerivedCacheCreationTokens: result.DerivedCacheCreationTokens,
 		DurationMs:                 time.Since(started).Milliseconds(),
+		Correlation:                corr,
 	})
 }
 
@@ -152,6 +158,8 @@ func (s *Server) dispatchCodexProviderCollect(
 		writeError(w, http.StatusBadGateway, "upstream_error", runErr.Error())
 		return
 	}
+	corr := correlation.FromContext(ctx).WithUpstreamResponseID(result.UpstreamResponseID)
+	ctx = correlation.WithContext(ctx, corr)
 	runResult := adaptercodex.RunResult{
 		Usage:                      result.Usage,
 		FinishReason:               result.FinishReason,
@@ -168,7 +176,7 @@ func (s *Server) dispatchCodexProviderCollect(
 		merged.Usage.MaxTokens = usage.MaxTokens
 	}
 	writeJSON(w, http.StatusOK, merged)
-	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.completed",
+	completedAttrs := []slog.Attr{
 		slog.String("request_id", reqID),
 		slog.String("model", model.Alias),
 		slog.Int("prompt_tokens", usage.PromptTokens),
@@ -182,7 +190,9 @@ func (s *Server) dispatchCodexProviderCollect(
 		slog.String("provider_path", "provider"),
 		slog.Bool("reasoning_signaled", result.ReasoningSignaled),
 		slog.Bool("reasoning_visible", result.ReasoningVisible),
-	)
+	}
+	completedAttrs = append(completedAttrs, corr.Attrs()...)
+	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.completed", completedAttrs...)
 	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
 		Stage:                      adapterruntime.RequestStageCompleted,
 		Provider:                   "codex_direct",
@@ -198,5 +208,6 @@ func (s *Server) dispatchCodexProviderCollect(
 		CacheCreationTokens:        0,
 		DerivedCacheCreationTokens: result.DerivedCacheCreationTokens,
 		DurationMs:                 time.Since(started).Milliseconds(),
+		Correlation:                corr,
 	})
 }

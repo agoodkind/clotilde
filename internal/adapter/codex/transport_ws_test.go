@@ -34,6 +34,15 @@ func runWebsocketTransportForTest(
 	})
 }
 
+func mustMarshalTurnMetadataForTest(t *testing.T, metadata TurnMetadata) string {
+	t.Helper()
+	raw, err := metadata.MarshalCompact()
+	if err != nil {
+		t.Fatalf("marshal turn metadata: %v", err)
+	}
+	return raw
+}
+
 func TestResponseCreateRequestFromHTTPUsesResponseCreateShape(t *testing.T) {
 	req := HTTPTransportRequest{
 		Model:             "gpt-5.4",
@@ -200,6 +209,13 @@ func TestRunWebsocketTransportParsesTextAndCompletion(t *testing.T) {
 		if got := r.Header.Get(CodexTurnMetadataHeader); got == "" {
 			t.Fatalf("%s should be non-empty", CodexTurnMetadataHeader)
 		}
+		var turnMetadata TurnMetadata
+		if err := json.Unmarshal([]byte(r.Header.Get(CodexTurnMetadataHeader)), &turnMetadata); err != nil {
+			t.Fatalf("parse %s: %v", CodexTurnMetadataHeader, err)
+		}
+		if _, ok := turnMetadata.Workspaces["/workspace"]; !ok {
+			t.Fatalf("%s missing workspace metadata: %#v", CodexTurnMetadataHeader, turnMetadata.Workspaces)
+		}
 		responseHeader := http.Header{}
 		responseHeader.Set(CodexTurnStateHeader, "turn-123")
 		conn, err := upgrader.Upgrade(w, r, responseHeader)
@@ -248,6 +264,8 @@ func TestRunWebsocketTransportParsesTextAndCompletion(t *testing.T) {
 		Alias:          "gpt-5.4",
 		ConversationID: "cursor:conv-123",
 		TurnState:      turnState,
+		TurnMetadata: mustMarshalTurnMetadataForTest(t, NewTurnMetadata("cursor:conv-123", "").
+			WithWorkspace("/workspace", TurnMetadataWorkspace{HasChanges: true})),
 	}, ResponseCreateWsRequest{Type: "response.create"}, func(ch adapteropenai.StreamChunk) error {
 		chunks = append(chunks, ch)
 		return nil
@@ -439,6 +457,203 @@ func TestRunWebsocketTransportCacheReusesConnectionAndChainsResponseIDs(t *testi
 	}
 	if input, _ := requests[3]["input"].([]any); len(input) != 2 {
 		t.Errorf("turn3 input count=%d want 2 (delta)", len(input))
+	}
+}
+
+func TestRunWebsocketTransportInvalidatesTakenSessionOnDeltaMismatch(t *testing.T) {
+	t.Parallel()
+
+	upgrader := websocket.Upgrader{}
+	var handshakes atomic.Int32
+	closedOldConn := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connNumber := handshakes.Add(1)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade: %v", err)
+		}
+		defer conn.Close()
+
+		frameCount := 2
+		if connNumber == 2 {
+			frameCount = 2
+		}
+		for idx := range frameCount {
+			_, _, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			responseID := "resp-1"
+			if connNumber == 1 && idx == 0 {
+				responseID = "warm-1"
+			}
+			if connNumber == 2 && idx == 0 {
+				responseID = "warm-2"
+			}
+			if connNumber == 2 && idx == 1 {
+				responseID = "resp-2"
+			}
+			for _, event := range []map[string]any{
+				{"type": "response.created", "response": map[string]any{"id": responseID}},
+				{"type": "response.completed", "response": map[string]any{"id": responseID, "usage": map[string]any{"input_tokens": 1, "output_tokens": 0, "total_tokens": 1, "input_tokens_details": map[string]any{"cached_tokens": 0}, "output_tokens_details": map[string]any{"reasoning_tokens": 0}}}},
+			} {
+				payload, err := json.Marshal(event)
+				if err != nil {
+					t.Fatalf("marshal event: %v", err)
+				}
+				if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+					return
+				}
+			}
+		}
+		if connNumber == 1 {
+			_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+			_, _, err := conn.ReadMessage()
+			if err != nil {
+				closedOldConn <- struct{}{}
+			}
+		}
+	}))
+	defer server.Close()
+
+	cache := NewWebsocketSessionCache(nil, time.Minute)
+	cfg := WebsocketTransportConfig{
+		URL:            "ws" + strings.TrimPrefix(server.URL, "http"),
+		Token:          "test-token",
+		RequestID:      "req-cache-mismatch",
+		Alias:          "gpt-5.4",
+		ConversationID: "cursor:conv-cache",
+		SessionCache:   cache,
+		TurnState:      NewTurnState(),
+	}
+
+	first := []map[string]any{{"type": "message", "role": "user", "content": "first"}}
+	_, err := runWebsocketTransportForTest(context.Background(), cfg, ResponseCreateWsRequest{
+		Type:  "response.create",
+		Model: "gpt-5.4",
+		Input: first,
+	}, func(adapteropenai.StreamChunk) error { return nil })
+	if err != nil {
+		t.Fatalf("first turn: %v", err)
+	}
+
+	mismatched := []map[string]any{{"type": "message", "role": "user", "content": "different root"}}
+	_, err = runWebsocketTransportForTest(context.Background(), cfg, ResponseCreateWsRequest{
+		Type:  "response.create",
+		Model: "gpt-5.4",
+		Input: mismatched,
+	}, func(adapteropenai.StreamChunk) error { return nil })
+	if err != nil {
+		t.Fatalf("mismatched turn: %v", err)
+	}
+
+	if handshakes.Load() != 2 {
+		t.Fatalf("handshakes=%d want 2", handshakes.Load())
+	}
+	select {
+	case <-closedOldConn:
+	case <-time.After(2 * time.Second):
+		t.Fatal("old websocket was not closed after delta mismatch")
+	}
+}
+
+func TestRunWebsocketTransportInvalidatesTakenSessionOnModelMismatch(t *testing.T) {
+	t.Parallel()
+
+	upgrader := websocket.Upgrader{}
+	var handshakes atomic.Int32
+	requestsCh := make(chan []map[string]any, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connNumber := handshakes.Add(1)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade: %v", err)
+		}
+		defer conn.Close()
+
+		var requests []map[string]any
+		for idx := range 2 {
+			_, body, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var req map[string]any
+			if err := json.Unmarshal(body, &req); err != nil {
+				t.Fatalf("unmarshal request: %v", err)
+			}
+			requests = append(requests, req)
+			responseID := "resp-a"
+			if idx == 0 {
+				responseID = "warm-a"
+			}
+			if connNumber == 2 {
+				responseID = "resp-b"
+				if idx == 0 {
+					responseID = "warm-b"
+				}
+			}
+			for _, event := range []map[string]any{
+				{"type": "response.created", "response": map[string]any{"id": responseID}},
+				{"type": "response.completed", "response": map[string]any{"id": responseID, "usage": map[string]any{"input_tokens": 1, "output_tokens": 0, "total_tokens": 1, "input_tokens_details": map[string]any{"cached_tokens": 0}, "output_tokens_details": map[string]any{"reasoning_tokens": 0}}}},
+			} {
+				payload, err := json.Marshal(event)
+				if err != nil {
+					t.Fatalf("marshal event: %v", err)
+				}
+				if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+					return
+				}
+			}
+		}
+		requestsCh <- requests
+	}))
+	defer server.Close()
+
+	cache := NewWebsocketSessionCache(nil, time.Minute)
+	cfg := WebsocketTransportConfig{
+		URL:            "ws" + strings.TrimPrefix(server.URL, "http"),
+		Token:          "test-token",
+		RequestID:      "req-cache-model",
+		Alias:          "gpt-5.4",
+		ConversationID: "cursor:conv-cache",
+		SessionCache:   cache,
+		TurnState:      NewTurnState(),
+	}
+	input := []map[string]any{{"type": "message", "role": "user", "content": "first"}}
+
+	_, err := runWebsocketTransportForTest(context.Background(), cfg, ResponseCreateWsRequest{
+		Type:           "response.create",
+		Model:          "gpt-5.4",
+		PromptCacheKey: "cursor:conv-cache",
+		Input:          input,
+	}, func(adapteropenai.StreamChunk) error { return nil })
+	if err != nil {
+		t.Fatalf("first turn: %v", err)
+	}
+
+	_, err = runWebsocketTransportForTest(context.Background(), cfg, ResponseCreateWsRequest{
+		Type:           "response.create",
+		Model:          "gpt-5.5",
+		PromptCacheKey: "cursor:conv-cache",
+		Input:          append(input, map[string]any{"type": "message", "role": "user", "content": "second"}),
+	}, func(adapteropenai.StreamChunk) error { return nil })
+	if err != nil {
+		t.Fatalf("second turn: %v", err)
+	}
+
+	if got := handshakes.Load(); got != 2 {
+		t.Fatalf("handshakes=%d want 2", got)
+	}
+	firstRequests := <-requestsCh
+	secondRequests := <-requestsCh
+	if got, _ := firstRequests[1]["previous_response_id"].(string); got != "warm-a" {
+		t.Fatalf("first real frame prev=%q want warm-a", got)
+	}
+	if got, _ := secondRequests[1]["previous_response_id"].(string); got != "warm-b" {
+		t.Fatalf("second real frame prev=%q want warm-b", got)
+	}
+	if input, _ := secondRequests[1]["input"].([]any); len(input) != 2 {
+		t.Fatalf("second real frame input len=%d want full input after model mismatch", len(input))
 	}
 }
 

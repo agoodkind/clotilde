@@ -14,10 +14,11 @@ type JSONCoercion struct {
 // OpenAI ingress prepares one from a ResolvedRequest today; future
 // native Anthropic ingress can construct it directly from `/v1/messages`.
 type PreparedRequest struct {
-	Request      Request
-	Model        adaptermodel.ResolvedModel
-	RequestID    string
-	TrackerKey   string
-	JSONCoercion JSONCoercion
-	IncludeUsage bool
+	Request       Request
+	Model         adaptermodel.ResolvedModel
+	RequestID     string
+	TrackerKey    string
+	JSONCoercion  JSONCoercion
+	IncludeUsage  bool
+	NativeIngress bool
 }

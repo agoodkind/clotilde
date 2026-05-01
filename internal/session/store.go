@@ -5,11 +5,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
-
-	"github.com/google/uuid"
 
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/util"
@@ -109,7 +106,7 @@ func NewGlobalFileStore() (*FileStore, error) {
 	}
 	fs := &FileStore{clydeRoot: config.GlobalDataDir()}
 	if home, err := os.UserHomeDir(); err == nil {
-		fs.discoveryCache = newDiscoveryCache(config.ClaudeProjectsRoot(home), nil, 0)
+		fs.discoveryCache = defaultDiscoveryCache(home)
 	} else {
 		slog.Warn("session.store.home_dir_failed",
 			"component", "session",
@@ -371,31 +368,19 @@ func (fs *FileStore) resolveFromStore(query string) *Session {
 		return sess
 	}
 
-	// Tier 2: UUID match
-	if _, parseErr := uuid.Parse(query); parseErr == nil {
-		sessions, listErr := fs.List()
-		if listErr == nil {
-			for _, sess := range sessions {
-				if sess.Metadata.SessionID == query {
-					slog.Debug("session.resolve.tier2_hit",
-						"component", "session",
-						"subcomponent", "resolve",
-						"query", query,
-						"session", sess.Name,
-						"match", "current_uuid",
-					)
-					return sess
-				}
-				if slices.Contains(sess.Metadata.PreviousSessionIDs, query) {
-					slog.Debug("session.resolve.tier2_hit",
-						"component", "session",
-						"subcomponent", "resolve",
-						"query", query,
-						"session", sess.Name,
-						"match", "previous_uuid",
-					)
-					return sess
-				}
+	// Tier 2: exact direct session-ID match
+	sessions, listErr := fs.List()
+	if listErr == nil {
+		for _, sess := range sessions {
+			if matchType := exactSessionIDMatchType(sess, query); matchType != "" {
+				slog.Debug("session.resolve.tier2_hit",
+					"component", "session",
+					"subcomponent", "resolve",
+					"query", query,
+					"session", sess.Name,
+					"match", matchType,
+				)
+				return sess
 			}
 		}
 	}
@@ -436,28 +421,21 @@ func (fs *FileStore) adoptFromDiscovery(query string) (*Session, error) {
 		return nil, fmt.Errorf("discovery scan: %w", err)
 	}
 
-	queryIsUUID := false
-	if _, parseErr := uuid.Parse(query); parseErr == nil {
-		queryIsUUID = true
-	}
-
 	var match *DiscoveryResult
 	for i := range results {
 		r := &results[i]
 		if r.IsAutoName || r.IsSubagent || r.SessionID == "" {
 			continue
 		}
-		if queryIsUUID && r.SessionID == query {
+		if strings.TrimSpace(r.SessionID) == strings.TrimSpace(query) {
 			if match == nil || shouldPreferDiscoveryResult(*r, *match) {
 				match = r
 			}
 			continue
 		}
-		if !queryIsUUID {
-			if sanitized := Sanitize(r.CustomTitle); sanitized != "" && sanitized == query {
-				if match == nil || shouldPreferDiscoveryResult(*r, *match) {
-					match = r
-				}
+		if sanitized := Sanitize(r.CustomTitle); sanitized != "" && sanitized == query {
+			if match == nil || shouldPreferDiscoveryResult(*r, *match) {
+				match = r
 			}
 		}
 	}
@@ -466,7 +444,6 @@ func (fs *FileStore) adoptFromDiscovery(query string) (*Session, error) {
 			"component", "session",
 			"subcomponent", "resolve",
 			"query", query,
-			"query_is_uuid", queryIsUUID,
 			"scanned", len(results),
 		)
 		return nil, nil
@@ -476,19 +453,18 @@ func (fs *FileStore) adoptFromDiscovery(query string) (*Session, error) {
 		"component", "session",
 		"subcomponent", "resolve",
 		"query", query,
-		"query_is_uuid", queryIsUUID,
 		"session_id", match.SessionID,
 		"transcript", match.TranscriptPath,
 		"raw_custom_title", match.CustomTitle,
 	)
 
-	// If the UUID is already registered (for example the daemon's
+	// If the direct session ID is already registered (for example the daemon's
 	// background scanner adopted it under an auto-generated name before
 	// the user assigned a customTitle), reconcile the existing session
 	// to match the Claude Code title rather than creating a duplicate.
 	// The rename uses the sanitized customTitle so tier 1 finds it on
 	// the retry. DisplayTitle is backfilled unconditionally.
-	if existing := fs.findByUUID(match.SessionID); existing != nil {
+	if existing := fs.findBySessionID(match.SessionID); existing != nil {
 		return fs.reconcileExisting(existing, match, query)
 	}
 
@@ -529,34 +505,47 @@ func adoptDisabledReason(fs *FileStore) string {
 	return "unknown"
 }
 
-// findByUUID returns the first registered session whose SessionID or
-// PreviousSessionIDs contain uuid, or nil when none match. Used by
+// findBySessionID returns the first registered session whose current or
+// historical direct session IDs contain sessionID, or nil when none match. Used by
 // tier 4 to detect a session that was previously auto-adopted (by the
 // daemon's background scanner or the hook) under a name that does not
 // reflect the user's customTitle.
-func (fs *FileStore) findByUUID(uuid string) *Session {
-	if uuid == "" {
+func (fs *FileStore) findBySessionID(sessionID string) *Session {
+	if sessionID == "" {
 		return nil
 	}
 	sessions, err := fs.List()
 	if err != nil {
-		slog.Warn("session.resolve.find_by_uuid_list_failed",
+		slog.Warn("session.resolve.find_by_session_id_list_failed",
 			"component", "session",
 			"subcomponent", "resolve",
-			"uuid", uuid,
+			"session_id", sessionID,
 			"err", err,
 		)
 		return nil
 	}
 	for _, sess := range sessions {
-		if sess.Metadata.SessionID == uuid {
-			return sess
-		}
-		if slices.Contains(sess.Metadata.PreviousSessionIDs, uuid) {
+		if MatchesAnySessionID(sess, sessionID) {
 			return sess
 		}
 	}
 	return nil
+}
+
+func exactSessionIDMatchType(sess *Session, query string) string {
+	query = strings.TrimSpace(query)
+	if query == "" || sess == nil {
+		return ""
+	}
+	if current, ok := CurrentIdentity(sess); ok && current.ID == query {
+		return "current_session_id"
+	}
+	for _, identity := range HistoricalIdentities(sess) {
+		if identity.ID == query && identity.ID != strings.TrimSpace(sess.Metadata.SessionID) {
+			return "previous_session_id"
+		}
+	}
+	return ""
 }
 
 // reconcileExisting updates an already-adopted session to reflect the

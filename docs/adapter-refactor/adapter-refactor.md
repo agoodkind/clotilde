@@ -122,7 +122,7 @@ also unobserved due to a known Cursor BYOK image upload bug.
 
 ## Target architecture
 
-```
+```text
 internal/adapter/
   facade.go                 // HTTP handler. Decode -> cursor.TranslateRequest -> resolve -> dispatch -> encode.
   dispatch.go               // Provider lookup by ResolvedRequest.Provider.
@@ -246,8 +246,9 @@ These are removed as part of the refactor. Do not add new code under them.
   provider construction).
 - `internal/adapter/server_response.go` and `server_streaming.go`.
 - `internal/adapter/tooltrans/`.
-- `internal/adapter/finishreason/` may dissolve into the providers. Each
-  provider already owns its own finish-reason mapping logic.
+- `internal/adapter/finishreason/` remains only as a shared provider-side
+  mapper while both providers import it directly. Root adapter code must not
+  map Anthropic or Codex terminal states.
 
 ## Work plan
 
@@ -325,27 +326,30 @@ Required preconditions (all land before any other Plan 4 work):
       records into per-flavor shapes with header presence/occurrence and
       body field tracking. The flavor classifier handles raw-mode JSON
       string bodies as well as summary-mode `{keys: [...]}` shapes.
-- [x] **Source-of-truth generation.** `clyde mitm codegen --package
-anthropic` emits `internal/adapter/anthropic/wire_flavors_gen.go`
-      from the v2 reference. Two parity tests
-      (`TestOutboundHeadersMatchClaudeCLIInteractiveFlavor`,
-      `TestOutboundHeadersAllowConfigOverride`) gate divergence at unit
-      test time.
+- [ ] **Source-of-truth generation.** `clyde mitm codegen --package
+anthropic` emits `internal/adapter/anthropic/wire_flavors_gen.go`,
+      and two parity tests (`TestOutboundHeadersMatchClaudeCLIInteractiveFlavor`,
+      `TestOutboundHeadersAllowConfigOverride`) gate header divergence at
+      unit test time. Current audit on 2026-04-30 found no committed
+      `research/claude-code/snapshots/latest/reference-v2.toml`, so the
+      generated file lacks its checked-in source reference.
 - [x] **Body-side identity parity.** Adapter emits `metadata.user_id`
       (with stable `device_id`, OAuth-derived `account_uuid`, and
       per-conversation `session_id`) and
       `context_management.clear_thinking_20251015` whenever thinking is
       on, matching the captured reference exactly.
-- [x] **Live byte-identical verification.** Cursor turns against Opus
-      through the daemon route via MITM landed at
-      `~/.local/state/clyde/mitm/always-on/capture.jsonl`.
-      `clyde mitm snapshot --v2` extracted a single
-      `claude-code-interactive-6fde33e0` flavor matching the canonical
-      reference. `clyde mitm diff` returned `snapshot parity: clean`.
-- [x] **Drift alarm.** `clyde mitm drift-check` lands per-upstream
+- [ ] **Live byte-identical verification.** A local audit on 2026-04-30
+      found only `~/.local/state/clyde/mitm/always-on/capture.jsonl`
+      with 6 lines and no committed v2 reference to diff against. The
+      `clyde mitm diff` command now auto-detects v2 references, and the
+      `wire-snapshot-check` target now snapshots with `--v2` when
+      `reference-v2.toml` exists, but live zero-divergence evidence still
+      needs to be captured and attached.
+- [ ] **Drift alarm.** `clyde mitm drift-check` lands per-upstream
       JSONL outcomes at `~/.local/state/clyde/mitm-drift/<upstream>.jsonl`.
       The daemon scheduler runs it on a configurable interval via
-      `[mitm.drift]` config.
+      `[mitm.drift]` config. Current audit on 2026-04-30 found no local
+      drift outcome file under `~/.local/state/clyde/mitm-drift/`.
 
 Provider work itself:
 
@@ -360,12 +364,15 @@ Provider work itself:
       `internal/adapter/anthropic/fallback/` are deleted, fallback dispatch
       is gone from the root server, and `internal/adapter/oauth_handler.go`
       is reduced to Anthropic request-building and identity helpers.
-- [ ] Classifier (`ResponseClass`, header interpretation, native error
+- [x] Classifier (`ResponseClass`, header interpretation, native error
       envelopes) stays. Live-validate against real 429s. Attach captured
-      logs to the history file.
-- [ ] Delete root finish-reason callers (`internal/adapter/stream.go:150`
-      and any leftover after the fallback package is gone). Provider owns
-      its own finish-reason mapping.
+      logs to the history file. Completed against real OAuth-bucket 429
+      evidence from `~/.local/state/clyde/anthropic.jsonl` on 2026-04-30.
+- [x] Reconciled finish-reason ownership. `internal/adapter/stream.go` is
+      gone, the old root stream caller is gone with it, and the surviving
+      shared `internal/adapter/finishreason/` helper is imported only by
+      provider-owned Anthropic/Codex code. Root writer code only preserves or
+      defaults already-normalized provider results.
 - [ ] Live validation: a real Cursor + Anthropic-OAuth turn produces
       zero divergence against the canonical reference. The diff tool gates
       the slice. Manual eyeballing is not enough.
@@ -380,24 +387,29 @@ surfaces. That means the native ingress should preserve Claude model ids
 and Anthropic wire format instead of mapping `opus`/`sonnet` to GPT
 aliases. Tack tracking for this slice lives in `CLYDE-134`.
 
-- [ ] Add Anthropic-native HTTP routes beside the OpenAI facade:
-      `/v1/messages` first, then `/v1/messages/count_tokens`, and confirm
-      whether native `/v1/models` should share the same listener or wrap the
-      existing registry output differently.
-- [ ] Add a native handler path that parses Anthropic request bodies and
+- [x] Added Anthropic-native HTTP routes beside the OpenAI facade for
+      `/v1/messages` and `/v1/messages/count_tokens`. The count-tokens
+      endpoint is a deliberate typed stub for now, and native `/v1/models`
+      remains open until Claude Code traffic confirms it is needed.
+- [x] Added a native handler path that parses Anthropic request bodies and
       emits Anthropic-native JSON and SSE frames without the OpenAI render
       layer in the middle.
-- [ ] Reuse provider-owned Anthropic request building and transport. Do
-      not introduce a second root-owned request builder or response parser.
-- [ ] Decide the auth contract for native ingress. Default bias is
-      Clyde-terminated auth because it matches the existing daemon-owned
-      OAuth bucket and identity machinery.
-- [ ] Define the native model surface: Claude-compatible ids out,
-      Claude-compatible ids in, and any model override behavior documented
-      against the source snapshot.
-- [ ] Live-validate a real Claude CLI session against Clyde via
-      `ANTHROPIC_BASE_URL`, including streaming, model listing, and token
-      counting if Claude calls that endpoint in practice.
+- [x] Reused the provider-owned Anthropic prepared-request seam and the
+      existing Anthropic transport. The root adapter still does not own a
+      second Anthropic request builder or response parser.
+- [x] Native ingress uses the same Clyde-terminated bearer gate as the
+      OpenAI facade, which keeps auth aligned with the daemon-owned OAuth
+      bucket and identity machinery.
+- [x] Native model ingress now accepts the existing Claude-compatible
+      adapter aliases on `/v1/messages` and resolves them through the live
+      registry to Anthropic-backed Claude model ids. A native `/v1/models`
+      surface is still undecided.
+- [x] Live-validated the basic real Claude CLI `claude -p` path against a
+      local Anthropic-shaped base URL through `ANTHROPIC_BASE_URL`. The CLI
+      completed a streaming turn and called `POST /v1/messages?beta=true`
+      only; it did not call `/v1/models` or `/v1/messages/count_tokens` on
+      that path. Full Clyde-to-upstream validation remains blocked on real
+      OAuth-bucket availability.
 
 ### 5. Codex provider implementation (parity superset of CLI + Desktop)
 
@@ -563,7 +575,7 @@ Tracked in `CLYDE-146`, `CLYDE-147`, `CLYDE-148`, `CLYDE-151`, and
 
 The refactor is not done until live traffic confirms it.
 
-- [ ] Anthropic rate-limit classifier validated against real 429s.
+- [x] Anthropic rate-limit classifier validated against real 429s.
 - [ ] Codex `previous_response_id` chaining validated within a single
       cached ws connection across 3+ Cursor turns on the same conversation.
 - [ ] Codex turn metadata (`x-codex-turn-metadata` workspaces block,

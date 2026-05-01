@@ -160,14 +160,16 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("/v1/models", s.auth(s.handleModels))
 	mux.HandleFunc("/v1/chat/completions", s.auth(s.handleChat))
 	mux.HandleFunc("/v1/completions", s.auth(s.handleLegacy))
+	mux.HandleFunc("/v1/messages", s.authAnthropic(s.handleAnthropicMessages))
+	mux.HandleFunc("/v1/messages/count_tokens", s.authAnthropic(s.handleAnthropicCountTokens))
 	mux.HandleFunc("/", s.handleRoot)
 	return mux
 }
 
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"service": "clyde-openai-adapter",
-		"paths":   []string{"/v1/models", "/v1/chat/completions", "/v1/completions", "/healthz"},
+		"service": "clyde-adapter",
+		"paths":   []string{"/v1/models", "/v1/chat/completions", "/v1/completions", "/v1/messages", "/v1/messages/count_tokens", "/healthz"},
 	})
 }
 
@@ -184,6 +186,21 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 		want := "Bearer " + s.token
 		if r.Header.Get("Authorization") != want {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid bearer token")
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (s *Server) authAnthropic(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.token == "" {
+			next(w, r)
+			return
+		}
+		want := "Bearer " + s.token
+		if r.Header.Get("Authorization") != want {
+			writeAnthropicError(w, http.StatusUnauthorized, "authentication_error", "missing or invalid bearer token")
 			return
 		}
 		next(w, r)

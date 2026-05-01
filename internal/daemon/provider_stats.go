@@ -16,6 +16,7 @@ import (
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/correlation"
 )
 
 type providerAggregate struct {
@@ -45,6 +46,13 @@ type providerStatsLogRecord struct {
 	Provider                   string      `json:"provider"`
 	Backend                    string      `json:"backend"`
 	RequestID                  string      `json:"request_id"`
+	TraceID                    string      `json:"trace_id"`
+	SpanID                     string      `json:"span_id"`
+	ParentSpanID               string      `json:"parent_span_id"`
+	CursorRequestID            string      `json:"cursor_request_id"`
+	CursorConversationID       string      `json:"cursor_conversation_id"`
+	UpstreamRequestID          string      `json:"upstream_request_id"`
+	UpstreamResponseID         string      `json:"upstream_response_id"`
 	Alias                      string      `json:"alias"`
 	Model                      string      `json:"model"`
 	Stream                     bool        `json:"stream"`
@@ -168,6 +176,16 @@ func requestEventFromLogRecord(rec providerStatsLogRecord) (adapterruntime.Reque
 		CostMicrocents:             numberValue(rec.CostMicrocents),
 		DurationMs:                 numberValue(rec.DurationMs),
 		Err:                        rec.Error,
+		Correlation: correlation.Context{
+			TraceID:              correlation.TraceID(rec.TraceID),
+			SpanID:               correlation.SpanID(rec.SpanID),
+			ParentSpanID:         correlation.SpanID(rec.ParentSpanID),
+			RequestID:            rec.RequestID,
+			CursorRequestID:      rec.CursorRequestID,
+			CursorConversationID: rec.CursorConversationID,
+			UpstreamRequestID:    rec.UpstreamRequestID,
+			UpstreamResponseID:   rec.UpstreamResponseID,
+		},
 	}
 	if ev.Err == "" {
 		ev.Err = rec.Err
@@ -206,12 +224,14 @@ func (h *providerStatsHub) ensureProvider(provider string) *providerAggregate {
 func (h *providerStatsHub) Record(ctx context.Context, ev adapterruntime.RequestEvent) {
 	h.apply(ev, true)
 	if h.log != nil {
-		h.log.DebugContext(ctx, "provider_stats.recorded",
-			"component", "daemon",
-			"provider", ev.Provider,
-			"request_id", ev.RequestID,
-			"stage", string(ev.Stage),
-		)
+		attrs := []slog.Attr{
+			slog.String("component", "daemon"),
+			slog.String("provider", ev.Provider),
+			slog.String("request_id", ev.RequestID),
+			slog.String("stage", string(ev.Stage)),
+		}
+		attrs = append(attrs, ev.Correlation.Attrs()...)
+		h.log.LogAttrs(ctx, slog.LevelDebug, "provider_stats.recorded", attrs...)
 	}
 }
 

@@ -11,7 +11,7 @@ import (
 
 // EmitActionableStreamError emits a single assistant-shaped chunk that
 // describes the upstream failure in user-friendly terms when the SSE
-// headers have already been committed. It is the legacy fallback for
+// headers have already been committed. It is the assistant-text path for
 // untyped errors; typed *anthropic.UpstreamError values surface a
 // native OpenAI error envelope instead (see EmitStreamError on the
 // shared SSEWriter).

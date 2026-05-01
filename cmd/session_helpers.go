@@ -8,9 +8,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"goodkind.io/clyde/internal/claude"
 	"goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/session"
+	sessionlifecycle "goodkind.io/clyde/internal/session/lifecycle"
 )
 
 // globalStore returns the global session store, or panics on error.
@@ -23,7 +23,8 @@ func globalStore() (*session.FileStore, error) {
 	return store, nil
 }
 
-// printResumeInstructions prints how to resume a session after claude exits.
+// printResumeInstructions prints how to resume a session after the interactive
+// provider exits.
 // Skipped for incognito sessions (they auto-delete).
 func printResumeInstructions(sess *session.Session) {
 	if sess.Metadata.IsIncognito {
@@ -32,7 +33,19 @@ func printResumeInstructions(sess *session.Session) {
 	_, _ = fmt.Fprintln(os.Stdout)
 	_, _ = fmt.Fprintln(os.Stdout, "Resume this session with:")
 	_, _ = fmt.Fprintf(os.Stdout, "  clyde resume %s\n", sess.Name)
-	_, _ = fmt.Fprintf(os.Stdout, "  claude --resume %s\n", sess.Metadata.SessionID)
+	runtime, err := sessionlifecycle.ForSession(sess, nil)
+	if err != nil {
+		slog.Warn("cmd.session.resume_instructions_provider_failed",
+			"component", "cli",
+			"session", sess.Name,
+			"provider", sess.ProviderID(),
+			"err", err,
+		)
+	} else {
+		for _, line := range runtime.ResumeInstructions(sess) {
+			_, _ = fmt.Fprintf(os.Stdout, "  %s\n", line)
+		}
+	}
 	slog.Info("cmd.session.resume_instructions", "session", sess.Name, "session_id", sess.Metadata.SessionID)
 }
 
@@ -41,13 +54,17 @@ func printResumeInstructions(sess *session.Session) {
 // import cycles in the daemon package), then sends them via gRPC. The daemon
 // runs the LLM call in the background so the wrapper can exit immediately.
 func autoUpdateContext(_ *session.FileStore, sess *session.Session) {
-	if sess.Metadata.IsIncognito || sess.Metadata.TranscriptPath == "" {
+	if sess.Metadata.IsIncognito {
 		return
 	}
 
-	// Extract messages on the client side (claude package can't be imported by daemon).
+	runtime, err := sessionlifecycle.ForSession(sess, nil)
+	if err != nil {
+		return
+	}
+
 	// Sample 100 messages so the labeler sees the conversation arc.
-	recent := claude.ExtractRecentMessages(sess.Metadata.TranscriptPath, 100, 300)
+	recent := runtime.RecentContextMessages(sess, 100, 300)
 	if len(recent) == 0 {
 		return
 	}
@@ -71,8 +88,9 @@ func autoUpdateContext(_ *session.FileStore, sess *session.Session) {
 }
 
 // resolveSessionForResume finds a session using the store's unified resolution,
-// with CLI-specific additions: auto-adopt for UUIDs and TUI picker for ambiguous matches.
-// Returns nil session (no error) if nothing found. The caller should forward to claude.
+// with CLI-specific additions: auto-adopt for UUIDs and TUI picker for
+// ambiguous matches. Returns nil session (no error) if nothing found; the
+// caller can then fall back to the default provider runtime.
 func resolveSessionForResume(cmd *cobra.Command, store *session.FileStore, query string) (*session.Session, error) {
 	// Unified 4-tier resolution: exact name, UUID, display name, single
 	// substring match. Anything more ambiguous than a single match is

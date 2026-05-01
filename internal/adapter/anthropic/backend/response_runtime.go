@@ -402,8 +402,7 @@ func StreamResponse(
 			// *anthropic.UpstreamError, emit a native OpenAI error
 			// envelope (data: {"error":{...}}) so Cursor and other
 			// OpenAI clients see a structured error rather than an
-			// assistant-shaped chat message. Untyped errors (e.g.
-			// claude-fallback subprocess failures) keep the previous
+			// assistant-shaped chat message. Untyped errors keep the
 			// actionable assistant text path.
 			if ue, ok := anthropic.AsUpstreamError(err); ok {
 				_ = sw.EmitStreamError(buildErrorBodyForUpstream(ue))

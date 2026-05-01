@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"goodkind.io/clyde/internal/correlation"
 )
 
 // isWebsocketUpgrade reports whether the request asks for a
@@ -94,6 +95,7 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, upstream
 		return
 	}
 	defer clientConn.Close()
+	corr := correlation.FromHTTPHeader(r.Header, r.Header.Get(correlation.HeaderRequestID))
 
 	startEvent := map[string]any{
 		"kind":             "ws_start",
@@ -102,6 +104,7 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, upstream
 		"request_headers":  redactHeaders(r.Header),
 		"response_headers": redactHeaders(upstreamResp.Header),
 	}
+	addCaptureCorrelation(startEvent, corr)
 	if err := appendCapture(cfg.CaptureDir, startEvent); err != nil {
 		p.log.Warn("mitm.ws.capture_start_failed", "err", err)
 	}
@@ -148,6 +151,7 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, upstream
 				"text":        text,
 				"seq":         count,
 			}
+			addCaptureCorrelation(ev, corr)
 			if err := appendCapture(captureDir, ev); err != nil {
 				p.log.Warn("mitm.ws.capture_msg_failed", "err", err)
 			}
@@ -169,6 +173,7 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, upstream
 		"url":      upstreamURL,
 		"messages": messageCount,
 	}
+	addCaptureCorrelation(endEvent, corr)
 	if closeErr != nil {
 		endEvent["err"] = closeErr.Error()
 	}
@@ -176,4 +181,31 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, upstream
 		p.log.Warn("mitm.ws.capture_end_failed", "err", err)
 	}
 	p.log.Info("mitm.ws.closed", "url", upstreamURL, "messages", messageCount)
+}
+
+func addCaptureCorrelation(event map[string]any, corr correlation.Context) {
+	if corr.TraceID != "" {
+		event["trace_id"] = string(corr.TraceID)
+	}
+	if corr.SpanID != "" {
+		event["span_id"] = string(corr.SpanID)
+	}
+	if corr.ParentSpanID != "" {
+		event["parent_span_id"] = string(corr.ParentSpanID)
+	}
+	if corr.RequestID != "" {
+		event["request_id"] = corr.RequestID
+	}
+	if corr.CursorRequestID != "" {
+		event["cursor_request_id"] = corr.CursorRequestID
+	}
+	if corr.CursorConversationID != "" {
+		event["cursor_conversation_id"] = corr.CursorConversationID
+	}
+	if corr.UpstreamRequestID != "" {
+		event["upstream_request_id"] = corr.UpstreamRequestID
+	}
+	if corr.UpstreamResponseID != "" {
+		event["upstream_response_id"] = corr.UpstreamResponseID
+	}
 }

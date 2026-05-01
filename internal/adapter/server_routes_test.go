@@ -9,9 +9,13 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"goodkind.io/clyde/internal/adapter/anthropic"
+	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	"goodkind.io/clyde/internal/config"
 )
 
@@ -173,5 +177,123 @@ func TestCloseForceClosesActiveConnection(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		close(release)
 		t.Fatalf("server did not stop")
+	}
+}
+
+func TestAnthropicMessagesRouteUsesNativeIngress(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Enabled = true
+	srv, err := New(cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	srv.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{}, anthropic.ProviderOptions{
+		ExecutePrepared: func(_ context.Context, req anthropic.PreparedRequest, writer adapterprovider.EventWriter) (adapterprovider.Result, error) {
+			if !req.NativeIngress {
+				t.Fatalf("NativeIngress = false, want true")
+			}
+			if got := req.Request.Model; got != "clyde-haiku-4-5" {
+				t.Fatalf("prepared model = %q", got)
+			}
+			if len(req.Request.Messages) != 1 || len(req.Request.Messages[0].Content) != 1 {
+				t.Fatalf("prepared messages = %+v", req.Request.Messages)
+			}
+			nativeWriter, ok := writer.(*nativeAnthropicJSONWriter)
+			if !ok {
+				t.Fatalf("writer type = %T, want *nativeAnthropicJSONWriter", writer)
+			}
+			body := []byte(`{"id":"msg_123","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"claude-haiku-4-5-20251001","stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":2}}`)
+			if err := nativeWriter.capture(http.StatusOK, http.Header{"Content-Type": {"application/json"}}, body); err != nil {
+				t.Fatalf("capture: %v", err)
+			}
+			return adapterprovider.Result{}, nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"clyde-haiku-4-5","messages":[{"role":"user","content":"hello"}],"max_tokens":32}`))
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
+		t.Fatalf("content-type = %q", got)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"type":"message"`) {
+		t.Fatalf("body missing anthropic message envelope: %s", body)
+	}
+	if strings.Contains(body, `"chat.completion"`) {
+		t.Fatalf("body unexpectedly contains OpenAI envelope: %s", body)
+	}
+}
+
+func TestAnthropicMessagesRoutePreservesSSEFramesWithClaudeBetaQuery(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Enabled = true
+	srv, err := New(cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	srv.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{}, anthropic.ProviderOptions{
+		ExecutePrepared: func(_ context.Context, req anthropic.PreparedRequest, writer adapterprovider.EventWriter) (adapterprovider.Result, error) {
+			if !req.NativeIngress || !req.Request.Stream {
+				t.Fatalf("prepared ingress=%v stream=%v, want native stream", req.NativeIngress, req.Request.Stream)
+			}
+			nativeWriter, ok := writer.(*nativeAnthropicStreamWriter)
+			if !ok {
+				t.Fatalf("writer type = %T, want *nativeAnthropicStreamWriter", writer)
+			}
+			nativeWriter.commit(http.Header{"Content-Type": {"text/event-stream"}})
+			if err := nativeWriter.write([]byte("event: message_start\n")); err != nil {
+				t.Fatalf("write event: %v", err)
+			}
+			if err := nativeWriter.write([]byte("data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_123\"}}\n\n")); err != nil {
+				t.Fatalf("write data: %v", err)
+			}
+			return adapterprovider.Result{}, nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages?beta=true", strings.NewReader(`{"model":"clyde-haiku-4-5","messages":[{"role":"user","content":"hello"}],"max_tokens":32,"stream":true}`))
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/event-stream") {
+		t.Fatalf("content-type = %q", got)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "event: message_start") {
+		t.Fatalf("body missing anthropic SSE event: %s", body)
+	}
+	if strings.Contains(body, "chat.completion.chunk") {
+		t.Fatalf("body unexpectedly contains OpenAI chunk framing: %s", body)
+	}
+}
+
+func TestAnthropicCountTokensRouteReturnsTypedStub(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Enabled = true
+	srv, err := New(cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(`{"model":"clyde-haiku-4-5"}`))
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want 501", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"type":"error"`) || !strings.Contains(body, `"not_supported_error"`) {
+		t.Fatalf("body = %s, want anthropic not_supported_error", body)
 	}
 }

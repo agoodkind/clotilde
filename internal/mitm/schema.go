@@ -29,6 +29,15 @@ type CaptureRecord struct {
 	T    int64             `json:"t,omitempty"`
 	URL  string            `json:"url,omitempty"`
 
+	TraceID              string `json:"trace_id,omitempty"`
+	SpanID               string `json:"span_id,omitempty"`
+	ParentSpanID         string `json:"parent_span_id,omitempty"`
+	RequestID            string `json:"request_id,omitempty"`
+	CursorRequestID      string `json:"cursor_request_id,omitempty"`
+	CursorConversationID string `json:"cursor_conversation_id,omitempty"`
+	UpstreamRequestID    string `json:"upstream_request_id,omitempty"`
+	UpstreamResponseID   string `json:"upstream_response_id,omitempty"`
+
 	// HTTP fields.
 	Method  string            `json:"method,omitempty"`
 	Status  int               `json:"status,omitempty"`

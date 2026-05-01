@@ -351,3 +351,53 @@ func TestStreamResponseTransportFailureEmitsNativeErrorEnvelope(t *testing.T) {
 		t.Fatalf("error message = %q, want transport failure detail", got.Message)
 	}
 }
+
+func TestStreamResponse429EmitsRateLimitNativeErrorEnvelope(t *testing.T) {
+	t.Parallel()
+
+	dispatcher := &fakeResponseDispatcher{
+		streamEvents: func(_ context.Context, _ anthropic.Request, _ anthropic.EventSink) (anthropic.Usage, string, error) {
+			resp := &http.Response{StatusCode: http.StatusTooManyRequests, Header: http.Header{}}
+			return anthropic.Usage{}, "", &anthropic.UpstreamError{
+				Classification: anthropic.Classify(resp, nil),
+				Status:         http.StatusTooManyRequests,
+				Message:        "This request would exceed your account's rate limit. Please try again later.",
+			}
+		},
+	}
+
+	err := StreamResponse(
+		dispatcher,
+		httptest.NewRecorder(),
+		httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil),
+		anthropic.Request{Model: "claude-opus-4-7"},
+		adaptermodel.ResolvedModel{Alias: "clyde-opus", Backend: "anthropic", ClaudeModel: "claude-opus-4-7"},
+		"req-429",
+		time.Now(),
+		false,
+		false,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("StreamResponse returned err: %v", err)
+	}
+	if dispatcher.actionables != 0 {
+		t.Fatalf("typed 429 failure must not use actionable assistant prose; got %d actionable calls", dispatcher.actionables)
+	}
+	if dispatcher.sseWriter == nil {
+		t.Fatal("expected SSE writer to be created")
+	}
+	if len(dispatcher.sseWriter.errors) != 1 {
+		t.Fatalf("expected exactly 1 native error envelope, got %d", len(dispatcher.sseWriter.errors))
+	}
+	got := dispatcher.sseWriter.errors[0]
+	if got.Type != "rate_limit_error" {
+		t.Fatalf("error type = %q, want rate_limit_error", got.Type)
+	}
+	if got.Code != "rate_limit_exceeded" {
+		t.Fatalf("error code = %q, want rate_limit_exceeded", got.Code)
+	}
+	if !strings.Contains(got.Message, "rate limit") {
+		t.Fatalf("error message = %q, want upstream rate-limit detail", got.Message)
+	}
+}

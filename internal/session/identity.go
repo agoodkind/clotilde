@@ -1,15 +1,118 @@
 package session
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
+
+// ProviderSessionID is a provider-scoped session identifier.
+type ProviderSessionID struct {
+	Provider ProviderID
+	ID       string
+}
+
+// Normalized returns a trimmed provider session id with default provider fallback.
+func (id ProviderSessionID) Normalized() ProviderSessionID {
+	return ProviderSessionID{
+		Provider: NormalizeProviderID(id.Provider),
+		ID:       strings.TrimSpace(id.ID),
+	}
+}
+
+// IsZero reports whether the id does not point at a concrete provider session.
+func (id ProviderSessionID) IsZero() bool {
+	return strings.TrimSpace(id.ID) == ""
+}
+
+// Key returns the stable logical identity key for maps and dedupe sets.
+func (id ProviderSessionID) Key() string {
+	normalized := id.Normalized()
+	if normalized.IsZero() {
+		return ""
+	}
+	return "provider:" + string(normalized.Provider) + ":sid:" + normalized.ID
+}
+
+// SessionIdentity holds the current and historical provider session ids.
+type SessionIdentity struct {
+	Name     string
+	Current  ProviderSessionID
+	Previous []ProviderSessionID
+}
+
+// HasID reports whether the current or historical identity matches the raw id.
+func (identity SessionIdentity) HasID(rawID string) bool {
+	trimmed := strings.TrimSpace(rawID)
+	if trimmed == "" {
+		return false
+	}
+	if identity.Current.Normalized().ID == trimmed {
+		return true
+	}
+	for _, previous := range identity.Previous {
+		if previous.Normalized().ID == trimmed {
+			return true
+		}
+	}
+	return false
+}
+
+// CurrentIdentity returns the session's current provider-scoped identity.
+func CurrentIdentity(sess *Session) (ProviderSessionID, bool) {
+	if sess == nil {
+		return ProviderSessionID{}, false
+	}
+	current := sess.Identity().Current.Normalized()
+	if current.IsZero() {
+		return ProviderSessionID{}, false
+	}
+	return current, true
+}
+
+// HistoricalIdentities returns every exact provider-scoped identifier that
+// should resolve back to the same logical session.
+func HistoricalIdentities(sess *Session) []ProviderSessionID {
+	if sess == nil {
+		return nil
+	}
+	identity := sess.Identity()
+	out := make([]ProviderSessionID, 0, 1+len(identity.Previous))
+	if current := identity.Current.Normalized(); !current.IsZero() {
+		out = append(out, current)
+	}
+	for _, previous := range identity.Previous {
+		normalized := previous.Normalized()
+		if normalized.IsZero() {
+			continue
+		}
+		out = append(out, normalized)
+	}
+	return out
+}
+
+// MatchesAnySessionID reports whether query matches any current or historical
+// direct session identifier for sess, regardless of provider namespace.
+func MatchesAnySessionID(sess *Session, query string) bool {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return false
+	}
+	for _, identity := range HistoricalIdentities(sess) {
+		if identity.ID == query {
+			return true
+		}
+	}
+	return false
+}
 
 // IdentityKey returns the logical identity used to collapse stale aliases that
-// point at the same underlying Claude session.
+// point at the same underlying provider session.
 func IdentityKey(sess *Session) string {
 	if sess == nil {
 		return ""
 	}
-	if id := strings.TrimSpace(sess.Metadata.SessionID); id != "" {
-		return "sid:" + id
+	if key := sess.Identity().Current.Key(); key != "" {
+		return key
 	}
 	return "name:" + sess.Name
 }
@@ -69,4 +172,15 @@ func LooksLikeAutoAdoptedName(name string) bool {
 		}
 	}
 	return true
+}
+
+func appendUniqueString(existing []string, value string) []string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return existing
+	}
+	if slices.Contains(existing, trimmed) {
+		return existing
+	}
+	return append(existing, trimmed)
 }

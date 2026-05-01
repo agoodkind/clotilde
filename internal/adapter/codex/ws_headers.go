@@ -3,6 +3,8 @@ package codex
 import (
 	"net/http"
 	"strings"
+
+	"goodkind.io/clyde/internal/correlation"
 )
 
 const (
@@ -13,6 +15,7 @@ const (
 type ResponsesWebsocketHeaderConfig struct {
 	RequestID            string
 	ConversationID       string
+	Correlation          correlation.Context
 	Token                string
 	InstallationID       string
 	WindowID             string
@@ -35,6 +38,11 @@ func BuildResponsesWebsocketHeaders(cfg ResponsesWebsocketHeaderConfig) http.Hea
 	}
 	if clientRequestID != "" {
 		header.Set("x-client-request-id", clientRequestID)
+	}
+	for key, values := range cfg.Correlation.HTTPHeaders() {
+		for _, value := range values {
+			header.Add(key, value)
+		}
 	}
 	if conversationID != "" {
 		header.Set("session_id", conversationID)

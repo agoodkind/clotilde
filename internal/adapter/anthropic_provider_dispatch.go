@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -138,6 +139,17 @@ func (s *Server) executeAnthropicPreparedCollect(
 	prepared anthropic.PreparedRequest,
 	writer adapterprovider.EventWriter,
 ) (adapterprovider.Result, error) {
+	if prepared.NativeIngress {
+		nativeWriter, ok := writer.(*nativeAnthropicJSONWriter)
+		if !ok || nativeWriter == nil {
+			return adapterprovider.Result{}, &anthropic.ExecuteError{
+				Status:  http.StatusInternalServerError,
+				Code:    "internal_error",
+				Message: "anthropic native collect path requires a native response writer",
+			}
+		}
+		return s.executeAnthropicPreparedCollectNative(ctx, prepared, nativeWriter)
+	}
 	dispatcher := &collectResponseDispatcher{
 		server:      s,
 		eventWriter: writer,
@@ -172,6 +184,17 @@ func (s *Server) executeAnthropicPreparedStream(
 	prepared anthropic.PreparedRequest,
 	writer adapterprovider.EventWriter,
 ) (adapterprovider.Result, error) {
+	if prepared.NativeIngress {
+		nativeWriter, ok := writer.(*nativeAnthropicStreamWriter)
+		if !ok || nativeWriter == nil {
+			return adapterprovider.Result{}, &anthropic.ExecuteError{
+				Status:  http.StatusInternalServerError,
+				Code:    "internal_error",
+				Message: "anthropic native stream path requires a native response writer",
+			}
+		}
+		return s.executeAnthropicPreparedStreamNative(ctx, prepared, nativeWriter)
+	}
 	streamWriter, ok := writer.(*providerStreamWriter)
 	if !ok || streamWriter == nil {
 		return adapterprovider.Result{}, &anthropic.ExecuteError{
@@ -203,6 +226,41 @@ func (s *Server) executeAnthropicPreparedStream(
 		return adapterprovider.Result{}, err
 	}
 	return adapterprovider.Result{SystemFingerprint: systemFingerprint}, nil
+}
+
+func (s *Server) executeAnthropicPreparedCollectNative(
+	ctx context.Context,
+	prepared anthropic.PreparedRequest,
+	writer *nativeAnthropicJSONWriter,
+) (adapterprovider.Result, error) {
+	resp, err := s.anthr.Do(ctx, prepared.Request)
+	if err != nil {
+		return adapterprovider.Result{}, err
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if readErr != nil {
+		return adapterprovider.Result{}, readErr
+	}
+	if err := writer.capture(http.StatusOK, resp.Header.Clone(), body); err != nil {
+		return adapterprovider.Result{}, err
+	}
+	return adapterprovider.Result{}, nil
+}
+
+func (s *Server) executeAnthropicPreparedStreamNative(
+	ctx context.Context,
+	prepared anthropic.PreparedRequest,
+	writer *nativeAnthropicStreamWriter,
+) (adapterprovider.Result, error) {
+	resp, err := s.anthr.Do(ctx, prepared.Request)
+	if err != nil {
+		return adapterprovider.Result{}, err
+	}
+	if err := writer.relay(resp); err != nil {
+		return adapterprovider.Result{}, err
+	}
+	return adapterprovider.Result{}, nil
 }
 
 func writeAnthropicProviderError(w http.ResponseWriter, err error) {
