@@ -290,6 +290,8 @@ layer's job is small and concrete. The resolver consumes a typed
 
 ### 3. Codegen wire types
 
+Tracked in `CLYDE-155`.
+
 - [ ] Add a `make wire-types` target. Source schemas live under
       `research/anthropic/` and `research/codex/`. Output goes into the provider
       packages. Codegen runs in CI and is checked in.
@@ -300,6 +302,10 @@ layer's job is small and concrete. The resolver consumes a typed
 - [ ] Same pass for Anthropic backend types where they still hand-roll.
 
 ### 4. Anthropic provider implementation
+
+Remaining provider cleanup is tracked in `CLYDE-149`. The byte-identical
+wire-parity gate is tracked in `CLYDE-150`. The live 429 classifier
+validation slice is tracked in `CLYDE-146`.
 
 **Gate (P0). Byte-identical claude-cli wire parity.** Plan 4 cannot start
 its rewrite until the claude-cli snapshot pipeline lands. The new provider
@@ -512,6 +518,9 @@ suffix-extension matcher described in step 5 above. `CLYDE-147`
 
 ### 7. Delete the root cruft
 
+The remaining closeout sweep for dead imports and dead adapter-local types is
+tracked in `CLYDE-154`.
+
 After items 1 through 6 land, the bridges become unused.
 
 - [x] Deleted `internal/adapter/anthropic_bridge.go` during the fallback
@@ -537,6 +546,8 @@ After items 1 through 6 land, the bridges become unused.
 
 ### 8. Test layout
 
+Tracked in `CLYDE-153`.
+
 - [ ] Tests under provider packages, not the root.
 - [ ] Render and runtime tests under their own packages.
 - [ ] Root tests cover only HTTP routing, auth lookup, dispatch, and request
@@ -546,6 +557,9 @@ After items 1 through 6 land, the bridges become unused.
 - [ ] Remove duplicated coverage between root and provider packages.
 
 ### 9. Live validation
+
+Tracked in `CLYDE-146`, `CLYDE-147`, `CLYDE-148`, `CLYDE-151`, and
+`CLYDE-152`.
 
 The refactor is not done until live traffic confirms it.
 
