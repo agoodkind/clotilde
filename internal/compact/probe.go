@@ -180,9 +180,7 @@ func ProbeContextUsage(ctx context.Context, opts ProbeOptions) (ContextUsage, er
 	// full pipe buffer. Keep the tail for diagnostics on failure.
 	var stderrTail strings.Builder
 	var stderrWG sync.WaitGroup
-	stderrWG.Add(1)
-	go func() {
-		defer stderrWG.Done()
+	stderrWG.Go(func() {
 		buf := make([]byte, 4096)
 		for {
 			n, readErr := stderr.Read(buf)
@@ -200,7 +198,7 @@ func ProbeContextUsage(ctx context.Context, opts ProbeOptions) (ContextUsage, er
 				return
 			}
 		}
-	}()
+	})
 
 	if _, err := stdin.Write(reqLine); err != nil {
 		_ = cmd.Process.Kill()

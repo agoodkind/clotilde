@@ -221,13 +221,9 @@ func handleGetContext(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 
 	// Extract window
 	start := center - before
-	if start < 0 {
-		start = 0
-	}
+	start = max(start, 0)
 	end := center + after + 1
-	if end > len(messages) {
-		end = len(messages)
-	}
+	end = min(end, len(messages))
 
 	window := messages[start:end]
 	text := fmt.Sprintf("Messages %d-%d of %d (centered on %d):\n\n%s",
@@ -440,7 +436,7 @@ func loadMessages(name string) ([]transcript.Message, error) {
 	}
 	sess, err := store.Resolve(name)
 	if err != nil {
-		return nil, fmt.Errorf("session resolution error: %v", err)
+		return nil, fmt.Errorf("session resolution error: %w", err)
 	}
 	if sess == nil {
 		return nil, fmt.Errorf("session '%s' not found", name)

@@ -34,7 +34,7 @@ func TestAutoRelogin_PassthroughNonInvalidGrant(t *testing.T) {
 	m := &Manager{credentialsDir: t.TempDir()}
 	origErr := errors.New("network timeout")
 	err := m.autoRelogin(context.Background(), origErr)
-	if err != origErr {
+	if !errors.Is(err, origErr) {
 		t.Fatalf("autoRelogin returned %v; want original err unchanged", err)
 	}
 }

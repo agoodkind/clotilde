@@ -99,30 +99,6 @@ func NewFileStore(clydeRoot string) *FileStore {
 	}
 }
 
-// NewFileStoreReadOnly returns a FileStore that never triggers tier 4
-// adoption from Resolve. Call sites inside the scan and prune pipeline
-// use this to prevent a Resolve performed during scan from re-entering
-// scan and recursing. The returned store reads and writes like a normal
-// FileStore; only the transparent-adoption side effect is suppressed.
-func NewFileStoreReadOnly(clydeRoot string) *FileStore {
-	return &FileStore{
-		clydeRoot: clydeRoot,
-		noAdopt:   true,
-	}
-}
-
-// NewFileStoreWithDiscovery returns a FileStore rooted at clydeRoot
-// with tier-4 adoption wired to scan projectsDir. This is the explicit
-// form used by tests and by any caller that wants tier 4 enabled
-// against a non-default projects directory. The production code path
-// uses NewGlobalFileStore, which resolves projectsDir from $HOME.
-func NewFileStoreWithDiscovery(clydeRoot, projectsDir string) *FileStore {
-	return &FileStore{
-		clydeRoot:      clydeRoot,
-		discoveryCache: newDiscoveryCache(projectsDir, nil, 0),
-	}
-}
-
 // NewGlobalFileStore creates a FileStore pointing at the global sessions directory.
 // Creates the directory if it doesn't exist. The returned store has the
 // tier-4 discovery cache attached so Resolve transparently adopts any
@@ -671,11 +647,10 @@ func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult
 		"display_title", match.CustomTitle,
 		"query", query,
 	)
-	renamed, err := fs.Get(target)
-	if err != nil {
-		return existing, nil
+	if renamed, getErr := fs.Get(target); getErr == nil {
+		return renamed, nil
 	}
-	return renamed, nil
+	return existing, nil
 }
 
 func shouldPreferDiscoveryResult(candidate DiscoveryResult, current DiscoveryResult) bool {
@@ -734,18 +709,16 @@ func (fs *FileStore) Rename(oldName, newName string) error {
 	}
 
 	// Update any child sessions that reference oldName as their parent
-	sessions, err := fs.List()
-	if err != nil {
-		return nil // non-fatal: rename succeeded, parent references not updated
-	}
-	for _, child := range sessions {
-		if child.Metadata.ParentSession == oldName {
-			child.Metadata.ParentSession = newName
-			_ = fs.Update(child) // best-effort
+	if sessions, listErr := fs.List(); listErr == nil {
+		for _, child := range sessions {
+			if child.Metadata.ParentSession == oldName {
+				child.Metadata.ParentSession = newName
+				_ = fs.Update(child) // best-effort
+			}
 		}
+		return nil
 	}
-
-	return nil
+	return nil // non-fatal: rename succeeded, parent references not updated
 }
 
 // Create creates a new session folder structure with metadata.

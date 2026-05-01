@@ -64,9 +64,12 @@ func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse ws url: %v", err)
 	}
-	conn, _, err := websocket.DefaultDialer.DialContext(context.Background(), parsed.String(), nil)
+	conn, resp, err := websocket.DefaultDialer.DialContext(context.Background(), parsed.String(), nil)
 	if err != nil {
 		t.Fatalf("client dial: %v", err)
+	}
+	if resp != nil && resp.Body != nil {
+		defer resp.Body.Close()
 	}
 
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create"}`)); err != nil {
@@ -163,6 +166,7 @@ func hasKind(lines []string, kind string) bool {
 // a cleanup that restores the original.
 func overrideChatGPTUpstream(t *testing.T, target string) func() {
 	t.Helper()
-	original := setChatGPTUpstreamForTest(target)
-	return func() { setChatGPTUpstreamForTest(original) }
+	original := chatGPTUpstream
+	chatGPTUpstream = target
+	return func() { chatGPTUpstream = original }
 }

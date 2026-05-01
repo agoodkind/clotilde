@@ -54,12 +54,7 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if err := m.invalidateIfDiskChanged(); err != nil {
-		slog.Debug("oauth.cache.invalidate_check_failed",
-			"subcomponent", "oauth",
-			"err", err,
-		)
-	}
+	m.invalidateIfDiskChanged()
 
 	tokens := m.cached
 	if tokens == nil {
@@ -140,13 +135,13 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 // invalidateIfDiskChanged drops the in-memory cache if the
 // .credentials.json mtime moved (i.e. another process wrote new
 // tokens). Caller must hold m.mu.
-func (m *Manager) invalidateIfDiskChanged() error {
+func (m *Manager) invalidateIfDiskChanged() {
 	credsPath := filepath.Join(m.credentialsDir, ".credentials.json")
 	info, err := os.Stat(credsPath)
 	if err != nil {
 		// File-less keychain path on macOS, or first run. Either way
 		// don't invalidate.
-		return nil
+		return
 	}
 	mtime := info.ModTime().UnixNano()
 	if mtime != m.credsMtime {
@@ -159,7 +154,6 @@ func (m *Manager) invalidateIfDiskChanged() error {
 		m.credsMtime = mtime
 		m.cached = nil
 	}
-	return nil
 }
 
 // isExpired returns true when the token is past its expiry minus the

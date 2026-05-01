@@ -83,14 +83,14 @@ func drawString(scr tcell.Screen, x, y int, style tcell.Style, s string, maxW in
 // fillRow paints a row of the given width with spaces in the given style,
 // starting at (x, y). Used for full-width backgrounds (status bar, header).
 func fillRow(scr tcell.Screen, x, y, w int, style tcell.Style) {
-	for i := 0; i < w; i++ {
+	for i := range w {
 		scr.SetContent(x+i, y, ' ', nil, style)
 	}
 }
 
 // clearRect paints r with spaces in the default style.
 func clearRect(scr tcell.Screen, r Rect) {
-	for row := 0; row < r.H; row++ {
+	for row := range r.H {
 		fillRow(scr, r.X, r.Y+row, r.W, tcell.StyleDefault)
 	}
 }
@@ -110,8 +110,8 @@ const (
 func dimBackground(scr tcell.Screen) {
 	w, h := scr.Size()
 	backdrop := dimOverlayColor()
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
+	for y := range h {
+		for x := range w {
 			str, style, _ := scr.Get(x, y)
 			fg, _, attr := style.Decompose()
 			newStyle := tcell.StyleDefault.Foreground(dimForeground(fg)).Background(backdrop).Attributes(attr)
@@ -266,33 +266,22 @@ func drawScrollbar(scr tcell.Screen, x, y0, h, visible, total, offset int) {
 	thumbStyle := StyleDefault.Foreground(ColorAccent)
 
 	// Draw the track first as a faint rule
-	for i := 0; i < h; i++ {
+	for i := range h {
 		scr.SetContent(x, y0+i, '│', nil, trackStyle)
 	}
 
 	// Thumb size proportional to visible window
-	thumbLen := h * visible / total
-	if thumbLen < 1 {
-		thumbLen = 1
-	}
-	if thumbLen > h {
-		thumbLen = h
-	}
+	thumbLen := max(h*visible/total, 1)
+	thumbLen = min(thumbLen, h)
 
 	// Thumb position scales the offset to the remaining track length.
-	maxOff := total - visible
-	if maxOff < 1 {
-		maxOff = 1
-	}
-	thumbStart := (h - thumbLen) * offset / maxOff
-	if thumbStart < 0 {
-		thumbStart = 0
-	}
+	maxOff := max(total-visible, 1)
+	thumbStart := max((h-thumbLen)*offset/maxOff, 0)
 	if thumbStart+thumbLen > h {
 		thumbStart = h - thumbLen
 	}
 
-	for i := 0; i < thumbLen; i++ {
+	for i := range thumbLen {
 		scr.SetContent(x, y0+thumbStart+i, '█', nil, thumbStyle)
 	}
 }

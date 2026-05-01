@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/gdamore/tcell/v2"
 )
@@ -212,10 +213,7 @@ func (p *CompactPanel) Draw(scr tcell.Screen, r Rect) {
 	drawString(scr, inner.X, y, StyleMuted, "status: "+p.status, inner.W)
 	y += 2
 
-	actionsLabelY := inner.Y + inner.H - 3
-	if actionsLabelY < y+4 {
-		actionsLabelY = y + 4
-	}
+	actionsLabelY := max(inner.Y+inner.H-3, y+4)
 	progressH := imax(0, actionsLabelY-y-1)
 	p.drawProgressLog(scr, Rect{X: inner.X, Y: y, W: inner.W, H: progressH})
 
@@ -480,21 +478,6 @@ func (p *CompactPanel) renderChecks() string {
 		check("chat", p.chat, 3)
 }
 
-func (p *CompactPanel) renderActions() string {
-	labels := []string{"Preview", "Apply", "Undo", "Close"}
-	out := ""
-	for i, label := range labels {
-		if i > 0 {
-			out += " "
-		}
-		if i == 1 && p.confirmApply {
-			label = "Apply (confirm)"
-		}
-		out += renderActionLabel(label, p.focusGroup == 3 && p.actionIdx == i)
-	}
-	return out
-}
-
 func (p *CompactPanel) drawActionButtons(scr tcell.Screen, x, y, maxW int) {
 	labels := []string{"Preview", "Apply", "Undo", "Close"}
 	cursor := x
@@ -564,21 +547,6 @@ func (p *CompactPanel) drawProgressLog(scr tcell.Screen, r Rect) {
 	}
 }
 
-func (p *CompactPanel) visibleIterationLines(limit int) []string {
-	if limit <= 0 || len(p.iterationHistory) == 0 {
-		return nil
-	}
-	if limit > len(p.iterationHistory) {
-		limit = len(p.iterationHistory)
-	}
-	start := len(p.iterationHistory) - limit
-	lines := make([]string, 0, limit)
-	for _, iter := range p.iterationHistory[start:] {
-		lines = append(lines, p.renderIterationLine(iter))
-	}
-	return lines
-}
-
 func (p *CompactPanel) renderIterationLine(iter CompactIteration) string {
 	return fmt.Sprintf(
 		"iter %d  %s  total %s  %s",
@@ -611,22 +579,17 @@ func (p *CompactPanel) renderSlider(width int) string {
 	if width < 4 {
 		width = 4
 	}
-	fill := p.compactedPercent() * width / 100
-	if fill < 0 {
-		fill = 0
-	}
-	if fill > width {
-		fill = width
-	}
-	out := "|"
-	for i := 0; i < width; i++ {
+	fill := min(max(p.compactedPercent()*width/100, 0), width)
+	var out strings.Builder
+	out.WriteString("|")
+	for i := range width {
 		if i < fill {
-			out += "="
+			out.WriteString("=")
 			continue
 		}
-		out += "-"
+		out.WriteString("-")
 	}
-	return out + "|"
+	return out.String() + "|"
 }
 
 func (p *CompactPanel) percent() int {
@@ -652,10 +615,7 @@ func (p *CompactPanel) percentLabel() string {
 func (p *CompactPanel) adjustTargetByPercent(delta int) {
 	next := p.percent() + delta
 	next = clamp(next, 1, 100)
-	p.targetTokens = p.maxTokens * next / 100
-	if p.targetTokens < 1 {
-		p.targetTokens = 1
-	}
+	p.targetTokens = max(p.maxTokens*next/100, 1)
 	p.targetText = strconv.Itoa(p.targetTokens)
 }
 
@@ -693,17 +653,17 @@ func formatWithCommas(value int) string {
 		value = -value
 	}
 	digits := strconv.Itoa(value)
-	formatted := ""
-	for i := 0; i < len(digits); i++ {
+	var formatted strings.Builder
+	for i := range len(digits) {
 		if i > 0 && (len(digits)-i)%3 == 0 {
-			formatted += ","
+			formatted.WriteString(",")
 		}
-		formatted += string(digits[i])
+		formatted.WriteString(string(digits[i]))
 	}
 	if isNegative {
-		return "-" + formatted
+		return "-" + formatted.String()
 	}
-	return formatted
+	return formatted.String()
 }
 
 func formatSignedWithCommas(value int) string {

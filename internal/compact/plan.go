@@ -156,7 +156,7 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 			tag := "OK"
 			if record.Delta > 0 {
 				tag = fmt.Sprintf("+%d over", record.Delta)
-			} else {
+			} else if record.Delta < 0 {
 				tag = fmt.Sprintf("-%d under", -record.Delta)
 			}
 			fmt.Fprintf(in.Out, "  iter  %-44s tail=%d  ctx=%d  %s\n",
@@ -294,10 +294,7 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 			if deltaOver <= nearTargetBrake/4 {
 				batchSize = 1
 			}
-			batchEnd := i + batchSize
-			if batchEnd > len(toolIDs) {
-				batchEnd = len(toolIDs)
-			}
+			batchEnd := min(i+batchSize, len(toolIDs))
 			stepUnits := batchEnd - i
 			for _, id := range toolIDs[i:batchEnd] {
 				opts.ToolDetailOverride[id] = ToolDetailLineOnly
@@ -351,10 +348,7 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 			if deltaOver <= nearTargetBrake/4 {
 				batchSize = 1
 			}
-			batchEnd := i + batchSize
-			if batchEnd > len(toolIDs) {
-				batchEnd = len(toolIDs)
-			}
+			batchEnd := min(i+batchSize, len(toolIDs))
 			stepUnits := batchEnd - i
 			for _, id := range toolIDs[i:batchEnd] {
 				opts.ToolDetailOverride[id] = ToolDetailDrop
@@ -420,10 +414,7 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 					}
 				}
 			}
-			batchEnd := i + batchSize
-			if batchEnd > len(dropOrder) {
-				batchEnd = len(dropOrder)
-			}
+			batchEnd := min(i+batchSize, len(dropOrder))
 			for _, step := range dropOrder[i:batchEnd] {
 				applyChatDropStep(opts.DroppedChatEntries, opts.DroppedSummaryChunks, step)
 			}

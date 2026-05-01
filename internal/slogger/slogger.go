@@ -84,7 +84,7 @@ func Setup(cfg config.LoggingConfig, role ProcessRole) (io.Closer, error) {
 	// live diagnostics.
 	compress := cfg.Rotation.Compress
 	if compress == nil {
-		compress = boolPtr(true)
+		compress = new(true)
 	}
 	logger, closer, err := gklog.New(gklog.Config{
 		JSONLogFile:   path,
@@ -102,10 +102,6 @@ func Setup(cfg config.LoggingConfig, role ProcessRole) (io.Closer, error) {
 	}
 	slog.SetDefault(logger)
 	return closer, nil
-}
-
-func boolPtr(v bool) *bool {
-	return &v
 }
 
 func parseJSONMinLevel(level string) slog.Level {

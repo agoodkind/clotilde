@@ -36,7 +36,7 @@ var (
 type ConversationTurn struct {
 	UUID       string    `json:"uuid,omitempty"`
 	Role       string    `json:"role"`
-	Timestamp  time.Time `json:"timestamp,omitempty"`
+	Timestamp  time.Time `json:"timestamp,omitzero"`
 	Text       string    `json:"text"`
 	Thinking   string    `json:"thinking,omitempty"`
 	ToolNames  []string  `json:"tool_names,omitempty"`
@@ -167,10 +167,6 @@ func toolFullDetailText(tools []ToolCall) string {
 	return strings.Join(lines, "\n")
 }
 
-func RenderPlainTextConversation(turns []ConversationTurn) string {
-	return renderConversationMessages(turns, -1)
-}
-
 func RenderMarkdownConversation(turns []ConversationTurn) string {
 	var b strings.Builder
 	for _, turn := range turns {
@@ -189,7 +185,7 @@ func RenderMarkdownConversation(turns []ConversationTurn) string {
 		}
 		if turn.Thinking != "" {
 			b.WriteString("> Thinking\n>\n")
-			for _, line := range strings.Split(turn.Thinking, "\n") {
+			for line := range strings.SplitSeq(turn.Thinking, "\n") {
 				b.WriteString("> " + line + "\n")
 			}
 			b.WriteString("\n")

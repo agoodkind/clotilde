@@ -31,10 +31,9 @@ func (m *Modal) Draw(scr tcell.Screen, r Rect) {
 	m.Rect = r
 
 	lines := m.layoutLines(r.W - 6)
-	h := 2 + len(lines) + 2 + 1 // border top + lines + blank + button row + border bottom
-	if h > r.H {
-		h = r.H
-	}
+	h := min(
+		// border top + lines + blank + button row + border bottom
+		2+len(lines)+2+1, r.H)
 	w := 60
 	if nw := longestLine(lines) + 6; nw > w {
 		w = nw
@@ -103,7 +102,7 @@ func (m *Modal) layoutLines(wrapW int) []modalLine {
 		out = append(out, modalLine{text: ""})
 	}
 	if m.Body != "" {
-		for _, bl := range strings.Split(m.Body, "\n") {
+		for bl := range strings.SplitSeq(m.Body, "\n") {
 			for _, wrapped := range wrapLine(bl, wrapW) {
 				out = append(out, modalLine{text: wrapped})
 			}

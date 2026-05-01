@@ -112,7 +112,7 @@ func (m *Manager) autoRelogin(ctx context.Context, originalErr error) error {
 	defer cancel()
 	got, err := lock.TryLockContext(lockCtx, 500*time.Millisecond)
 	if err != nil || !got {
-		return fmt.Errorf("acquire relogin lock: %w (original: %v)", err, originalErr)
+		return fmt.Errorf("acquire relogin lock: %w (original: %w)", err, originalErr)
 	}
 	defer func() { _ = lock.Unlock() }()
 
@@ -154,7 +154,7 @@ func (m *Manager) autoRelogin(ctx context.Context, originalErr error) error {
 			"output_tail", tailString(string(out), 400),
 			slog.Any("err", runErr),
 		)
-		return fmt.Errorf("claude auth login failed (exit %d): %w (original: %v)",
+		return fmt.Errorf("claude auth login failed (exit %d): %w (original: %w)",
 			exitCode, runErr, originalErr)
 	}
 

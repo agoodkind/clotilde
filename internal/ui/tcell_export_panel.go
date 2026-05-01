@@ -142,7 +142,7 @@ func (p *ExportPanel) Draw(scr tcell.Screen, r Rect) {
 		p.scrollToFocus = false
 	}
 
-	for row := 0; row < p.contentRect.H; row++ {
+	for row := range p.contentRect.H {
 		idx := p.scrollOffset + row
 		if idx >= len(lines) {
 			break
@@ -173,10 +173,8 @@ func (p *ExportPanel) renderLines(width int) []exportPanelLine {
 	add := func(style tcell.Style, text string) {
 		lines = append(lines, exportPanelLine{Text: text, Style: style})
 	}
-	blank := func(n int) {
-		for i := 0; i < n; i++ {
-			add(StyleDefault, "")
-		}
+	blank := func() {
+		add(StyleDefault, "")
 	}
 	addFocus := func(group int, style tcell.Style, text string) {
 		if group >= 0 && group < len(p.focusRows) && p.focusRows[group] < 0 {
@@ -198,19 +196,19 @@ func (p *ExportPanel) renderLines(width int) []exportPanelLine {
 		formatWithCommas(p.stats.ToolCalls),
 		formatWithCommas(p.stats.SystemPrompts),
 		formatWithCommas(p.stats.Compactions)))
-	blank(1)
+	blank()
 
 	historyLabel := "include from   "
 	add(StyleHeader, "History")
 	addFocus(0, p.focusStyle(0), historyLabel+p.historySliderForWidth(width-runeCount(historyLabel)))
 	add(StyleMuted, "included       "+p.historyIncludedLabel())
 	add(StyleMuted, "estimate       "+p.estimateLabel())
-	blank(1)
+	blank()
 
 	add(StyleHeader, "Content")
 	addFocus(1, p.focusStyle(1), p.renderContentChecks())
 	addFocus(2, p.focusStyle(2), p.renderMoreContentChecks())
-	blank(1)
+	blank()
 
 	add(StyleHeader, "Compression")
 	addFocus(3, p.focusStyle(3), "whitespace  [ "+p.whitespaceLabel()+" ]")
@@ -223,13 +221,13 @@ func (p *ExportPanel) renderLines(width int) []exportPanelLine {
 		}
 		add(StyleMuted, prefix+line)
 	}
-	blank(1)
+	blank()
 
 	add(StyleHeader, "Destination")
 	addFocus(4, p.focusStyle(4), p.renderDestinationChecks())
 	addFocus(5, p.focusStyle(5), "folder  [ Choose folder... ]  "+p.folder)
 	addFocus(6, p.focusStyle(6), "name    ["+p.name+"]")
-	blank(1)
+	blank()
 
 	add(StyleHeader, "Live Status")
 	add(StyleMuted, "status: "+p.status)
@@ -357,11 +355,7 @@ func (p *ExportPanel) handleContentKeys(e *tcell.EventKey) bool {
 	maxIdx := 2
 	switch e.Key() {
 	case tcell.KeyLeft:
-		if p.focusGroup == 1 {
-			p.contentIdx = (p.contentIdx + 2) % 3
-		} else {
-			p.contentIdx = (p.contentIdx + 2) % 3
-		}
+		p.contentIdx = (p.contentIdx + 2) % 3
 		return true
 	case tcell.KeyRight:
 		p.contentIdx = (p.contentIdx + 1) % (maxIdx + 1)
@@ -539,10 +533,6 @@ func (p *ExportPanel) buildRequest() SessionExportRequest {
 		Filename:               p.name,
 		Overwrite:              p.overwrite,
 	}
-}
-
-func (p *ExportPanel) historySlider() string {
-	return p.historyMarkedSlider().Render()
 }
 
 func (p *ExportPanel) historySliderForWidth(width int) string {

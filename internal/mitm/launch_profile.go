@@ -2,6 +2,7 @@ package mitm
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,11 +15,11 @@ import (
 // inject, what Chromium flags Electron renderers need, and which
 // upstream domains to expect in the capture.
 type LaunchProfile struct {
-	Name           string
-	BinaryFinder   func() (string, error)
-	BaseArgs       []string
-	EnvKeys        []string
-	IsElectron     bool
+	Name            string
+	BinaryFinder    func() (string, error)
+	BaseArgs        []string
+	EnvKeys         []string
+	IsElectron      bool
 	UpstreamDomains []string
 }
 
@@ -27,30 +28,30 @@ type LaunchProfile struct {
 func LaunchProfiles() map[string]LaunchProfile {
 	return map[string]LaunchProfile{
 		"codex-cli": {
-			Name:           "codex-cli",
-			BinaryFinder:   findOnPath("codex"),
-			EnvKeys:        []string{"SSL_CERT_FILE", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY"},
+			Name:            "codex-cli",
+			BinaryFinder:    findOnPath("codex"),
+			EnvKeys:         []string{"SSL_CERT_FILE", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY"},
 			UpstreamDomains: []string{"chatgpt.com", "openai.com"},
 		},
 		"codex-desktop": {
-			Name:           "codex-desktop",
-			BinaryFinder:   findApp("/Applications/Codex.app/Contents/MacOS/Codex"),
-			BaseArgs:       []string{},
-			EnvKeys:        []string{"SSL_CERT_FILE", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS"},
-			IsElectron:     true,
+			Name:            "codex-desktop",
+			BinaryFinder:    findApp("/Applications/Codex.app/Contents/MacOS/Codex"),
+			BaseArgs:        []string{},
+			EnvKeys:         []string{"SSL_CERT_FILE", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS"},
+			IsElectron:      true,
 			UpstreamDomains: []string{"chatgpt.com", "openai.com"},
 		},
 		"claude-code": {
-			Name:           "claude-code",
-			BinaryFinder:   findOnPath("claude"),
-			EnvKeys:        []string{"HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS"},
+			Name:            "claude-code",
+			BinaryFinder:    findOnPath("claude"),
+			EnvKeys:         []string{"HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS"},
 			UpstreamDomains: []string{"api.anthropic.com", "claude.ai"},
 		},
 		"claude-desktop": {
-			Name:           "claude-desktop",
-			BinaryFinder:   findApp("/Applications/Claude.app/Contents/MacOS/Claude"),
-			EnvKeys:        []string{"SSL_CERT_FILE", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS"},
-			IsElectron:     true,
+			Name:            "claude-desktop",
+			BinaryFinder:    findApp("/Applications/Claude.app/Contents/MacOS/Claude"),
+			EnvKeys:         []string{"SSL_CERT_FILE", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS"},
+			IsElectron:      true,
 			UpstreamDomains: []string{"api.anthropic.com", "claude.ai"},
 		},
 		// VS Code is generic Electron. The proxy intercepts whatever
@@ -60,10 +61,10 @@ func LaunchProfiles() map[string]LaunchProfile {
 		// extensions that pin certs (Copilot today) bypass the proxy
 		// regardless. CLYDE-131 tracks Copilot pinning specifically.
 		"vscode": {
-			Name:           "vscode",
-			BinaryFinder:   findApp("/Applications/Visual Studio Code.app/Contents/MacOS/Electron"),
-			EnvKeys:        []string{"SSL_CERT_FILE", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS"},
-			IsElectron:     true,
+			Name:            "vscode",
+			BinaryFinder:    findApp("/Applications/Visual Studio Code.app/Contents/MacOS/Electron"),
+			EnvKeys:         []string{"SSL_CERT_FILE", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS"},
+			IsElectron:      true,
 			UpstreamDomains: []string{"api.anthropic.com", "claude.ai", "chatgpt.com", "openai.com", "api.githubcopilot.com"},
 		},
 	}
@@ -97,17 +98,15 @@ func (p LaunchProfile) ResolvedBinary() (string, error) {
 // keys are overridden from the supplied overrides map.
 func (p LaunchProfile) ComposeEnv(parent []string, overrides map[string]string) []string {
 	overridden := map[string]string{}
-	for k, v := range overrides {
-		overridden[k] = v
-	}
+	maps.Copy(overridden, overrides)
 	out := make([]string, 0, len(parent)+len(overridden))
 	for _, kv := range parent {
-		i := strings.IndexByte(kv, '=')
-		if i < 0 {
+		before, _, ok := strings.Cut(kv, "=")
+		if !ok {
 			out = append(out, kv)
 			continue
 		}
-		key := kv[:i]
+		key := before
 		if _, ok := overridden[key]; ok {
 			continue
 		}

@@ -93,10 +93,7 @@ func (m *OptionsModal) Draw(scr tcell.Screen, r Rect) {
 	if r.W <= 2 || r.H <= 2 {
 		return
 	}
-	w := r.W - 4
-	if w > 110 {
-		w = 110
-	}
+	w := min(r.W-4, 110)
 	if w < 28 {
 		w = r.W - 2
 	}
@@ -104,16 +101,7 @@ func (m *OptionsModal) Draw(scr tcell.Screen, r Rect) {
 		w = 1
 	}
 	contentRows := m.totalEntries() + 4
-	h := contentRows
-	if h < 10 {
-		h = 10
-	}
-	if h > r.H-2 {
-		h = r.H - 2
-	}
-	if h < 1 {
-		h = 1
-	}
+	h := max(min(max(contentRows, 10), r.H-2), 1)
 	box := Rect{X: r.X + (r.W-w)/2, Y: r.Y + (r.H-h)/2, W: w, H: h}
 	m.rect = box
 
@@ -138,10 +126,7 @@ func (m *OptionsModal) Draw(scr tcell.Screen, r Rect) {
 		return
 	}
 	contentTop := inner.Y + 1
-	contentH := inner.H - 2
-	if contentH < 1 {
-		contentH = 1
-	}
+	contentH := max(inner.H-2, 1)
 
 	showStats := len(m.StatsSegments) > 0
 	layout := "options_only"
@@ -153,41 +138,19 @@ func (m *OptionsModal) Draw(scr tcell.Screen, r Rect) {
 
 	switch layout {
 	case "split":
-		statsW := (inner.W - 1) * 55 / 100
-		if statsW < 24 {
-			statsW = 24
-		}
-		if statsW > inner.W-20 {
-			statsW = inner.W - 20
-		}
-		if statsW < 1 {
-			statsW = 1
-		}
+		statsW := max((inner.W-1)*55/100, 24)
+		statsW = max(min(statsW, inner.W-20), 1)
 		optionsX := inner.X + statsW + 1
-		optionsW := inner.W - statsW - 1
-		if optionsW < 1 {
-			optionsW = 1
-		}
+		optionsW := max(inner.W-statsW-1, 1)
 		for y := inner.Y; y < inner.Y+inner.H; y++ {
 			scr.SetContent(optionsX-1, y, '│', nil, StyleMuted)
 		}
 		m.drawStatsPane(scr, Rect{X: inner.X, Y: contentTop, W: statsW, H: contentH})
 		m.drawOptionsPane(scr, Rect{X: optionsX, Y: contentTop, W: optionsW, H: contentH})
 	case "stacked":
-		statsH := contentH * 40 / 100
-		if statsH < 4 {
-			statsH = 4
-		}
-		if statsH > contentH-4 {
-			statsH = contentH - 4
-		}
-		if statsH < 1 {
-			statsH = 1
-		}
-		optionsH := contentH - statsH - 1
-		if optionsH < 1 {
-			optionsH = 1
-		}
+		statsH := max(contentH*40/100, 4)
+		statsH = max(min(statsH, contentH-4), 1)
+		optionsH := max(contentH-statsH-1, 1)
 		m.drawStatsPane(scr, Rect{X: inner.X, Y: contentTop, W: inner.W, H: statsH})
 		dividerY := contentTop + statsH
 		for x := inner.X; x < inner.X+inner.W; x++ {
@@ -395,7 +358,7 @@ func (m *OptionsModal) clampCursor() {
 func (m *OptionsModal) resetCursor() {
 	m.cursor = 0
 	total := m.totalEntries()
-	for i := 0; i < total; i++ {
+	for i := range total {
 		entry := m.entryAt(i)
 		if entry != nil && !entry.Disabled && entry.Action != nil {
 			m.cursor = i
@@ -441,7 +404,7 @@ func (m *OptionsModal) drawOptionsPane(scr tcell.Screen, r Rect) {
 		contentW = r.W - 1
 	}
 	y := r.Y
-	for row := 0; row < r.H; row++ {
+	for row := range r.H {
 		logical := m.optionsOffset + row
 		if logical >= logicalTotal {
 			break
@@ -504,10 +467,7 @@ func (m *OptionsModal) jumpToOptionsScrollbarY(y int) {
 	if m.optionsScrollbarRect.H <= 0 {
 		return
 	}
-	rel := y - m.optionsScrollbarRect.Y
-	if rel < 0 {
-		rel = 0
-	}
+	rel := max(y-m.optionsScrollbarRect.Y, 0)
 	if rel >= m.optionsScrollbarRect.H {
 		rel = m.optionsScrollbarRect.H - 1
 	}

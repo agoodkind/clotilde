@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -79,19 +81,6 @@ func NudgeDiscoveryScan() {
 		return
 	}
 	log.DebugContext(bg, "daemon.client.nudge.sigusr1_sent", "pid", pid)
-}
-
-// RenameSessionViaDaemon asks the daemon to perform the rename. The
-// daemon owns the rename so subscribers get notified, and concurrent
-// callers do not race on the metadata.json move. Returns true when
-// the rename happened via the daemon, false (and an error) when the
-// daemon is unreachable so callers can fall back to a direct write.
-func RenameSessionViaDaemon(ctx context.Context, oldName, newName string) (bool, error) {
-	outcome, err := RenameSessionViaDaemonOutcome(ctx, oldName, newName)
-	if outcome == LifecycleOutcomeReady {
-		return true, nil
-	}
-	return false, err
 }
 
 // RenameSessionViaDaemonOutcome performs the rename and returns the normalized
@@ -545,7 +534,9 @@ func ConnectOrStart(ctx context.Context) (*Client, error) {
 	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
 		return nil, fmt.Errorf("flock: %w", err)
 	}
-	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+	defer func() {
+		_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+	}()
 
 	// Double-check: another process may have started the daemon while we waited.
 	if client, err := connect(ctx); err == nil {
@@ -617,7 +608,7 @@ func (c *Client) ReleaseSession(wrapperID string) error {
 // in the background. Fire-and-forget: the caller does not wait for the result.
 // Messages should be pre-extracted by the caller (to avoid import cycles).
 func (c *Client) UpdateContext(sessionName, workspaceRoot string, messages []string) error {
-	payload, _ := json.Marshal(map[string]interface{}{
+	payload, _ := json.Marshal(map[string]any{
 		"type":           "update_context",
 		"session_name":   sessionName,
 		"workspace_root": workspaceRoot,
@@ -636,18 +627,6 @@ func (c *Client) UpdateContext(sessionName, workspaceRoot string, messages []str
 		RawJson: payload,
 	})
 	return err
-}
-
-// UpdateSessionRemoteControlViaDaemon flips the per session remote
-// control flag through the daemon. Returns true when the daemon
-// accepted the update so callers can fall back to a direct file write
-// only when the daemon is unreachable.
-func UpdateSessionRemoteControlViaDaemon(ctx context.Context, name string, enabled bool) (bool, error) {
-	outcome, err := UpdateSessionRemoteControlViaDaemonOutcome(ctx, name, enabled)
-	if outcome == LifecycleOutcomeReady {
-		return true, nil
-	}
-	return false, err
 }
 
 // UpdateSessionRemoteControlViaDaemonOutcome updates one session setting and
@@ -705,16 +684,6 @@ func UpdateSessionWorkspaceRootViaDaemonOutcome(ctx context.Context, name, works
 	}
 	log.DebugContext(rpcCtx, "daemon.client.update_session_workspace_root.ok")
 	return LifecycleOutcomeReady, nil
-}
-
-// UpdateGlobalRemoteControlViaDaemon flips the global default. The
-// daemon serialises writes to ~/.config/clyde/config.toml.
-func UpdateGlobalRemoteControlViaDaemon(ctx context.Context, enabled bool) (bool, error) {
-	outcome, err := UpdateGlobalRemoteControlViaDaemonOutcome(ctx, enabled)
-	if outcome == LifecycleOutcomeReady {
-		return true, nil
-	}
-	return false, err
 }
 
 // UpdateGlobalRemoteControlViaDaemonOutcome updates the global default and
@@ -1026,7 +995,7 @@ func openCompactStream(parent context.Context, in CompactRunOptions, apply bool)
 			ev, recvErr := stream.Recv()
 			if recvErr != nil {
 				log.DebugContext(ctx, "daemon.client.compact.recv_done", "apply", apply, "err", recvErr)
-				if recvErr == io.EOF {
+				if errors.Is(recvErr, io.EOF) {
 					done <- nil
 				} else {
 					done <- recvErr
@@ -1147,29 +1116,6 @@ func ExportSessionViaDaemon(ctx context.Context, req *clydev1.ExportSessionReque
 	log.DebugContext(rpcCtx, "daemon.client.session_export.ok",
 		"session", req.GetSessionName(),
 		"bytes", len(resp.GetBody()))
-	return resp, nil
-}
-
-func ProbeContextUsageViaDaemon(ctx context.Context, sessionName string) (*clydev1.ProbeContextUsageResponse, error) {
-	log := daemonClientLog(ctx)
-	log.DebugContext(ctx, "daemon.client.context_usage.begin", "session", sessionName)
-	c, err := ConnectOrStart(ctx)
-	if err != nil {
-		log.DebugContext(ctx, "daemon.client.context_usage.connect_failed", "err", err)
-		return nil, err
-	}
-	defer c.conn.Close()
-	rpcCtx, cancel := context.WithTimeout(ctx, 75*time.Second)
-	defer cancel()
-	resp, rpcErr := c.rpc.ProbeContextUsage(rpcCtx, &clydev1.ProbeContextUsageRequest{SessionName: sessionName})
-	if rpcErr != nil {
-		log.DebugContext(rpcCtx, "daemon.client.context_usage.rpc_failed", "session", sessionName, "err", rpcErr)
-		return nil, rpcErr
-	}
-	log.DebugContext(rpcCtx, "daemon.client.context_usage.ok",
-		"session", sessionName,
-		"total_tokens", resp.GetTotalTokens(),
-		"max_tokens", resp.GetMaxTokens())
 	return resp, nil
 }
 
@@ -1314,9 +1260,9 @@ func renderDarwinLaunchAgentPlist(args []string) string {
 	if pathEnv == "" {
 		pathEnv = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 	}
-	argv := ""
+	var argv strings.Builder
 	for _, arg := range args {
-		argv += "    <string>" + xmlEscape(arg) + "</string>\n"
+		argv.WriteString("    <string>" + xmlEscape(arg) + "</string>\n")
 	}
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -1346,7 +1292,7 @@ func renderDarwinLaunchAgentPlist(args []string) string {
   <string>%s</string>
 </dict>
 </plist>
-`, xmlEscape(launchAgentLabel), argv, xmlEscape(home), xmlEscape(pathEnv), xmlEscape(logPath), xmlEscape(logPath))
+`, xmlEscape(launchAgentLabel), argv.String(), xmlEscape(home), xmlEscape(pathEnv), xmlEscape(logPath), xmlEscape(logPath))
 }
 
 func xmlEscape(s string) string {

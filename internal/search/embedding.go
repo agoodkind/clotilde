@@ -57,7 +57,7 @@ func newEmbeddingFilter(cfg config.SearchLocal) *embeddingFilter {
 
 // filterChunks embeds the query and each chunk, returning only chunks whose
 // cosine similarity to the query exceeds the threshold.
-func (e *embeddingFilter) filterChunks(ctx context.Context, query string, chunks [][]transcript.Message) ([][]transcript.Message, error) {
+func (e *embeddingFilter) filterChunks(ctx context.Context, query string, chunks [][]transcript.Message) [][]transcript.Message {
 	log := slog.Default()
 	start := time.Now()
 
@@ -80,7 +80,7 @@ func (e *embeddingFilter) filterChunks(ctx context.Context, query string, chunks
 	queryEmb, err := e.embed(ctx, []string{query})
 	if err != nil {
 		log.Warn("embedding query failed, skipping pre-filter", "err", err)
-		return chunks, nil // fall back to no filtering
+		return chunks // fall back to no filtering
 	}
 	log.Debug("embedding: query embedded", "duration", time.Since(queryEmbStart).Round(time.Millisecond))
 
@@ -89,12 +89,12 @@ func (e *embeddingFilter) filterChunks(ctx context.Context, query string, chunks
 	chunkEmbs, err := e.embed(ctx, chunkTexts)
 	if err != nil {
 		log.Warn("embedding chunks failed, skipping pre-filter", "err", err)
-		return chunks, nil
+		return chunks
 	}
 	log.Debug("embedding: chunks embedded", "chunks", len(chunkTexts), "duration", time.Since(chunksEmbStart).Round(time.Millisecond))
 
 	if len(queryEmb) == 0 || len(chunkEmbs) != len(chunks) {
-		return chunks, nil
+		return chunks
 	}
 
 	// Filter by cosine similarity
@@ -121,10 +121,10 @@ func (e *embeddingFilter) filterChunks(ctx context.Context, query string, chunks
 	if len(filtered) == 0 {
 		// If nothing passed, return all chunks (threshold might be too high)
 		log.Warn("embedding filter removed all chunks, falling back to unfiltered")
-		return chunks, nil
+		return chunks
 	}
 
-	return filtered, nil
+	return filtered
 }
 
 // embed returns embeddings for the given texts.

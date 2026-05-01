@@ -105,13 +105,13 @@ func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript
 
 		// Skip rerank if only 1 result (nothing to filter), but still run deep
 		if len(matched) <= 1 && layer.Name != "deep" {
-				log.Debug("skipping rerank layer (single result)", "layer", layer.Name)
+			log.Debug("skipping rerank layer (single result)", "layer", layer.Name)
 			continue
 		}
 
 		// Swap model if this layer uses a different one
 		if cfg.Backend == "local" && layer.Model != currentModel {
-				log.Debug("swapping model", "from", currentModel, "to", layer.Model, "layer", layer.Name)
+			log.Debug("swapping model", "from", currentModel, "to", layer.Model, "layer", layer.Name)
 			if err := lmctl.EnsureLoaded(ctx, layer.Model,
 				lmctl.WithContextLength(cfg.Local.ContextLength),
 				lmctl.WithMaxMemoryGB(cfg.Local.MaxMemoryGB),
@@ -133,7 +133,7 @@ func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript
 		default:
 			matched = rerankResults(ctx, layerClient, matched, query)
 		}
-			log.Debug("layer complete",
+		log.Debug("layer complete",
 			"layer", layer.Name,
 			"model", layer.Model,
 			"before", beforeCount,
@@ -258,23 +258,20 @@ func sweepChunks(ctx context.Context, log *slog.Logger, client Client, messages 
 	if cfg.Backend == "local" {
 		_ = ensureEmbeddingModelReady(ctx, cfg.Local)
 		filter := newEmbeddingFilter(cfg.Local)
-		filtered, filterErr := filter.filterChunks(ctx, query, chunks)
-		if filterErr == nil {
-			chunks = filtered
-		}
+		chunks = filter.filterChunks(ctx, query, chunks)
 	}
 
-type chunkResult struct {
-	idx    int
-	result *Result
-	err    error
-}
+	type chunkResult struct {
+		idx    int
+		result *Result
+		err    error
+	}
 
-type searchConcurrencyPermit struct {
-	Acquired bool
-}
+	type searchConcurrencyPermit struct {
+		Acquired bool
+	}
 
-maxConc := cfg.Local.MaxConcurrent
+	maxConc := cfg.Local.MaxConcurrent
 	if maxConc <= 0 {
 		maxConc = defaultMaxConcurrent
 	}
@@ -398,7 +395,7 @@ Return ONLY the numbers of relevant results, one per line. If none are relevant,
 
 	var filtered []Result
 	seen := make(map[int]bool)
-	for _, line := range strings.Split(normalized, "\n") {
+	for line := range strings.SplitSeq(normalized, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue

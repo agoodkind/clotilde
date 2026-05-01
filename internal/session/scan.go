@@ -93,7 +93,10 @@ func ScanProjects(claudeProjectsDir string) ([]DiscoveryResult, error) {
 	err := filepath.WalkDir(claudeProjectsDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			// Skip permission errors but keep walking other branches.
-			return nil
+			if os.IsPermission(err) {
+				return nil
+			}
+			return err
 		}
 		if d.IsDir() {
 			return nil
@@ -336,11 +339,12 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 		if err == nil {
 			md.LastAccessed = fi.ModTime()
 		}
-		if !r.FirstEntryTime.IsZero() {
+		switch {
+		case !r.FirstEntryTime.IsZero():
 			md.Created = r.FirstEntryTime
-		} else if !md.LastAccessed.IsZero() {
+		case !md.LastAccessed.IsZero():
 			md.Created = md.LastAccessed
-		} else {
+		default:
 			md.Created = time.Now()
 		}
 		if md.LastAccessed.IsZero() {
@@ -360,7 +364,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 			)
 			continue
 		}
-			slog.Debug("session.adopt.created",
+		slog.Debug("session.adopt.created",
 			"component", "session",
 			"subcomponent", "adopt",
 			"session", name,

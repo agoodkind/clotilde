@@ -11,30 +11,30 @@ import (
 // Config represents the clyde configuration.
 type Config struct {
 	// Defaults are applied to all sessions unless overridden
-	Defaults Defaults `json:"defaults,omitempty" toml:"defaults,omitempty"`
+	Defaults Defaults `json:"defaults" toml:"defaults"`
 	// Profiles is a map of named session profiles
 	Profiles map[string]Profile `json:"profiles,omitempty" toml:"profiles,omitempty"`
 	// Logging configures process-wide runtime behavior.
-	Logging LoggingConfig `json:"logging,omitempty" toml:"logging,omitempty"`
+	Logging LoggingConfig `json:"logging" toml:"logging"`
 	// Search configures the conversation search LLM backend
-	Search SearchConfig `json:"search,omitempty" toml:"search,omitempty"`
+	Search SearchConfig `json:"search" toml:"search"`
 	// Adapter configures the OpenAI compatible HTTP adapter mounted
 	// inside the daemon process.
-	Adapter AdapterConfig `json:"adapter,omitempty" toml:"adapter,omitempty"`
+	Adapter AdapterConfig `json:"adapter" toml:"adapter"`
 	// WebApp configures the optional remote dashboard mounted by the
 	// daemon. The dashboard exposes a small HTML form plus a JSON API
 	// for spawning new remote control sessions and lists every active
 	// bridge URL. Pair with cloudflared to expose securely.
-	WebApp WebAppConfig `json:"webApp,omitempty" toml:"web_app,omitempty"`
+	WebApp WebAppConfig `json:"webApp" toml:"web_app"`
 	// Prune configures the daemon's periodic session pruning loop.
 	// Disabled by default so existing installs see no behavior change
 	// until the user opts in.
-	Prune PruneConfig `json:"prune,omitempty" toml:"prune,omitempty"`
+	Prune PruneConfig `json:"prune" toml:"prune"`
 	// OAuth configures the daemon's background OAuth token refresher.
 	// The refresher keeps a warm access token in the keychain
 	// so the adapter direct-OAuth path almost never has to refresh
 	// inline.
-	OAuth OAuthConfig `json:"oauth,omitempty" toml:"oauth,omitempty"`
+	OAuth OAuthConfig `json:"oauth" toml:"oauth"`
 	// Labeler configures the per-session topic labeler that writes a
 	// short bookmark-style label into Metadata.Context. The previous
 	// implementation shelled out to `claude -p --model sonnet`, which
@@ -42,18 +42,18 @@ type Config struct {
 	// uncontrollably. The shellout has been ripped out; this struct
 	// is the wiring point for the eventual rewrite against the
 	// in-process adapter. Disabled by default until then.
-	Labeler LabelerConfig `json:"labeler,omitempty" toml:"labeler,omitempty"`
+	Labeler LabelerConfig `json:"labeler" toml:"labeler"`
 	// MITM configures the local capture proxy used for Claude/Codex
 	// subprocesses and for adapter-side request observability.
-	MITM MITMConfig `json:"mitm,omitempty" toml:"mitm,omitempty"`
+	MITM MITMConfig `json:"mitm" toml:"mitm"`
 }
 
 // LoggingConfig carries global logging settings.
 type LoggingConfig struct {
 	Level    string          `json:"level,omitempty" toml:"level,omitempty"`
-	Rotation LoggingRotation `json:"rotation,omitempty" toml:"rotation,omitempty"`
-	Body     LoggingBody     `json:"body,omitempty" toml:"body,omitempty"`
-	Paths    LoggingPaths    `json:"paths,omitempty" toml:"paths,omitempty"`
+	Rotation LoggingRotation `json:"rotation,omitzero" toml:"rotation,omitempty"`
+	Body     LoggingBody     `json:"body,omitzero" toml:"body,omitempty"`
+	Paths    LoggingPaths    `json:"paths,omitzero" toml:"paths,omitempty"`
 }
 
 // LoggingRotation controls file rotation behavior for the unified clyde logger.
@@ -186,22 +186,22 @@ type AdapterConfig struct {
 	// direct-OAuth path and the background token refresher. Required
 	// when DirectOAuth is true; also required when the global [oauth]
 	// refresher is enabled so periodic refresh can reach the token URL.
-	OAuth AdapterOAuth `json:"oauth,omitempty" toml:"oauth,omitempty"`
+	OAuth AdapterOAuth `json:"oauth,omitzero" toml:"oauth,omitempty"`
 	// ClientIdentity carries wire request-shape fields (headers and
 	// body-side billing line inputs). There are no compiled-in defaults:
 	// NewRegistry rejects empty required fields. See clyde.example.toml.
-	ClientIdentity AdapterClientIdentity `json:"clientIdentity,omitempty" toml:"client_identity,omitempty"`
+	ClientIdentity AdapterClientIdentity `json:"clientIdentity,omitzero" toml:"client_identity,omitempty"`
 	// Logprobs configures per-backend handling of the OpenAI
 	// logprobs / top_logprobs request fields. Anthropic does not
 	// emit logprobs and `claude -p` does not either; shunts may.
 	// There is no compiled-in default. When either backend key is
 	// set, NewRegistry requires both keys and rejects unknown values.
-	Logprobs AdapterLogprobs `json:"logprobs,omitempty" toml:"logprobs,omitempty"`
+	Logprobs AdapterLogprobs `json:"logprobs,omitzero" toml:"logprobs,omitempty"`
 	// Notices controls the synthetic notice injection path that annotates
 	// assistant turns with overage / budget context in a hidden sentinel.
 	// Omitted defaults to true so operators can disable by setting
 	// enabled = false.
-	Notices AdapterNotices `json:"notices,omitempty" toml:"notices,omitempty"`
+	Notices AdapterNotices `json:"notices,omitzero" toml:"notices,omitempty"`
 	// Families declares the per-family Claude capability matrix the
 	// registry expands into the public alias set at load time. Keyed
 	// by a stable family slug (e.g. "opus-4-7", "sonnet-4-6",
@@ -213,12 +213,12 @@ type AdapterConfig struct {
 	// are no compiled-in defaults: when Fallback.Enabled is true,
 	// NewRegistry validates every field and rejects partial
 	// configurations.
-	Fallback AdapterFallback `json:"fallback,omitempty" toml:"fallback,omitempty"`
+	Fallback AdapterFallback `json:"fallback,omitzero" toml:"fallback,omitempty"`
 	// Codex configures routing for ChatGPT model names (gpt-*, o*)
 	// through the Codex backend-api surface. This keeps Cursor on the
 	// same adapter endpoint/port while letting model name choose
 	// backend.
-	Codex AdapterCodex `json:"codex,omitempty" toml:"codex,omitempty"`
+	Codex AdapterCodex `json:"codex,omitzero" toml:"codex,omitempty"`
 }
 
 // AdapterCodex configures the direct Codex backend path plus optional
@@ -327,7 +327,7 @@ type AdapterFallback struct {
 	// (or in addition to) `claude -p`. When ForwardToShunt.Enabled
 	// is true, the dispatcher forwards to the named shunt before
 	// trying `claude -p`.
-	ForwardToShunt AdapterFallbackShunt `json:"forwardToShunt,omitempty" toml:"forward_to_shunt,omitempty"`
+	ForwardToShunt AdapterFallbackShunt `json:"forwardToShunt,omitzero" toml:"forward_to_shunt,omitempty"`
 	// CLIAliases maps a family slug declared in cfg.Families to
 	// the short name `claude -p --model` accepts (e.g. "opus",
 	// "sonnet", "haiku"). Required (non-empty) when Enabled. Every
@@ -560,8 +560,8 @@ type AdapterShunt struct {
 type SearchConfig struct {
 	// Backend is "claude" (default) or "local"
 	Backend string       `json:"backend,omitempty" toml:"backend,omitempty"`
-	Local   SearchLocal  `json:"local,omitempty" toml:"local,omitempty"`
-	Claude  SearchClaude `json:"claude,omitempty" toml:"claude,omitempty"`
+	Local   SearchLocal  `json:"local,omitzero" toml:"local,omitempty"`
+	Claude  SearchClaude `json:"claude,omitzero" toml:"claude,omitempty"`
 }
 
 // SearchLocal configures a local OpenAI-compatible LLM endpoint.
@@ -683,7 +683,7 @@ type MITMConfig struct {
 	Providers      string          `json:"providers,omitempty" toml:"providers,omitempty"`
 	BodyMode       string          `json:"bodyMode,omitempty" toml:"body_mode,omitempty"`
 	CaptureDir     string          `json:"captureDir,omitempty" toml:"capture_dir,omitempty"`
-	Drift          MITMDriftConfig `json:"drift,omitempty" toml:"drift,omitempty"`
+	Drift          MITMDriftConfig `json:"drift,omitzero" toml:"drift,omitempty"`
 }
 
 // MITMDriftConfig configures the daemon-driven drift watchdog. When

@@ -178,11 +178,7 @@ func TestReloadDaemonRequiresProcessLock(t *testing.T) {
 }
 
 func TestInheritedListenerFilesIncludesDaemonAdapterAndWebapp(t *testing.T) {
-	socketDir, err := os.MkdirTemp("/tmp", "clyde-lis-")
-	if err != nil {
-		t.Fatalf("temp socket dir: %v", err)
-	}
-	defer os.RemoveAll(socketDir)
+	socketDir := t.TempDir()
 	daemonLis, err := net.Listen("unix", filepath.Join(socketDir, "d.sock"))
 	if err != nil {
 		t.Fatalf("listen daemon: %v", err)

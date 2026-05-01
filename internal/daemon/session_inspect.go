@@ -485,13 +485,13 @@ func inspectForEachTailLine(transcriptPath string, tailSize int, fn func(line []
 	}
 }
 
-func daemonDeleteSessionData(clydeRoot, sessionID, transcriptPath string) (*daemonDeletedFiles, error) {
+func daemonDeleteSessionData(clydeRoot, sessionID, transcriptPath string) error {
 	deleted := &daemonDeletedFiles{}
-	claudeProjectDir := ""
+	var claudeProjectDir string
 	if transcriptPath != "" {
 		if util.FileExists(transcriptPath) {
 			if err := os.Remove(transcriptPath); err != nil {
-				return deleted, fmt.Errorf("delete transcript: %w", err)
+				return fmt.Errorf("delete transcript: %w", err)
 			}
 			deleted.Transcript = append(deleted.Transcript, transcriptPath)
 		}
@@ -501,20 +501,20 @@ func daemonDeleteSessionData(clydeRoot, sessionID, transcriptPath string) (*daem
 		encoded := strings.ReplaceAll(strings.ReplaceAll(projectRoot, "/", "-"), ".", "-")
 		home, err := util.HomeDir()
 		if err != nil {
-			return deleted, err
+			return err
 		}
 		claudeProjectDir = filepath.Join(home, ".claude", "projects", encoded)
 		path := filepath.Join(claudeProjectDir, sessionID+".jsonl")
 		if util.FileExists(path) {
 			if err := os.Remove(path); err != nil {
-				return deleted, fmt.Errorf("delete transcript: %w", err)
+				return fmt.Errorf("delete transcript: %w", err)
 			}
 			deleted.Transcript = append(deleted.Transcript, path)
 		}
 	}
 	matches, err := filepath.Glob(filepath.Join(claudeProjectDir, "agent-*.jsonl"))
 	if err != nil {
-		return deleted, err
+		return err
 	}
 	for _, path := range matches {
 		contains, err := inspectFileContains(path, sessionID)
@@ -522,11 +522,11 @@ func daemonDeleteSessionData(clydeRoot, sessionID, transcriptPath string) (*daem
 			continue
 		}
 		if err := os.Remove(path); err != nil {
-			return deleted, err
+			return err
 		}
 		deleted.AgentLogs = append(deleted.AgentLogs, path)
 	}
-	return deleted, nil
+	return nil
 }
 
 func inspectFileContains(path, needle string) (bool, error) {

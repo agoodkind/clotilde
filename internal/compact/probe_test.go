@@ -37,14 +37,14 @@ func TestBuildProbeArgsCanSkipForking(t *testing.T) {
 }
 
 func joinArgs(args []string) string {
-	out := ""
+	var out strings.Builder
 	for i, arg := range args {
 		if i > 0 {
-			out += " "
+			out.WriteString(" ")
 		}
-		out += arg
+		out.WriteString(arg)
 	}
-	return out
+	return out.String()
 }
 
 func contains(s, sub string) bool {

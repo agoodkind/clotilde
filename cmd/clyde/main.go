@@ -39,10 +39,16 @@ import (
 )
 
 func main() {
+	exitCode := run()
+	slog.Info("cli.main.exit", "component", "cli", "exit_code", exitCode)
+	os.Exit(exitCode)
+}
+
+func run() int {
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "config load failed:", err)
-		os.Exit(1)
+		return 1
 	}
 
 	closer, err := slogger.Setup(cfg.Logging, detectSlogRole(os.Args[1:]))
@@ -52,7 +58,7 @@ func main() {
 			"err", err,
 		)
 		_, _ = fmt.Fprintln(os.Stderr, "slogger setup failed:", err)
-		os.Exit(1)
+		return 1
 	}
 	defer func() { _ = closer.Close() }()
 
@@ -60,12 +66,12 @@ func main() {
 		mode, rewritten := cmd.ClassifyArgs(os.Args[1:])
 		switch mode {
 		case cmd.ModePassthrough:
-			os.Exit(cmd.ForwardToClaudeThenDashboard(os.Args[1:]))
+			return cmd.ForwardToClaudeThenDashboard(os.Args[1:])
 		case cmd.ModeBasedirLaunch:
 			if len(rewritten) == 0 {
-				os.Exit(1)
+				return 1
 			}
-			os.Exit(cmd.RunBasedirLaunch(rewritten[0]))
+			return cmd.RunBasedirLaunch(rewritten[0])
 		case cmd.ModeResumeNoArgDashboard:
 			os.Args = os.Args[:1]
 		case cmd.ModeResumeFlag:
@@ -103,12 +109,13 @@ func main() {
 
 	if err := root.Execute(); err != nil {
 		if strings.HasPrefix(err.Error(), "unknown command") {
-			os.Exit(cmd.ForwardToClaudeThenDashboard(os.Args[1:]))
+			return cmd.ForwardToClaudeThenDashboard(os.Args[1:])
 		}
 		_, _ = fmt.Fprintln(f.IOStreams.Err, "Error:", err)
-		os.Exit(1)
+		return 1
 	}
 	slog.Info("cli.execute.completed", "component", "cli")
+	return 0
 }
 
 func detectSlogRole(args []string) slogger.ProcessRole {

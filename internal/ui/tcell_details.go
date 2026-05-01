@@ -313,7 +313,7 @@ func formatDetailCompactions(detail SessionDetail) string {
 // buildRight renders the full conversation. Each message gets a role tag
 // and a timestamp. Long bodies are wrapped by the parent TextBox because
 // its Wrap flag is on.
-func (d *DetailsView) buildRight(sess *session.Session, detail SessionDetail) [][]TextSegment {
+func (d *DetailsView) buildRight(_ *session.Session, detail SessionDetail) [][]TextSegment {
 	src := detail.AllMessages
 	if len(src) == 0 && len(detail.Messages) > 0 {
 		src = detail.Messages
@@ -368,7 +368,7 @@ func (d *DetailsView) buildRight(sess *session.Session, detail SessionDetail) []
 		// Body lines: split on existing newlines so the TextBox wrapping does
 		// not accidentally glue them together. Blank line after each message.
 		body := strings.ReplaceAll(m.Text, "\r", "")
-		for _, line := range strings.Split(body, "\n") {
+		for line := range strings.SplitSeq(body, "\n") {
 			if strings.TrimSpace(line) == "" {
 				continue
 			}

@@ -506,13 +506,10 @@ func TestRunPlan_TargetLoop_FakeCounter(t *testing.T) {
 	// Fake counter: returns 1000 on first call, then decreases by
 	// 200 per call. With static_overhead=0 and reserved=0 and
 	// target=500, the loop will ping a few iterations, then return.
-	var calls int32
+	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&calls, 1)
-		count := 1000 - 200*int(n-1)
-		if count < 1 {
-			count = 1
-		}
+		n := calls.Add(1)
+		count := max(1000-200*int(n-1), 1)
 		fmt.Fprintf(w, `{"input_tokens":%d}`, count)
 	}))
 	defer srv.Close()
@@ -548,7 +545,7 @@ func TestRunPlan_TargetLoop_FakeCounter(t *testing.T) {
 	if len(res.Iterations) < 2 {
 		t.Errorf("expected at least 2 iterations (baseline + at least one demotion), got %d", len(res.Iterations))
 	}
-	if got := atomic.LoadInt32(&calls); got < 2 {
+	if got := calls.Load(); got < 2 {
 		t.Errorf("count_tokens calls = %d, expected at least 2", got)
 	}
 }
@@ -570,9 +567,9 @@ func TestRunPlan_TargetAlreadyMet(t *testing.T) {
 		t.Fatalf("LoadSlice: %v", err)
 	}
 
-	var calls int32
+	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		atomic.AddInt32(&calls, 1)
+		calls.Add(1)
 		fmt.Fprint(w, `{"input_tokens":42}`)
 	}))
 	defer srv.Close()
@@ -598,7 +595,7 @@ func TestRunPlan_TargetAlreadyMet(t *testing.T) {
 	if len(res.Iterations) != 1 {
 		t.Errorf("len(Iterations) = %d, want 1", len(res.Iterations))
 	}
-	if got := atomic.LoadInt32(&calls); got != 1 {
+	if got := calls.Load(); got != 1 {
 		t.Errorf("count_tokens calls = %d, want 1", got)
 	}
 }

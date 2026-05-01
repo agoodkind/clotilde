@@ -3,6 +3,7 @@ package mitm
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -128,7 +129,7 @@ func readCaptureRecordsRaw(path string) ([][]byte, []CaptureRecord, error) {
 		rawLines = append(rawLines, copied)
 		records = append(records, rec)
 	}
-	if err := scanner.Err(); err != nil && err != io.EOF {
+	if err := scanner.Err(); err != nil && !errors.Is(err, io.EOF) {
 		return nil, nil, err
 	}
 	return rawLines, records, nil
@@ -351,7 +352,7 @@ func buildFlavorShape(slug string, sig FlavorSignature, requests []rawRequest, o
 	methodSet := map[string]bool{}
 	pathSet := map[string]bool{}
 	headerObservations := map[string]map[string]int{} // header → value → count
-	headerPresenceCount := map[string]int{}            // header → number of records present
+	headerPresenceCount := map[string]int{}           // header → number of records present
 	bodyTypeSet := map[string]bool{}
 	fieldObservations := map[string]*v2FieldAcc{} // top-level body field → aggregated observation
 
@@ -469,12 +470,12 @@ func classifyHeader(name string, values map[string]int, presence, total int, opt
 // v2FieldAcc accumulates observations for one top-level body field
 // across multiple captured requests.
 type v2FieldAcc struct {
-	count            int
-	kindCounts       map[V2FieldKind]int
-	sample           string
-	subAcc           map[string]*v2FieldAcc
-	itemKindCounts   map[V2FieldKind]int
-	itemSubAcc       map[string]*v2FieldAcc
+	count          int
+	kindCounts     map[V2FieldKind]int
+	sample         string
+	subAcc         map[string]*v2FieldAcc
+	itemKindCounts map[V2FieldKind]int
+	itemSubAcc     map[string]*v2FieldAcc
 }
 
 func newFieldAcc() *v2FieldAcc {
@@ -528,9 +529,9 @@ func (a *v2FieldAcc) observe(value any, depth int) {
 
 func (a *v2FieldAcc) materialize(name string, totalRecords int) V2Field {
 	out := V2Field{
-		Name:           name,
-		Kind:           dominantKind(a.kindCounts),
-		SampleValue:    a.sample,
+		Name:        name,
+		Kind:        dominantKind(a.kindCounts),
+		SampleValue: a.sample,
 	}
 	if a.count >= totalRecords {
 		out.Presence = V2HeaderPresenceRequired

@@ -20,17 +20,18 @@ var (
 	ErrUnknownToolType = errors.New("tool.type must be \"function\"")
 )
 
-type OpenAIRequest = adapteropenai.ChatRequest
-type OpenAITool = adapteropenai.Tool
-type OpenAIToolFunctionSchema = adapteropenai.ToolFunctionSchema
-type OpenAIFunction = adapteropenai.Function
-type OpenAIMessage = adapteropenai.ChatMessage
-type OpenAIToolCall = adapteropenai.ToolCall
-type OpenAIToolCallFunction = adapteropenai.ToolCallFunction
-type OpenAIContentPart = adapteropenai.ContentPart
+type (
+	OpenAIRequest            = adapteropenai.ChatRequest
+	OpenAITool               = adapteropenai.Tool
+	OpenAIToolFunctionSchema = adapteropenai.ToolFunctionSchema
+	OpenAIFunction           = adapteropenai.Function
+	OpenAIMessage            = adapteropenai.ChatMessage
+	OpenAIToolCall           = adapteropenai.ToolCall
+	OpenAIToolCallFunction   = adapteropenai.ToolCallFunction
+	OpenAIContentPart        = adapteropenai.ContentPart
+)
 
 var noticeSentinelRE = regexp.MustCompile(`(?s)<!--clyde-notice-->.*?<!--/clyde-notice-->\s*`)
-var activitySentinelRE = regexp.MustCompile(`(?s)<!--clyde-activity-->.*?<!--/clyde-activity-->\s*`)
 
 // TranslateRequest maps an OpenAI-shaped chat request to Anthropic /v1/messages fields.
 func TranslateRequest(req OpenAIRequest, systemPrefix string, maxTokens int) (AnthRequest, error) {
@@ -235,29 +236,13 @@ func stripNotice(text string, msgIdx, partIdx int) string {
 		return text
 	}
 	slog.Info("adapter.sentinel.notice.stripped",
-		"subcomponent", "tooltrans",
+		"subcomponent", "anthropic_mapper",
 		"msg_idx", msgIdx,
 		"part_idx", partIdx,
 		"source_len", len(text),
 		"stripped_len", len(stripped),
 	)
 	return stripped
-}
-
-// StripNoticeSentinel removes the clyde notice envelope.
-func StripNoticeSentinel(text string) string {
-	if text == "" {
-		return ""
-	}
-	return noticeSentinelRE.ReplaceAllString(text, "")
-}
-
-// StripActivitySentinel removes the shared activity envelope.
-func StripActivitySentinel(text string) string {
-	if text == "" {
-		return ""
-	}
-	return activitySentinelRE.ReplaceAllString(text, "")
 }
 
 // flattenToolResultContent normalizes a tool_result content payload to a
@@ -398,12 +383,10 @@ func parseDataURI(s string) (mediaType string, data string, err error) {
 		return "", "", fmt.Errorf("not a data uri")
 	}
 	rest := strings.TrimPrefix(s, prefix)
-	comma := strings.Index(rest, ",")
-	if comma < 0 {
+	meta, payload, ok := strings.Cut(rest, ",")
+	if !ok {
 		return "", "", fmt.Errorf("invalid data uri: missing comma")
 	}
-	meta := rest[:comma]
-	payload := rest[comma+1:]
 	parts := strings.Split(meta, ";")
 	if len(parts) == 0 || parts[0] == "" {
 		mediaType = "application/octet-stream"
@@ -508,9 +491,4 @@ func stripThinkingBlockquote(text string) string {
 		return text
 	}
 	return thinkingBlockquoteRE.ReplaceAllString(text, "")
-}
-
-// StripThinkingSentinel removes the clyde thinking envelope.
-func StripThinkingSentinel(text string) string {
-	return stripThinkingBlockquote(text)
 }

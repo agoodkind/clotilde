@@ -10,11 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -436,7 +438,7 @@ func (s *Server) DeleteSession(ctx context.Context, req *clydev1.DeleteSessionRe
 		return nil, status.Errorf(codes.NotFound, "session %q not found", req.Name)
 	}
 	projClydeRoot := daemonProjectClydeRootForSession(sess)
-	if _, err := daemonDeleteSessionData(projClydeRoot, sess.Metadata.SessionID, sess.Metadata.TranscriptPath); err != nil {
+	if err := daemonDeleteSessionData(projClydeRoot, sess.Metadata.SessionID, sess.Metadata.TranscriptPath); err != nil {
 		s.log.Warn("daemon.session_delete.current_data_failed",
 			"component", "daemon",
 			"subcomponent", "sessions",
@@ -445,7 +447,7 @@ func (s *Server) DeleteSession(ctx context.Context, req *clydev1.DeleteSessionRe
 			"err", err)
 	}
 	for _, prevID := range sess.Metadata.PreviousSessionIDs {
-		if _, err := daemonDeleteSessionData(projClydeRoot, prevID, ""); err != nil {
+		if err := daemonDeleteSessionData(projClydeRoot, prevID, ""); err != nil {
 			s.log.Warn("daemon.session_delete.previous_data_failed",
 				"component", "daemon",
 				"subcomponent", "sessions",
@@ -688,7 +690,7 @@ type hookEventPayload struct {
 func (s *Server) HookEvent(ctx context.Context, req *clydev1.HookEventRequest) (*clydev1.HookEventResponse, error) {
 	var payload hookEventPayload
 	if err := json.Unmarshal(req.RawJson, &payload); err != nil {
-		return &clydev1.HookEventResponse{ExitCode: 0}, nil
+		return nil, fmt.Errorf("decode hook event payload: %w", err)
 	}
 
 	switch payload.Type {
@@ -734,9 +736,7 @@ func adapterScratchDir() string {
 func (s *Server) writeSettingsJSON(wrapperID, model, effortLevel string) (string, error) {
 	s.mu.RLock()
 	globalCopy := make(map[string]json.RawMessage, len(s.globalSettings))
-	for k, v := range s.globalSettings {
-		globalCopy[k] = v
-	}
+	maps.Copy(globalCopy, s.globalSettings)
 	globalModel := globalSettingString(s.globalSettings, "model")
 	s.mu.RUnlock()
 
@@ -1502,12 +1502,7 @@ func (s *Server) UpdateSessionSettings(ctx context.Context, req *clydev1.UpdateS
 		if len(req.UpdateMask) == 0 {
 			return true
 		}
-		for _, m := range req.UpdateMask {
-			if m == field {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(req.UpdateMask, field)
 	}
 	if req.Settings != nil {
 		if applyMask("model") {
@@ -1551,12 +1546,7 @@ func (s *Server) UpdateGlobalSettings(ctx context.Context, req *clydev1.UpdateGl
 		if len(req.UpdateMask) == 0 {
 			return true
 		}
-		for _, m := range req.UpdateMask {
-			if m == field {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(req.UpdateMask, field)
 	}
 	if req.Defaults != nil && applyMask("remote_control") {
 		cfg.Defaults.RemoteControl = req.Defaults.RemoteControl
@@ -1818,10 +1808,8 @@ func resolveTranscriptPath(sessionID string) string {
 		if s.Metadata.SessionID == sessionID {
 			return s.Metadata.TranscriptPath
 		}
-		for _, prev := range s.Metadata.PreviousSessionIDs {
-			if prev == sessionID {
-				return s.Metadata.TranscriptPath
-			}
+		if slices.Contains(s.Metadata.PreviousSessionIDs, sessionID) {
+			return s.Metadata.TranscriptPath
 		}
 	}
 	return ""

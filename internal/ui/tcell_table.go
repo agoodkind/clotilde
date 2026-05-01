@@ -198,7 +198,7 @@ func (t *TableWidget) Draw(scr tcell.Screen, r Rect) {
 	}
 
 	// Data rows
-	for vi := 0; vi < vis; vi++ {
+	for vi := range vis {
 		di := t.Offset + vi
 		if di >= len(t.Rows) {
 			break
@@ -212,7 +212,7 @@ func (t *TableWidget) Draw(scr tcell.Screen, r Rect) {
 		}
 
 		vx := 0
-		for i := 0; i < len(t.Headers); i++ {
+		for i := range len(t.Headers) {
 			if i > 0 {
 				vx += t.ColGaps
 			}
@@ -259,10 +259,7 @@ func (t *TableWidget) JumpToScrollbarY(y int) {
 	if t.ScrollbarRect.H <= 0 {
 		return
 	}
-	rel := y - t.ScrollbarRect.Y
-	if rel < 0 {
-		rel = 0
-	}
+	rel := max(y-t.ScrollbarRect.Y, 0)
 	if rel >= t.ScrollbarRect.H {
 		rel = t.ScrollbarRect.H - 1
 	}

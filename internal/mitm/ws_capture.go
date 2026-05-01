@@ -18,7 +18,7 @@ func isWebsocketUpgrade(r *http.Request) bool {
 		return false
 	}
 	for _, value := range r.Header.Values("Connection") {
-		for _, part := range strings.Split(value, ",") {
+		for part := range strings.SplitSeq(value, ",") {
 			if strings.EqualFold(strings.TrimSpace(part), "upgrade") {
 				return true
 			}
@@ -72,6 +72,9 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, upstream
 		status := http.StatusBadGateway
 		if upstreamResp != nil {
 			status = upstreamResp.StatusCode
+			if upstreamResp.Body != nil {
+				_ = upstreamResp.Body.Close()
+			}
 		}
 		p.log.Warn("mitm.ws.dial_failed", "url", upstreamURL, "status", status, "err", err)
 		http.Error(w, "ws upstream dial failed: "+err.Error(), http.StatusBadGateway)
@@ -104,12 +107,12 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, upstream
 	}
 
 	var (
-		messageCount  int
-		messageMu     sync.Mutex
-		closeOnce     sync.Once
-		closeErr      error
-		closeChan     = make(chan struct{})
-		captureDir    = cfg.CaptureDir
+		messageCount int
+		messageMu    sync.Mutex
+		closeOnce    sync.Once
+		closeErr     error
+		closeChan    = make(chan struct{})
+		captureDir   = cfg.CaptureDir
 	)
 
 	closeBoth := func(reason error) {

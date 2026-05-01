@@ -38,7 +38,7 @@ func runNoAnyOrEmptyInterface(pass *analysis.Pass) (any, error) {
 					if !ast.IsExported(typeSpec.Name.Name) {
 						continue
 					}
-					checkTypeExpr(pass, path, typeSpec.Type)
+					checkTypeExpr(pass, typeSpec.Type)
 				}
 			case *ast.FuncDecl:
 				if !ast.IsExported(d.Name.Name) || d.Type == nil {
@@ -46,12 +46,12 @@ func runNoAnyOrEmptyInterface(pass *analysis.Pass) (any, error) {
 				}
 				if d.Type.Params != nil {
 					for _, p := range d.Type.Params.List {
-						checkTypeExpr(pass, path, p.Type)
+						checkTypeExpr(pass, p.Type)
 					}
 				}
 				if d.Type.Results != nil {
 					for _, r := range d.Type.Results.List {
-						checkTypeExpr(pass, path, r.Type)
+						checkTypeExpr(pass, r.Type)
 					}
 				}
 			}
@@ -60,7 +60,7 @@ func runNoAnyOrEmptyInterface(pass *analysis.Pass) (any, error) {
 	return nil, nil
 }
 
-func checkTypeExpr(pass *analysis.Pass, path string, expr ast.Expr) {
+func checkTypeExpr(pass *analysis.Pass, expr ast.Expr) {
 	ast.Inspect(expr, func(node ast.Node) bool {
 		switch typed := node.(type) {
 		case *ast.Ident:

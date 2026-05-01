@@ -3,6 +3,7 @@ package mitm
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -88,7 +89,7 @@ func readCaptureRecords(path string) ([]CaptureRecord, error) {
 		}
 		out = append(out, rec)
 	}
-	if err := scanner.Err(); err != nil && err != io.EOF {
+	if err := scanner.Err(); err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
 	}
 	return out, nil
@@ -331,8 +332,8 @@ func canonicalHeaderValue(lowerName, value string) string {
 // from the upstream URL so two captures from different sessions
 // produce the same URL pattern.
 func normalizeURLPattern(raw string) string {
-	if i := strings.Index(raw, "?"); i >= 0 {
-		return raw[:i]
+	if before, _, ok := strings.Cut(raw, "?"); ok {
+		return before
 	}
 	return raw
 }

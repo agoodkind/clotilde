@@ -373,7 +373,6 @@ func (s *StatusBarWidget) Draw(scr tcell.Screen, r Rect) {
 		bx := rightX - runeCount(txt)
 		if bx > x {
 			drawString(scr, bx, r.Y, badgeStyle(ColorSuccess), txt, rightX-bx)
-			rightX = bx
 		}
 	}
 }

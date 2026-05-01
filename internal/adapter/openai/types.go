@@ -143,7 +143,7 @@ type ToolCall struct {
 	Index    int              `json:"index"`
 	ID       string           `json:"id,omitempty"`
 	Type     string           `json:"type,omitempty"`
-	Function ToolCallFunction `json:"function,omitempty"`
+	Function ToolCallFunction `json:"function,omitzero"`
 }
 
 type ToolCallFunction struct {

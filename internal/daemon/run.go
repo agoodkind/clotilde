@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -38,8 +39,10 @@ import (
 // package itself.
 type ExtraLoop func(log *slog.Logger) func()
 
-const adapterConfigReloadDebounce = 250 * time.Millisecond
-const adapterShutdownWait = 4 * time.Second
+const (
+	adapterConfigReloadDebounce = 250 * time.Millisecond
+	adapterShutdownWait         = 4 * time.Second
+)
 
 // reloadHTTPDrainWait caps how long the reload waits for in-flight
 // adapter requests to finish before force-closing. The drain polls
@@ -48,11 +51,13 @@ const adapterShutdownWait = 4 * time.Second
 // immediately. A live agent turn can run for a minute or more, so the
 // max wait is generous; it only matters when a real stream is in
 // flight.
-const reloadHTTPDrainWait = 10 * time.Minute
-const reloadGRPCDrainWait = 10 * time.Minute
-const envDaemonReloadChild = "CLYDE_DAEMON_RELOAD_CHILD"
-const envDaemonInheritedListeners = "CLYDE_DAEMON_INHERITED_LISTENERS"
-const envDaemonReadyFD = "CLYDE_DAEMON_READY_FD"
+const (
+	reloadHTTPDrainWait         = 10 * time.Minute
+	reloadGRPCDrainWait         = 10 * time.Minute
+	envDaemonReloadChild        = "CLYDE_DAEMON_RELOAD_CHILD"
+	envDaemonInheritedListeners = "CLYDE_DAEMON_INHERITED_LISTENERS"
+	envDaemonReadyFD            = "CLYDE_DAEMON_READY_FD"
+)
 
 const (
 	listenerNameDaemon  = "daemon"
@@ -216,8 +221,8 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
 			cancels := append([]func(){}, exclusiveCancels...)
 			exclusiveCancels = nil
 			exclusiveMu.Unlock()
-			for i := len(cancels) - 1; i >= 0; i-- {
-				cancels[i]()
+			for _, cancel := range slices.Backward(cancels) {
+				cancel()
 			}
 			log.Info("daemon.exclusive_subsystems.stopped",
 				"component", "daemon",
@@ -408,7 +413,8 @@ func reloadDaemonBinary(ctx context.Context, log *slog.Logger, grpcServer *grpc.
 	cmd := exec.Command(executablePath, "daemon")
 	cmd.Stdout = nil
 	cmd.Stderr = nil
-	cmd.ExtraFiles = append(files, readyWrite)
+	files = append(files, readyWrite)
+	cmd.ExtraFiles = files
 	specJSON, err := json.Marshal(specs)
 	if err != nil {
 		return reloadReport{}, fmt.Errorf("encode inherited listeners: %w", err)

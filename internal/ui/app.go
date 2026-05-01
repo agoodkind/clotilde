@@ -18,6 +18,7 @@ import (
 	"hash/fnv"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -497,7 +498,6 @@ type App struct {
 
 	// sessionsLoading gates in-flight daemon snapshot requests so rapid
 	// refresh triggers coalesce without spawning redundant RPC calls.
-	storeSnapshot     string
 	sessionsLoadingMu sync.Mutex
 	sessionsLoading   bool
 	startupLoading    bool
@@ -523,9 +523,6 @@ type App struct {
 	// appFocused tracks the terminal focus state from EventFocus so we can
 	// avoid high-frequency spinner redraws while unfocused.
 	appFocused bool
-
-	// Scroll position readout for status bar
-	positionText string
 
 	// suspendImpl is the test seam for suspendAndRun. Production
 	// builds set this to a wrapper around the real method that
@@ -1748,33 +1745,25 @@ func dedupeSessionList(in []*session.Session) []*session.Session {
 
 func copyStringMap(in map[string]string) map[string]string {
 	out := make(map[string]string, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
+	maps.Copy(out, in)
 	return out
 }
 
 func copyBoolMap(in map[string]bool) map[string]bool {
 	out := make(map[string]bool, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
+	maps.Copy(out, in)
 	return out
 }
 
 func copyIntMap(in map[string]int) map[string]int {
 	out := make(map[string]int, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
+	maps.Copy(out, in)
 	return out
 }
 
 func copyContextStateMap(in map[string]SessionContextState) map[string]SessionContextState {
 	out := make(map[string]SessionContextState, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
+	maps.Copy(out, in)
 	return out
 }
 
@@ -1814,7 +1803,6 @@ func (a *App) runRegistrySupervisor(stop <-chan struct{}) {
 	}
 
 	retryDelay := 250 * time.Millisecond
-	const maxRetryDelay = 5 * time.Second
 
 	for {
 		select {
@@ -1840,7 +1828,7 @@ func (a *App) runRegistrySupervisor(stop <-chan struct{}) {
 			if !waitForRegistryRetry(stop, retryDelay) {
 				return
 			}
-			retryDelay = nextRegistryRetryDelay(retryDelay, maxRetryDelay)
+			retryDelay = nextRegistryRetryDelay(retryDelay)
 			continue
 		}
 
@@ -1872,7 +1860,7 @@ func (a *App) runRegistrySupervisor(stop <-chan struct{}) {
 			if !waitForRegistryRetry(stop, retryDelay) {
 				return
 			}
-			retryDelay = nextRegistryRetryDelay(retryDelay, maxRetryDelay)
+			retryDelay = nextRegistryRetryDelay(retryDelay)
 		}
 	}
 }
@@ -1886,7 +1874,6 @@ func (a *App) runProviderStatsSupervisor(stop <-chan struct{}) {
 	}
 
 	retryDelay := 250 * time.Millisecond
-	const maxRetryDelay = 5 * time.Second
 
 	for {
 		select {
@@ -1905,7 +1892,7 @@ func (a *App) runProviderStatsSupervisor(stop <-chan struct{}) {
 			if !waitForRegistryRetry(stop, retryDelay) {
 				return
 			}
-			retryDelay = nextRegistryRetryDelay(retryDelay, maxRetryDelay)
+			retryDelay = nextRegistryRetryDelay(retryDelay)
 			continue
 		}
 
@@ -1937,7 +1924,7 @@ func (a *App) runProviderStatsSupervisor(stop <-chan struct{}) {
 			if !waitForRegistryRetry(stop, retryDelay) {
 				return
 			}
-			retryDelay = nextRegistryRetryDelay(retryDelay, maxRetryDelay)
+			retryDelay = nextRegistryRetryDelay(retryDelay)
 		}
 	}
 }
@@ -1980,10 +1967,11 @@ func waitForRegistryRetry(stop <-chan struct{}, delay time.Duration) bool {
 	}
 }
 
-func nextRegistryRetryDelay(current time.Duration, max time.Duration) time.Duration {
+func nextRegistryRetryDelay(current time.Duration) time.Duration {
+	const maxRetryDelay = 5 * time.Second
 	next := current * 2
-	if next > max {
-		return max
+	if next > maxRetryDelay {
+		return maxRetryDelay
 	}
 	return next
 }
@@ -2168,25 +2156,6 @@ func (a *App) selectedSessionName() string {
 	return a.selected.Name
 }
 
-// runLastUsedTicker watches every tracked transcript for mtime
-// changes and refreshes the affected row in place. Sort order does
-// not change so the user's eyes stay on the row they were reading.
-// A short lived "recently updated" highlight tints the row for a
-// few seconds so the eye catches the update. The ticker idles
-// quickly and avoids work when the user is actively interacting.
-func (a *App) runLastUsedTicker(stop <-chan struct{}) {
-	<-stop
-}
-
-// refreshLastUsedColumns walks every session, restats its
-// transcript, and rewrites only the affected table row when the
-// mtime has advanced. The order of a.sessions is left untouched so
-// no reshuffle happens. The set of sessions whose row was touched
-// is recorded so a brief highlight tint stays on for a few seconds.
-func (a *App) refreshLastUsedColumns() {
-	a.requestSessionsAsync("last_used")
-}
-
 // runIdleSummarySweeper regenerates stale or missing session summaries
 // while the user is idle. It wakes periodically, checks for a long idle
 // window, picks one session whose Context looks outdated, and kicks off
@@ -2353,7 +2322,7 @@ func (a *App) initScreen() error {
 	return nil
 }
 
-func (a *App) postInterrupt(data interface{}) {
+func (a *App) postInterrupt(data any) {
 	a.screenMu.RLock()
 	scr := a.screen
 	a.screenMu.RUnlock()
@@ -2430,33 +2399,10 @@ func terminalCallWarnThreshold(call string) time.Duration {
 	}
 }
 
-func (a *App) seedBridgesAsync() {
-	if a.cb.ListBridges == nil {
-		return
-	}
-	go func() {
-		startedAt := time.Now()
-		slog.Debug("tui.startup.list_bridges.begin",
-			"component", "tui",
-			"started_at", startedAt.Format(time.RFC3339Nano))
-		list, err := a.cb.ListBridges()
-		a.postInterrupt(bridgesLoaded{
-			list:     list,
-			err:      err,
-			duration: time.Since(startedAt),
-		})
-	}()
-}
-
 // PreWarmStats kicks off background model computation. Results land in
 // modelCache and a redraw is triggered via PostEvent.
 func (a *App) PreWarmStats() {
 	a.requestSessionsAsync("prewarm")
-}
-
-// asyncRefresh posts an event that triggers a redraw without blocking.
-func (a *App) asyncRefresh() {
-	a.postInterrupt(a)
 }
 
 // ---------------- Event dispatch ----------------
@@ -2580,9 +2526,7 @@ func (a *App) handleEvent(ev tcell.Event) {
 			a.lastHeartbeatAt = time.Now()
 			a.logHealthTick()
 		case modelsPrewarmed:
-			for name, model := range d.models {
-				a.modelCache[name] = model
-			}
+			maps.Copy(a.modelCache, d.models)
 			a.populateTable()
 		case bridgesLoaded:
 			if d.err != nil {
@@ -3300,8 +3244,8 @@ func (a *App) draw() {
 	// the longer the user interacts with it.
 	w, h := a.screen.Size()
 	clearStartedAt := time.Now()
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
+	for y := range h {
+		for x := range w {
 			a.screen.SetContent(x, y, ' ', nil, tcell.StyleDefault)
 		}
 	}
@@ -3418,10 +3362,7 @@ func (a *App) draw() {
 	a.lastDrawSpinner = a.spinnerFrame
 	overlayDuration := time.Duration(0)
 	if a.overlay != nil {
-		overlayDuration = totalDuration - layoutDuration - clearDuration - bodyDuration - statusDuration - showDuration
-		if overlayDuration < 0 {
-			overlayDuration = 0
-		}
+		overlayDuration = max(totalDuration-layoutDuration-clearDuration-bodyDuration-statusDuration-showDuration, 0)
 	}
 	if totalDuration > 20*time.Millisecond {
 		logLevel := slog.LevelDebug
@@ -3484,18 +3425,12 @@ func (a *App) layout() {
 	a.statusRect = Rect{X: 0, Y: statusY, W: w, H: statusH}
 
 	contentTop := headerH
-	availableH := h - headerH - statusH
-	if availableH < 0 {
-		availableH = 0
-	}
+	availableH := max(h-headerH-statusH, 0)
 
 	detailH := 0
 	if a.selected != nil && availableH >= 5 {
 		desired := 12
-		maxDetail := availableH - 3
-		if maxDetail < 0 {
-			maxDetail = 0
-		}
+		maxDetail := max(availableH-3, 0)
 		detailH = imin(desired, maxDetail)
 		if detailH < 4 {
 			detailH = 0
@@ -3519,10 +3454,7 @@ func (a *App) layout() {
 	if w < 8 {
 		tableX = 0
 	}
-	tableW := w - (tableX * 2)
-	if tableW < 0 {
-		tableW = 0
-	}
+	tableW := max(w-(tableX*2), 0)
 	a.tableRect = Rect{X: tableX, Y: contentTop, W: tableW, H: tableH}
 
 	a.detailRect = Rect{}
@@ -4129,7 +4061,8 @@ func (a *App) drawSessionsEmptyState(r Rect) {
 func (a *App) drawCenteredLines(r Rect, lines []struct {
 	style tcell.Style
 	text  string
-}) {
+},
+) {
 	if r.W <= 0 || r.H <= 0 || len(lines) == 0 {
 		return
 	}
@@ -4471,11 +4404,12 @@ func (a *App) openNewSessionRemoteControlModal(basedir string) {
 	launch := func(enableRC bool) {
 		a.closeOverlay()
 		runner := func() {
-			if a.cb.StartSessionWithBasedirRC != nil {
+			switch {
+			case a.cb.StartSessionWithBasedirRC != nil:
 				_ = a.cb.StartSessionWithBasedirRC(basedir, enableRC)
-			} else if a.cb.StartSessionWithBasedir != nil {
+			case a.cb.StartSessionWithBasedir != nil:
 				_ = a.cb.StartSessionWithBasedir(basedir)
-			} else if a.cb.StartSession != nil {
+			case a.cb.StartSession != nil:
 				_ = a.cb.StartSession()
 			}
 		}
@@ -5115,15 +5049,6 @@ func (a *App) drawSettingsTab(r Rect) {
 	}
 }
 
-// globalRCStateLabel returns a short string describing the current
-// global remote control default. Used in the Settings tab summary.
-func (a *App) globalRCStateLabel() string {
-	if a.globalRemoteControl {
-		return "on  (G to disable)"
-	}
-	return "off (G to enable)"
-}
-
 // configRowDescription returns a "<path> (status)" string where status
 // is one of "exists" or "missing". Useful for surfacing the active
 // config files in the Settings tab without scattering os.Stat calls
@@ -5602,94 +5527,6 @@ func (a *App) openExportOptions(sess *session.Session) {
 	a.mode = StatusExport
 }
 
-func (a *App) exportSessionToClipboard(sess *session.Session, format SessionExportFormat) {
-	if sess == nil || a.cb.ExportSession == nil {
-		return
-	}
-	req := SessionExportRequest{
-		SessionName:            sess.Name,
-		Format:                 format,
-		HistoryStart:           1 << 30,
-		WhitespaceCompression:  SessionExportWhitespaceTidy,
-		IncludeChat:            true,
-		IncludeThinking:        false,
-		IncludeToolCalls:       false,
-		CopyToClipboard:        true,
-		IncludeRawJSONMetadata: false,
-	}
-	go func() {
-		body, err := a.cb.ExportSession(sess, req)
-		if err != nil {
-			a.postInterrupt(exportFinished{
-				title: "Export failed",
-				body:  err.Error(),
-			})
-			return
-		}
-		if err := CopyToClipboard(string(body)); err != nil {
-			a.postInterrupt(exportFinished{
-				title: "Copy failed",
-				body:  err.Error(),
-			})
-			return
-		}
-		a.postInterrupt(exportFinished{
-			title: "Copied export",
-			body:  fmt.Sprintf("%s copied to the system clipboard.", exportFormatLabel(format)),
-		})
-	}()
-}
-
-func (a *App) openExportSavePrompt(sess *session.Session, format SessionExportFormat) {
-	if sess == nil || a.cb.ExportSession == nil {
-		return
-	}
-	initial := defaultExportPath(sess, format)
-	input := NewTextInput("Path: ")
-	input.Text = initial
-	input.CursorX = runeCount(initial)
-	input.OnSubmit = func(s string) {
-		a.closeOverlay()
-		path := strings.TrimSpace(s)
-		if path == "" {
-			return
-		}
-		go func() {
-			body, err := a.cb.ExportSession(sess, SessionExportRequest{
-				SessionName:           sess.Name,
-				Format:                format,
-				HistoryStart:          1 << 30,
-				WhitespaceCompression: SessionExportWhitespaceTidy,
-				IncludeChat:           true,
-				IncludeThinking:       false,
-				IncludeToolCalls:      false,
-				SaveToFile:            true,
-				Directory:             filepath.Dir(path),
-				Filename:              filepath.Base(path),
-			})
-			if err != nil {
-				a.postInterrupt(exportFinished{title: "Export failed", body: err.Error()})
-				return
-			}
-			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-				a.postInterrupt(exportFinished{title: "Save failed", body: err.Error()})
-				return
-			}
-			if err := os.WriteFile(path, body, 0o644); err != nil {
-				a.postInterrupt(exportFinished{title: "Save failed", body: err.Error()})
-				return
-			}
-			a.postInterrupt(exportFinished{
-				title: "Export saved",
-				body:  fmt.Sprintf("%s written to %s", exportFormatLabel(format), path),
-			})
-		}()
-	}
-	input.OnCancel = a.closeOverlay
-	a.overlay = &InputOverlay{Input: input, Title: "Save " + exportFormatLabel(format)}
-	a.mode = StatusFilter
-}
-
 func (a *App) openExportFolderPicker(panel *ExportPanel) {
 	if panel == nil {
 		return
@@ -5756,18 +5593,6 @@ func exportCompleteBody(req SessionExportRequest, savedPath string) string {
 	return strings.Join(parts, "\n")
 }
 
-func defaultExportPath(sess *session.Session, format SessionExportFormat) string {
-	filename := "session"
-	if sess != nil && sess.Name != "" {
-		filename = sess.Name
-	}
-	path := defaultExportFilename(filename, format)
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		return filepath.Join(home, "Downloads", path)
-	}
-	return path
-}
-
 func defaultExportFolder() string {
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		return filepath.Join(home, "Downloads")
@@ -5785,19 +5610,6 @@ func exportFormatExt(format SessionExportFormat) string {
 		return "json"
 	default:
 		return "txt"
-	}
-}
-
-func exportFormatLabel(format SessionExportFormat) string {
-	switch format {
-	case SessionExportMarkdown:
-		return "Markdown export"
-	case SessionExportHTML:
-		return "HTML export"
-	case SessionExportJSON:
-		return "JSON export"
-	default:
-		return "Plain text export"
 	}
 }
 
@@ -5952,12 +5764,6 @@ func (a *App) restartDaemonAsync() {
 		a.refreshSessions()
 		a.refreshStats()
 	}()
-}
-
-// softRefreshSessions preserves the old call site contract while delegating
-// refresh work to the daemon-backed async snapshot path.
-func (a *App) softRefreshSessions() {
-	a.requestSessionsAsync("refresh.soft")
 }
 
 // suspendAndRun shuts down the screen, runs fn (which may launch claude),
@@ -6116,10 +5922,7 @@ type InputOverlay struct {
 }
 
 func (i *InputOverlay) Draw(scr tcell.Screen, r Rect) {
-	w := 60
-	if w > r.W-4 {
-		w = r.W - 4
-	}
+	w := min(60, r.W-4)
 	h := 5
 	box := Rect{X: r.X + (r.W-w)/2, Y: r.Y + (r.H-h)/2, W: w, H: h}
 	i.rect = box

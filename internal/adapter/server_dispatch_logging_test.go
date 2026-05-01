@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -480,8 +481,8 @@ func findRawLogEvent(t *testing.T, logBuffer *bytes.Buffer) map[string]any {
 func findLogEvent(t *testing.T, logBuffer *bytes.Buffer, message string) map[string]any {
 	t.Helper()
 	lines := strings.Split(strings.TrimSpace(logBuffer.String()), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
+	for _, line := range slices.Backward(lines) {
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}

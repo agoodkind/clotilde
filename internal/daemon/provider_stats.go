@@ -136,7 +136,7 @@ func resolveProviderStatsLogPath() (string, error) {
 }
 
 func requestEventFromLogRecord(rec providerStatsLogRecord) (adapterruntime.RequestEvent, bool) {
-	stage := adapterruntime.RequestStage("")
+	var stage adapterruntime.RequestStage
 	switch rec.Msg {
 	case "adapter.request.started":
 		stage = adapterruntime.RequestStageStarted

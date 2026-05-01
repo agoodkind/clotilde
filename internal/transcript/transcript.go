@@ -96,27 +96,23 @@ type contentBlock struct {
 	Input    ToolInputJSON `json:"input"`
 }
 
-type toolResultBlock struct {
-	Type      string          `json:"type"`
-	ToolUseID string          `json:"tool_use_id"`
-	Content   json.RawMessage `json:"content"`
-	IsError   bool            `json:"is_error"`
-}
+var (
+	systemTagRe         = regexp.MustCompile(`<(?:system-reminder|local-command[^>]*|command-name|command-message|command-args|local-command-stdout|local-command-caveat)[^>]*>[\s\S]*?</(?:system-reminder|local-command[^>]*|command-name|command-message|command-args|local-command-stdout|local-command-caveat)>`)
+	transcriptNoiseTags = []string{
+		"command-name",
+		"command-message",
+		"command-args",
+		"local-command-stdout",
+		"local-command-stderr",
+		"local-command-caveat",
+		"system-reminder",
+		"user-prompt-submit-hook",
+		"task-notification",
+		"bash-stdout",
+		"bash-stderr",
+	}
+)
 
-var systemTagRe = regexp.MustCompile(`<(?:system-reminder|local-command[^>]*|command-name|command-message|command-args|local-command-stdout|local-command-caveat)[^>]*>[\s\S]*?</(?:system-reminder|local-command[^>]*|command-name|command-message|command-args|local-command-stdout|local-command-caveat)>`)
-var transcriptNoiseTags = []string{
-	"command-name",
-	"command-message",
-	"command-args",
-	"local-command-stdout",
-	"local-command-stderr",
-	"local-command-caveat",
-	"system-reminder",
-	"user-prompt-submit-hook",
-	"task-notification",
-	"bash-stdout",
-	"bash-stderr",
-}
 var transcriptNoisePatterns = func() []*regexp.Regexp {
 	out := make([]*regexp.Regexp, 0, len(transcriptNoiseTags))
 	for _, t := range transcriptNoiseTags {
@@ -273,7 +269,7 @@ func stripSystemTags(s string) string {
 	}
 	if strings.Contains(s, "hook feedback:") {
 		var keep []string
-		for _, line := range strings.Split(s, "\n") {
+		for line := range strings.SplitSeq(s, "\n") {
 			t := strings.TrimSpace(line)
 			if strings.HasPrefix(t, "Stop hook feedback:") ||
 				strings.HasPrefix(t, "PreToolUse hook feedback:") ||
