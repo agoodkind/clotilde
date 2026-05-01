@@ -4,7 +4,7 @@ To file as CLYDE Tack ticket. P1.
 
 ## Why this exists
 
-The Snapshot type shipped with CLYDE-125 was modeled around the Codex
+The Snapshot type shipped with `ISSUE-125` was modeled around the Codex
 websocket flow: one canonical handshake, one repeating frame body.
 Empirical capture of Claude Code traffic on 2026-04-27 (from
 `~/.local/state/clyde/mitm/always-on/capture-pre-fix.jsonl`) proved
@@ -77,7 +77,7 @@ Snapshot v2 = {
 **v1.5 (this session, option 1).** A per-flavor classifier feeds the
 EXISTING Snapshot type. Each captured caller flavor produces its
 own `reference.toml` under `research/<upstream>/snapshots/<flavor>/`.
-This unblocks CLYDE-124 (Anthropic byte-identical parity) without
+This unblocks `ISSUE-124` (Anthropic byte-identical parity) without
 waiting for v2's richer schema. The classifier becomes the natural
 feeder for v2: same signature math, just emits richer output.
 
@@ -100,7 +100,7 @@ vs free), and per-flavor full extraction.
    Codex backward compat.
 6. `clyde mitm diff` understands both v1 and v2 schemas; v2 diff
    is per-flavor.
-7. CLYDE-124's parity check uses v2 against the captured Claude
+7. `ISSUE-124`'s parity check uses v2 against the captured Claude
    Code reference.
 
 ## Out of scope
@@ -117,4 +117,4 @@ vs free), and per-flavor full extraction.
 - `internal/mitm/snapshot.go::ExtractSnapshot` v1 extractor.
 - `~/.local/state/clyde/mitm/always-on/capture-pre-fix.jsonl` for the
   multi-flavor evidence.
-- CLYDE-124 (Anthropic byte-identical) is the immediate consumer.
+- `ISSUE-124` (Anthropic byte-identical) is the immediate consumer.
