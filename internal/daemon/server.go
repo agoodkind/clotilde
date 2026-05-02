@@ -34,6 +34,7 @@ import (
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	"goodkind.io/clyde/internal/bridge"
 	"goodkind.io/clyde/internal/codex"
+	codexstore "goodkind.io/clyde/internal/codex/store"
 	compactengine "goodkind.io/clyde/internal/compact"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/outputstyle"
@@ -109,10 +110,17 @@ type wrapperSession struct {
 type remoteWorker struct {
 	sessionName string
 	sessionID   string
+	basedir     string
 	incognito   bool
 	cmd         *exec.Cmd
 	done        chan struct{}
 	skipCleanup atomic.Bool
+}
+
+type remoteWorkerTmuxState struct {
+	Detected bool
+	Status   string
+	Reason   string
 }
 
 type liveRuntimeSession struct {
@@ -1630,7 +1638,7 @@ func (s *Server) applyCodexSessionDetail(sess *session.Session, resp *clydev1.Ge
 	if path == "" {
 		return
 	}
-	thread, err := codex.ReadThreadByRolloutPath(path, true, false)
+	thread, err := codexstore.ReadThreadByRolloutPath(path, true, false)
 	if err != nil {
 		s.log.Warn("daemon.codex.detail_read_failed",
 			"component", "daemon",
@@ -1986,6 +1994,7 @@ func (s *Server) StartRemoteSession(ctx context.Context, req *clydev1.StartRemot
 	worker := &remoteWorker{
 		sessionName: name,
 		sessionID:   sessionID,
+		basedir:     basedir,
 		incognito:   req.GetIncognito(),
 		cmd:         cmd,
 		done:        make(chan struct{}),
@@ -2275,6 +2284,18 @@ func (s *Server) startRemoteWorkerProcess(sessionName, sessionID, basedir string
 	if err != nil {
 		return nil, err
 	}
+	tmux := detectRemoteWorkerTmuxState()
+	if tmux.Detected {
+		s.log.Warn("daemon.remote_session.tmux_unsupported",
+			"component", "daemon",
+			"provider", session.ProviderClaude,
+			"session", sessionName,
+			"session_id", sessionID,
+			"basedir", basedir,
+			"tmux_status", tmux.Status,
+			"reason", tmux.Reason,
+		)
+	}
 	args := []string{
 		"daemon",
 		"launch-remote-worker",
@@ -2299,7 +2320,28 @@ func (s *Server) startRemoteWorkerProcess(sessionName, sessionID, basedir string
 		return nil, err
 	}
 	_ = devNull.Close()
+	s.log.Info("daemon.remote_session.worker_launched",
+		"component", "daemon",
+		"provider", session.ProviderClaude,
+		"session", sessionName,
+		"session_id", sessionID,
+		"basedir", basedir,
+		"incognito", incognito,
+		"pid", cmd.Process.Pid,
+		"tmux_status", tmux.Status,
+	)
 	return cmd, nil
+}
+
+func detectRemoteWorkerTmuxState() remoteWorkerTmuxState {
+	if strings.TrimSpace(os.Getenv("TMUX")) == "" {
+		return remoteWorkerTmuxState{Status: "not_detected"}
+	}
+	return remoteWorkerTmuxState{
+		Detected: true,
+		Status:   "unsupported",
+		Reason:   "daemon-owned Claude live sessions run headless and are restored through foreground leases, not tmux attachment",
+	}
 }
 
 func (s *Server) waitRemoteWorker(worker *remoteWorker) {

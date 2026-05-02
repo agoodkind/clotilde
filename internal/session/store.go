@@ -35,7 +35,7 @@ type Store interface {
 	// and updates any child sessions whose ParentSession matches oldName.
 	Rename(oldName, newName string) error
 
-	// Search returns sessions matching query against name, UUID,
+	// Search returns sessions matching query against name, provider session id,
 	// and context (case-insensitive substring match).
 	Search(query string) ([]*Session, error)
 
@@ -50,10 +50,10 @@ type Store interface {
 
 	// Resolve finds a session using a multi-tier lookup:
 	// 1. Exact name match
-	// 2. UUID match (checks SessionID and PreviousSessionIDs)
+	// 2. Provider session id match (checks current and historical ids)
 	// 3. Substring search (returns single match only)
-	// 4. Transparent adoption: scans ~/.claude/projects for a transcript
-	//    whose sessionId or sanitized customTitle matches query, then
+	// 4. Transparent adoption: scans provider-owned artifacts for a session
+	//    whose provider session id or sanitized customTitle matches query, then
 	//    registers a clyde session stub (metadata.json) and returns it.
 	//    This tier is skipped on FileStores constructed with
 	//    NewFileStoreReadOnly (for scan paths that must not recurse).
@@ -97,8 +97,8 @@ func NewFileStore(clydeRoot string) *FileStore {
 
 // NewGlobalFileStore creates a FileStore pointing at the global sessions directory.
 // Creates the directory if it doesn't exist. The returned store has the
-// tier-4 discovery cache attached so Resolve transparently adopts any
-// Claude Code session present on disk but not yet registered with clyde.
+// tier-4 discovery cache attached so Resolve transparently adopts any provider
+// session present on disk but not yet registered with clyde.
 func NewGlobalFileStore() (*FileStore, error) {
 	if err := config.EnsureGlobalSessionsDir(); err != nil {
 		sessionLog.Warn("session.store.ensure_global_sessions_failed",
@@ -285,7 +285,7 @@ func (fs *FileStore) Get(name string) (*Session, error) {
 	}, nil
 }
 
-// Search returns sessions matching query against name, UUID,
+// Search returns sessions matching query against name, provider session id,
 // and context (case-insensitive substring match).
 func (fs *FileStore) Search(query string) ([]*Session, error) {
 	sessions, err := fs.List()

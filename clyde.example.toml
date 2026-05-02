@@ -44,6 +44,32 @@ default_model = "clyde-opus-4-7"
 [adapter.notices]
 enabled = true
 
+[adapter.codex]
+enabled = true
+native_model_routing = "codex"
+model_prefixes = ["gpt-", "o"]
+
+# GPT/Codex model aliases are config-owned. `tokens` is the advertised
+# catalog window; `observed_tokens` is the Responses HTTP window Clyde
+# should expose when HTTP is the active Codex transport.
+[[adapter.codex.models]]
+alias_prefix = "gpt-5.4"
+model = "gpt-5.4"
+efforts = ["low", "medium", "high", "xhigh"]
+max_output_tokens = 128000
+contexts = [
+  { tokens = 1000000, observed_tokens = 272000, alias_suffix = "1m", advertised_native_aliases = ["gpt-5.4"] },
+]
+
+[[adapter.codex.models]]
+alias_prefix = "codex-5.5"
+model = "gpt-5.5"
+efforts = ["low", "medium", "high", "xhigh"]
+max_output_tokens = 128000
+contexts = [
+  { tokens = 272000, native_aliases = ["gpt-5.5"] },
+]
+
 # Optional: forward otherwise-unknown model aliases to one
 # OpenAI-compatible upstream. The caller's model value is preserved unless
 # model is set.

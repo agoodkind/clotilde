@@ -204,34 +204,12 @@ func TestIndexRendersHTML(t *testing.T) {
 	}
 }
 
-func TestBridgesEndpointSerializesDeps(t *testing.T) {
-	deps := Deps{
-		Bridges: func() []Bridge {
-			return []Bridge{{SessionName: "n", URL: "https://example", PID: 99}}
-		},
-	}
-	ts := newTestServer(t, config.WebAppConfig{}, deps)
-	defer ts.Close()
-	resp, err := http.Get(ts.URL + "/api/bridges")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	var got []Bridge
-	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].URL != "https://example" {
-		t.Fatalf("unexpected payload: %+v", got)
-	}
-}
-
 func TestTokenAuthEnforced(t *testing.T) {
 	os.Unsetenv("CLYDE_WEBAPP_TOKEN")
 	ts := newTestServer(t, config.WebAppConfig{RequireToken: "secret"}, Deps{})
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/api/bridges")
+	resp, err := http.Get(ts.URL + "/api/live-sessions")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +218,7 @@ func TestTokenAuthEnforced(t *testing.T) {
 		t.Fatalf("no token status = %d, want 401", resp.StatusCode)
 	}
 
-	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/bridges", nil)
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/live-sessions", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	r2, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -249,40 +227,6 @@ func TestTokenAuthEnforced(t *testing.T) {
 	defer r2.Body.Close()
 	if r2.StatusCode != http.StatusOK {
 		t.Fatalf("with token = %d, want 200", r2.StatusCode)
-	}
-}
-
-func TestStartSessionUsesDaemonLaunch(t *testing.T) {
-	var gotName, gotBasedir string
-	ts := newTestServer(t, config.WebAppConfig{}, Deps{
-		StartRemoteSession: func(_ context.Context, name, basedir string) (string, string, error) {
-			gotName = name
-			gotBasedir = basedir
-			return "chat-demo", "uuid-demo", nil
-		},
-	})
-	defer ts.Close()
-
-	resp, err := http.Post(ts.URL+"/api/sessions", "application/json", strings.NewReader(`{"name":"demo","basedir":"/tmp/demo"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("status = %d, want 202", resp.StatusCode)
-	}
-	if gotName != "demo" || gotBasedir != "/tmp/demo" {
-		t.Fatalf("launch args = (%q, %q)", gotName, gotBasedir)
-	}
-	var body startSessionResponse
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatal(err)
-	}
-	if body.Name != "chat-demo" {
-		t.Fatalf("name = %v, want chat-demo", body.Name)
-	}
-	if body.SessionID != "uuid-demo" {
-		t.Fatalf("session_id = %v, want uuid-demo", body.SessionID)
 	}
 }
 

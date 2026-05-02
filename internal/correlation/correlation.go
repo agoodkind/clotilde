@@ -198,6 +198,24 @@ func AttrsFromContext(ctx context.Context) []slog.Attr {
 	return FromContext(ctx).Attrs()
 }
 
+func AppendAttrs(attrs []slog.Attr, corr Context) []slog.Attr {
+	if len(attrs) == 0 {
+		return corr.Attrs()
+	}
+	seen := make(map[string]bool, len(attrs))
+	for _, attr := range attrs {
+		seen[attr.Key] = true
+	}
+	for _, attr := range corr.Attrs() {
+		if seen[attr.Key] {
+			continue
+		}
+		attrs = append(attrs, attr)
+		seen[attr.Key] = true
+	}
+	return attrs
+}
+
 func (c Context) SetHTTPHeaders(header http.Header) {
 	if header == nil {
 		return

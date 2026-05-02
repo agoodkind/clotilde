@@ -13,8 +13,18 @@ type ProviderSessionID struct {
 
 // Normalized returns a trimmed provider session id with default provider fallback.
 func (id ProviderSessionID) Normalized() ProviderSessionID {
+	return id.NormalizedForProvider(defaultProviderInfo.ID)
+}
+
+// NormalizedForProvider returns a trimmed provider session id, using fallback
+// when the id does not carry its own provider namespace.
+func (id ProviderSessionID) NormalizedForProvider(fallback ProviderID) ProviderSessionID {
+	provider := ProviderID(strings.TrimSpace(string(id.Provider)))
+	if provider == ProviderUnknown {
+		provider = NormalizeProviderID(fallback)
+	}
 	return ProviderSessionID{
-		Provider: NormalizeProviderID(id.Provider),
+		Provider: provider,
 		ID:       strings.TrimSpace(id.ID),
 	}
 }

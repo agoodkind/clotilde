@@ -1,6 +1,8 @@
 package slogger
 
 import (
+	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -8,6 +10,7 @@ import (
 	"testing"
 
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/correlation"
 )
 
 func TestSetupWritesConcernLogToHardCodedNestedTree(t *testing.T) {
@@ -111,6 +114,58 @@ func TestConcernLoggerResolvesDefaultAfterSetup(t *testing.T) {
 	assertLogContains(t, filepath.Join(root, "logs", "session", "domain", "resolve.jsonl"), "session.resolve.lazy_logger")
 }
 
+func TestSetupInjectsContextCorrelationAttrs(t *testing.T) {
+	root := t.TempDir()
+	unified := filepath.Join(root, "clyde-daemon.jsonl")
+	t.Setenv(envOverride, unified)
+
+	closer, err := Setup(config.LoggingConfig{
+		Level: "debug",
+		Rotation: config.LoggingRotation{
+			Enabled: new(false),
+		},
+	}, ProcessRoleDaemon)
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	t.Cleanup(func() { _ = closer.Close() })
+
+	corr := correlation.Context{
+		TraceID:              "0123456789abcdef0123456789abcdef",
+		SpanID:               "0123456789abcdef",
+		ParentSpanID:         "fedcba9876543210",
+		RequestID:            "req-ctx",
+		CursorRequestID:      "cursor-req",
+		CursorConversationID: "cursor-conv",
+	}
+	ctx := correlation.WithContext(context.Background(), corr)
+	slog.InfoContext(ctx, "daemon.rpc.started", "request_id", "explicit-req")
+	_ = closer.Close()
+
+	event := readSingleEvent(t, unified)
+	if event.Message != "daemon.rpc.started" {
+		t.Fatalf("message = %q", event.Message)
+	}
+	if event.RequestID != "explicit-req" {
+		t.Fatalf("request_id = %q, want explicit-req", event.RequestID)
+	}
+	if event.TraceID != string(corr.TraceID) {
+		t.Fatalf("trace_id = %q, want %q", event.TraceID, corr.TraceID)
+	}
+	if event.SpanID != string(corr.SpanID) {
+		t.Fatalf("span_id = %q, want %q", event.SpanID, corr.SpanID)
+	}
+	if event.ParentSpanID != string(corr.ParentSpanID) {
+		t.Fatalf("parent_span_id = %q, want %q", event.ParentSpanID, corr.ParentSpanID)
+	}
+	if event.CursorRequestID != corr.CursorRequestID {
+		t.Fatalf("cursor_request_id = %q, want %q", event.CursorRequestID, corr.CursorRequestID)
+	}
+	if event.CursorConversationID != corr.CursorConversationID {
+		t.Fatalf("cursor_conversation_id = %q, want %q", event.CursorConversationID, corr.CursorConversationID)
+	}
+}
+
 func TestConcernForEventCoversPrimaryTree(t *testing.T) {
 	cases := map[string]string{
 		"adapter.codex.transport.prepared": ConcernAdapterProviderCodexWS,
@@ -138,4 +193,28 @@ func assertLogContains(t *testing.T, path string, needle string) {
 	if !strings.Contains(string(content), needle) {
 		t.Fatalf("log %s missing %q: %s", path, needle, content)
 	}
+}
+
+type logEvent struct {
+	Message              string `json:"msg"`
+	TraceID              string `json:"trace_id"`
+	SpanID               string `json:"span_id"`
+	ParentSpanID         string `json:"parent_span_id"`
+	RequestID            string `json:"request_id"`
+	CursorRequestID      string `json:"cursor_request_id"`
+	CursorConversationID string `json:"cursor_conversation_id"`
+}
+
+func readSingleEvent(t *testing.T, path string) logEvent {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read log %s: %v", path, err)
+	}
+	line := strings.TrimSpace(string(content))
+	var event logEvent
+	if err := json.Unmarshal([]byte(line), &event); err != nil {
+		t.Fatalf("unmarshal log event: %v content=%s", err, content)
+	}
+	return event
 }

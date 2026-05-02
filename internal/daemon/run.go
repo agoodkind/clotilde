@@ -806,29 +806,6 @@ func startWebApp(log *slog.Logger, srv *Server, inherited net.Listener) (*webApp
 		return nil, nil
 	}
 	deps := webapp.Deps{
-		Bridges: func() []webapp.Bridge {
-			snap := srv.snapshotBridges()
-			out := make([]webapp.Bridge, 0, len(snap))
-			for _, b := range snap {
-				out = append(out, webapp.Bridge{
-					SessionID:       b.SessionId,
-					BridgeSessionID: b.BridgeSessionId,
-					URL:             b.Url,
-					PID:             b.Pid,
-				})
-			}
-			return out
-		},
-		StartRemoteSession: func(ctx context.Context, name, basedir string) (string, string, error) {
-			resp, err := srv.StartRemoteSession(ctx, &clydev1.StartRemoteSessionRequest{
-				SessionName: name,
-				Basedir:     basedir,
-			})
-			if err != nil {
-				return "", "", err
-			}
-			return resp.GetSessionName(), resp.GetSessionId(), nil
-		},
 		ListLiveSessions:  srv.listLiveSessionsForWebApp,
 		StartLiveSession:  srv.startLiveSessionForWebApp,
 		SendLiveSession:   srv.sendLiveSessionForWebApp,

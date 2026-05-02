@@ -1,9 +1,8 @@
 // Package webapp implements the optional remote dashboard mounted by
 // the clyde daemon. The dashboard renders a single HTML page for
-// provider-neutral live sessions, while keeping the legacy bridge list
-// endpoint available for Claude remote-control URLs. Authentication is
-// a static bearer token so the listener can sit behind a Cloudflare
-// tunnel without exposing a public surface unguarded.
+// provider-neutral live sessions. Authentication is a static bearer
+// token so the listener can sit behind a Cloudflare tunnel without
+// exposing a public surface unguarded.
 package webapp
 
 import (
@@ -31,21 +30,6 @@ const DefaultPort = 11435
 // DefaultHost is the loopback bind. The dashboard never binds a
 // public interface unless the user explicitly sets WebAppConfig.Host.
 const DefaultHost = "::1"
-
-// Bridge is the daemon side view of one active remote control
-// session. The webapp does not import the daemon protobuf, so the
-// caller adapts Bridge entries before passing them in.
-type Bridge struct {
-	SessionName     string
-	SessionID       string
-	BridgeSessionID string
-	URL             string
-	PID             int64
-}
-
-// BridgeSource returns the current set of active bridges. The daemon
-// supplies an implementation that snapshots its bridge map.
-type BridgeSource func() []Bridge
 
 // LiveSession is the daemon side view of one provider-neutral live
 // session that can be displayed and driven by the browser chat harness.
@@ -90,13 +74,11 @@ type SendLiveSessionRequest struct {
 
 // Deps wires the daemon helpers the webapp needs.
 type Deps struct {
-	Bridges            BridgeSource
-	StartRemoteSession func(ctx context.Context, name, basedir string) (sessionName, sessionID string, err error)
-	ListLiveSessions   func(ctx context.Context) ([]LiveSession, error)
-	StartLiveSession   func(ctx context.Context, req StartLiveSessionRequest) (LiveSession, error)
-	SendLiveSession    func(ctx context.Context, sessionID, text string) error
-	StreamLiveSession  func(ctx context.Context, sessionID string) (<-chan LiveSessionEvent, error)
-	StopLiveSession    func(ctx context.Context, sessionID string) error
+	ListLiveSessions  func(ctx context.Context) ([]LiveSession, error)
+	StartLiveSession  func(ctx context.Context, req StartLiveSessionRequest) (LiveSession, error)
+	SendLiveSession   func(ctx context.Context, sessionID, text string) error
+	StreamLiveSession func(ctx context.Context, sessionID string) (<-chan LiveSessionEvent, error)
+	StopLiveSession   func(ctx context.Context, sessionID string) error
 }
 
 // Server is the HTTP facade for the dashboard.
@@ -260,8 +242,6 @@ func (s *Server) closeTrackedConns(states ...http.ConnState) {
 func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.auth(s.handleIndex))
-	mux.HandleFunc("/api/bridges", s.auth(s.handleListBridges))
-	mux.HandleFunc("/api/sessions", s.auth(s.handleStartSession))
 	mux.HandleFunc("/api/live-sessions", s.auth(s.handleLiveSessions))
 	mux.HandleFunc("/api/live-sessions/", s.auth(s.handleLiveSessionByID))
 	mux.HandleFunc("/healthz", s.handleHealth)
@@ -279,14 +259,6 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(indexHTML))
-}
-
-func (s *Server) handleListBridges(w http.ResponseWriter, r *http.Request) {
-	if s.deps.Bridges == nil {
-		writeJSON(w, http.StatusOK, []Bridge{})
-		return
-	}
-	writeJSON(w, http.StatusOK, s.deps.Bridges())
 }
 
 func (s *Server) handleLiveSessions(w http.ResponseWriter, r *http.Request) {
@@ -430,41 +402,6 @@ func (s *Server) handleStopLiveSession(w http.ResponseWriter, r *http.Request, s
 	writeJSON(w, http.StatusAccepted, stopLiveSessionResponse{Stopped: true})
 }
 
-type startSessionRequest struct {
-	Name    string `json:"name"`
-	Basedir string `json:"basedir"`
-	Model   string `json:"model"`
-	Effort  string `json:"effort"`
-}
-
-func (s *Server) handleStartSession(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var body startSessionRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	if s.deps.StartRemoteSession == nil {
-		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "remote launch unavailable"})
-		return
-	}
-	sessionName, sessionID, err := s.deps.StartRemoteSession(r.Context(), body.Name, body.Basedir)
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, errorResponse{Error: err.Error()})
-		return
-	}
-	s.rememberStarting(sessionName, "daemon StartRemoteSession", "spawned, waiting for bridge URL to appear")
-	writeJSON(w, http.StatusAccepted, startSessionResponse{
-		Name:      sessionName,
-		SessionID: sessionID,
-		Cmd:       "daemon StartRemoteSession",
-		Note:      "session is starting; refresh /api/bridges in a few seconds",
-	})
-}
-
 func (s *Server) rememberStarting(name, cmd, note string) {
 	s.mu.Lock()
 	s.starting = append(s.starting, startedSession{
@@ -538,22 +475,14 @@ type stopLiveSessionResponse struct {
 	Stopped bool `json:"stopped"`
 }
 
-type startSessionResponse struct {
-	Name      string `json:"name"`
-	SessionID string `json:"session_id"`
-	Cmd       string `json:"cmd"`
-	Note      string `json:"note"`
-}
-
-func writeJSON[T healthResponse | errorResponse | liveSessionsResponse | startLiveSessionResponse | sendLiveSessionResponse | stopLiveSessionResponse | startSessionResponse | []Bridge](w http.ResponseWriter, code int, v T) {
+func writeJSON[T healthResponse | errorResponse | liveSessionsResponse | startLiveSessionResponse | sendLiveSessionResponse | stopLiveSessionResponse](w http.ResponseWriter, code int, v T) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
 }
 
 // indexHTML is the dashboard's single page. It renders a list of
-// live sessions and a form for spawning a provider-neutral chat. The
-// legacy active bridge table remains visible for Claude bridge URLs.
+// live sessions and a form for spawning a provider-neutral chat.
 const indexHTML = `<!doctype html>
 <html><head><meta charset="utf-8"><title>clyde remote</title>
 <style>
@@ -614,20 +543,14 @@ button:hover{background:#5fa0ff;}
   </form>
 </div>
 
-<h2>Active bridges</h2>
-<table id="bridges"><thead>
-<tr><th>session</th><th>URL</th><th>pid</th></tr>
-</thead><tbody><tr><td colspan="3" class="empty">loading...</td></tr></tbody></table>
-
 <script>
 const pending = []; // {name, startedAt, attempts, cmd}
-let lastBridges = [];
 let lastLive = [];
 let activeSession = '';
 let source = null;
 
 async function refresh(){
-  await Promise.all([refreshLive(), refreshBridges()]);
+  await refreshLive();
   renderPending();
 }
 
@@ -643,33 +566,18 @@ async function refreshLive(){
       tb.innerHTML = lastLive.map(s=>` + "`" + `<tr><td>${escape(s.session_name||s.session_id)}</td><td>${escape(s.provider)}</td><td>${escape(s.status)}</td><td><button data-open="${escape(s.session_id)}">Open</button></td></tr>` + "`" + `).join('');
       tb.querySelectorAll('button[data-open]').forEach(btn=>btn.addEventListener('click',()=>openChat(btn.dataset.open)));
     }
+    settlePending();
   }catch(e){
     document.querySelector('#live tbody').innerHTML = '<tr><td colspan="4" class="empty">error: '+e+'</td></tr>';
   }
 }
 
-async function refreshBridges(){
-  try{
-    const r = await fetch('/api/bridges');
-    if(!r.ok){throw new Error(r.status);}
-    lastBridges = await r.json();
-    const tb = document.querySelector('#bridges tbody');
-    if(!lastBridges.length){tb.innerHTML='<tr><td colspan="3" class="empty">no active bridges</td></tr>';}
-    else{
-      tb.innerHTML = lastBridges.map(b=>` + "`" + `<tr><td>${escape(b.SessionName)}</td><td><a href="${escape(b.URL)}" target="_blank">${escape(b.URL)}</a></td><td>${b.PID}</td></tr>` + "`" + `).join('');
-    }
-  }catch(e){
-    document.querySelector('#bridges tbody').innerHTML = '<tr><td colspan="3" class="empty">error: '+e+'</td></tr>';
-  }
-  // Mark pending entries that now have either a generic live session
-  // or a legacy bridge.
+function settlePending(){
   for(let i=pending.length-1;i>=0;i--){
     const p = pending[i];
     p.attempts++;
     const matchedLive = lastLive.find(s=>s.session_name===p.name || s.session_id===p.sessionID);
-    const matchedBridge = lastBridges.find(b=>b.SessionName===p.name || (!p.name && b.PID && (Date.now()-p.startedAt) > 1000));
-    const matched = matchedLive || matchedBridge;
-    if(matched){pending.splice(i,1);}
+    if(matchedLive){pending.splice(i,1);}
   }
 }
 
@@ -734,9 +642,9 @@ document.getElementById('stopbtn').addEventListener('click', async ()=>{
   if(!r.ok){alert('Stop failed: '+await r.text());}
 });
 
-// Poll faster while sessions are pending so the bridge URL appears
-// quickly after spawn. Drop to a slower cadence once everything has
-// settled to keep idle CPU low.
+// Poll faster while sessions are pending so daemon live-session state
+// appears quickly after spawn. Drop to a slower cadence once
+// everything has settled to keep idle CPU low.
 function tickerInterval(){return pending.length? 1500 : 4000;}
 function loop(){refresh().then(()=>setTimeout(loop, tickerInterval()));}
 loop();

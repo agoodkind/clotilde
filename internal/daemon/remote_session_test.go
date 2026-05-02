@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -166,5 +167,96 @@ func TestStartRemoteSessionHonorsIncognito(t *testing.T) {
 	}
 	if !sess.Metadata.IsIncognito {
 		t.Fatalf("incognito flag not persisted")
+	}
+}
+
+func TestStartRemoteSessionLaunchesWorkerWithSessionAndBasedir(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "data"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(tmp, "run"))
+
+	argsFile := filepath.Join(tmp, "worker-args.txt")
+	pwdFile := filepath.Join(tmp, "worker-pwd.txt")
+	script := filepath.Join(tmp, "fake-worker.sh")
+	scriptBody := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argsFile + "\npwd > " + pwdFile + "\nsleep 1\n"
+	if err := os.WriteFile(script, []byte(scriptBody), 0o755); err != nil {
+		t.Fatalf("write fake worker: %v", err)
+	}
+	oldExec := remoteWorkerExecutable
+	remoteWorkerExecutable = func() (string, error) { return script, nil }
+	defer func() { remoteWorkerExecutable = oldExec }()
+
+	srv, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Close()
+
+	basedir := filepath.Join(tmp, "workspace")
+	if err := os.MkdirAll(basedir, 0o755); err != nil {
+		t.Fatalf("mkdir basedir: %v", err)
+	}
+	resp, err := srv.StartRemoteSession(context.Background(), &clydev1.StartRemoteSessionRequest{
+		SessionName: "chat-worker",
+		Basedir:     basedir,
+		Incognito:   true,
+	})
+	if err != nil {
+		t.Fatalf("start remote session: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(argsFile); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	argsBytes, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("read worker args: %v", err)
+	}
+	args := strings.Split(strings.TrimSpace(string(argsBytes)), "\n")
+	wantArgs := []string{
+		"daemon",
+		"launch-remote-worker",
+		"--session-name",
+		"chat-worker",
+		"--session-id",
+		resp.GetSessionId(),
+		"--basedir",
+		basedir,
+		"--incognito",
+	}
+	if strings.Join(args, "\x00") != strings.Join(wantArgs, "\x00") {
+		t.Fatalf("worker args = %#v want %#v", args, wantArgs)
+	}
+	pwdBytes, err := os.ReadFile(pwdFile)
+	if err != nil {
+		t.Fatalf("read worker pwd: %v", err)
+	}
+	if got := strings.TrimSpace(string(pwdBytes)); got != basedir {
+		t.Fatalf("worker pwd = %q want %q", got, basedir)
+	}
+}
+
+func TestDetectRemoteWorkerTmuxStateIsExplicit(t *testing.T) {
+	t.Setenv("TMUX", "")
+	if got := detectRemoteWorkerTmuxState(); got.Detected || got.Status != "not_detected" {
+		t.Fatalf("tmux state without env = %#v", got)
+	}
+	t.Setenv("TMUX", "/tmp/tmux-501/default,123,0")
+	got := detectRemoteWorkerTmuxState()
+	if !got.Detected {
+		t.Fatalf("tmux detected = false, want true")
+	}
+	if got.Status != "unsupported" {
+		t.Fatalf("tmux status = %q want unsupported", got.Status)
+	}
+	if got.Reason == "" {
+		t.Fatalf("tmux unsupported reason is empty")
 	}
 }

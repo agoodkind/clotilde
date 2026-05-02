@@ -290,6 +290,87 @@ func TestHandleChatLogsIngressBeforeParse(t *testing.T) {
 	}
 }
 
+func TestHandleChatLogsCorrelationFieldsAtBoundaries(t *testing.T) {
+	t.Parallel()
+	srv, buf := newLoggingServer(t, config.LoggingConfig{
+		Body: config.LoggingBody{
+			Mode:  "summary",
+			MaxKB: 32,
+		},
+	}, func(cfg *config.AdapterConfig) {
+		cfg.Codex.Enabled = true
+		cfg.Codex.ModelPrefixes = []string{"gpt-"}
+	})
+
+	payload, err := json.Marshal(map[string]any{
+		"model": "gpt-5.4",
+		"metadata": map[string]string{
+			"cursorRequestId":      "cursor-meta-req",
+			"cursorConversationId": "cursor-meta-conv",
+			"cursorGenerationId":   "cursor-meta-gen",
+		},
+		"messages": []map[string]string{{"role": "user", "content": "ping"}},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Clyde-Request-Id", "clyde-req-1")
+	req.Header.Set("X-Clyde-Trace-Id", "0123456789abcdef0123456789abcdef")
+	req.Header.Set("X-Clyde-Span-Id", "0123456789abcdef")
+	req.Header.Set("X-Cursor-Request-Id", "cursor-header-req")
+	req.Header.Set("X-Cursor-Conversation-Id", "cursor-header-conv")
+	resp := httptest.NewRecorder()
+	srv.mux.ServeHTTP(resp, req)
+
+	ingress := findLogEvent(t, buf, "adapter.chat.ingress")
+	if ingress == nil {
+		t.Fatalf("expected adapter.chat.ingress event")
+	}
+	assertCorrelationEvent(t, ingress, "clyde-req-1", "0123456789abcdef0123456789abcdef", "0123456789abcdef")
+	if ingress["cursor_request_id"] != "cursor-header-req" {
+		t.Fatalf("ingress cursor_request_id=%v", ingress["cursor_request_id"])
+	}
+
+	rawEvt := findLogEvent(t, buf, "adapter.chat.raw")
+	if rawEvt == nil {
+		t.Fatalf("expected adapter.chat.raw event")
+	}
+	assertCorrelationEvent(t, rawEvt, "clyde-req-1", "0123456789abcdef0123456789abcdef", "0123456789abcdef")
+
+	received := findLogEvent(t, buf, "adapter.chat.received")
+	if received == nil {
+		t.Fatalf("expected adapter.chat.received event")
+	}
+	assertCorrelationEvent(t, received, "clyde-req-1", "0123456789abcdef0123456789abcdef", "0123456789abcdef")
+	if received["cursor_request_id"] != "cursor-meta-req" {
+		t.Fatalf("received cursor_request_id=%v", received["cursor_request_id"])
+	}
+	if received["cursor_conversation_id"] != "cursor-meta-conv" {
+		t.Fatalf("received cursor_conversation_id=%v", received["cursor_conversation_id"])
+	}
+	if received["cursor_generation_id"] != "cursor-meta-gen" {
+		t.Fatalf("received cursor_generation_id=%v", received["cursor_generation_id"])
+	}
+}
+
+func assertCorrelationEvent(t *testing.T, evt map[string]any, requestID, traceID, parentSpanID string) {
+	t.Helper()
+	if evt["request_id"] != requestID {
+		t.Fatalf("request_id=%v want %s", evt["request_id"], requestID)
+	}
+	if evt["trace_id"] != traceID {
+		t.Fatalf("trace_id=%v want %s", evt["trace_id"], traceID)
+	}
+	if evt["parent_span_id"] != parentSpanID {
+		t.Fatalf("parent_span_id=%v want %s", evt["parent_span_id"], parentSpanID)
+	}
+	if spanID, ok := evt["span_id"].(string); !ok || spanID == "" || spanID == parentSpanID {
+		t.Fatalf("span_id=%v should be non-empty child span", evt["span_id"])
+	}
+}
+
 func TestHandleChatAcceptsResponsesInputShape(t *testing.T) {
 	t.Parallel()
 	srv, _ := newLoggingServer(t, config.LoggingConfig{

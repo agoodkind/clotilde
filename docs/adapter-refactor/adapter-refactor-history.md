@@ -15,6 +15,7 @@ completed work.
 | `CLYDE-148` | Cancelled. Reconnect telemetry validation was superseded by the `adapter.codex.ws_session.*` and `adapter.codex.frame.sent` signals from `CLYDE-145`.                                                 |
 | `CLYDE-149` | Anthropic provider cleanup landed; root fallback and bridge paths are gone, and provider-owned dispatch handles collect and stream.                                                                   |
 | `CLYDE-156` | Malformed Cursor patch-hunk handling closed outside the active adapter plan.                                                                                                                          |
+| `CLYDE-165` | Daemon startup owns the MITM listener when `[mitm].enabled_default` is set; rolling XDG baselines refresh from accumulated captures with drift logged before baseline replacement.                    |
 
 ## Deleted Or Retired Adapter Paths
 
@@ -44,8 +45,8 @@ completed work.
 - Claude Code Snapshot v2 now belongs under the local XDG baseline store, not a
   repo path. Anthropic `wire_flavors_gen.go` still regenerates from a local
   baseline reference, and direct v2 diff is clean.
-- `CLYDE-165` now tracks the daemon-owned always-on MITM architecture: rolling
-  XDG baselines refreshed from accumulated captures, with drift logged before a
+- `CLYDE-165` closed the daemon-owned always-on MITM architecture: rolling XDG
+  baselines refresh from accumulated captures, with drift logged before a
   baseline is replaced.
 - Native Anthropic ingress now resolves Clyde aliases to upstream Claude model
   ids before dispatch. A live `/v1/messages` request reached real Anthropic

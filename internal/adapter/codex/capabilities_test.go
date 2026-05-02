@@ -9,29 +9,31 @@ import (
 
 func TestCapabilityReportForModelUsesObservedHTTPContextForCodexResponses(t *testing.T) {
 	report := CapabilityReportForModel(adaptermodel.ResolvedModel{
-		Alias:       "clyde-gpt-5.4-1m-high",
-		Backend:     adaptermodel.BackendCodex,
-		ClaudeModel: "gpt-5.4",
-		Context:     1000000,
+		Alias:           "clyde-test-codex-1m-high",
+		Backend:         adaptermodel.BackendCodex,
+		ClaudeModel:     "configured-codex-model",
+		Context:         1000000,
+		ObservedContext: 333000,
 	}, CapabilityMode{WebsocketEnabled: false})
 
 	if report.AdvertisedContextWindow != 1000000 {
 		t.Fatalf("advertised=%d want 1000000", report.AdvertisedContextWindow)
 	}
-	if report.ObservedContextWindow != 272000 {
-		t.Fatalf("observed=%d want 272000", report.ObservedContextWindow)
+	if report.ObservedContextWindow != 333000 {
+		t.Fatalf("observed=%d want 333000", report.ObservedContextWindow)
 	}
-	if report.EffectiveSafeWindow != 244800 {
-		t.Fatalf("effective=%d want 244800", report.EffectiveSafeWindow)
+	if report.EffectiveSafeWindow != 299700 {
+		t.Fatalf("effective=%d want 299700", report.EffectiveSafeWindow)
 	}
 }
 
 func TestCapabilityReportForModelPreservesAdvertisedContextWhenWebsocketEnabled(t *testing.T) {
 	report := CapabilityReportForModel(adaptermodel.ResolvedModel{
-		Alias:       "clyde-gpt-5.4-1m-high",
-		Backend:     adaptermodel.BackendCodex,
-		ClaudeModel: "gpt-5.4",
-		Context:     1000000,
+		Alias:           "clyde-test-codex-1m-high",
+		Backend:         adaptermodel.BackendCodex,
+		ClaudeModel:     "configured-codex-model",
+		Context:         1000000,
+		ObservedContext: 333000,
 	}, CapabilityMode{WebsocketEnabled: true})
 
 	if report.ObservedContextWindow != 1000000 {

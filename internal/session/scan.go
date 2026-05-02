@@ -293,11 +293,10 @@ func buildKnownIdentitySet(store *FileStore) (map[string]string, error) {
 	}
 	out := make(map[string]string, len(all)*2)
 	for _, s := range all {
-		if s.Metadata.ProviderSessionID() != "" {
-			out[providerSessionKey(metadataProvider(s.Metadata), s.Metadata.ProviderSessionID())] = s.Name
-		}
-		for _, id := range s.Metadata.PreviousProviderSessionIDStrings() {
-			out[providerSessionKey(metadataProvider(s.Metadata), id)] = s.Name
+		for _, id := range HistoricalIdentities(s) {
+			if key := id.Key(); key != "" {
+				out[key] = s.Name
+			}
 		}
 	}
 	return out, nil
@@ -315,13 +314,13 @@ func buildExistingNameSet(store *FileStore) (map[string]bool, error) {
 	return out, nil
 }
 
-// uniqueAdoptedName generates a registry-safe name for an adopted
-// transcript. The base is a sanitized basename of the workspace root
-// joined with the first eight characters of the session UUID. Collisions
-// are resolved with the shared UniqueName helper.
+// uniqueAdoptedName generates a registry-safe name for an adopted provider
+// artifact. The base is a sanitized basename of the workspace root joined with
+// a short provider session id prefix. Collisions are resolved with the shared
+// UniqueName helper.
 func uniqueAdoptedName(r DiscoveryResult, taken map[string]bool) string {
 	base := workspaceBaseName(r.WorkspaceRoot)
-	short := safeShortUUID(r.ProviderSessionID())
+	short := safeShortProviderSessionID(r.ProviderSessionID())
 	return UniqueName(fmt.Sprintf("%s-%s", base, short), taken)
 }
 
@@ -348,7 +347,7 @@ func workspaceBaseName(root string) string {
 	return b.String()
 }
 
-func safeShortUUID(id string) string {
+func safeShortProviderSessionID(id string) string {
 	id = strings.TrimSpace(id)
 	if len(id) >= 8 {
 		return id[:8]
@@ -357,11 +356,7 @@ func safeShortUUID(id string) string {
 }
 
 func (r DiscoveryResult) ProviderIdentity() ProviderSessionID {
-	id := r.Identity.Normalized()
-	if id.Provider == "" {
-		id.Provider = NormalizeProviderID(r.Provider)
-	}
-	return id.Normalized()
+	return r.Identity.NormalizedForProvider(r.Provider)
 }
 
 func (r DiscoveryResult) ProviderSessionID() string {
@@ -373,10 +368,7 @@ func (r DiscoveryResult) ProviderSessionKey() string {
 }
 
 func (r DiscoveryResult) ParentProviderSessionKey() string {
-	parent := r.ForkParent.Normalized()
-	if parent.Provider == "" {
-		parent.Provider = NormalizeProviderID(r.Provider)
-	}
+	parent := r.ForkParent.NormalizedForProvider(r.Provider)
 	return parent.Key()
 }
 
@@ -385,12 +377,4 @@ func (r DiscoveryResult) PrimaryArtifactPath() string {
 		return r.Claude.TranscriptPath
 	}
 	return ""
-}
-
-func providerSessionKey(provider ProviderID, sessionID string) string {
-	return ProviderSessionID{Provider: provider, ID: sessionID}.Key()
-}
-
-func metadataProvider(md Metadata) ProviderID {
-	return md.ProviderID()
 }

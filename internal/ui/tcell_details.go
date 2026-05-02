@@ -33,20 +33,18 @@ type DetailsView struct {
 	LeftRect  Rect // last-drawn rect for the left pane, used for mouse hit-testing
 	RightRect Rect // last-drawn rect for the right pane
 
-	// LookupBridge returns the active claude --remote-control bridge
-	// for sess, if any. Set by the App so the details pane can
-	// surface the bridge URL without importing the daemon protobuf.
-	LookupBridge func(sess *session.Session) (Bridge, bool)
+	// LookupLiveURL returns the active daemon live URL for sess, if any.
+	// Claude currently sources that URL from its bridge backend; the
+	// details pane keeps the display provider-neutral.
+	LookupLiveURL func(sess *session.Session) (LiveURL, bool)
 }
 
-// formatBridge renders the Remote control row in the details left
-// column. Active bridges show their URL; inactive sessions show a
-// hint about how to enable.
-func (d *DetailsView) formatBridge(sess *session.Session) string {
-	if d.LookupBridge == nil {
+// formatLiveURL renders the live URL row in the details left column.
+func (d *DetailsView) formatLiveURL(sess *session.Session) string {
+	if d.LookupLiveURL == nil {
 		return "(daemon offline)"
 	}
-	b, ok := d.LookupBridge(sess)
+	b, ok := d.LookupLiveURL(sess)
 	if !ok {
 		return "off"
 	}
@@ -135,7 +133,7 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][
 
 	section("Identity")
 	kv("Model", detail.Model)
-	kv("Remote ctrl", d.formatBridge(sess))
+	kv("Live URL", d.formatLiveURL(sess))
 	kv("Basedir", shortPath(sess.Metadata.WorkspaceRoot))
 	if sess.Metadata.WorkDir != "" && sess.Metadata.WorkDir != sess.Metadata.WorkspaceRoot {
 		kv("Work dir", shortPath(sess.Metadata.WorkDir))

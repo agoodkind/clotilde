@@ -6,8 +6,8 @@
 // What lives here:
 //
 //   - RunDashboard / runPostSessionDashboard (the tcell TUI entrypoint)
-//   - TUI callbacks for delete, rename, resume, remote-control,
-//     bridges, send, tail, registry, summary, view, model extract
+//   - TUI callbacks for delete, rename, resume, live sessions,
+//     registry, summary, view, model extract
 //   - NewResumeCmd (the `clyde resume <name|uuid>` verb)
 //   - ClassifyArgs and ForwardToClaude (passthrough routing)
 //   - resumeSession / deleteSession helpers shared by the TUI and the
@@ -37,8 +37,7 @@ import (
 
 // RunDashboard is the entrypoint for `clyde` with no subcommand. It
 // boots the tcell TUI dashboard for managing existing sessions
-// (resume, delete, rename, view, remote-control toggle, send-to,
-// tail-transcript). New sessions from the TUI launch `claude` with
+// (resume, delete, rename, view, live sessions). New sessions from the TUI launch `claude` with
 // CLYDE_SESSION_NAME set; the SessionStart hook adopts the row.
 func RunDashboard(cmd *cobra.Command, args []string) int {
 	// Non-interactive (piped) invocation: forward to real claude.
@@ -211,13 +210,6 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 				return err
 			}
 			return startNewSessionInDir(basedir, store, dashboardLaunchCWD, false)
-		},
-		StartSessionWithBasedirRC: func(basedir string, enableRC bool) error {
-			store, err := openStore()
-			if err != nil {
-				return err
-			}
-			return startNewSessionInDir(basedir, store, dashboardLaunchCWD, enableRC)
 		},
 		StartLiveSession: func(req ui.LiveSessionStartRequest) (ui.LiveSession, error) {
 			resp, err := daemon.StartLiveSessionViaDaemon(context.Background(), &clydev1.StartLiveSessionRequest{
@@ -397,23 +389,6 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			}()
 			return out, cancel, nil
 		},
-		SetRemoteControl: func(sess *session.Session, enabled bool) error {
-			if sess == nil || sess.Name == "" {
-				return fmt.Errorf("nil session")
-			}
-			outcome, err := daemon.UpdateSessionRemoteControlViaDaemonOutcome(context.Background(), sess.Name, enabled)
-			if outcome != daemon.LifecycleOutcomeReady {
-				return daemonLifecycleError("update_session_remote_control", outcome, err)
-			}
-			return nil
-		},
-		SetGlobalRemoteControl: func(enabled bool) error {
-			outcome, err := daemon.UpdateGlobalRemoteControlViaDaemonOutcome(context.Background(), enabled)
-			if outcome != daemon.LifecycleOutcomeReady {
-				return daemonLifecycleError("update_global_remote_control", outcome, err)
-			}
-			return nil
-		},
 		LoadConfigControls: func() ([]ui.ConfigControl, error) {
 			raw, err := daemon.ListConfigControlsViaDaemon(context.Background())
 			if err != nil {
@@ -424,22 +399,6 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 		UpdateConfigControl: func(key, value string) error {
 			_, err := daemon.UpdateConfigControlViaDaemon(context.Background(), key, value)
 			return err
-		},
-		ListBridges: func() ([]ui.Bridge, error) {
-			raw, err := daemon.ListBridgesViaDaemon(context.Background())
-			if err != nil {
-				return nil, err
-			}
-			out := make([]ui.Bridge, 0, len(raw))
-			for _, b := range raw {
-				out = append(out, ui.Bridge{
-					SessionID:       b.GetSessionId(),
-					PID:             b.GetPid(),
-					BridgeSessionID: b.GetBridgeSessionId(),
-					URL:             b.GetUrl(),
-				})
-			}
-			return out, nil
 		},
 		SendLiveSession: func(sessionID, text string) error {
 			ok, err := daemon.SendLiveSessionViaDaemon(context.Background(), sessionID, text)
@@ -629,28 +588,25 @@ func compactEventFromProto(ev *clydev1.CompactEvent) ui.CompactEvent {
 
 func sessionSnapshotFromProto(resp *clydev1.ListSessionsResponse) ui.SessionSnapshot {
 	out := ui.SessionSnapshot{
-		Sessions:            make([]*session.Session, 0, len(resp.GetSessions())),
-		Models:              make(map[string]string, len(resp.GetSessions())),
-		RemoteControl:       make(map[string]bool, len(resp.GetSessions())),
-		MessageCounts:       make(map[string]int, len(resp.GetSessions())),
-		ContextStates:       make(map[string]ui.SessionContextState, len(resp.GetSessions())),
-		GlobalRemoteControl: resp.GetGlobalRemoteControl(),
+		Sessions:      make([]*session.Session, 0, len(resp.GetSessions())),
+		Models:        make(map[string]string, len(resp.GetSessions())),
+		MessageCounts: make(map[string]int, len(resp.GetSessions())),
+		ContextStates: make(map[string]ui.SessionContextState, len(resp.GetSessions())),
 	}
 	for _, raw := range resp.GetSessions() {
-		sess, model, remoteControl, messageCount, contextState, bridge := sessionSummaryFromProto(raw)
+		sess, model, messageCount, contextState, bridge := sessionSummaryFromProto(raw)
 		out.Sessions = append(out.Sessions, sess)
 		out.Models[sess.Name] = model
-		out.RemoteControl[sess.Name] = remoteControl
 		out.MessageCounts[sess.Name] = messageCount
 		out.ContextStates[sess.Name] = contextState
 		if bridge != nil {
-			out.Bridges = append(out.Bridges, *bridge)
+			out.LiveURLs = append(out.LiveURLs, *bridge)
 		}
 	}
 	return out
 }
 
-func sessionSummaryFromProto(raw *clydev1.SessionSummary) (*session.Session, string, bool, int, ui.SessionContextState, *ui.Bridge) {
+func sessionSummaryFromProto(raw *clydev1.SessionSummary) (*session.Session, string, int, ui.SessionContextState, *ui.LiveURL) {
 	sess := &session.Session{
 		Name: raw.GetName(),
 		Metadata: session.Metadata{
@@ -685,42 +641,39 @@ func sessionSummaryFromProto(raw *clydev1.SessionSummary) (*session.Session, str
 		Status: raw.GetContextUsageStatus(),
 	}
 
-	var bridge *ui.Bridge
-	if b := raw.GetBridge(); b != nil {
-		bridge = &ui.Bridge{
-			SessionID:       b.GetSessionId(),
-			PID:             b.GetPid(),
-			BridgeSessionID: b.GetBridgeSessionId(),
-			URL:             b.GetUrl(),
+	var liveURL *ui.LiveURL
+	if live := raw.GetRuntime().GetLive(); live != nil && live.GetBridgeUrl() != "" {
+		liveURL = &ui.LiveURL{
+			SessionID: live.GetCurrent().GetSessionId(),
+			URL:       live.GetBridgeUrl(),
+		}
+	} else if b := raw.GetBridge(); b != nil {
+		liveURL = &ui.LiveURL{
+			SessionID: b.GetSessionId(),
+			URL:       b.GetUrl(),
 		}
 	}
-	return sess, raw.GetModel(), raw.GetRemoteControl(), int(raw.GetMessageCount()), contextState, bridge
+	return sess, raw.GetModel(), int(raw.GetMessageCount()), contextState, liveURL
 }
 
 func sessionEventFromProto(ev *clydev1.SubscribeRegistryResponse) ui.SessionEvent {
 	out := ui.SessionEvent{
-		Kind:            strings.TrimPrefix(ev.GetKind().String(), "KIND_"),
-		SessionName:     ev.GetSessionName(),
-		SessionID:       ev.GetSessionId(),
-		OldName:         ev.GetOldName(),
-		BridgeSessionID: ev.GetBridgeSessionId(),
-		BridgeURL:       ev.GetBridgeUrl(),
-		BinaryPath:      ev.GetBinaryPath(),
-		BinaryReason:    ev.GetBinaryReason(),
-		BinaryHash:      ev.GetBinaryHash(),
+		Kind:         strings.TrimPrefix(ev.GetKind().String(), "KIND_"),
+		SessionName:  ev.GetSessionName(),
+		SessionID:    ev.GetSessionId(),
+		OldName:      ev.GetOldName(),
+		LiveURL:      ev.GetBridgeUrl(),
+		BinaryPath:   ev.GetBinaryPath(),
+		BinaryReason: ev.GetBinaryReason(),
+		BinaryHash:   ev.GetBinaryHash(),
 	}
 	if raw := ev.GetSessionSummary(); raw != nil {
-		sess, model, remoteControl, messageCount, contextState, bridge := sessionSummaryFromProto(raw)
+		sess, model, messageCount, contextState, bridge := sessionSummaryFromProto(raw)
 		out.Session = sess
 		out.Model = model
-		out.RemoteControl = remoteControl
 		out.MessageCount = messageCount
 		out.ContextState = &contextState
-		out.Bridge = bridge
-	}
-	if ev.GetKind() == clydev1.SubscribeRegistryResponse_KIND_GLOBAL_SETTINGS_UPDATED {
-		globalRC := ev.GetGlobalRemoteControl()
-		out.GlobalRemoteControl = &globalRC
+		out.LiveURLRecord = bridge
 	}
 	return out
 }

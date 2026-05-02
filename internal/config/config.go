@@ -251,8 +251,18 @@ type AdapterCodexModel struct {
 }
 
 type AdapterCodexModelContext struct {
-	Tokens      int    `json:"tokens,omitempty" toml:"tokens,omitempty"`
-	AliasSuffix string `json:"aliasSuffix,omitempty" toml:"alias_suffix,omitempty"`
+	Tokens int `json:"tokens,omitempty" toml:"tokens,omitempty"`
+	// ObservedTokens is the context window the Codex Responses HTTP
+	// transport has actually accepted for this advertised variant.
+	// When zero, Clyde treats the observed window as equal to Tokens.
+	ObservedTokens int    `json:"observedTokens,omitempty" toml:"observed_tokens,omitempty"`
+	AliasSuffix    string `json:"aliasSuffix,omitempty" toml:"alias_suffix,omitempty"`
+	// NativeAliases are OpenAI/Codex-looking ids that should resolve to
+	// this context when [adapter.codex].native_model_routing is "codex".
+	NativeAliases []string `json:"nativeAliases,omitempty" toml:"native_aliases,omitempty"`
+	// AdvertisedNativeAliases is the subset of native aliases Clyde should
+	// include in /v1/models. Aliases listed here also resolve natively.
+	AdvertisedNativeAliases []string `json:"advertisedNativeAliases,omitempty" toml:"advertised_native_aliases,omitempty"`
 }
 
 // AdapterLogprobs picks the per-backend behavior. Each value is
@@ -450,10 +460,14 @@ type AdapterModelContext struct {
 // reasoning effort tiers for this model. The first entry is the
 // default when the request does not specify one.
 type AdapterModel struct {
-	Backend string   `json:"backend,omitempty" toml:"backend,omitempty"`
-	Model   string   `json:"model,omitempty" toml:"model,omitempty"`
-	Context int      `json:"context,omitempty" toml:"context,omitempty"`
-	Efforts []string `json:"efforts,omitempty" toml:"efforts,omitempty"`
+	Backend string `json:"backend,omitempty" toml:"backend,omitempty"`
+	Model   string `json:"model,omitempty" toml:"model,omitempty"`
+	Context int    `json:"context,omitempty" toml:"context,omitempty"`
+	// ObservedContext is the provider-specific context window Clyde
+	// should surface for capability reports when it differs from the
+	// advertised context. Zero means use Context.
+	ObservedContext int      `json:"observedContext,omitempty" toml:"observed_context,omitempty"`
+	Efforts         []string `json:"efforts,omitempty" toml:"efforts,omitempty"`
 	// Shunt names an entry in AdapterConfig.Shunts for backend "shunt".
 	Shunt string `json:"shunt,omitempty" toml:"shunt,omitempty"`
 }

@@ -153,12 +153,13 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	discoveryAttrs = append(discoveryAttrs, corr.Attrs()...)
 	slogger.WithConcern(s.log, slogger.ConcernAdapterChatDiscovery).LogAttrs(ctx, slog.LevelInfo, "adapter.chat.discovery", discoveryAttrs...)
 	rawAttrs := rawChatLogEvent{
-		RequestID:  reqID,
-		Method:     r.Method,
-		Path:       r.URL.Path,
-		RemoteAddr: r.RemoteAddr,
-		Headers:    redactedHeaders(r.Header),
-		BodyBytes:  bodyBytes,
+		RequestID:   reqID,
+		Method:      r.Method,
+		Path:        r.URL.Path,
+		RemoteAddr:  r.RemoteAddr,
+		Headers:     redactedHeaders(r.Header),
+		BodyBytes:   bodyBytes,
+		Correlation: corr,
 	}
 	var req ChatRequest
 	parseErr := json.Unmarshal(body, &req)
@@ -195,44 +196,54 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	if parseErr != nil {
 		slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(r.Context(), slog.LevelWarn, "adapter.chat.parse_failed",
-			slog.String("request_id", reqID),
-			slog.String("err", parseErr.Error()),
-			slog.Int("body_bytes", bodyBytes),
+			correlation.AppendAttrs([]slog.Attr{
+				slog.String("request_id", reqID),
+				slog.String("err", parseErr.Error()),
+				slog.Int("body_bytes", bodyBytes),
+			}, corr)...,
 		)
 		s.respondAdapterError(w, r, adapterErrInvalidJSON("invalid JSON: "+parseErr.Error(), parseErr))
 		return
 	}
 	if n := CountNormalizedTools(req, body); n > 0 {
 		slogger.WithConcern(s.log, slogger.ConcernAdapterChatDiscovery).LogAttrs(r.Context(), slog.LevelInfo, "adapter.tools.normalized",
-			slog.String("request_id", reqID),
-			slog.String("from_shape", "anthropic_native"),
-			slog.Int("count", n),
+			correlation.AppendAttrs([]slog.Attr{
+				slog.String("request_id", reqID),
+				slog.String("from_shape", "anthropic_native"),
+				slog.Int("count", n),
+			}, corr)...,
 		)
 	}
 	if len(req.Messages) == 0 && len(req.Input) > 0 {
 		count, nerr := parseMessagesFromInput(&req)
 		if nerr != nil {
 			slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(r.Context(), slog.LevelWarn, "adapter.messages.normalize_failed",
-				slog.String("request_id", reqID),
-				slog.String("model", req.Model),
-				slog.String("err", nerr.Error()),
+				correlation.AppendAttrs([]slog.Attr{
+					slog.String("request_id", reqID),
+					slog.String("model", req.Model),
+					slog.String("err", nerr.Error()),
+				}, corr)...,
 			)
 			s.respondAdapterError(w, r, adapterErrInvalidRequest(nerr.Error(), nerr))
 			return
 		}
 		if count > 0 {
 			slogger.WithConcern(s.log, slogger.ConcernAdapterChatDiscovery).LogAttrs(r.Context(), slog.LevelInfo, "adapter.messages.normalized",
-				slog.String("request_id", reqID),
-				slog.String("from_shape", "responses_input"),
-				slog.Int("count", count),
+				correlation.AppendAttrs([]slog.Attr{
+					slog.String("request_id", reqID),
+					slog.String("from_shape", "responses_input"),
+					slog.Int("count", count),
+				}, corr)...,
 			)
 		}
 	}
 	if len(req.Messages) == 0 {
 		slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(r.Context(), slog.LevelWarn, "adapter.chat.validation_failed",
-			slog.String("request_id", reqID),
-			slog.String("model", req.Model),
-			slog.String("reason", "messages_required"),
+			correlation.AppendAttrs([]slog.Attr{
+				slog.String("request_id", reqID),
+				slog.String("model", req.Model),
+				slog.String("reason", "messages_required"),
+			}, corr)...,
 		)
 		s.respondAdapterError(w, r, adapterErrInvalidRequest("messages is required", nil))
 		return

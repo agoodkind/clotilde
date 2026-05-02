@@ -674,35 +674,6 @@ func (c *Client) UpdateContext(sessionName, workspaceRoot string, messages []str
 	return err
 }
 
-// UpdateSessionRemoteControlViaDaemonOutcome updates one session setting and
-// returns the normalized daemon lifecycle outcome.
-func UpdateSessionRemoteControlViaDaemonOutcome(ctx context.Context, name string, enabled bool) (LifecycleOutcome, error) {
-	log := daemonClientLog(ctx)
-	log.DebugContext(ctx, "daemon.client.update_session_remote_control.begin",
-		"name", name,
-		"enabled", enabled,
-	)
-	c, err := ConnectOrStart(ctx)
-	if err != nil {
-		log.DebugContext(ctx, "daemon.client.update_session_remote_control.connect_failed", "err", err)
-		return LifecycleOutcomeDegradedOffline, err
-	}
-	defer func() { _ = c.conn.Close() }()
-	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	_, err = c.rpc.UpdateSessionSettings(rpcCtx, &clydev1.UpdateSessionSettingsRequest{
-		Name:       name,
-		Settings:   &clydev1.Settings{RemoteControl: enabled},
-		UpdateMask: []string{"remote_control"},
-	})
-	if err != nil {
-		log.DebugContext(rpcCtx, "daemon.client.update_session_remote_control.rpc_failed", "err", err)
-		return lifecycleOutcomeForError(err), err
-	}
-	log.DebugContext(rpcCtx, "daemon.client.update_session_remote_control.ok")
-	return LifecycleOutcomeReady, nil
-}
-
 // UpdateSessionWorkspaceRootViaDaemonOutcome updates a session's metadata
 // workspace root through the daemon.
 func UpdateSessionWorkspaceRootViaDaemonOutcome(ctx context.Context, name, workspaceRoot string) (LifecycleOutcome, error) {
@@ -728,31 +699,6 @@ func UpdateSessionWorkspaceRootViaDaemonOutcome(ctx context.Context, name, works
 		return lifecycleOutcomeForError(err), err
 	}
 	log.DebugContext(rpcCtx, "daemon.client.update_session_workspace_root.ok")
-	return LifecycleOutcomeReady, nil
-}
-
-// UpdateGlobalRemoteControlViaDaemonOutcome updates the global default and
-// returns the normalized daemon lifecycle outcome.
-func UpdateGlobalRemoteControlViaDaemonOutcome(ctx context.Context, enabled bool) (LifecycleOutcome, error) {
-	log := daemonClientLog(ctx)
-	log.DebugContext(ctx, "daemon.client.update_global_remote_control.begin", "enabled", enabled)
-	c, err := ConnectOrStart(ctx)
-	if err != nil {
-		log.DebugContext(ctx, "daemon.client.update_global_remote_control.connect_failed", "err", err)
-		return LifecycleOutcomeDegradedOffline, err
-	}
-	defer func() { _ = c.conn.Close() }()
-	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	_, err = c.rpc.UpdateGlobalSettings(rpcCtx, &clydev1.UpdateGlobalSettingsRequest{
-		Defaults:   &clydev1.GlobalDefaults{RemoteControl: enabled},
-		UpdateMask: []string{"remote_control"},
-	})
-	if err != nil {
-		log.DebugContext(rpcCtx, "daemon.client.update_global_remote_control.rpc_failed", "err", err)
-		return lifecycleOutcomeForError(err), err
-	}
-	log.DebugContext(rpcCtx, "daemon.client.update_global_remote_control.ok")
 	return LifecycleOutcomeReady, nil
 }
 
@@ -830,27 +776,6 @@ func lifecycleErrorLooksOffline(err error) bool {
 		}
 	}
 	return false
-}
-
-// ListBridgesViaDaemon fetches the daemon's current bridge map.
-func ListBridgesViaDaemon(ctx context.Context) ([]*clydev1.Bridge, error) {
-	log := daemonClientLog(ctx)
-	log.DebugContext(ctx, "daemon.client.list_bridges.begin")
-	c, err := ConnectOrStart(ctx)
-	if err != nil {
-		log.DebugContext(ctx, "daemon.client.list_bridges.connect_failed", "err", err)
-		return nil, err
-	}
-	defer func() { _ = c.conn.Close() }()
-	rpcCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	resp, err := c.rpc.ListBridges(rpcCtx, &clydev1.ListBridgesRequest{})
-	if err != nil {
-		log.DebugContext(rpcCtx, "daemon.client.list_bridges.rpc_failed", "err", err)
-		return nil, err
-	}
-	log.DebugContext(rpcCtx, "daemon.client.list_bridges.ok", "count", len(resp.Bridges))
-	return resp.Bridges, nil
 }
 
 // StartLiveSessionViaDaemon asks the daemon to start a provider-neutral live

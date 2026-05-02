@@ -29,10 +29,9 @@ type StatusBarWidget struct {
 	// LegendOverride lets overlays/panels supply a context-specific
 	// legend while reusing the same fixed status bar location.
 	LegendOverride []LegendAction
-	// BridgeCount surfaces the number of active claude --remote-control
-	// sessions. Rendered as a small RC×N badge on the right edge so
-	// the user always sees how many of their sessions are exposed.
-	BridgeCount int
+	// LiveURLCount surfaces the number of active live URLs. Claude
+	// currently reports these through its bridge backend.
+	LiveURLCount int
 	// DaemonOnline indicates whether the daemon subscription stream is
 	// currently healthy. When false the status bar shows an offline
 	// badge, but the rest of the TUI remains interactive.
@@ -367,9 +366,9 @@ func (s *StatusBarWidget) Draw(scr tcell.Screen, r Rect) {
 		}
 	}
 
-	// Right aligned bridge indicator. Sits to the left of daemon/position.
-	if s.BridgeCount > 0 {
-		txt := " RC×" + itoa(s.BridgeCount) + " "
+	// Right aligned live-session indicator. Sits to the left of daemon/position.
+	if s.LiveURLCount > 0 {
+		txt := " LIVE×" + itoa(s.LiveURLCount) + " "
 		bx := rightX - runeCount(txt)
 		if bx > x {
 			drawString(scr, bx, r.Y, badgeStyle(ColorSuccess), txt, rightX-bx)

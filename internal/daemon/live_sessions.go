@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -22,11 +23,20 @@ var newCodexLiveRuntime = codex.NewLiveRuntime
 
 func (s *Server) ListLiveSessions(context.Context, *clydev1.ListLiveSessionsRequest) (*clydev1.ListLiveSessionsResponse, error) {
 	s.remoteMu.Lock()
-	defer s.remoteMu.Unlock()
-	out := make([]*clydev1.LiveSession, 0, len(s.liveSessions))
+	out := make([]*clydev1.LiveSession, 0, len(s.liveSessions)+len(s.remoteWorkers))
+	seenClaude := make(map[string]bool, len(s.remoteWorkers))
 	for _, live := range s.liveSessions {
 		out = append(out, protoLiveSessionFromRecord(live))
 	}
+	for _, worker := range s.remoteWorkers {
+		if worker == nil {
+			continue
+		}
+		out = append(out, protoClaudeLiveSessionFromWorker(worker, "running", s.bridgeURLForSession(worker.sessionID)))
+		seenClaude[worker.sessionID] = true
+	}
+	s.remoteMu.Unlock()
+	out = append(out, s.discoverClaudeLiveSessions(seenClaude)...)
 	return &clydev1.ListLiveSessionsResponse{Sessions: out}, nil
 }
 
@@ -462,7 +472,7 @@ func (s *Server) suspendClaudeRemoteForForeground(lease *foregroundLease) error 
 	}
 	s.remoteMu.Unlock()
 	if worker == nil || worker.cmd == nil || worker.cmd.Process == nil {
-		return nil
+		return s.suspendClaudeRemoteByInjectSocket(lease)
 	}
 	if err := worker.cmd.Process.Signal(os.Interrupt); err != nil {
 		if killErr := worker.cmd.Process.Kill(); killErr != nil {
@@ -488,6 +498,37 @@ func (s *Server) suspendClaudeRemoteForForeground(lease *foregroundLease) error 
 	return nil
 }
 
+func (s *Server) suspendClaudeRemoteByInjectSocket(lease *foregroundLease) error {
+	if lease == nil || !injectSocketExists(lease.sessionID) {
+		return nil
+	}
+	lease.shouldRestore = true
+	lease.restoreReason = "claude_remote_socket"
+	if err := writeInjectSocket(lease.sessionID, []byte{0x03}); err != nil {
+		return status.Errorf(codes.FailedPrecondition, "suspend claude remote worker through inject socket: %v", err)
+	}
+	released := false
+	deadline := daemonNow().Add(2 * time.Second)
+	for daemonNow().Before(deadline) {
+		if !injectSocketExists(lease.sessionID) {
+			released = true
+			break
+		}
+		timer := time.NewTimer(25 * time.Millisecond)
+		<-timer.C
+	}
+	if released {
+		s.log.Info("daemon.foreground_session.claude_socket_suspended",
+			"component", "daemon",
+			"provider", session.ProviderClaude,
+			"session", lease.sessionName,
+			"session_id", lease.sessionID,
+		)
+		return nil
+	}
+	return status.Errorf(codes.FailedPrecondition, "claude remote worker for %q did not release inject socket", lease.sessionID)
+}
+
 func (s *Server) restoreClaudeRemoteAfterForeground(lease *foregroundLease) (*clydev1.LiveSession, error) {
 	basedir := strings.TrimSpace(lease.basedir)
 	if basedir == "" {
@@ -500,6 +541,7 @@ func (s *Server) restoreClaudeRemoteAfterForeground(lease *foregroundLease) (*cl
 	worker := &remoteWorker{
 		sessionName: lease.sessionName,
 		sessionID:   lease.sessionID,
+		basedir:     basedir,
 		incognito:   lease.incognito,
 		cmd:         cmd,
 		done:        make(chan struct{}),
@@ -530,6 +572,98 @@ func (s *Server) restoreClaudeRemoteAfterForeground(lease *foregroundLease) (*cl
 		SupportsStream: true,
 		SupportsStop:   false,
 	}, nil
+}
+
+func protoClaudeLiveSessionFromWorker(worker *remoteWorker, status, url string) *clydev1.LiveSession {
+	if worker == nil {
+		return nil
+	}
+	return &clydev1.LiveSession{
+		Provider:       string(session.ProviderClaude),
+		SessionName:    worker.sessionName,
+		SessionId:      worker.sessionID,
+		Status:         status,
+		Basedir:        worker.basedir,
+		Url:            url,
+		SupportsSend:   true,
+		SupportsStream: true,
+		SupportsStop:   false,
+	}
+}
+
+func (s *Server) discoverClaudeLiveSessions(seen map[string]bool) []*clydev1.LiveSession {
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		s.log.Warn("daemon.live_session.claude_discovery_store_failed",
+			"component", "daemon",
+			"provider", session.ProviderClaude,
+			"err", err,
+		)
+		return nil
+	}
+	sessions, err := store.List()
+	if err != nil {
+		s.log.Warn("daemon.live_session.claude_discovery_list_failed",
+			"component", "daemon",
+			"provider", session.ProviderClaude,
+			"err", err,
+		)
+		return nil
+	}
+	out := make([]*clydev1.LiveSession, 0)
+	for _, sess := range sessions {
+		if sess == nil || sess.ProviderID() != session.ProviderClaude {
+			continue
+		}
+		sessionID := strings.TrimSpace(sess.Metadata.ProviderSessionID())
+		if sessionID == "" || seen[sessionID] {
+			continue
+		}
+		url := s.bridgeURLForSession(sessionID)
+		if !injectSocketExists(sessionID) && url == "" {
+			continue
+		}
+		out = append(out, &clydev1.LiveSession{
+			Provider:       string(session.ProviderClaude),
+			SessionName:    sess.Name,
+			SessionId:      sessionID,
+			Status:         "reattachable",
+			Basedir:        liveSessionStoredBasedir(sess),
+			Url:            url,
+			SupportsSend:   true,
+			SupportsStream: true,
+			SupportsStop:   false,
+		})
+	}
+	return out
+}
+
+func (s *Server) bridgeURLForSession(sessionID string) string {
+	s.bridgeMu.RLock()
+	defer s.bridgeMu.RUnlock()
+	bridge := s.bridges[sessionID]
+	if bridge == nil {
+		return ""
+	}
+	return bridge.GetUrl()
+}
+
+func injectSocketExists(sessionID string) bool {
+	if strings.TrimSpace(sessionID) == "" {
+		return false
+	}
+	info, err := os.Stat(injectSocketPath(sessionID))
+	return err == nil && !info.IsDir()
+}
+
+func writeInjectSocket(sessionID string, payload []byte) error {
+	conn, err := net.DialTimeout("unix", injectSocketPath(sessionID), 2*time.Second)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	_, err = conn.Write(payload)
+	return err
 }
 
 func firstNonEmpty(values ...string) string {

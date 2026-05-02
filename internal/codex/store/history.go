@@ -1,4 +1,4 @@
-package codex
+package codexstore
 
 import (
 	"bufio"
@@ -12,9 +12,24 @@ import (
 // ThreadSource is the typed subset of Codex SessionSource that Clyde needs for
 // local discovery and details rendering.
 type ThreadSource struct {
-	Kind           string
+	Kind           ThreadSourceKind
 	ParentThreadID string
+	AgentNickname  string
+	AgentRole      string
 }
+
+type ThreadSourceKind string
+
+const (
+	ThreadSourceUnknown     ThreadSourceKind = "unknown"
+	ThreadSourceCLI         ThreadSourceKind = "cli"
+	ThreadSourceVSCode      ThreadSourceKind = "vscode"
+	ThreadSourceExec        ThreadSourceKind = "exec"
+	ThreadSourceMCP         ThreadSourceKind = "mcp"
+	ThreadSourceCustom      ThreadSourceKind = "custom"
+	ThreadSourceSubagent    ThreadSourceKind = "subagent"
+	ThreadSourceSubagentOld ThreadSourceKind = "subAgent"
+)
 
 // ThreadSummary is a provider-owned summary of a Codex rollout thread.
 type ThreadSummary struct {
@@ -27,6 +42,7 @@ type ThreadSummary struct {
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 	CWD           string
+	LatestCWD     string
 	CLIVersion    string
 	Originator    string
 	Source        ThreadSource
@@ -90,6 +106,8 @@ func ReadThreadByRolloutPath(path string, includeHistory bool, archived bool) (T
 			if ok {
 				applyMessage(&summary, msg, includeHistory)
 			}
+		case "turn_context":
+			applyTurnContext(&summary, envelope.Payload)
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -133,7 +151,7 @@ type sourceUnion struct {
 func (s *sourceUnion) UnmarshalJSON(data []byte) error {
 	var scalar string
 	if err := json.Unmarshal(data, &scalar); err == nil {
-		s.Kind = scalar
+		s.Kind = normalizeThreadSourceKind(scalar)
 		return nil
 	}
 	var object sourceObject
@@ -142,12 +160,23 @@ func (s *sourceUnion) UnmarshalJSON(data []byte) error {
 	}
 	switch {
 	case object.Subagent.ThreadSpawn.ParentThreadID != "":
-		s.Kind = "subAgent"
+		s.Kind = ThreadSourceSubagent
 		s.ParentThreadID = object.Subagent.ThreadSpawn.ParentThreadID
+		s.AgentNickname = object.Subagent.ThreadSpawn.AgentNickname
+		s.AgentRole = object.Subagent.ThreadSpawn.AgentRole
+	case object.Subagent.Review:
+		s.Kind = ThreadSourceSubagent
+		s.AgentRole = "review"
+	case object.Subagent.Compact:
+		s.Kind = ThreadSourceSubagent
+		s.AgentRole = "compact"
+	case object.Subagent.Other != "":
+		s.Kind = ThreadSourceSubagent
+		s.AgentRole = object.Subagent.Other
 	case object.Custom != "":
-		s.Kind = "custom"
+		s.Kind = ThreadSourceCustom
 	default:
-		s.Kind = "unknown"
+		s.Kind = ThreadSourceUnknown
 	}
 	return nil
 }
@@ -157,7 +186,12 @@ type sourceObject struct {
 	Subagent struct {
 		ThreadSpawn struct {
 			ParentThreadID string `json:"parent_thread_id"`
+			AgentNickname  string `json:"agent_nickname"`
+			AgentRole      string `json:"agent_role"`
 		} `json:"thread_spawn"`
+		Review  bool   `json:"review"`
+		Compact bool   `json:"compact"`
+		Other   string `json:"other"`
 	} `json:"subagent"`
 }
 
@@ -179,6 +213,10 @@ type eventPayload struct {
 	Phase   string `json:"phase"`
 }
 
+type turnContextPayload struct {
+	CWD string `json:"cwd"`
+}
+
 func applySessionMeta(summary *ThreadSummary, payload sessionMetaPayload, lineTime time.Time) {
 	summary.ID = payload.ID
 	summary.CWD = payload.CWD
@@ -188,8 +226,18 @@ func applySessionMeta(summary *ThreadSummary, payload sessionMetaPayload, lineTi
 	summary.Source = payload.Source.ThreadSource
 	summary.AgentNickname = payload.AgentNickname
 	summary.AgentRole = payload.AgentRole
+	if summary.Source.AgentNickname == "" {
+		summary.Source.AgentNickname = payload.AgentNickname
+	}
+	if summary.Source.AgentRole == "" {
+		summary.Source.AgentRole = payload.AgentRole
+	}
 	summary.ForkedFromID = payload.Source.ParentThreadID
-	summary.IsSubagent = payload.Source.ParentThreadID != "" || payload.AgentNickname != "" || payload.AgentRole != ""
+	summary.IsSubagent = payload.Source.Kind == ThreadSourceSubagent ||
+		payload.Source.Kind == ThreadSourceSubagentOld ||
+		payload.Source.ParentThreadID != "" ||
+		payload.AgentNickname != "" ||
+		payload.AgentRole != ""
 	if created := parseCodexTime(payload.Timestamp); !created.IsZero() {
 		summary.CreatedAt = created
 	} else if !lineTime.IsZero() {
@@ -197,6 +245,16 @@ func applySessionMeta(summary *ThreadSummary, payload sessionMetaPayload, lineTi
 	}
 	if summary.UpdatedAt.IsZero() {
 		summary.UpdatedAt = summary.CreatedAt
+	}
+}
+
+func applyTurnContext(summary *ThreadSummary, raw json.RawMessage) {
+	var payload turnContextPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return
+	}
+	if strings.TrimSpace(payload.CWD) != "" {
+		summary.LatestCWD = payload.CWD
 	}
 }
 
@@ -283,4 +341,26 @@ func parseCodexTime(value string) time.Time {
 		return t
 	}
 	return time.Time{}
+}
+
+func normalizeThreadSourceKind(value string) ThreadSourceKind {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "cli":
+		return ThreadSourceCLI
+	case "vscode", "vs_code":
+		return ThreadSourceVSCode
+	case "exec":
+		return ThreadSourceExec
+	case "mcp", "appserver", "app_server":
+		return ThreadSourceMCP
+	case "custom":
+		return ThreadSourceCustom
+	case "subagent", "sub_agent", "subagent_old", "subagent-old":
+		return ThreadSourceSubagent
+	default:
+		if strings.TrimSpace(value) == "" {
+			return ThreadSourceUnknown
+		}
+		return ThreadSourceKind(strings.TrimSpace(value))
+	}
 }

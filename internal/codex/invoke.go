@@ -50,11 +50,10 @@ func (l *Lifecycle) ResumeInteractive(ctx context.Context, req session.ResumeReq
 }
 
 func (l *Lifecycle) ResumeOpaqueInteractive(ctx context.Context, req session.OpaqueResumeRequest) error {
-	query := strings.TrimSpace(req.Query)
-	if query == "" {
-		return fmt.Errorf("missing codex resume query")
+	args, err := codexResumeArgs(req)
+	if err != nil {
+		return err
 	}
-	args := append([]string{"resume", query}, req.AdditionalArgs...)
 	return invokeInteractive(ctx, args, "", "")
 }
 
@@ -73,8 +72,20 @@ func (l *Lifecycle) RecentContextMessages(*session.Session, int, int) []session.
 	return nil
 }
 
-func (l *Lifecycle) DeleteArtifacts(context.Context, session.DeleteArtifactsRequest) (*session.DeletedArtifacts, error) {
-	return &session.DeletedArtifacts{}, nil
+func codexResumeArgs(req session.OpaqueResumeRequest) ([]string, error) {
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
+		return nil, fmt.Errorf("missing codex resume query")
+	}
+	args := []string{"resume"}
+	switch query {
+	case "last", "--last":
+		args = append(args, "--last")
+	default:
+		args = append(args, query)
+	}
+	args = append(args, req.AdditionalArgs...)
+	return args, nil
 }
 
 func invokeInteractive(ctx context.Context, args []string, workDir, sessionName string) error {

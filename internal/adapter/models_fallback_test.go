@@ -114,7 +114,12 @@ func testCodexModels() []config.AdapterCodexModel {
 			Efforts:         []string{EffortLow, EffortMedium, EffortHigh, EffortXHigh},
 			MaxOutputTokens: 128000,
 			Contexts: []config.AdapterCodexModelContext{
-				{Tokens: 1000000, AliasSuffix: "1m"},
+				{
+					Tokens:                  1000000,
+					ObservedTokens:          272000,
+					AliasSuffix:             "1m",
+					AdvertisedNativeAliases: []string{"gpt-5.4"},
+				},
 			},
 		},
 		{
@@ -123,7 +128,25 @@ func testCodexModels() []config.AdapterCodexModel {
 			Efforts:         []string{EffortLow, EffortMedium, EffortHigh, EffortXHigh},
 			MaxOutputTokens: 128000,
 			Contexts: []config.AdapterCodexModelContext{
-				{Tokens: 272000},
+				{Tokens: 272000, NativeAliases: []string{"gpt-5.5"}},
+			},
+		},
+		{
+			AliasPrefix:     "codex-5.3",
+			Model:           "gpt-5.3-codex",
+			Efforts:         []string{EffortLow, EffortMedium, EffortHigh, EffortXHigh},
+			MaxOutputTokens: 128000,
+			Contexts: []config.AdapterCodexModelContext{
+				{Tokens: 272000, NativeAliases: []string{"gpt-5.3-codex"}},
+			},
+		},
+		{
+			AliasPrefix:     "codex-5.3-spark",
+			Model:           "gpt-5.3-codex-spark",
+			Efforts:         []string{EffortLow, EffortMedium, EffortHigh, EffortXHigh},
+			MaxOutputTokens: 128000,
+			Contexts: []config.AdapterCodexModelContext{
+				{Tokens: 272000, NativeAliases: []string{"gpt-5.3-codex-spark"}},
 			},
 		},
 	}
@@ -156,6 +179,7 @@ func TestResolveRoutesNativeCodexByDefaultWhenCodexEnabled(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Codex.Enabled = true
 	cfg.Codex.ModelPrefixes = []string{"gpt-", "o"}
+	cfg.Codex.Models = testCodexModels()
 	r, err := NewRegistry(cfg)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
@@ -196,6 +220,7 @@ func TestResolveRejectsNativeCodexWhenRoutingExplicitlyOff(t *testing.T) {
 func TestListIncludesNativeCodexModelsWhenRoutable(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Codex.Enabled = true
+	cfg.Codex.Models = testCodexModels()
 	r, err := NewRegistry(cfg)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)

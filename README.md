@@ -142,6 +142,23 @@ Typical files:
 Project-scoped Clyde data lives under `.claude/clyde/`. Add that path to
 your `.gitignore`.
 
+## Data Locations
+
+Clyde follows XDG directories for global state and keeps project-local
+session metadata beside the project.
+
+| Data | Default location | Override |
+| --- | --- | --- |
+| Project session metadata and settings | `<project>/.claude/clyde/` | project root |
+| Global session index | `~/.local/share/clyde/sessions/` | `XDG_DATA_HOME` |
+| Global config | `~/.config/clyde/config.toml` | `XDG_CONFIG_HOME` |
+| Search result cache | `~/.cache/clyde/search-results/` | `XDG_CACHE_HOME` |
+| Logs, MITM captures, compaction backups, context cache | `~/.local/state/clyde/` | `XDG_STATE_HOME` |
+| Daemon socket and live session runtime files | `$TMPDIR/clyde-<uid>/` on macOS, or `$XDG_RUNTIME_DIR/clyde/` when set | `XDG_RUNTIME_DIR` |
+
+The dashboard and daemon treat `.claude/clyde/` and the XDG locations as
+Clyde-owned.
+
 ## Hooks and Lifecycle
 
 `make install-hook` registers a single SessionStart hook:

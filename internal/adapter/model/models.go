@@ -65,6 +65,10 @@ type ResolvedModel struct {
 	// Context is the advertised context window in tokens. Purely
 	// informational; the upstream enforces the real limit.
 	Context int
+	// ObservedContext is the provider-specific context window Clyde
+	// should expose for capability reports when it differs from the
+	// advertised context. Zero means use Context.
+	ObservedContext int
 	// Efforts enumerates the allowed `effort` values for this
 	// family. Empty for families the toml leaves without an efforts
 	// list; Resolve will then 400 any caller-supplied effort.
@@ -115,6 +119,8 @@ type Registry struct {
 	codexNativeRouting string
 	codexNativeShunt   string
 	codexModels        map[string]ResolvedModel
+	nativeCodexModels  map[string]ResolvedModel
+	nativeAdvertised   map[string]bool
 }
 
 // NewRegistry builds the registry from a loaded AdapterConfig. It
@@ -209,6 +215,8 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 		codexNativeRouting: strings.ToLower(strings.TrimSpace(cfg.Codex.NativeModelRouting)),
 		codexNativeShunt:   strings.ToLower(strings.TrimSpace(cfg.Codex.NativeModelShunt)),
 		codexModels:        map[string]ResolvedModel{},
+		nativeCodexModels:  map[string]ResolvedModel{},
+		nativeAdvertised:   map[string]bool{},
 	}
 	if r.codexNativeRouting == "" {
 		if r.codexEnabled {
@@ -245,6 +253,9 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 	}
 	for _, model := range cfg.Codex.Models {
 		if err := addCodexModelAliases(r.codexModels, model); err != nil {
+			return nil, err
+		}
+		if err := addNativeCodexModelAliases(r.nativeCodexModels, r.nativeAdvertised, model); err != nil {
 			return nil, err
 		}
 	}
@@ -425,6 +436,7 @@ func addCodexModelAliases(out map[string]ResolvedModel, cfg config.AdapterCodexM
 				Backend:         BackendCodex,
 				ClaudeModel:     cfg.Model,
 				Context:         ctx.Tokens,
+				ObservedContext: ctx.ObservedTokens,
 				Efforts:         []string{effort},
 				Effort:          effort,
 				MaxOutputTokens: cfg.MaxOutputTokens,
@@ -438,11 +450,55 @@ func addCodexModelAliases(out map[string]ResolvedModel, cfg config.AdapterCodexM
 			Backend:         BackendCodex,
 			ClaudeModel:     cfg.Model,
 			Context:         ctx.Tokens,
+			ObservedContext: ctx.ObservedTokens,
 			Efforts:         cfg.Efforts,
 			MaxOutputTokens: cfg.MaxOutputTokens,
 		}
 	}
 	return nil
+}
+
+func addNativeCodexModelAliases(out map[string]ResolvedModel, advertised map[string]bool, cfg config.AdapterCodexModel) error {
+	if strings.TrimSpace(cfg.Model) == "" {
+		return fmt.Errorf("adapter: [adapter.codex.models.%s] missing model", cfg.AliasPrefix)
+	}
+	if len(cfg.Contexts) == 0 {
+		return fmt.Errorf("adapter: [adapter.codex.models.%s] missing contexts", cfg.AliasPrefix)
+	}
+	for _, ctx := range cfg.Contexts {
+		nativeAliases := append([]string(nil), ctx.NativeAliases...)
+		nativeAliases = append(nativeAliases, ctx.AdvertisedNativeAliases...)
+		for _, alias := range nativeAliases {
+			addNativeCodexModelAlias(out, alias, cfg, ctx)
+		}
+		for _, alias := range ctx.AdvertisedNativeAliases {
+			alias = strings.TrimSpace(alias)
+			if alias != "" {
+				advertised[strings.ToLower(alias)] = true
+			}
+		}
+	}
+	return nil
+}
+
+func addNativeCodexModelAlias(out map[string]ResolvedModel, alias string, cfg config.AdapterCodexModel, ctx config.AdapterCodexModelContext) {
+	alias = strings.TrimSpace(alias)
+	if alias == "" {
+		return
+	}
+	key := strings.ToLower(alias)
+	if _, ok := out[key]; ok {
+		return
+	}
+	out[key] = ResolvedModel{
+		Alias:           alias,
+		Backend:         BackendCodex,
+		ClaudeModel:     cfg.Model,
+		Context:         ctx.Tokens,
+		ObservedContext: ctx.ObservedTokens,
+		Efforts:         cfg.Efforts,
+		MaxOutputTokens: cfg.MaxOutputTokens,
+	}
 }
 
 // resolveFromConfig converts a user provided AdapterModel entry into
@@ -458,12 +514,13 @@ func resolveFromConfig(alias string, m config.AdapterModel) ResolvedModel {
 		}
 	}
 	out := ResolvedModel{
-		Alias:       alias,
-		Backend:     backend,
-		ClaudeModel: m.Model,
-		Context:     m.Context,
-		Efforts:     m.Efforts,
-		Shunt:       m.Shunt,
+		Alias:           alias,
+		Backend:         backend,
+		ClaudeModel:     m.Model,
+		Context:         m.Context,
+		ObservedContext: m.ObservedContext,
+		Efforts:         m.Efforts,
+		Shunt:           m.Shunt,
 	}
 	return out
 }
@@ -510,7 +567,7 @@ func (r *Registry) looksLikeNativeCodexModel(alias string) bool {
 }
 
 func normalizeCodexModelAlias(alias string) string {
-	key := strings.TrimSpace(alias)
+	key := codexAliasModelKey(alias)
 	lower := strings.ToLower(key)
 	for _, prefix := range []string{"clyde-codex-"} {
 		if strings.HasPrefix(lower, prefix) {
@@ -521,22 +578,20 @@ func normalizeCodexModelAlias(alias string) string {
 	}
 	if strings.HasPrefix(lower, "clyde-gpt-") {
 		key = "gpt-" + key[len("clyde-gpt-"):]
-		lower = strings.ToLower(key)
 	}
+	return key
+}
+
+func codexAliasModelKey(alias string) string {
+	key := strings.TrimSpace(alias)
+	lower := strings.ToLower(key)
 	for _, suffix := range []string{"-low", "-medium", "-high", "-xhigh"} {
 		if strings.HasSuffix(lower, suffix) {
 			key = key[:len(key)-len(suffix)]
-			lower = strings.ToLower(key)
 			break
 		}
 	}
-	if strings.HasSuffix(lower, "-1m") {
-		key = key[:len(key)-len("-1m")]
-	}
-	switch {
-	default:
-		return key
-	}
+	return key
 }
 
 func codexAliasEffort(alias string) string {
@@ -547,28 +602,6 @@ func codexAliasEffort(alias string) string {
 		}
 	}
 	return ""
-}
-
-func codexAliasContext(alias string) int {
-	key := normalizeCodexModelAlias(alias)
-	original := strings.ToLower(strings.TrimSpace(alias))
-	switch strings.ToLower(strings.TrimSpace(key)) {
-	case "gpt-5.4":
-		return 1000000
-	}
-	if strings.HasSuffix(original, "-1m") || strings.Contains(original, "-1m-") {
-		switch strings.ToLower(strings.TrimSpace(key)) {
-		case "gpt-5.4":
-			return 1000000
-		}
-	}
-	if strings.TrimSpace(key) == "gpt-5.5" {
-		return 272000
-	}
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(key)), "gpt-5.3") {
-		return 272000
-	}
-	return 0
 }
 
 // Resolve looks up the alias and returns the resolved model plus the
@@ -592,16 +625,7 @@ func (r *Registry) Resolve(alias, reqEffort string) (ResolvedModel, string, erro
 	if r.looksLikeNativeCodexModel(alias) {
 		switch r.codexNativeRouting {
 		case "codex":
-			effort := strings.ToLower(strings.TrimSpace(reqEffort))
-			if effort == "" {
-				effort = codexAliasEffort(alias)
-			}
-			return ResolvedModel{
-				Alias:       alias,
-				Backend:     BackendCodex,
-				ClaudeModel: normalizeCodexModelAlias(alias),
-				Context:     codexAliasContext(alias),
-			}, effort, nil
+			return r.resolveNativeCodexModel(alias, reqEffort)
 		case "shunt":
 			if _, ok := r.shunts[r.codexNativeShunt]; ok {
 				return ResolvedModel{
@@ -650,16 +674,7 @@ func (r *Registry) Resolve(alias, reqEffort string) (ResolvedModel, string, erro
 		)
 	}
 	if r.looksLikeCodexModel(alias) {
-		effort := strings.ToLower(strings.TrimSpace(reqEffort))
-		if effort == "" {
-			effort = codexAliasEffort(alias)
-		}
-		return ResolvedModel{
-			Alias:       alias,
-			Backend:     BackendCodex,
-			ClaudeModel: normalizeCodexModelAlias(alias),
-			Context:     codexAliasContext(alias),
-		}, effort, nil
+		return r.resolveNativeCodexModel(alias, reqEffort)
 	}
 	if r.openAICompat.BaseURL != "" {
 		return ResolvedModel{
@@ -673,6 +688,29 @@ func (r *Registry) Resolve(alias, reqEffort string) (ResolvedModel, string, erro
 		return ResolvedModel{}, "", fmt.Errorf("unknown model %q and no usable default", alias)
 	}
 	return resolveConfiguredModel(def, reqEffort)
+}
+
+func (r *Registry) resolveNativeCodexModel(alias, reqEffort string) (ResolvedModel, string, error) {
+	effort := strings.ToLower(strings.TrimSpace(reqEffort))
+	if effort == "" {
+		effort = codexAliasEffort(alias)
+	}
+	modelKey := strings.ToLower(strings.TrimSpace(normalizeCodexModelAlias(alias)))
+	if m, ok := r.nativeCodexModels[modelKey]; ok {
+		m.Alias = alias
+		if effort != "" && len(m.Efforts) > 0 && !contains(m.Efforts, effort) {
+			return ResolvedModel{}, "", fmt.Errorf(
+				"effort %q not supported for %q (allowed: %s)",
+				effort, alias, strings.Join(m.Efforts, ", "),
+			)
+		}
+		return m, effort, nil
+	}
+	return ResolvedModel{
+		Alias:       alias,
+		Backend:     BackendCodex,
+		ClaudeModel: normalizeCodexModelAlias(alias),
+	}, effort, nil
 }
 
 func resolveConfiguredModel(m ResolvedModel, reqEffort string) (ResolvedModel, string, error) {
@@ -720,24 +758,14 @@ func (r *Registry) List() []ResolvedModel {
 		seen[strings.ToLower(strings.TrimSpace(m.Alias))] = struct{}{}
 	}
 	if r.codexEnabled && r.codexNativeRouting == "codex" {
-		for _, alias := range codexAdvertisedAliases() {
+		for _, alias := range slices.Sorted(maps.Keys(r.nativeAdvertised)) {
 			if _, ok := seen[alias]; ok {
 				continue
 			}
-			out = append(out, ResolvedModel{
-				Alias:       alias,
-				Backend:     BackendCodex,
-				ClaudeModel: normalizeCodexModelAlias(alias),
-				Context:     codexAliasContext(alias),
-				Efforts:     []string{EffortLow, EffortMedium, EffortHigh, EffortXHigh},
-			})
+			out = append(out, r.nativeCodexModels[alias])
 		}
 	}
 	return out
-}
-
-func codexAdvertisedAliases() []string {
-	return []string{"gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark", "o3"}
 }
 
 func (r *Registry) Models() map[string]ResolvedModel {

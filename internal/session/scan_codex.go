@@ -1,12 +1,9 @@
 package session
 
 import (
-	"bufio"
-	"encoding/json"
-	"os"
 	"path/filepath"
-	"strings"
-	"time"
+
+	codexstore "goodkind.io/clyde/internal/codex/store"
 )
 
 type codexDiscoveryScanner struct {
@@ -22,178 +19,48 @@ func (s codexDiscoveryScanner) Provider() ProviderID {
 }
 
 func (s codexDiscoveryScanner) Scan() ([]DiscoveryResult, error) {
-	started := currentTime()
-	roots := []string{
-		filepath.Join(s.codexHome, "sessions"),
-	}
-	var out []DiscoveryResult
-	for _, root := range roots {
-		scanned, err := s.scanRoot(root)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, scanned...)
-	}
-	sessionScanLog.Logger().Debug("session.scan.completed",
-		"component", "session",
-		"subcomponent", "scan",
-		"provider", s.Provider(),
-		"codex_home", s.codexHome,
-		"transcripts", len(out),
-		"duration_ms", time.Since(started).Milliseconds(),
-	)
-	return out, nil
-}
-
-func (s codexDiscoveryScanner) scanRoot(root string) ([]DiscoveryResult, error) {
-	var out []DiscoveryResult
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			if os.IsNotExist(err) || os.IsPermission(err) {
-				return nil
-			}
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.HasPrefix(d.Name(), "rollout-") || !strings.HasSuffix(d.Name(), ".jsonl") {
-			return nil
-		}
-		dr, ok := readCodexRolloutHeader(path)
-		if !ok {
-			return nil
-		}
-		out = append(out, dr)
-		return nil
-	})
+	paths, err := codexstore.ResolveStorePaths(s.codexHome, "")
 	if err != nil {
-		sessionScanLog.Logger().Warn("session.scan.walk_failed",
-			"component", "session",
-			"subcomponent", "scan",
-			"provider", s.Provider(),
-			"root", root,
-			"err", err,
-		)
 		return nil, err
 	}
+	results, err := codexstore.NewDiscoveryScanner(paths).Scan()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]DiscoveryResult, 0, len(results))
+	for _, result := range results {
+		out = append(out, codexDiscoveryResult(result))
+	}
 	return out, nil
 }
 
-type codexRolloutLine struct {
-	Timestamp string          `json:"timestamp"`
-	Type      string          `json:"type"`
-	Payload   json.RawMessage `json:"payload"`
-}
-
-type codexSessionMetaPayload struct {
-	ID            string             `json:"id"`
-	Timestamp     string             `json:"timestamp"`
-	CWD           string             `json:"cwd"`
-	Originator    string             `json:"originator"`
-	CLIVersion    string             `json:"cli_version"`
-	ModelProvider string             `json:"model_provider"`
-	Source        codexSessionSource `json:"source"`
-	AgentNickname string             `json:"agent_nickname"`
-	AgentRole     string             `json:"agent_role"`
-}
-
-// codexSessionSource models the SessionSource union observed in
-// research/codex/codex-rs/app-server-protocol/schema/typescript/v2/SessionSource.ts.
-type codexSessionSource struct {
-	Kind           string
-	ParentThreadID string
-}
-
-func (s *codexSessionSource) UnmarshalJSON(data []byte) error {
-	var scalar string
-	if err := json.Unmarshal(data, &scalar); err == nil {
-		s.Kind = scalar
-		return nil
+func codexDiscoveryResult(result codexstore.DiscoveryResult) DiscoveryResult {
+	workspace := result.LatestWorkDir
+	if workspace == "" {
+		workspace = result.WorkspaceRoot
 	}
-	var object codexSessionSourceObject
-	if err := json.Unmarshal(data, &object); err != nil {
-		return err
-	}
-	switch {
-	case object.Subagent.ThreadSpawn.ParentThreadID != "":
-		s.Kind = "subAgent"
-		s.ParentThreadID = object.Subagent.ThreadSpawn.ParentThreadID
-	case object.Custom != "":
-		s.Kind = "custom"
-	default:
-		s.Kind = "unknown"
-	}
-	return nil
-}
-
-type codexSessionSourceObject struct {
-	Custom   string `json:"custom"`
-	Subagent struct {
-		ThreadSpawn struct {
-			ParentThreadID string `json:"parent_thread_id"`
-		} `json:"thread_spawn"`
-	} `json:"subagent"`
-}
-
-func readCodexRolloutHeader(path string) (DiscoveryResult, bool) {
-	f, err := os.Open(path)
-	if err != nil {
-		return DiscoveryResult{}, false
-	}
-	defer func() { _ = f.Close() }()
-
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		var envelope codexRolloutLine
-		if err := json.Unmarshal(line, &envelope); err != nil {
-			continue
-		}
-		if envelope.Type != "session_meta" {
-			continue
-		}
-		var payload codexSessionMetaPayload
-		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
-			return DiscoveryResult{}, false
-		}
-		if payload.ID == "" {
-			return DiscoveryResult{}, false
-		}
-		createdAt := payload.Timestamp
-		if createdAt == "" {
-			createdAt = envelope.Timestamp
-		}
-		var firstEntryTime time.Time
-		if createdAt != "" {
-			firstEntryTime, _ = time.Parse(time.RFC3339Nano, createdAt)
-		}
-		dr := DiscoveryResult{
+	return DiscoveryResult{
+		Provider: ProviderCodex,
+		Identity: ProviderSessionID{
 			Provider: ProviderCodex,
-			Identity: ProviderSessionID{
-				Provider: ProviderCodex,
-				ID:       payload.ID,
-			},
-			WorkspaceRoot:  payload.CWD,
-			Entrypoint:     payload.Originator,
-			FirstEntryTime: firstEntryTime,
-			IsSubagent:     payload.Source.ParentThreadID != "" || payload.AgentNickname != "" || payload.AgentRole != "",
-			Claude: ClaudeDiscoveryState{
-				TranscriptPath: path,
-			},
-		}
-		if payload.Source.ParentThreadID != "" {
-			dr.IsForked = true
-			dr.ForkParent = ProviderSessionID{
-				Provider: ProviderCodex,
-				ID:       payload.Source.ParentThreadID,
-			}
-		}
-		return dr, true
+			ID:       result.ThreadID,
+		},
+		WorkspaceRoot:  workspace,
+		Entrypoint:     result.Entrypoint,
+		FirstEntryTime: result.CreatedAt,
+		CustomTitle:    result.ThreadName,
+		ForkParent: ProviderSessionID{
+			Provider: ProviderCodex,
+			ID:       result.ForkParentID,
+		},
+		IsForked:   result.ForkParentID != "",
+		IsSubagent: result.IsSubagent,
+		Claude: ClaudeDiscoveryState{
+			TranscriptPath: result.RolloutPath,
+		},
 	}
-	return DiscoveryResult{}, false
+}
+
+func defaultCodexHome(homeDir string) string {
+	return filepath.Join(homeDir, ".codex")
 }

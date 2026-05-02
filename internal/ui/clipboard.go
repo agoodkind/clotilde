@@ -1,5 +1,5 @@
 // Package ui implements the Clyde terminal user interface.
-// "Copy bridge URL" action. The helper picks the first clipboard tool
+// "Copy live URL" action. The helper picks the first clipboard tool
 // that matches the host OS. Callers get a single error return so they
 // can surface a message when the clipboard is unreachable.
 package ui

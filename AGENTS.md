@@ -30,8 +30,8 @@ anything else               -> cobra; unknown -> ForwardToClaudeThenDashboard (T
 Developer tooling: `**cmd/clyde-tui-qa`\*\* drives the real TUI for QA (see the section near the end of this file). It is not part of the default user surface.
 
 The TUI is read-mostly with management actions wired via direct Go
-calls into the daemon: resume, delete, rename, view content, send-to,
-tail-transcript, remote-control toggle, bridge listing. Session
+calls into the daemon: resume, delete, rename, view content, and
+provider-neutral live-session actions. Session
 creation and incognito went away with the cull; users create sessions
 via plain `claude` (passthrough) and clyde adopts them in the
 background.
@@ -379,19 +379,32 @@ blind process restart. Keep these semantics intact when changing
   queued reload reconnects to the latest daemon generation, giving
   last-writer-wins behavior.
 
-### Remote Control (`--remote-control`)
+### Daemon-Owned Live Sessions
 
-Sessions can opt into Claude Code's bridge so the running conversation is exposed at `https://claude.ai/code/<bridgeSessionId>`. Three layers cooperate:
+Live interactive sessions are daemon-owned. TUI, webapp, and command
+surfaces must call provider-neutral live-session RPCs instead of
+probing provider files, sockets, bridge state, transcript tails, or
+send primitives directly.
 
-1. **Wrapper** (`internal/claude/pty_invoke.go`): when `RemoteControl` is on, claude runs inside a pty using `github.com/creack/pty`. The wrapper opens a per-session Unix socket at `$XDG_RUNTIME_DIR/clyde/inject/<sessionId>.sock` (or `$TMPDIR/clyde-inject/...` on macOS) and copies inbound bytes into the pty stdin, so daemon-mediated messages reach claude as if typed.
-2. **Daemon** (`internal/bridge/`, `internal/daemon/`): one `bridge.Watcher` per daemon process tails `~/.claude/sessions/<pid>.json` via fsnotify and emits `BRIDGE_OPENED` / `BRIDGE_CLOSED` on the existing registry stream. `transcript.Tailer` plus `transcriptHub` fan transcript lines out to multiple subscribers via the new `TailTranscript` server-side streaming RPC. `SendToSession` dials the wrapper's inject socket. `UpdateSessionSettings` and `UpdateGlobalSettings` are the daemon-authoritative write paths for per session / global config.
-3. **TUI** (`internal/ui/`): The dashboard shows an `RC` badge column, a "Remote ctrl" details row, an `RC×N` status bar badge, and "Open bridge in browser" / "Copy bridge URL" entries in the options popup. Press `S` to pin a session in the new "Sidecar" tab (`internal/ui/tcell_sidecar.go`), which subscribes to `TailTranscript` and posts user input through `SendToSession`. Press `G` on the Settings tab to flip the global default.
+The TUI may expose user-facing live-session controls such as "Drive in
+sidecar", "Open live URL", and "Copy live URL". Those controls are UI
+affordances only. Provider-specific behavior belongs behind the
+daemon's live-session backend.
 
-Post-cull, the bridge is reachable through the TUI only (RC toggle in
-the options popup, Sidecar tab for tail/send). The standalone
-`clyde bridge` and `clyde send` verbs were removed; their daemon RPCs
-(`UpdateSessionSettings`, `TailTranscript`, `SendToSession`,
-`ListBridges`) still exist and are driven directly by the TUI.
+Claude compatibility is implemented inside the daemon backend:
+
+- Claude bridge watching remains an internal daemon concern.
+- Claude pty injection and transcript tailing remain daemon/backend
+  primitives.
+- Launching a session directly from Clyde must foreground the selected
+  chat for the user. When that foreground process exits, the daemon
+  should restore the headless/live sidecar state for providers that
+  support it.
+
+Codex compatibility should follow the same live-session RPC contract.
+If Codex needs tmux, browser automation, or another harness, keep that
+harness inside the daemon backend and expose only typed live-session
+state/events/actions to callers.
 
 ## Testing
 

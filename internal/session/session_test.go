@@ -146,6 +146,57 @@ var _ = Describe("Session", func() {
 			Expect(md.PreviousSessionIDs).To(Equal([]string{"codex-previous"}))
 			Expect(md.ProviderTranscriptPath()).To(Equal("/tmp/codex.jsonl"))
 		})
+
+		It("applies the metadata provider to unqualified provider-owned identities", func() {
+			md := session.Metadata{
+				Name:     "codex-provider-owned",
+				Provider: session.ProviderCodex,
+				ProviderState: &session.ProviderOwnedMetadata{
+					Current: session.ProviderSessionID{ID: "codex-current"},
+					Previous: []session.ProviderSessionID{{
+						ID: "codex-previous",
+					}},
+				},
+			}
+
+			md.NormalizeProviderState()
+
+			Expect(md.Provider).To(Equal(session.ProviderCodex))
+			Expect(md.ProviderState.Current).To(Equal(session.ProviderSessionID{
+				Provider: session.ProviderCodex,
+				ID:       "codex-current",
+			}))
+			Expect(md.ProviderState.Previous).To(Equal([]session.ProviderSessionID{{
+				Provider: session.ProviderCodex,
+				ID:       "codex-previous",
+			}}))
+			Expect(md.SessionID).To(Equal("codex-current"))
+			Expect(md.PreviousSessionIDs).To(Equal([]string{"codex-previous"}))
+		})
+
+		It("rotates unqualified next identities inside the current provider namespace", func() {
+			s := &session.Session{
+				Name: "codex-rotating",
+				Metadata: session.Metadata{
+					Name:      "codex-rotating",
+					Provider:  session.ProviderCodex,
+					SessionID: "codex-current",
+				},
+			}
+			s.Metadata.NormalizeProviderState()
+
+			s.RotateIdentity(session.ProviderSessionID{ID: "codex-next"})
+
+			Expect(s.ProviderID()).To(Equal(session.ProviderCodex))
+			Expect(s.Metadata.ProviderState.Current).To(Equal(session.ProviderSessionID{
+				Provider: session.ProviderCodex,
+				ID:       "codex-next",
+			}))
+			Expect(s.Metadata.ProviderState.Previous).To(Equal([]session.ProviderSessionID{{
+				Provider: session.ProviderCodex,
+				ID:       "codex-current",
+			}}))
+		})
 	})
 
 	Describe("Provider capabilities", func() {

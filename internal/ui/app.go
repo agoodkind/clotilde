@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -63,14 +64,10 @@ type AppCallbacks struct {
 	// StartSessionWithBasedir creates a new session pinned to the given
 	// workspace root. Empty string falls back to the caller's cwd.
 	StartSessionWithBasedir func(basedir string) error
-	// StartSessionWithBasedirRC creates a new tracked session pinned to
-	// basedir and requests the launch-time remote-control flag state.
-	// When nil, the UI falls back to StartSessionWithBasedir.
-	StartSessionWithBasedirRC func(basedir string, enableRC bool) error
 	// StartIncognitoWithBasedir launches an incognito session pinned
 	// to basedir. The session auto deletes on exit unless persisted
-	// later. enableRC requests the --remote-control flag at launch.
-	StartIncognitoWithBasedir func(basedir string, enableRC bool) error
+	// later.
+	StartIncognitoWithBasedir func(basedir string, liveURL bool) error
 	// ListLiveSessions returns provider-neutral live sessions from the daemon.
 	ListLiveSessions func() ([]LiveSession, error)
 	// StartLiveSession launches a provider-neutral daemon-owned live session.
@@ -84,14 +81,6 @@ type AppCallbacks struct {
 	// SetBasedir rewrites the session's workspaceRoot field in metadata.
 	// newPath is already resolved by the caller; "" clears the field.
 	SetBasedir func(sess *session.Session, newPath string) error
-	// SetRemoteControl flips the per session --remote-control flag.
-	// The callback should route through the daemon so subscribers see
-	// the change. The TUI uses the result to refresh its visible state.
-	SetRemoteControl func(sess *session.Session, enabled bool) error
-	// SetGlobalRemoteControl writes the global config default. Used by
-	// the Settings tab to flip the default for sessions that have no
-	// explicit per session value.
-	SetGlobalRemoteControl func(enabled bool) error
 	// LoadConfigControls returns daemon-owned config controls rendered by
 	// the Settings tab.
 	LoadConfigControls func() ([]ConfigControl, error)
@@ -103,8 +92,6 @@ type AppCallbacks struct {
 	LoadStats func() (DashboardStats, error)
 	// SubscribeProviderStats streams provider-level stats updates from the daemon.
 	SubscribeProviderStats func() (events <-chan ProviderStats, cancel func(), err error)
-	// ListBridges returns the daemon's view of active bridges.
-	ListBridges func() ([]Bridge, error)
 	// RestartDaemon asks the local daemon supervisor to self-heal and restart.
 	RestartDaemon func() error
 	// RefreshSummary triggers a background regeneration of the session's
@@ -181,35 +168,30 @@ type SessionExportStats struct {
 }
 
 type SessionSnapshot struct {
-	Sessions            []*session.Session
-	Models              map[string]string
-	RemoteControl       map[string]bool
-	MessageCounts       map[string]int
-	ContextStates       map[string]SessionContextState
-	Bridges             []Bridge
-	GlobalRemoteControl bool
+	Sessions      []*session.Session
+	Models        map[string]string
+	MessageCounts map[string]int
+	ContextStates map[string]SessionContextState
+	LiveURLs      []LiveURL
 }
 
 // SessionEvent is the UI-facing copy of the daemon SubscribeRegistryResponse. The
 // ui package keeps its own type so the daemon's protobuf does not leak
 // into widget code.
 type SessionEvent struct {
-	Kind                string
-	SessionName         string
-	SessionID           string
-	OldName             string
-	BridgeSessionID     string
-	BridgeURL           string
-	Session             *session.Session
-	Model               string
-	RemoteControl       bool
-	MessageCount        int
-	ContextState        *SessionContextState
-	Bridge              *Bridge
-	GlobalRemoteControl *bool
-	BinaryPath          string
-	BinaryReason        string
-	BinaryHash          string
+	Kind          string
+	SessionName   string
+	SessionID     string
+	OldName       string
+	LiveURL       string
+	Session       *session.Session
+	Model         string
+	MessageCount  int
+	ContextState  *SessionContextState
+	LiveURLRecord *LiveURL
+	BinaryPath    string
+	BinaryReason  string
+	BinaryHash    string
 }
 
 type SessionContextState struct {
@@ -237,14 +219,10 @@ type ConfigControlOption struct {
 	Description string
 }
 
-// Bridge mirrors the daemon's notion of an active claude
-// --remote-control session so widgets can render the URL without
-// importing the daemon protobuf.
-type Bridge struct {
-	SessionID       string
-	PID             int64
-	BridgeSessionID string
-	URL             string
+// LiveURL is the UI-facing provider-neutral URL for a live session.
+type LiveURL struct {
+	SessionID string
+	URL       string
 }
 
 // TranscriptEntry carries one parsed line of a streamed transcript
@@ -452,20 +430,18 @@ type App struct {
 	hiddenCount   int  // number of sessions hidden by the ephemeral filter
 
 	// Caches
-	modelCache          map[string]string
-	remoteControlCache  map[string]bool
-	messageCountCache   map[string]int
-	contextStateCache   map[string]SessionContextState
-	globalRemoteControl bool
-	configControls      []ConfigControl
-	configSelected      int
-	configLoading       bool
-	configErr           string
-	// bridges holds the daemon's view of active claude --remote-control
-	// bridges. Keyed by Claude session UUID. Updated on startup via
-	// ListBridges and on each BRIDGE_OPENED / BRIDGE_CLOSED event.
-	bridgeMu sync.RWMutex
-	bridges  map[string]Bridge
+	modelCache        map[string]string
+	messageCountCache map[string]int
+	contextStateCache map[string]SessionContextState
+	configControls    []ConfigControl
+	configSelected    int
+	configLoading     bool
+	configErr         string
+	// liveURLs holds daemon-emitted live URLs keyed by provider session ID.
+	// Claude currently sources these from its bridge runtime; the TUI treats
+	// them as provider-neutral live session URLs.
+	liveURLMu sync.RWMutex
+	liveURLs  map[string]LiveURL
 
 	// daemonOnline tracks whether the daemon-backed registry stream is
 	// currently healthy. The dashboard keeps running when false and the
@@ -625,10 +601,9 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 		sessions:           sessions,
 		mode:               StatusBrowse,
 		modelCache:         make(map[string]string),
-		remoteControlCache: make(map[string]bool),
 		messageCountCache:  make(map[string]int),
 		contextStateCache:  make(map[string]SessionContextState),
-		bridges:            make(map[string]Bridge),
+		liveURLs:           make(map[string]LiveURL),
 		detailCache:        make(map[string]SessionDetail),
 		detailLoading:      make(map[string]bool),
 		exportStatsCache:   make(map[string]SessionExportStats),
@@ -672,7 +647,7 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 		a.trackSelection(row)
 	}
 	a.details = NewDetailsView()
-	a.details.LookupBridge = a.bridgeFor
+	a.details.LookupLiveURL = a.liveURLRecordFor
 	a.status = &StatusBarWidget{Mode: StatusBrowse}
 
 	a.populateTable()
@@ -915,7 +890,7 @@ func (a *App) buildSessionStatsSegments(sess *session.Session) ([][]TextSegment,
 	}
 	detail, loading := a.cachedDetailForSession(sess)
 	view := NewDetailsView()
-	view.LookupBridge = a.bridgeFor
+	view.LookupLiveURL = a.liveURLRecordFor
 	return view.buildLeft(sess, detail), loading
 }
 
@@ -1591,12 +1566,6 @@ type exportStatsLoaded struct {
 	err   error
 }
 
-type bridgesLoaded struct {
-	list     []Bridge
-	err      error
-	duration time.Duration
-}
-
 type modelsPrewarmed struct {
 	models map[string]string
 }
@@ -1749,16 +1718,14 @@ func (a *App) applySessionSnapshot(snapshot SessionSnapshot) {
 
 	a.sessions = dedupeSessionList(snapshot.Sessions)
 	a.modelCache = copyStringMap(snapshot.Models)
-	a.remoteControlCache = copyBoolMap(snapshot.RemoteControl)
 	a.messageCountCache = copyIntMap(snapshot.MessageCounts)
 	a.contextStateCache = copyContextStateMap(snapshot.ContextStates)
-	a.globalRemoteControl = snapshot.GlobalRemoteControl
-	a.bridgeMu.Lock()
-	clear(a.bridges)
-	for _, b := range snapshot.Bridges {
-		a.bridges[b.SessionID] = b
+	a.liveURLMu.Lock()
+	clear(a.liveURLs)
+	for _, b := range snapshot.LiveURLs {
+		a.liveURLs[b.SessionID] = b
 	}
-	a.bridgeMu.Unlock()
+	a.liveURLMu.Unlock()
 	a.sortSessions()
 	a.populateTable()
 	a.restoreTableSelection(selection)
@@ -1781,14 +1748,10 @@ func (a *App) applySessionEvent(ev SessionEvent) {
 		selection.name = ev.SessionName
 	}
 
-	if ev.GlobalRemoteControl != nil {
-		a.globalRemoteControl = *ev.GlobalRemoteControl
-	}
-
-	if ev.Bridge != nil {
-		a.bridgeMu.Lock()
-		a.bridges[ev.Bridge.SessionID] = *ev.Bridge
-		a.bridgeMu.Unlock()
+	if ev.LiveURLRecord != nil {
+		a.liveURLMu.Lock()
+		a.liveURLs[ev.LiveURLRecord.SessionID] = *ev.LiveURLRecord
+		a.liveURLMu.Unlock()
 	}
 
 	switch ev.Kind {
@@ -1802,21 +1765,20 @@ func (a *App) applySessionEvent(ev SessionEvent) {
 	case "SESSION_DELETED":
 		a.deleteSessionEvent(ev)
 	case "BRIDGE_OPENED":
-		a.bridgeMu.Lock()
-		a.bridges[ev.SessionID] = Bridge{
-			SessionID:       ev.SessionID,
-			BridgeSessionID: ev.BridgeSessionID,
-			URL:             ev.BridgeURL,
+		a.liveURLMu.Lock()
+		a.liveURLs[ev.SessionID] = LiveURL{
+			SessionID: ev.SessionID,
+			URL:       ev.LiveURL,
 		}
-		a.bridgeMu.Unlock()
+		a.liveURLMu.Unlock()
 		if a.sidecar != nil && a.sidecarSessionID == ev.SessionID {
-			a.sidecar.LiveURL = ev.BridgeURL
+			a.sidecar.LiveURL = ev.LiveURL
 			a.maybeOpenSidecarTail()
 		}
 	case "BRIDGE_CLOSED":
-		a.bridgeMu.Lock()
-		delete(a.bridges, ev.SessionID)
-		a.bridgeMu.Unlock()
+		a.liveURLMu.Lock()
+		delete(a.liveURLs, ev.SessionID)
+		a.liveURLMu.Unlock()
 		if a.sidecar != nil && a.sidecarSessionID == ev.SessionID {
 			a.sidecar.LiveURL = ""
 		}
@@ -1855,7 +1817,6 @@ func (a *App) upsertSessionEvent(ev SessionEvent) {
 	}
 	a.sessions = dedupeSessionList(filtered)
 	a.modelCache[ev.Session.Name] = ev.Model
-	a.remoteControlCache[ev.Session.Name] = ev.RemoteControl
 	a.messageCountCache[ev.Session.Name] = ev.MessageCount
 	if ev.ContextState != nil {
 		a.contextStateCache[ev.Session.Name] = *ev.ContextState
@@ -1881,7 +1842,6 @@ func (a *App) renameSessionEvent(ev SessionEvent) {
 		}
 		a.sessions = dedupeSessionList(filtered)
 		a.modelCache[ev.Session.Name] = ev.Model
-		a.remoteControlCache[ev.Session.Name] = ev.RemoteControl
 		a.messageCountCache[ev.Session.Name] = ev.MessageCount
 		if ev.ContextState != nil {
 			a.contextStateCache[ev.Session.Name] = *ev.ContextState
@@ -1889,7 +1849,6 @@ func (a *App) renameSessionEvent(ev SessionEvent) {
 	}
 	if ev.OldName != "" && ev.OldName != ev.SessionName {
 		delete(a.modelCache, ev.OldName)
-		delete(a.remoteControlCache, ev.OldName)
 		delete(a.messageCountCache, ev.OldName)
 		delete(a.contextStateCache, ev.OldName)
 	}
@@ -1909,7 +1868,6 @@ func (a *App) deleteSessionEvent(ev SessionEvent) {
 	a.sessions = filtered
 	if ev.SessionName != "" {
 		delete(a.modelCache, ev.SessionName)
-		delete(a.remoteControlCache, ev.SessionName)
 		delete(a.messageCountCache, ev.SessionName)
 		delete(a.contextStateCache, ev.SessionName)
 	}
@@ -1948,12 +1906,6 @@ func copyStringMap(in map[string]string) map[string]string {
 	return out
 }
 
-func copyBoolMap(in map[string]bool) map[string]bool {
-	out := make(map[string]bool, len(in))
-	maps.Copy(out, in)
-	return out
-}
-
 func copyIntMap(in map[string]int) map[string]int {
 	out := make(map[string]int, len(in))
 	maps.Copy(out, in)
@@ -1975,9 +1927,9 @@ func (a *App) noteInteraction() {
 }
 
 // runRegistrySubscriber drains the daemon event stream and pokes the
-// store watcher's interrupt path on every event. Bridge events also
-// patch the local bridge map so the dashboard reflects new and
-// closed bridges within milliseconds. The reload runs on the same
+// store watcher's interrupt path on every event. Live URL events also
+// patch the local map so the dashboard reflects opened and closed
+// live URLs within milliseconds. The reload runs on the same
 // code path as the polling watcher so concurrency stays simple.
 func (a *App) runRegistrySubscriber(events <-chan SessionEvent) {
 	tuiLog.Logger().Info("tui.registry_subscriber.started", "component", "tui")
@@ -2754,25 +2706,6 @@ func (a *App) handleEvent(ev tcell.Event) {
 			a.logHealthTick()
 		case modelsPrewarmed:
 			maps.Copy(a.modelCache, d.models)
-			a.populateTable()
-		case bridgesLoaded:
-			if d.err != nil {
-				tuiLog.Logger().Warn("tui.startup.list_bridges.failed",
-					"component", "tui",
-					"duration_ms", d.duration.Milliseconds(),
-					"err", d.err)
-				break
-			}
-			a.bridgeMu.Lock()
-			clear(a.bridges)
-			for _, b := range d.list {
-				a.bridges[b.SessionID] = b
-			}
-			a.bridgeMu.Unlock()
-			tuiLog.Logger().Info("tui.startup.list_bridges.loaded",
-				"component", "tui",
-				"count", len(d.list),
-				"duration_ms", d.duration.Milliseconds())
 			a.populateTable()
 		case summaryRefreshed:
 			// Table was already repopulated by maybeRefreshSummary. The
@@ -3574,9 +3507,9 @@ func (a *App) draw() {
 	if provider, ok := a.overlay.(LegendProvider); ok {
 		a.status.LegendOverride = provider.StatusLegendActions()
 	}
-	a.bridgeMu.RLock()
-	a.status.BridgeCount = len(a.bridges)
-	a.bridgeMu.RUnlock()
+	a.liveURLMu.RLock()
+	a.status.LiveURLCount = len(a.liveURLs)
+	a.liveURLMu.RUnlock()
 	a.status.DaemonOnline = a.isDaemonOnline()
 	a.status.DaemonConnecting = a.showStartupLoadingState() && !a.isDaemonOnline()
 	a.status.DaemonSpinner = LoadingSpinnerGlyph(a.spinnerFrame)
@@ -4546,7 +4479,7 @@ func (a *App) openNewSessionTypeModal(basedir string) {
 			Hint:  "persists in the dashboard",
 			Action: func() {
 				a.closeOverlay()
-				a.openNewSessionRemoteControlModal(basedir)
+				a.launchNewTrackedSession(basedir)
 			},
 		},
 		{
@@ -4554,7 +4487,7 @@ func (a *App) openNewSessionTypeModal(basedir string) {
 			Hint:  "auto-delete on exit unless you keep it",
 			Action: func() {
 				a.closeOverlay()
-				a.openNewSessionRemoteControlModalIncognito(basedir)
+				a.launchNewIncognitoSession(basedir)
 			},
 			Disabled: a.cb.StartIncognitoWithBasedir == nil,
 		},
@@ -4628,78 +4561,27 @@ func (a *App) sidecarLaunchLabel(temporary bool) string {
 	return "Tracked live session"
 }
 
-// openNewSessionRemoteControlModalIncognito mirrors the regular
-// remote-control choice but routes through the incognito launcher.
-// The session bypasses the registry on creation and only persists if
-// the user opts in via the post session prompt.
-func (a *App) openNewSessionRemoteControlModalIncognito(basedir string) {
-	launch := func(enableRC bool) {
-		a.closeOverlay()
-		runner := func() {
-			if a.cb.StartIncognitoWithBasedir != nil {
-				_ = a.cb.StartIncognitoWithBasedir(basedir, enableRC)
-			}
+func (a *App) launchNewTrackedSession(basedir string) {
+	runner := func() {
+		switch {
+		case a.cb.StartSessionWithBasedir != nil:
+			_ = a.cb.StartSessionWithBasedir(basedir)
+		case a.cb.StartSession != nil:
+			_ = a.cb.StartSession()
 		}
-		a.suspendImpl(runner)
-		a.refreshSessions()
 	}
-	entries := []OptionsModalEntry{
-		{
-			Label:  "Launch incognito (no remote control)",
-			Hint:   "auto-delete on exit",
-			Action: func() { launch(false) },
-		},
-		{
-			Label:  "Launch incognito with --remote-control",
-			Hint:   "bridge URL until exit",
-			Action: func() { launch(true) },
-		},
-	}
-	modal := NewOptionsModal("Temporary session at "+shortPath(basedir), entries)
-	modal.OnCancel = func() { a.closeOverlay() }
-	a.overlay = modal
-	a.mode = StatusFilter
+	a.suspendImpl(runner)
+	a.refreshSessions()
 }
 
-// openNewSessionRemoteControlModal is the second step in the new
-// session flow. After the basedir is chosen, the user picks whether
-// claude should launch with --remote-control or without. Both options
-// suspend the TUI, start the session, and refresh the table on
-// return. The modal defaults to "without" so users who just want a
-// local session can confirm by pressing Enter on the highlighted
-// option.
-func (a *App) openNewSessionRemoteControlModal(basedir string) {
-	launch := func(enableRC bool) {
-		a.closeOverlay()
-		runner := func() {
-			switch {
-			case a.cb.StartSessionWithBasedirRC != nil:
-				_ = a.cb.StartSessionWithBasedirRC(basedir, enableRC)
-			case a.cb.StartSessionWithBasedir != nil:
-				_ = a.cb.StartSessionWithBasedir(basedir)
-			case a.cb.StartSession != nil:
-				_ = a.cb.StartSession()
-			}
+func (a *App) launchNewIncognitoSession(basedir string) {
+	runner := func() {
+		if a.cb.StartIncognitoWithBasedir != nil {
+			_ = a.cb.StartIncognitoWithBasedir(basedir, false)
 		}
-		a.suspendImpl(runner)
-		a.refreshSessions()
 	}
-	entries := []OptionsModalEntry{
-		{
-			Label:  "Launch without remote control",
-			Hint:   "classic stdio",
-			Action: func() { launch(false) },
-		},
-		{
-			Label:  "Launch with --remote-control",
-			Hint:   "exposes bridge URL at claude.ai/code",
-			Action: func() { launch(true) },
-		},
-	}
-	modal := NewOptionsModal("Start new session at "+shortPath(basedir), entries)
-	modal.OnCancel = func() { a.closeOverlay() }
-	a.overlay = modal
-	a.mode = StatusFilter
+	a.suspendImpl(runner)
+	a.refreshSessions()
 }
 
 func (a *App) viewSelected() {
@@ -4984,7 +4866,7 @@ func (a *App) pinSidecar(sess *session.Session) {
 		a.sidecarCancel = nil
 	}
 	bridgeURL := ""
-	if b, ok := a.bridgeFor(sess); ok {
+	if b, ok := a.liveURLRecordFor(sess); ok {
 		bridgeURL = b.URL
 	}
 	panel := NewSidecarPanel(sess.Name, sess.Metadata.ProviderSessionID(), bridgeURL)
@@ -5499,12 +5381,11 @@ func (a *App) openHelpModal() {
 		{Label: "  1            Sessions tab", Disabled: true},
 		{Label: "  2            Stats tab", Disabled: true},
 		{Label: "  3            Settings tab", Disabled: true},
-		{Label: "  4            Sidecar tab (live remote control view)", Disabled: true},
+		{Label: "  4            Sidecar tab (live session view)", Disabled: true},
 		{Label: "  !@#$%        sort columns 1..5", Disabled: true},
-		{Label: "Remote control (in row Options popup)", Disabled: true},
-		{Label: "  Enable / Disable for selected session", Disabled: true},
-		{Label: "  Open bridge in browser", Disabled: true},
-		{Label: "  Copy bridge URL", Disabled: true},
+		{Label: "Live sessions", Disabled: true},
+		{Label: "  Drive in sidecar from row Options popup", Disabled: true},
+		{Label: "  Open/copy live URL from row Options popup", Disabled: true},
 		{Label: "Settings tab only", Disabled: true},
 		{Label: "  e            edit global config in $EDITOR", Disabled: true},
 		{Label: "  E            edit project config in $EDITOR", Disabled: true},
@@ -5567,91 +5448,33 @@ func (a *App) findSessionByName(name string) *session.Session {
 	return nil
 }
 
-// remoteControlEntry builds the toggle entry for the options popup.
-// The label flips between Enable and Disable based on the current
-// per session value as known to the wired callback.
-func (a *App) remoteControlEntry(sess *session.Session, close func()) OptionsModalEntry {
-	caps := sessionCapabilities(sess)
-	enabled := a.remoteControlCache[sess.Name]
-	label := "Enable remote control"
-	if enabled {
-		label = "Disable remote control"
-	}
-	return OptionsModalEntry{
-		Label: label,
-		Hint:  "claude --remote-control",
-		Action: func() {
-			close()
-			if a.cb.SetRemoteControl != nil {
-				a.remoteControlCache[sess.Name] = !enabled
-				go func() {
-					defer func() {
-						if r := recover(); r != nil {
-							logUIGoroutinePanic("remote_control_update", fmt.Sprint(r))
-						}
-					}()
-					_ = a.cb.SetRemoteControl(sess, !enabled)
-					a.requestSessionsAsync("remote_control")
-				}()
-			}
-		},
-		Disabled: a.cb.SetRemoteControl == nil || !caps.RemoteControl,
-	}
-}
-
-// openBridgeEntry builds the "open bridge in browser" entry.  Only
-// enabled when the daemon reports an active bridge for this session.
-func (a *App) openBridgeEntry(sess *session.Session, close func()) OptionsModalEntry {
-	if !sessionCapabilities(sess).RemoteControl {
-		return OptionsModalEntry{Label: "Open bridge in browser", Hint: "unsupported", Disabled: true}
-	}
-	b, ok := a.bridgeFor(sess)
-	return OptionsModalEntry{
-		Label: "Open bridge in browser",
-		Hint:  "uses /usr/bin/open",
-		Action: func() {
-			close()
-			if !ok {
-				return
-			}
-			_ = exec.Command("open", b.URL).Start()
-		},
-		Disabled: !ok,
-	}
-}
-
-// copyBridgeEntry builds the "copy bridge URL" entry.  Disabled when
-// no bridge is active. Uses CopyToClipboard which picks the right
-// tool for the host OS (pbcopy, wl-copy, xclip, xsel, or clip.exe).
-func (a *App) copyBridgeEntry(sess *session.Session, close func()) OptionsModalEntry {
-	if !sessionCapabilities(sess).RemoteControl {
-		return OptionsModalEntry{Label: "Copy bridge URL", Hint: "unsupported", Disabled: true}
-	}
-	b, ok := a.bridgeFor(sess)
-	return OptionsModalEntry{
-		Label: "Copy bridge URL",
-		Hint:  "system clipboard",
-		Action: func() {
-			close()
-			if !ok {
-				return
-			}
-			_ = CopyToClipboard(b.URL)
-		},
-		Disabled: !ok,
-	}
-}
-
-// bridgeFor returns the cached bridge for sess, if any. Reads under
-// the bridge mutex.
-func (a *App) bridgeFor(sess *session.Session) (Bridge, bool) {
+// liveURLRecordFor returns the cached live URL backing record for sess,
+// if any.
+func (a *App) liveURLRecordFor(sess *session.Session) (LiveURL, bool) {
 	if sess == nil || sess.Metadata.ProviderSessionID() == "" {
-		return Bridge{}, false
+		return LiveURL{}, false
 	}
-	a.bridgeMu.RLock()
-	defer a.bridgeMu.RUnlock()
-	b, ok := a.bridges[sess.Metadata.ProviderSessionID()]
+	a.liveURLMu.RLock()
+	defer a.liveURLMu.RUnlock()
+	b, ok := a.liveURLs[sess.Metadata.ProviderSessionID()]
 	return b, ok
+}
+
+func (a *App) liveURLForSession(sess *session.Session) (string, bool) {
+	if sess == nil {
+		return "", false
+	}
+	sessionID := sess.Metadata.ProviderSessionID()
+	if sessionID == "" {
+		return "", false
+	}
+	if a.sidecar != nil && a.sidecarSessionID == sessionID && strings.TrimSpace(a.sidecar.LiveURL) != "" {
+		return strings.TrimSpace(a.sidecar.LiveURL), true
+	}
+	if b, ok := a.liveURLRecordFor(sess); ok && strings.TrimSpace(b.URL) != "" {
+		return strings.TrimSpace(b.URL), true
+	}
+	return "", false
 }
 
 func sessionCapabilities(sess *session.Session) session.ProviderCapabilities {
@@ -5795,7 +5618,6 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []Optio
 				a.openBasedirEditor(sess)
 			},
 		},
-		a.remoteControlEntry(sess, close),
 		{
 			Label: "Drive in sidecar",
 			Hint:  "live stream",
@@ -5813,8 +5635,8 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []Optio
 			},
 			Disabled: !a.sidecarCanDrive(sess),
 		},
-		a.openBridgeEntry(sess, close),
-		a.copyBridgeEntry(sess, close),
+		a.openLiveURLEntry(sess, close),
+		a.copyLiveURLEntry(sess, close),
 		{
 			Label: "Rename",
 			Hint:  "edits the registry name",
@@ -5852,6 +5674,55 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []Optio
 		},
 	}
 	return entries
+}
+
+func (a *App) openLiveURLEntry(sess *session.Session, close func()) OptionsModalEntry {
+	url, ok := a.liveURLForSession(sess)
+	return OptionsModalEntry{
+		Label:    "Open live URL",
+		Hint:     "browser",
+		Disabled: !ok,
+		Action: func() {
+			close()
+			if url == "" {
+				return
+			}
+			if err := openExternalURL(url); err != nil {
+				tuiLog.Logger().Warn("live_url.open failed", "session", sess.Name, "error", err)
+			}
+		},
+	}
+}
+
+func (a *App) copyLiveURLEntry(sess *session.Session, close func()) OptionsModalEntry {
+	url, ok := a.liveURLForSession(sess)
+	return OptionsModalEntry{
+		Label:    "Copy live URL",
+		Hint:     "clipboard",
+		Disabled: !ok,
+		Action: func() {
+			close()
+			if url == "" {
+				return
+			}
+			if err := CopyToClipboard(url); err != nil {
+				tuiLog.Logger().Warn("live_url.copy failed", "session", sess.Name, "error", err)
+			}
+		},
+	}
+}
+
+func openExternalURL(url string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	return cmd.Start()
 }
 
 // openRenamePrompt asks for the new session name via an inline input

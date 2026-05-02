@@ -77,7 +77,8 @@ type Permissions struct {
 	DisableBypassPermissionsMode string   `json:"disableBypassPermissionsMode,omitempty"`
 }
 
-// NewSession creates a new session with the given name and UUID.
+// NewSession creates a new default-provider session with the given name and
+// provider session id.
 func NewSession(name, sessionID string) *Session {
 	now := currentTime()
 	sess := &Session{
@@ -157,16 +158,10 @@ func (m Metadata) PreviousProviderSessionIDStrings() []string {
 func (m Metadata) Identity(name string) SessionIdentity {
 	provider := m.ProviderID()
 	if m.ProviderState != nil {
-		current := m.ProviderState.Current.Normalized()
-		if current.Provider == "" {
-			current.Provider = provider
-		}
+		current := m.ProviderState.Current.NormalizedForProvider(provider)
 		previous := make([]ProviderSessionID, 0, len(m.ProviderState.Previous))
 		for _, previousID := range m.ProviderState.Previous {
-			normalized := previousID.Normalized()
-			if normalized.Provider == "" {
-				normalized.Provider = provider
-			}
+			normalized := previousID.NormalizedForProvider(provider)
 			if !normalized.IsZero() {
 				previous = append(previous, normalized)
 			}
@@ -204,29 +199,23 @@ func (m *Metadata) NormalizeProviderState() {
 	if m.ProviderState == nil {
 		m.ProviderState = &ProviderOwnedMetadata{}
 	}
-	current := m.ProviderState.Current.Normalized()
+	current := m.ProviderState.Current.NormalizedForProvider(provider)
 	if current.IsZero() && m.SessionID != "" {
-		current = ProviderSessionID{Provider: provider, ID: m.SessionID}.Normalized()
-	}
-	if current.Provider == "" {
-		current.Provider = provider
+		current = ProviderSessionID{Provider: provider, ID: m.SessionID}.NormalizedForProvider(provider)
 	}
 	m.ProviderState.Current = current
 
 	if len(m.ProviderState.Previous) == 0 && len(m.PreviousSessionIDs) > 0 {
 		m.ProviderState.Previous = make([]ProviderSessionID, 0, len(m.PreviousSessionIDs))
 		for _, previousSessionID := range m.PreviousSessionIDs {
-			id := ProviderSessionID{Provider: provider, ID: previousSessionID}.Normalized()
+			id := ProviderSessionID{Provider: provider, ID: previousSessionID}.NormalizedForProvider(provider)
 			if !id.IsZero() {
 				m.ProviderState.Previous = append(m.ProviderState.Previous, id)
 			}
 		}
 	}
 	for i := range m.ProviderState.Previous {
-		normalized := m.ProviderState.Previous[i].Normalized()
-		if normalized.Provider == "" {
-			normalized.Provider = provider
-		}
+		normalized := m.ProviderState.Previous[i].NormalizedForProvider(provider)
 		m.ProviderState.Previous[i] = normalized
 	}
 	if m.ProviderState.Artifacts.TranscriptPath == "" && m.TranscriptPath != "" {
@@ -259,7 +248,7 @@ func (m *Metadata) SetProviderTranscriptPath(path string) {
 // replaces it with the new primary identity.
 func (s *Session) RotateIdentity(next ProviderSessionID) {
 	identity := s.Identity()
-	next = next.Normalized()
+	next = next.NormalizedForProvider(s.ProviderID())
 	if current := identity.Current.Normalized(); !current.IsZero() && current != next {
 		s.Metadata.PreviousSessionIDs = appendUniqueString(s.Metadata.PreviousSessionIDs, current.ID)
 		s.Metadata.NormalizeProviderState()

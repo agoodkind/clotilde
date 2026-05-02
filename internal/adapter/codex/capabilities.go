@@ -1,15 +1,12 @@
 package codex
 
 import (
-	"strings"
-
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
 const (
 	defaultEffectiveContextPercent = 90
-	observedHTTPResponsesContext   = 272000
 )
 
 type CapabilityMode struct {
@@ -25,10 +22,8 @@ type CapabilityReport struct {
 func CapabilityReportForModel(model adaptermodel.ResolvedModel, mode CapabilityMode) CapabilityReport {
 	advertised := model.Context
 	observed := advertised
-	if model.Backend == adaptermodel.BackendCodex && !mode.WebsocketEnabled {
-		if strings.TrimSpace(model.ClaudeModel) == "gpt-5.4" || strings.TrimSpace(model.ClaudeModel) == "gpt-5.5" {
-			observed = observedHTTPResponsesContext
-		}
+	if model.Backend == adaptermodel.BackendCodex && !mode.WebsocketEnabled && model.ObservedContext > 0 {
+		observed = model.ObservedContext
 	}
 	if observed <= 0 {
 		observed = advertised

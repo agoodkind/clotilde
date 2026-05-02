@@ -6,11 +6,12 @@ import (
 	"fmt"
 
 	claudeartifacts "goodkind.io/clyde/internal/claude/artifacts"
+	"goodkind.io/clyde/internal/codex"
 	"goodkind.io/clyde/internal/session"
 )
 
 // Delete removes provider-owned artifacts for a logical session row.
-func Delete(_ context.Context, req session.DeleteArtifactsRequest) (*session.DeletedArtifacts, error) {
+func Delete(ctx context.Context, req session.DeleteArtifactsRequest) (*session.DeletedArtifacts, error) {
 	if req.Session == nil {
 		return nil, fmt.Errorf("nil session")
 	}
@@ -25,7 +26,7 @@ func Delete(_ context.Context, req session.DeleteArtifactsRequest) (*session.Del
 			AgentLogs:   deleted.AgentLogs,
 		}, nil
 	case session.ProviderCodex:
-		return &session.DeletedArtifacts{}, nil
+		return codex.NewLifecycle().DeleteArtifacts(ctx, req)
 	default:
 		return nil, fmt.Errorf("unsupported session provider %q", req.Session.ProviderID())
 	}

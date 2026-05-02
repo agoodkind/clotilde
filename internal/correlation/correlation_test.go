@@ -74,6 +74,26 @@ func TestAttrsIncludesCorrelationFields(t *testing.T) {
 	}
 }
 
+func TestAppendAttrsSkipsExistingKeys(t *testing.T) {
+	t.Parallel()
+
+	corr := Context{
+		TraceID:   "11111111111111111111111111111111",
+		SpanID:    "2222222222222222",
+		RequestID: "corr-request",
+	}
+	got := attrMap(AppendAttrs([]slog.Attr{slog.String("request_id", "explicit-request")}, corr))
+	if got["request_id"] != "explicit-request" {
+		t.Fatalf("request_id = %q, want explicit-request", got["request_id"])
+	}
+	if got["trace_id"] != string(corr.TraceID) {
+		t.Fatalf("trace_id = %q, want %q", got["trace_id"], corr.TraceID)
+	}
+	if got["span_id"] != string(corr.SpanID) {
+		t.Fatalf("span_id = %q, want %q", got["span_id"], corr.SpanID)
+	}
+}
+
 func TestMetadataRoundTripCreatesChildSpan(t *testing.T) {
 	t.Parallel()
 

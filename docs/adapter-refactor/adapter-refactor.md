@@ -34,18 +34,8 @@ evidence shows a regression.
 
 ## Next Slice
 
-1. Continue `CLYDE-163`: add Clyde-side context preflight for Cursor/Codex
-   requests because `/v1/models` context metadata alone did not make Cursor
-   auto-summarize oversized `clyde-codex-5.5` turns.
-2. Do `CLYDE-171`: finish removing the remaining hard-coded native
-   Codex/GPT alias catalog, context helpers, and routing defaults now that
-   Clyde-specific GPT aliases can be declared in config. `CLYDE-169` is the
-   umbrella tracker, not the consumable next ticket.
-3. Continue `CLYDE-165`: move MITM baseline refresh under the daemon-owned
-   always-on listener and keep local rolling baselines in XDG state.
-4. Keep `CLYDE-162` open for a true Cursor `Subagent` tool repro. Current
-   adapter logs show missing Cursor generation ids, but the latest turn did not
-   include a `Subagent` tool in the request body.
+1. Continue `CLYDE-157`: finish trace/span propagation across adapter,
+   daemon, provider, and capture logs.
 
 ## Global Remaining Set
 
@@ -71,16 +61,14 @@ evidence shows a regression.
 - `CLYDE-160`: Todo. Reproduce Claude long-running tasks stopping too early.
 - `CLYDE-161`: Todo. Split logging architecture by concern and evaluate
   per-request log bundles.
-- `CLYDE-162`: In Progress. Needs a true Cursor `Subagent` request-body repro;
-  current logs show missing generation ids only.
-- `CLYDE-163`: In Progress. Investigate Cursor context auto-summarization not
-  engaging for Clyde adapter models.
-- `CLYDE-165`: In Progress. Daemon-owned always-on MITM with rolling XDG
+- `CLYDE-162`: Done. Background completion failures now carry enough
+  correlation to debug the Cursor-side completion path.
+- `CLYDE-163`: Done. Cursor auto-summarization remains client-side; Clyde's
+  responsibility is correct context reporting and preflight behavior.
+- `CLYDE-165`: Done. Daemon-owned always-on MITM with rolling XDG
   baselines, drift logs, and convenience-only CLI.
-- `CLYDE-169`: In Progress. Clyde-specific GPT aliases and Claude family
-  aliases are now config-declared, but native Codex alias/context helpers and
-  source-level routing defaults still need to move behind config. Consumable
-  child ticket: `CLYDE-171`.
+- `CLYDE-169`: Done. Adapter model mappings, native Codex aliases, and
+  observed Codex context windows are config-driven.
 
 ## Non-Negotiables
 

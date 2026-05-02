@@ -251,7 +251,7 @@ func TestHappyPath_ResumeFromOptionsPopup(t *testing.T) {
 // mkAppWithSessions constructs a test App with n synthetic sessions
 // and a SimulationScreen attached. Returns the app, the screen, and
 // a cleanup func. The App's expensive callbacks (RefreshSummary,
-// GetSessionDetail, SubscribeRegistry, ListBridges) are stubbed.
+// GetSessionDetail, SubscribeRegistry) are stubbed.
 func mkAppWithSessions(t *testing.T, n int) (*App, tcell.SimulationScreen, func()) {
 	t.Helper()
 	sessions := make([]*session.Session, n)

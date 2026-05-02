@@ -1,7 +1,6 @@
 package session
 
 import (
-	"path/filepath"
 	"strings"
 
 	"goodkind.io/clyde/internal/config"
@@ -16,7 +15,7 @@ func defaultDiscoveryScanners(homeDir string) []DiscoveryScanner {
 	}
 	return []DiscoveryScanner{
 		newClaudeDiscoveryScanner(config.ClaudeProjectsRoot(homeDir)),
-		newCodexDiscoveryScanner(filepath.Join(homeDir, ".codex")),
+		newCodexDiscoveryScanner(defaultCodexHome(homeDir)),
 	}
 }
 

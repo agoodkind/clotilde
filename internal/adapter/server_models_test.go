@@ -69,25 +69,27 @@ func TestModelEntryFromResolvedIsBackendNeutral(t *testing.T) {
 
 func TestCodexCapabilityOverlayAppliesTransportAwareContextTruth(t *testing.T) {
 	entry := modelEntryFromResolved(ResolvedModel{
-		Alias:       "clyde-gpt-5.4-1m-high",
-		Backend:     BackendCodex,
-		ClaudeModel: "gpt-5.4",
-		Context:     1_000_000,
+		Alias:           "clyde-configured-codex-1m-high",
+		Backend:         BackendCodex,
+		ClaudeModel:     "configured-codex-model",
+		Context:         1_000_000,
+		ObservedContext: 333_000,
 	})
 	entry = adaptercodex.ApplyCapabilityReport(entry, adaptercodex.CapabilityReportForModel(ResolvedModel{
-		Alias:       "clyde-gpt-5.4-1m-high",
-		Backend:     BackendCodex,
-		ClaudeModel: "gpt-5.4",
-		Context:     1_000_000,
+		Alias:           "clyde-configured-codex-1m-high",
+		Backend:         BackendCodex,
+		ClaudeModel:     "configured-codex-model",
+		Context:         1_000_000,
+		ObservedContext: 333_000,
 	}, adaptercodex.CapabilityMode{WebsocketEnabled: false}))
 
 	for _, got := range []int{entry.Context, entry.ContextWindow, entry.ContextLength, entry.MaxModelLen} {
-		if got != 272000 {
+		if got != 333000 {
 			t.Fatalf("observed context fields = %+v", entry)
 		}
 	}
 	for _, got := range []int{entry.ContextTokenLimit, entry.ContextTokenLimitCamel, entry.ContextTokenLimitForMaxMode, entry.ContextTokenLimitForMaxModeCamel} {
-		if got != 244800 {
+		if got != 299700 {
 			t.Fatalf("effective safe fields = %+v", entry)
 		}
 	}

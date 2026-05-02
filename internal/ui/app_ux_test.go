@@ -81,50 +81,33 @@ func TestUX_TerminalModeResetSequenceDisablesAlternateScroll(t *testing.T) {
 	}
 }
 
-func TestUX_NewSessionRemoteControlChoiceIsForwarded(t *testing.T) {
+func TestUX_NewSessionUsesConfigDefaultWithoutLiveURLPrompt(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 2)
 	defer cleanup()
 	a.suspendImpl = func(fn func()) { fn() }
 
-	var calls []bool
-	a.cb.StartSessionWithBasedirRC = func(basedir string, enableRC bool) error {
+	var calls int
+	a.cb.StartSessionWithBasedir = func(basedir string) error {
 		if basedir != "/tmp/work" {
 			t.Fatalf("basedir = %q, want /tmp/work", basedir)
 		}
-		calls = append(calls, enableRC)
+		calls++
 		return nil
 	}
 
-	a.openNewSessionRemoteControlModal("/tmp/work")
+	a.openNewSessionTypeModal("/tmp/work")
 	modal, ok := a.overlay.(*OptionsModal)
 	if !ok {
 		t.Fatalf("overlay = %T, want *OptionsModal", a.overlay)
 	}
-	withRC := findModalAction(modal, "Launch with --remote-control")
-	if withRC == nil {
-		t.Fatalf("missing Launch with --remote-control action")
+	action := findModalAction(modal, "New tracked session")
+	if action == nil {
+		t.Fatalf("missing New tracked session action")
 	}
-	withRC()
+	action()
 
-	a.openNewSessionRemoteControlModal("/tmp/work")
-	modal, ok = a.overlay.(*OptionsModal)
-	if !ok {
-		t.Fatalf("overlay = %T, want *OptionsModal", a.overlay)
-	}
-	withoutRC := findModalAction(modal, "Launch without remote control")
-	if withoutRC == nil {
-		t.Fatalf("missing Launch without remote control action")
-	}
-	withoutRC()
-
-	if len(calls) != 2 {
-		t.Fatalf("StartSessionWithBasedirRC calls = %d, want 2", len(calls))
-	}
-	if !calls[0] {
-		t.Fatalf("first call enableRC = false, want true")
-	}
-	if calls[1] {
-		t.Fatalf("second call enableRC = true, want false")
+	if calls != 1 {
+		t.Fatalf("StartSessionWithBasedir calls = %d, want 1", calls)
 	}
 }
 
@@ -214,7 +197,6 @@ func TestUX_SessionOptionsRespectProviderCapabilities(t *testing.T) {
 	}
 	a.cb.ViewContent = func(*session.Session) string { return "" }
 	a.cb.ExportSession = func(*session.Session, SessionExportRequest) ([]byte, error) { return nil, nil }
-	a.cb.SetRemoteControl = func(*session.Session, bool) error { return nil }
 	a.cb.ForkSession = func(*session.Session) error { return nil }
 
 	a.openSessionOptionsFor(sess)
@@ -225,10 +207,9 @@ func TestUX_SessionOptionsRespectProviderCapabilities(t *testing.T) {
 	for _, label := range []string{
 		"View transcript",
 		"Export transcript",
-		"Enable remote control",
 		"Drive in sidecar",
-		"Open bridge in browser",
-		"Copy bridge URL",
+		"Open live URL",
+		"Copy live URL",
 		"Compact",
 		"Fork",
 	} {
@@ -608,13 +589,12 @@ func TestUX_RegistrySessionUpdateAppliesWithoutSnapshotReload(t *testing.T) {
 		},
 	}
 	a.applySessionEvent(SessionEvent{
-		Kind:          "SESSION_UPDATED",
-		SessionName:   updated.Name,
-		SessionID:     updated.Metadata.ProviderSessionID(),
-		Session:       updated,
-		Model:         "sonnet",
-		RemoteControl: true,
-		MessageCount:  42,
+		Kind:         "SESSION_UPDATED",
+		SessionName:  updated.Name,
+		SessionID:    updated.Metadata.ProviderSessionID(),
+		Session:      updated,
+		Model:        "sonnet",
+		MessageCount: 42,
 	})
 
 	if listCalls != 0 {
@@ -626,9 +606,6 @@ func TestUX_RegistrySessionUpdateAppliesWithoutSnapshotReload(t *testing.T) {
 	}
 	if a.modelCache[updated.Name] != "sonnet" {
 		t.Fatalf("model cache = %q, want sonnet", a.modelCache[updated.Name])
-	}
-	if !a.remoteControlCache[updated.Name] {
-		t.Fatalf("remote control cache not updated")
 	}
 	if a.messageCountCache[updated.Name] != 42 {
 		t.Fatalf("message count cache = %d, want 42", a.messageCountCache[updated.Name])
@@ -679,14 +656,13 @@ func TestUX_RegistryRenamePreservesSelection(t *testing.T) {
 		},
 	}
 	a.applySessionEvent(SessionEvent{
-		Kind:          "SESSION_RENAMED",
-		OldName:       "test-session-00",
-		SessionName:   renamed.Name,
-		SessionID:     renamed.Metadata.ProviderSessionID(),
-		Session:       renamed,
-		Model:         "opus",
-		RemoteControl: false,
-		MessageCount:  7,
+		Kind:         "SESSION_RENAMED",
+		OldName:      "test-session-00",
+		SessionName:  renamed.Name,
+		SessionID:    renamed.Metadata.ProviderSessionID(),
+		Session:      renamed,
+		Model:        "opus",
+		MessageCount: 7,
 	})
 
 	if a.selected == nil || a.selected.Name != renamed.Name {

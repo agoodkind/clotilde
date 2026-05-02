@@ -24,6 +24,7 @@ import (
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/slogger"
 )
 
@@ -51,6 +52,7 @@ type rawChatLogEvent struct {
 	BodyRaw       string
 	BodyB64       string
 	BodyTruncated bool
+	Correlation   correlation.Context
 }
 
 func (attrs rawChatLogEvent) asAttrs() []slog.Attr {
@@ -74,7 +76,7 @@ func (attrs rawChatLogEvent) asAttrs() []slog.Attr {
 	if attrs.BodyTruncated {
 		out = append(out, slog.Bool("body_truncated", true))
 	}
-	return out
+	return correlation.AppendAttrs(out, attrs.Correlation)
 }
 
 func encodeBodyB64(body []byte) string {

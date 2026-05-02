@@ -182,30 +182,6 @@ func TestEventResizeSetsPendingDisplaySyncWithoutTableReshuffle(t *testing.T) {
 	}
 }
 
-func TestBridgesLoadedInterruptPopulatesBridgeMap(t *testing.T) {
-	a, _, cleanup := mkAppWithSessions(t, 2)
-	defer cleanup()
-
-	a.handleEvent(tcell.NewEventInterrupt(bridgesLoaded{
-		list: []Bridge{{
-			SessionID:       a.sessions[0].Metadata.ProviderSessionID(),
-			BridgeSessionID: "bridge-1",
-			URL:             "https://claude.ai/code/bridge-1",
-		}},
-	}))
-
-	got, ok := a.bridgeFor(a.sessions[0])
-	if !ok {
-		t.Fatalf("expected bridge to be loaded")
-	}
-	if got.BridgeSessionID != "bridge-1" {
-		t.Fatalf("bridge session id = %q, want bridge-1", got.BridgeSessionID)
-	}
-	if got.URL != "https://claude.ai/code/bridge-1" {
-		t.Fatalf("bridge url = %q", got.URL)
-	}
-}
-
 func TestLastUsedTickDoesNotDeadlockWhenUpdatingRows(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 2)
 	defer cleanup()

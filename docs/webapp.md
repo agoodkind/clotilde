@@ -1,11 +1,12 @@
-# Remote dashboard webapp
+# Live-session webapp
 
 The clyde daemon optionally hosts a small HTML dashboard. The
-dashboard lists every active `--remote-control` bridge URL and
-exposes a form for spawning a new remote control session. It runs in
-the same process as the gRPC daemon and the OpenAI adapter, so a
-single launchd entry on macOS or a single systemd unit on Linux
-covers everything.
+dashboard lists daemon-owned live sessions and exposes a small chat
+harness for starting, streaming, sending to, and stopping those
+sessions through the daemon live-session HTTP surface. It runs in the
+same process as the gRPC daemon and the OpenAI adapter, so a single
+launchd entry on macOS or a single systemd unit on Linux covers
+everything.
 
 ## Enable
 
@@ -26,23 +27,40 @@ Restart the daemon. Visit `http://localhost:11435/`.
 | Method | Path             | Purpose                                              |
 |--------|------------------|------------------------------------------------------|
 | GET    | `/`              | HTML dashboard                                       |
-| GET    | `/api/bridges`   | JSON list of every active bridge                     |
-| POST   | `/api/sessions`  | Spawn a new `--remote-control` session via clyde |
+| GET    | `/api/live-sessions` | JSON list of daemon-owned live sessions        |
+| POST   | `/api/live-sessions` | Start a daemon-owned live session               |
+| POST   | `/api/live-sessions/{session_id}/send` | Send user text to a live session |
+| GET    | `/api/live-sessions/{session_id}/stream` | Stream live-session events as SSE |
+| POST   | `/api/live-sessions/{session_id}/stop` | Stop a live session              |
 | GET    | `/healthz`       | Liveness probe                                       |
 
-POST `/api/sessions` payload:
+POST `/api/live-sessions` payload:
 
 ```json
 {
+  "provider": "claude",
   "name": "my-session",
   "basedir": "/home/me/code/proj",
   "model": "claude-4-7-high",
-  "effort": "high"
+  "effort": "high",
+  "incognito": false
 }
 ```
 
-Every field is optional. Empty values fall through to the clyde
-defaults the same way the CLI flags do.
+Every field is optional. Empty provider, model, and effort values are
+daemon policy inputs; the browser does not implement provider-specific
+launch behavior.
+
+POST `/api/live-sessions/{session_id}/send` payload:
+
+```json
+{
+  "text": "hello"
+}
+```
+
+GET `/api/live-sessions/{session_id}/stream` returns Server-Sent
+Events with event name `live-session`.
 
 ## Cloudflare tunnel
 
@@ -56,11 +74,10 @@ cloudflared tunnel --url http://localhost:11435
 For named tunnels with Access policies, follow the standard
 cloudflared docs and add a Service Token rule on the hostname.
 
-## Caveats
+## Notes
 
-The webapp shells out to the `clyde` binary on the host to spawn
-sessions. The path can be set via `web_app.clyde_binary`; without
-it the daemon falls back to `clyde` on PATH. Tool authoring,
-templates, and a richer multi-pane viewer are out of scope for the
-first version. Open `https://claude.ai/code/<bridge-id>` from the
-dashboard rows to drive a live session.
+The webapp is only an HTTP facade and browser renderer. It does not
+shell out to `clyde` or implement provider-specific session control
+itself. Live-session listing, launch, streaming, send, and stop are
+delegated to daemon-owned dependencies behind the provider-neutral
+live-session contract.

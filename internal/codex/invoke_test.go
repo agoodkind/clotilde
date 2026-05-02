@@ -62,6 +62,51 @@ func TestLifecycleResumeInteractiveInvokesCodexResume(t *testing.T) {
 	}
 }
 
+func TestCodexResumeArgsSupportIDNameLastAndAll(t *testing.T) {
+	cases := []struct {
+		name string
+		req  session.OpaqueResumeRequest
+		want []string
+	}{
+		{
+			name: "thread id",
+			req:  session.OpaqueResumeRequest{Query: "019de9aa-3a00-7010-bd9f-a6ee71559357"},
+			want: []string{"resume", "019de9aa-3a00-7010-bd9f-a6ee71559357"},
+		},
+		{
+			name: "thread name",
+			req:  session.OpaqueResumeRequest{Query: "visible-name"},
+			want: []string{"resume", "visible-name"},
+		},
+		{
+			name: "last shorthand",
+			req:  session.OpaqueResumeRequest{Query: "last"},
+			want: []string{"resume", "--last"},
+		},
+		{
+			name: "native last flag",
+			req:  session.OpaqueResumeRequest{Query: "--last"},
+			want: []string{"resume", "--last"},
+		},
+		{
+			name: "cwd all flag",
+			req:  session.OpaqueResumeRequest{Query: "visible-name", AdditionalArgs: []string{"--all"}},
+			want: []string{"resume", "visible-name", "--all"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := codexResumeArgs(tc.req)
+			if err != nil {
+				t.Fatalf("codexResumeArgs returned error: %v", err)
+			}
+			if strings.Join(got, "\x00") != strings.Join(tc.want, "\x00") {
+				t.Fatalf("codexResumeArgs = %#v want %#v", got, tc.want)
+			}
+		})
+	}
+}
+
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }

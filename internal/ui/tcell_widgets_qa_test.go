@@ -52,8 +52,8 @@ func TestQA_AllWidgets(t *testing.T) {
 			s := &StatusBarWidget{Mode: StatusBrowse, Position: "Top"}
 			s.Draw(scr, r)
 		}},
-		{"03-statusbar-detail-with-bridges", 100, 1, func(scr tcell.Screen, r Rect) {
-			s := &StatusBarWidget{Mode: StatusDetail, Position: "45%", BridgeCount: 3}
+		{"03-statusbar-detail-with-live-urls", 100, 1, func(scr tcell.Screen, r Rect) {
+			s := &StatusBarWidget{Mode: StatusDetail, Position: "45%", LiveURLCount: 3}
 			s.Draw(scr, r)
 		}},
 		{"04-statusbar-compact", 100, 1, func(scr tcell.Screen, r Rect) {
@@ -90,9 +90,9 @@ func TestQA_AllWidgets(t *testing.T) {
 				{Label: "Fork", Hint: "f"},
 				{Label: "Rename", Hint: ""},
 				{Label: "Edit basedir", Hint: "B"},
-				{Label: "Drive in sidecar", Hint: "needs --remote-control", Disabled: true},
-				{Label: "Open bridge in browser", Hint: ""},
-				{Label: "Copy bridge URL", Hint: ""},
+				{Label: "Drive in sidecar", Hint: "live stream", Disabled: true},
+				{Label: "Open live URL", Hint: "browser", Disabled: true},
+				{Label: "Copy live URL", Hint: "clipboard", Disabled: true},
 				{Label: "Delete", Hint: "d"},
 			})
 			m.Draw(scr, r)
@@ -105,10 +105,9 @@ func TestQA_AllWidgets(t *testing.T) {
 				{Label: "Resume", Hint: "load this session"},
 				{Label: "View transcript", Hint: "v"},
 				{Label: "Edit basedir", Hint: "b"},
-				{Label: "Enable remote control", Hint: "claude --remote-control"},
-				{Label: "Drive in sidecar", Hint: "needs --remote-control", Disabled: true},
-				{Label: "Open bridge in browser", Hint: "uses /usr/bin/open", Disabled: true},
-				{Label: "Copy bridge URL", Hint: "system clipboard", Disabled: true},
+				{Label: "Drive in sidecar", Hint: "live stream", Disabled: true},
+				{Label: "Open live URL", Hint: "browser", Disabled: true},
+				{Label: "Copy live URL", Hint: "clipboard", Disabled: true},
 				{Label: "Rename", Hint: "edits the registry name"},
 				{Label: "Compact", Hint: "c"},
 				{Label: "Fork", Hint: "f"},

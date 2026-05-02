@@ -2,11 +2,14 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/codex"
@@ -126,6 +129,209 @@ func TestForegroundLeaseSuspendsAndRestoresCodexLiveRuntime(t *testing.T) {
 	}
 	if _, ok := srv.liveSessions["codex-thread"]; !ok {
 		t.Fatalf("codex live session not restored")
+	}
+}
+
+func TestSendLiveSessionDeliversToClaudeInjectSocket(t *testing.T) {
+	tmp := setupDaemonTestHome(t)
+	shortRun := shortRuntimeDir(t)
+	t.Setenv("XDG_RUNTIME_DIR", shortRun)
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	sess := session.NewSession("claude-chat", "claude-session")
+	setTestProviderIdentity(sess, session.ProviderClaude, "claude-session")
+	sess.Metadata.WorkDir = filepath.Join(tmp, "work")
+	if err := store.Create(sess); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	socketPath := injectSocketPath("claude-session")
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
+		t.Fatalf("mkdir inject dir: %v", err)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen inject socket: %v", err)
+	}
+	defer func() {
+		_ = listener.Close()
+		_ = os.Remove(socketPath)
+	}()
+	received := make(chan string, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		payload, _ := io.ReadAll(conn)
+		received <- string(payload)
+	}()
+
+	srv := newTestServer(t)
+	resp, err := srv.SendLiveSession(context.Background(), &clydev1.SendLiveSessionRequest{
+		SessionId: "claude-session",
+		Text:      "hello claude",
+	})
+	if err != nil {
+		t.Fatalf("send live session: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatalf("accepted = false, want true")
+	}
+	select {
+	case got := <-received:
+		if got != "hello claude\n" {
+			t.Fatalf("injected payload = %q want %q", got, "hello claude\n")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for injected payload")
+	}
+}
+
+func TestListLiveSessionsIncludesClaudeRemoteWorkers(t *testing.T) {
+	tmp := setupDaemonTestHome(t)
+	srv := newTestServer(t)
+	srv.remoteMu.Lock()
+	srv.remoteWorkers["claude-chat"] = &remoteWorker{
+		sessionName: "claude-chat",
+		sessionID:   "claude-session",
+		basedir:     filepath.Join(tmp, "work"),
+		incognito:   true,
+	}
+	srv.remoteMu.Unlock()
+
+	resp, err := srv.ListLiveSessions(context.Background(), &clydev1.ListLiveSessionsRequest{})
+	if err != nil {
+		t.Fatalf("list live sessions: %v", err)
+	}
+	if len(resp.GetSessions()) != 1 {
+		t.Fatalf("live session count = %d want 1", len(resp.GetSessions()))
+	}
+	got := resp.GetSessions()[0]
+	if got.GetProvider() != string(session.ProviderClaude) || got.GetSessionName() != "claude-chat" || got.GetSessionId() != "claude-session" {
+		t.Fatalf("live session = %#v", got)
+	}
+	if !got.GetSupportsSend() || !got.GetSupportsStream() || got.GetSupportsStop() {
+		t.Fatalf("unexpected live capabilities: send=%v stream=%v stop=%v", got.GetSupportsSend(), got.GetSupportsStream(), got.GetSupportsStop())
+	}
+}
+
+func TestListLiveSessionsReacquiresClaudeSocketWithoutWorkerMap(t *testing.T) {
+	tmp := setupDaemonTestHome(t)
+	shortRun := shortRuntimeDir(t)
+	t.Setenv("XDG_RUNTIME_DIR", shortRun)
+
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	basedir := filepath.Join(tmp, "work")
+	sess := session.NewSession("claude-chat", "claude-session")
+	setTestProviderIdentity(sess, session.ProviderClaude, "claude-session")
+	sess.Metadata.WorkDir = basedir
+	if err := store.Create(sess); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	socketPath := injectSocketPath("claude-session")
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
+		t.Fatalf("mkdir inject dir: %v", err)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen inject socket: %v", err)
+	}
+	defer func() {
+		_ = listener.Close()
+		_ = os.Remove(socketPath)
+	}()
+
+	srv := newTestServer(t)
+	resp, err := srv.ListLiveSessions(context.Background(), &clydev1.ListLiveSessionsRequest{})
+	if err != nil {
+		t.Fatalf("list live sessions: %v", err)
+	}
+	if len(resp.GetSessions()) != 1 {
+		t.Fatalf("live session count = %d want 1", len(resp.GetSessions()))
+	}
+	got := resp.GetSessions()[0]
+	if got.GetProvider() != string(session.ProviderClaude) || got.GetSessionId() != "claude-session" {
+		t.Fatalf("live session = %#v", got)
+	}
+	if got.GetStatus() != "reattachable" {
+		t.Fatalf("status = %q want reattachable", got.GetStatus())
+	}
+	if got.GetBasedir() != basedir {
+		t.Fatalf("basedir = %q want %q", got.GetBasedir(), basedir)
+	}
+}
+
+func TestForegroundLeaseSuspendsClaudeRemoteByInjectSocketAfterReload(t *testing.T) {
+	tmp := setupDaemonTestHome(t)
+	shortRun := shortRuntimeDir(t)
+	t.Setenv("XDG_RUNTIME_DIR", shortRun)
+
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	basedir := filepath.Join(tmp, "work")
+	sess := session.NewSession("claude-chat", "claude-session")
+	setTestProviderIdentity(sess, session.ProviderClaude, "claude-session")
+	sess.Metadata.WorkDir = basedir
+	if err := store.Create(sess); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	socketPath := injectSocketPath("claude-session")
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
+		t.Fatalf("mkdir inject dir: %v", err)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen inject socket: %v", err)
+	}
+	defer func() {
+		_ = listener.Close()
+		_ = os.Remove(socketPath)
+	}()
+	received := make(chan []byte, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		payload, _ := io.ReadAll(conn)
+		received <- payload
+		_ = listener.Close()
+		_ = os.Remove(socketPath)
+	}()
+
+	srv := newTestServer(t)
+	acquired, err := srv.AcquireForegroundSession(context.Background(), &clydev1.AcquireForegroundSessionRequest{
+		SessionName: "claude-chat",
+		Provider:    string(session.ProviderClaude),
+	})
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	if !acquired.GetShouldRestore() {
+		t.Fatalf("should_restore = false, want true")
+	}
+	if acquired.GetRestoreReason() != "claude_remote_socket" {
+		t.Fatalf("restore_reason = %q want claude_remote_socket", acquired.GetRestoreReason())
+	}
+	select {
+	case got := <-received:
+		if len(got) != 1 || got[0] != 0x03 {
+			t.Fatalf("inject payload = %#v want ctrl-c", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for ctrl-c payload")
 	}
 }
 
@@ -260,6 +466,17 @@ func setupDaemonTestHome(t *testing.T) string {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
 	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(tmp, "run"))
 	return tmp
+}
+
+func shortRuntimeDir(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join("/tmp", fmt.Sprintf("clyde-%d-%d", os.Getpid(), time.Now().UnixNano()))
+	_ = os.RemoveAll(dir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir short runtime dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
 }
 
 func newTestServer(t *testing.T) *Server {
