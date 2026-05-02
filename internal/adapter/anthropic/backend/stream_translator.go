@@ -142,6 +142,16 @@ func (t *StreamTranslator) HandleEventEvents(eventName string, dataJSON []byte) 
 			if !ok {
 				return nil, false, "", nil, fmt.Errorf("unknown tool block index %d", ev.Index)
 			}
+			// Empty partial_json carries no information. Forwarding it
+			// produces a tool_call delta whose Function field is the
+			// zero value, which json:"function,omitzero" drops, leaving
+			// a bare {"index":N,"type":"function"} chunk on the wire.
+			// Cursor's OpenAI SSE parser treats that as a finalize and
+			// drops the entire tool call. Defense in depth alongside
+			// the same guard in stream_parse.go::dispatchSSE.
+			if ev.Delta.PartialJSON == "" {
+				return nil, false, "", nil, nil
+			}
 			return []Event{{
 				Kind: EventToolCallDelta,
 				ToolCalls: []OpenAIToolCall{{

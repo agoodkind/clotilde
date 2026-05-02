@@ -114,6 +114,7 @@ func (s *Server) prepareAnthropicProviderRequest(
 		TrackerKey:   requestContextTrackerKey(req.OpenAI, model.Alias),
 		JSONCoercion: jsonCoercion,
 		IncludeUsage: req.OpenAI.StreamOptions != nil && req.OpenAI.StreamOptions.IncludeUsage,
+		Stream:       req.OpenAI.Stream,
 	}, nil
 }
 
@@ -138,7 +139,7 @@ func (s *Server) executeAnthropicPreparedRequest(
 		}
 	}
 	defer s.release()
-	if prepared.Request.Stream {
+	if prepared.Stream || prepared.Request.Stream {
 		return s.executeAnthropicPreparedStream(ctx, prepared, writer)
 	}
 	return s.executeAnthropicPreparedCollect(ctx, prepared, writer)
@@ -295,6 +296,7 @@ func anthropicResolvedModelFromRequest(req adapterresolver.ResolvedRequest) adap
 		Effort:          req.Effort.String(),
 		MaxOutputTokens: req.ContextBudget.OutputTokens,
 		FamilySlug:      req.Family,
+		Thinking:        req.Thinking,
 	}
 }
 

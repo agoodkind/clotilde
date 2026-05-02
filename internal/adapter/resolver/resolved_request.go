@@ -43,6 +43,12 @@ type ResolvedRequest struct {
 	ContextBudget ContextBudget
 	RequestID     string
 	Correlation   correlation.Context
+	// Thinking carries the model registry's thinking mode for this
+	// alias as a typed string ("enabled", "adaptive", "disabled", or
+	// empty when not applicable). Per-provider dispatch reads this to
+	// populate the upstream wire request. Empty means leave thinking
+	// unset on the upstream call.
+	Thinking string
 
 	Cursor adaptercursor.Request
 	OpenAI adapteropenai.ChatRequest

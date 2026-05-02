@@ -29,6 +29,13 @@ type ResolvedModelView struct {
 	Effort          Effort
 	Context         int
 	MaxOutputTokens int
+	// Thinking is the resolved thinking mode for this alias as a typed
+	// string ("enabled", "adaptive", "disabled", or empty when not
+	// applicable). The resolver carries it through so per-provider
+	// dispatch can populate the upstream wire request without reaching
+	// back into the model registry. Empty means leave the upstream
+	// thinking field unset.
+	Thinking string
 }
 
 // ErrUnresolvedProvider signals that the model alias resolved to a
@@ -65,7 +72,8 @@ func Resolve(req adaptercursor.Request, registry ModelRegistry) (ResolvedRequest
 			OutputTokens: view.MaxOutputTokens,
 			TotalTokens:  view.Context,
 		},
-		Cursor: req,
-		OpenAI: req.OpenAI,
+		Thinking: view.Thinking,
+		Cursor:   req,
+		OpenAI:   req.OpenAI,
 	}, nil
 }

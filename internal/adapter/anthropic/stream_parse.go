@@ -147,6 +147,17 @@ func dispatchSSE(
 					BlockIndex: ev.Index,
 				})
 			case "input_json_delta":
+				// Anthropic emits a leading content_block_delta with
+				// an empty partial_json to "open" the tool input
+				// stream. Forwarding it produces a tool_call delta with
+				// a zero-value Function block that json:"function,omitzero"
+				// drops, leaving a bare {"index":N,"type":"function"}
+				// chunk on the wire. Cursor's OpenAI SSE parser treats
+				// that as a finalize/reset and drops the whole tool
+				// call, so the user sees no Read/Glob card.
+				if ev.Delta.PartialJSON == "" {
+					return nil
+				}
 				return sink(StreamEvent{
 					Kind:        "tool_use_arg_delta",
 					BlockIndex:  ev.Index,
