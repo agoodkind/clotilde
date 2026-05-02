@@ -18,7 +18,7 @@ import (
 const structuredOutputShuntParseFailedEvent = "shunt structured-output parse failed; retrying"
 
 func (s *Server) forwardShunt(w http.ResponseWriter, r *http.Request, model ResolvedModel, body []byte) {
-	started := time.Now()
+	started := adapterClock.Now()
 	reqID := newRequestID()
 	corr := correlation.FromContext(r.Context()).Child().WithRequestID(reqID)
 	if corr.TraceID == "" {
@@ -193,7 +193,7 @@ func shuntCall(ctx context.Context, baseURL, apiKey string, body []byte) ([]byte
 	if err != nil {
 		return nil, 0, nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	rb, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, resp.StatusCode, resp.Header, err

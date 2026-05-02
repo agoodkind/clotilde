@@ -118,7 +118,7 @@ func (l *defaultLayer) Usage(ctx context.Context, opts UsageOptions) (Usage, err
 	if err != nil {
 		return Usage{}, err
 	}
-	captured := time.Now().UTC()
+	captured := currentTime().UTC()
 	payload := &cachedUsage{
 		SchemaVersion:   diskCacheSchemaV,
 		Usage:           raw,

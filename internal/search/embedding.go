@@ -59,7 +59,7 @@ func newEmbeddingFilter(cfg config.SearchLocal) *embeddingFilter {
 // cosine similarity to the query exceeds the threshold.
 func (e *embeddingFilter) filterChunks(ctx context.Context, query string, chunks [][]transcript.Message) [][]transcript.Message {
 	log := slog.Default()
-	start := time.Now()
+	start := searchClock.Now()
 
 	// Build text for each chunk
 	chunkTexts := make([]string, len(chunks))
@@ -76,22 +76,22 @@ func (e *embeddingFilter) filterChunks(ctx context.Context, query string, chunks
 	}
 
 	// Embed query
-	queryEmbStart := time.Now()
+	queryEmbStart := searchClock.Now()
 	queryEmb, err := e.embed(ctx, []string{query})
 	if err != nil {
-		log.Warn("embedding query failed, skipping pre-filter", "err", err)
+		log.WarnContext(ctx, "embedding query failed, skipping pre-filter", "err", err)
 		return chunks // fall back to no filtering
 	}
-	log.Debug("embedding: query embedded", "duration", time.Since(queryEmbStart).Round(time.Millisecond))
+	log.DebugContext(ctx, "embedding: query embedded", "duration", time.Since(queryEmbStart).Round(time.Millisecond))
 
 	// Embed all chunks in one batch
-	chunksEmbStart := time.Now()
+	chunksEmbStart := searchClock.Now()
 	chunkEmbs, err := e.embed(ctx, chunkTexts)
 	if err != nil {
-		log.Warn("embedding chunks failed, skipping pre-filter", "err", err)
+		log.WarnContext(ctx, "embedding chunks failed, skipping pre-filter", "err", err)
 		return chunks
 	}
-	log.Debug("embedding: chunks embedded", "chunks", len(chunkTexts), "duration", time.Since(chunksEmbStart).Round(time.Millisecond))
+	log.DebugContext(ctx, "embedding: chunks embedded", "chunks", len(chunkTexts), "duration", time.Since(chunksEmbStart).Round(time.Millisecond))
 
 	if len(queryEmb) == 0 || len(chunkEmbs) != len(chunks) {
 		return chunks
@@ -107,7 +107,7 @@ func (e *embeddingFilter) filterChunks(ctx context.Context, query string, chunks
 		}
 	}
 
-	log.Info("embedding pre-filter complete",
+	log.InfoContext(ctx, "embedding pre-filter complete",
 		"model", e.model,
 		"total_chunks", len(chunks),
 		"passed", len(filtered),
@@ -120,7 +120,7 @@ func (e *embeddingFilter) filterChunks(ctx context.Context, query string, chunks
 
 	if len(filtered) == 0 {
 		// If nothing passed, return all chunks (threshold might be too high)
-		log.Warn("embedding filter removed all chunks, falling back to unfiltered")
+		log.WarnContext(ctx, "embedding filter removed all chunks, falling back to unfiltered")
 		return chunks
 	}
 

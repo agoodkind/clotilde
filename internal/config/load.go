@@ -17,21 +17,43 @@ import (
 // and was removed. Pelletier mirrors the same Marshal / Unmarshal API surface
 // so the migration is a one-line import swap on each call.
 func loadConfig(dir string) (*Config, error) {
+	log := slog.Default().With("concern", "process.daemon.config")
 	// Prefer TOML
 	tomlPath := filepath.Join(dir, "config.toml")
 	if util.FileExists(tomlPath) {
 		var cfg Config
 		data, err := os.ReadFile(tomlPath)
 		if err != nil {
+			log.Warn("config.load.read_failed",
+				"component", "config",
+				"subcomponent", "load",
+				"path", tomlPath,
+				"format", "toml",
+				"err", err,
+			)
 			return nil, fmt.Errorf("failed to read %s: %w", tomlPath, err)
 		}
 		if err := toml.Unmarshal(data, &cfg); err != nil {
+			log.Warn("config.load.parse_failed",
+				"component", "config",
+				"subcomponent", "load",
+				"path", tomlPath,
+				"format", "toml",
+				"err", err,
+			)
 			return nil, fmt.Errorf("failed to parse %s: %w", tomlPath, err)
 		}
 		if err := applyLoggingDefaultsAndValidate(&cfg); err != nil {
+			log.Warn("config.load.validate_failed",
+				"component", "config",
+				"subcomponent", "load",
+				"path", tomlPath,
+				"format", "toml",
+				"err", err,
+			)
 			return nil, fmt.Errorf("invalid %s: %w", tomlPath, err)
 		}
-		slog.Default().With("concern", "process.daemon.config").Debug("config.load.loaded",
+		log.Debug("config.load.loaded",
 			"component", "config",
 			"subcomponent", "load",
 			"format", "toml",
@@ -50,7 +72,7 @@ func loadConfig(dir string) (*Config, error) {
 		if err := applyLoggingDefaultsAndValidate(&cfg); err != nil {
 			return nil, err
 		}
-		slog.Default().With("concern", "process.daemon.config").Debug("config.load.loaded",
+		log.Debug("config.load.loaded",
 			"component", "config",
 			"subcomponent", "load",
 			"format", "json",
@@ -86,21 +108,46 @@ func SaveGlobal(cfg *Config) error {
 	if cfg == nil {
 		return fmt.Errorf("nil config")
 	}
+	log := slog.Default().With("concern", "process.daemon.config")
 	globalDir := filepath.Dir(GlobalConfigPath())
 	if err := os.MkdirAll(globalDir, 0o755); err != nil {
+		log.Warn("config.save.mkdir_failed",
+			"component", "config",
+			"subcomponent", "save",
+			"path", globalDir,
+			"err", err,
+		)
 		return fmt.Errorf("create global config dir: %w", err)
 	}
 	tomlPath := filepath.Join(globalDir, "config.toml")
 	tmp := tomlPath + ".tmp"
 	encoded, err := toml.Marshal(cfg)
 	if err != nil {
+		log.Warn("config.save.encode_failed",
+			"component", "config",
+			"subcomponent", "save",
+			"err", err,
+		)
 		return fmt.Errorf("encode toml: %w", err)
 	}
 	if err := os.WriteFile(tmp, encoded, 0o644); err != nil {
+		log.Warn("config.save.write_tmp_failed",
+			"component", "config",
+			"subcomponent", "save",
+			"path", tmp,
+			"err", err,
+		)
 		return fmt.Errorf("write tmp: %w", err)
 	}
 	if err := os.Rename(tmp, tomlPath); err != nil {
 		os.Remove(tmp)
+		log.Warn("config.save.rename_failed",
+			"component", "config",
+			"subcomponent", "save",
+			"tmp", tmp,
+			"path", tomlPath,
+			"err", err,
+		)
 		return fmt.Errorf("rename: %w", err)
 	}
 	return nil

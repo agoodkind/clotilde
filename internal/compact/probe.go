@@ -129,15 +129,22 @@ func ProbeContextUsage(ctx context.Context, opts ProbeOptions) (ContextUsage, er
 	defer cancel()
 
 	const requestID = "clyde-auto-calibrate-r1"
-	controlReq := map[string]any{
-		"type":       "control_request",
-		"request_id": requestID,
-		"request": map[string]any{
-			"subtype": "get_context_usage",
-		},
+	type controlRequestPayload struct {
+		Subtype string `json:"subtype"`
+	}
+	type controlRequestEnvelope struct {
+		Type      string                `json:"type"`
+		RequestID string                `json:"request_id"`
+		Request   controlRequestPayload `json:"request"`
+	}
+	controlReq := controlRequestEnvelope{
+		Type:      "control_request",
+		RequestID: requestID,
+		Request:   controlRequestPayload{Subtype: "get_context_usage"},
 	}
 	reqLine, err := json.Marshal(controlReq)
 	if err != nil {
+		slog.ErrorContext(ctx, "compact.probe.marshal_request_failed", "component", "compact", "subcomponent", "probe", "err", err)
 		return ContextUsage{}, fmt.Errorf("probe: marshal control request: %w", err)
 	}
 	reqLine = append(reqLine, '\n')
@@ -151,18 +158,21 @@ func ProbeContextUsage(ctx context.Context, opts ProbeOptions) (ContextUsage, er
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
+		slog.ErrorContext(ctx, "compact.probe.stdin_pipe_failed", "component", "compact", "subcomponent", "probe", "err", err)
 		return ContextUsage{}, fmt.Errorf("probe: stdin pipe: %w", err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		slog.ErrorContext(ctx, "compact.probe.stdout_pipe_failed", "component", "compact", "subcomponent", "probe", "err", err)
 		return ContextUsage{}, fmt.Errorf("probe: stdout pipe: %w", err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		slog.ErrorContext(ctx, "compact.probe.stderr_pipe_failed", "component", "compact", "subcomponent", "probe", "err", err)
 		return ContextUsage{}, fmt.Errorf("probe: stderr pipe: %w", err)
 	}
 
-	started := time.Now()
+	started := compactClock.Now()
 	compactLog.Logger().Info("compact.probe.spawned",
 		"component", "compact",
 		"subcomponent", "probe",
@@ -173,6 +183,7 @@ func ProbeContextUsage(ctx context.Context, opts ProbeOptions) (ContextUsage, er
 	)
 
 	if err := cmd.Start(); err != nil {
+		slog.ErrorContext(ctx, "compact.probe.start_failed", "component", "compact", "subcomponent", "probe", "binary", binary, "session_id", opts.SessionID, "err", err)
 		return ContextUsage{}, fmt.Errorf("probe: start claude: %w", err)
 	}
 
@@ -204,6 +215,7 @@ func ProbeContextUsage(ctx context.Context, opts ProbeOptions) (ContextUsage, er
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 		stderrWG.Wait()
+		slog.ErrorContext(ctx, "compact.probe.write_request_failed", "component", "compact", "subcomponent", "probe", "session_id", opts.SessionID, "err", err)
 		return ContextUsage{}, fmt.Errorf("probe: write control request: %w", err)
 	}
 	// Close stdin so claude sees EOF and exits after the response.
@@ -217,13 +229,13 @@ func ProbeContextUsage(ctx context.Context, opts ProbeOptions) (ContextUsage, er
 		)
 	}
 
-	usage, parseErr := scanForUsage(stdout, requestID)
+	usage, parseErr := scanForUsage(probeCtx, stdout, requestID)
 	waitErr := cmd.Wait()
 	stderrWG.Wait()
 
 	durationMs := time.Since(started).Milliseconds()
 	if parseErr != nil {
-		compactLog.Logger().Warn("compact.probe.parse_failed",
+		slog.WarnContext(ctx, "compact.probe.parse_failed",
 			"component", "compact",
 			"subcomponent", "probe",
 			"session_id", opts.SessionID,
@@ -275,7 +287,7 @@ func buildProbeArgs(opts ProbeOptions) []string {
 // hook events, session events, and other SDK messages that we ignore.
 // Returns an error if stdout closes before the matching response is
 // seen or if the response is an error rather than success.
-func scanForUsage(stdout io.Reader, requestID string) (ContextUsage, error) {
+func scanForUsage(ctx context.Context, stdout io.Reader, requestID string) (ContextUsage, error) {
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 128*1024), 8*1024*1024)
 
@@ -312,6 +324,7 @@ func scanForUsage(stdout io.Reader, requestID string) (ContextUsage, error) {
 		}
 		var usage ContextUsage
 		if err := json.Unmarshal(env.Response.Response, &usage); err != nil {
+			slog.ErrorContext(ctx, "compact.probe.decode_usage_failed", "component", "compact", "subcomponent", "probe", "request_id", requestID, "err", err)
 			return ContextUsage{}, fmt.Errorf("probe: decode usage payload: %w", err)
 		}
 		compactLog.Logger().Debug("compact.probe.response_received",
@@ -323,6 +336,7 @@ func scanForUsage(stdout io.Reader, requestID string) (ContextUsage, error) {
 		return usage, nil
 	}
 	if err := scanner.Err(); err != nil {
+		slog.ErrorContext(ctx, "compact.probe.scan_stdout_failed", "component", "compact", "subcomponent", "probe", "request_id", requestID, "lines_scanned", lines, "err", err)
 		return ContextUsage{}, fmt.Errorf("probe: scan stdout: %w (lines=%d)", err, lines)
 	}
 	return ContextUsage{}, fmt.Errorf("probe: no control_response before stdout closed (lines=%d)", lines)

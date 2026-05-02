@@ -101,13 +101,18 @@ func NewFileStore(clydeRoot string) *FileStore {
 // Claude Code session present on disk but not yet registered with clyde.
 func NewGlobalFileStore() (*FileStore, error) {
 	if err := config.EnsureGlobalSessionsDir(); err != nil {
+		sessionLog.Warn("session.store.ensure_global_sessions_failed",
+			"component", "session",
+			"subcomponent", "store",
+			"err", err,
+		)
 		return nil, fmt.Errorf("failed to create global sessions directory: %w", err)
 	}
 	fs := &FileStore{clydeRoot: config.GlobalDataDir()}
 	if home, err := os.UserHomeDir(); err == nil {
 		fs.discoveryCache = defaultDiscoveryCache(home)
 	} else {
-		sessionResolveLog.Logger().Warn("session.store.home_dir_failed",
+		sessionLog.Warn("session.store.home_dir_failed",
 			"component", "session",
 			"subcomponent", "store",
 			"err", err,
@@ -121,6 +126,12 @@ func NewGlobalFileStore() (*FileStore, error) {
 // adoption while they walk transcripts directly.
 func NewGlobalFileStoreReadOnly() (*FileStore, error) {
 	if err := config.EnsureGlobalSessionsDir(); err != nil {
+		sessionLog.Warn("session.store.ensure_global_sessions_failed",
+			"component", "session",
+			"subcomponent", "store",
+			"readonly", true,
+			"err", err,
+		)
 		return nil, fmt.Errorf("failed to create global sessions directory: %w", err)
 	}
 	return &FileStore{clydeRoot: config.GlobalDataDir(), noAdopt: true}, nil
@@ -257,6 +268,13 @@ func (fs *FileStore) Get(name string) (*Session, error) {
 	metadataPath := filepath.Join(sessionDir, metadataFile)
 	var metadata Metadata
 	if err := util.ReadJSON(metadataPath, &metadata); err != nil {
+		sessionLog.Warn("session.store.metadata_read_failed",
+			"component", "session",
+			"subcomponent", "store",
+			"session", name,
+			"path", metadataPath,
+			"err", err,
+		)
 		return nil, fmt.Errorf("failed to read session metadata: %w", err)
 	}
 	metadata.NormalizeProviderState()
@@ -314,7 +332,7 @@ func (fs *FileStore) Resolve(query string) (*Session, error) {
 	)
 	adopted, err := fs.adoptFromDiscovery(query)
 	if err != nil {
-		sessionResolveLog.Logger().Warn("session.resolve.tier4_failed",
+		sessionLog.Warn("session.resolve.tier4_failed",
 			"component", "session",
 			"subcomponent", "resolve",
 			"query", query,
@@ -418,6 +436,12 @@ func (fs *FileStore) resolveFromStore(query string) *Session {
 func (fs *FileStore) adoptFromDiscovery(query string) (*Session, error) {
 	results, err := fs.discoveryCache.Get()
 	if err != nil {
+		sessionLog.Warn("session.resolve.tier4_scan_failed",
+			"component", "session",
+			"subcomponent", "resolve",
+			"query", query,
+			"err", err,
+		)
 		return nil, fmt.Errorf("discovery scan: %w", err)
 	}
 
@@ -471,6 +495,13 @@ func (fs *FileStore) adoptFromDiscovery(query string) (*Session, error) {
 	adopted, adoptErr := AdoptUnknown(fs, []DiscoveryResult{*match})
 	fs.discoveryCache.Invalidate()
 	if adoptErr != nil {
+		sessionLog.Warn("session.resolve.tier4_adopt_failed",
+			"component", "session",
+			"subcomponent", "resolve",
+			"query", query,
+			"session_id", match.ProviderSessionID(),
+			"err", adoptErr,
+		)
 		return nil, fmt.Errorf("adopt: %w", adoptErr)
 	}
 	if len(adopted) == 0 {
@@ -516,7 +547,7 @@ func (fs *FileStore) findByProviderSessionID(id ProviderSessionID) *Session {
 	}
 	sessions, err := fs.List()
 	if err != nil {
-		sessionResolveLog.Logger().Warn("session.resolve.find_by_provider_identity_list_failed",
+		sessionLog.Warn("session.resolve.find_by_provider_identity_list_failed",
 			"component", "session",
 			"subcomponent", "resolve",
 			"provider", id.Provider,
@@ -573,7 +604,7 @@ func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult
 	}
 	if titleChanged {
 		if err := fs.Update(existing); err != nil {
-			sessionResolveLog.Logger().Warn("session.resolve.display_title_backfill_failed",
+			sessionLog.Warn("session.resolve.display_title_backfill_failed",
 				"component", "session",
 				"subcomponent", "resolve",
 				"session", existing.Name,
@@ -609,7 +640,7 @@ func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult
 	// strategy AdoptUnknown uses during fresh adoption.
 	names, err := buildExistingNameSet(fs)
 	if err != nil {
-		sessionResolveLog.Logger().Warn("session.resolve.reconcile_name_set_failed",
+		sessionLog.Warn("session.resolve.reconcile_name_set_failed",
 			"component", "session",
 			"subcomponent", "resolve",
 			"err", err,
@@ -623,7 +654,7 @@ func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult
 	}
 
 	if err := fs.Rename(existing.Name, target); err != nil {
-		sessionResolveLog.Logger().Warn("session.resolve.reconcile_rename_failed",
+		sessionLog.Warn("session.resolve.reconcile_rename_failed",
 			"component", "session",
 			"subcomponent", "resolve",
 			"old_name", existing.Name,
@@ -674,9 +705,21 @@ func shouldPreferDiscoveryResult(candidate DiscoveryResult, current DiscoveryRes
 // and updates any child sessions whose ParentSession matches oldName.
 func (fs *FileStore) Rename(oldName, newName string) error {
 	if err := ValidateName(oldName); err != nil {
+		sessionLog.Warn("session.store.rename_invalid_old_name",
+			"component", "session",
+			"subcomponent", "store",
+			"session", oldName,
+			"err", err,
+		)
 		return fmt.Errorf("invalid old name: %w", err)
 	}
 	if err := ValidateName(newName); err != nil {
+		sessionLog.Warn("session.store.rename_invalid_new_name",
+			"component", "session",
+			"subcomponent", "store",
+			"session", newName,
+			"err", err,
+		)
 		return fmt.Errorf("invalid new name: %w", err)
 	}
 	if !fs.Exists(oldName) {
@@ -689,17 +732,39 @@ func (fs *FileStore) Rename(oldName, newName string) error {
 	oldDir := config.GetSessionDir(fs.clydeRoot, oldName)
 	newDir := config.GetSessionDir(fs.clydeRoot, newName)
 	if err := os.Rename(oldDir, newDir); err != nil {
+		sessionLog.Warn("session.store.rename_dir_failed",
+			"component", "session",
+			"subcomponent", "store",
+			"old_session", oldName,
+			"new_session", newName,
+			"old_dir", oldDir,
+			"new_dir", newDir,
+			"err", err,
+		)
 		return fmt.Errorf("rename session directory: %w", err)
 	}
 
 	// Update metadata Name field in the new location
 	sess, err := fs.Get(newName)
 	if err != nil {
+		sessionLog.Warn("session.store.rename_reload_failed",
+			"component", "session",
+			"subcomponent", "store",
+			"session", newName,
+			"err", err,
+		)
 		return fmt.Errorf("failed to read renamed session: %w", err)
 	}
 	sess.Name = newName
 	sess.Metadata.Name = newName
 	if err := fs.Update(sess); err != nil {
+		sessionLog.Warn("session.store.rename_metadata_update_failed",
+			"component", "session",
+			"subcomponent", "store",
+			"old_session", oldName,
+			"new_session", newName,
+			"err", err,
+		)
 		return fmt.Errorf("failed to update session metadata: %w", err)
 	}
 
@@ -728,12 +793,26 @@ func (fs *FileStore) Create(session *Session) error {
 
 	sessionDir := config.GetSessionDir(fs.clydeRoot, session.Name)
 	if err := util.EnsureDir(sessionDir); err != nil {
+		sessionLog.Warn("session.store.create_dir_failed",
+			"component", "session",
+			"subcomponent", "store",
+			"session", session.Name,
+			"path", sessionDir,
+			"err", err,
+		)
 		return fmt.Errorf("failed to create session directory: %w", err)
 	}
 
 	metadataPath := filepath.Join(sessionDir, metadataFile)
 	session.Metadata.NormalizeProviderState()
 	if err := util.WriteJSON(metadataPath, session.Metadata); err != nil {
+		sessionLog.Warn("session.store.create_metadata_failed",
+			"component", "session",
+			"subcomponent", "store",
+			"session", session.Name,
+			"path", metadataPath,
+			"err", err,
+		)
 		return fmt.Errorf("failed to write session metadata: %w", err)
 	}
 
@@ -754,6 +833,13 @@ func (fs *FileStore) Update(session *Session) error {
 	metadataPath := filepath.Join(sessionDir, metadataFile)
 	session.Metadata.NormalizeProviderState()
 	if err := util.WriteJSON(metadataPath, session.Metadata); err != nil {
+		sessionLog.Warn("session.store.update_metadata_failed",
+			"component", "session",
+			"subcomponent", "store",
+			"session", session.Name,
+			"path", metadataPath,
+			"err", err,
+		)
 		return fmt.Errorf("failed to update session metadata: %w", err)
 	}
 
@@ -795,6 +881,13 @@ func (fs *FileStore) LoadSettings(name string) (*Settings, error) {
 
 	var settings Settings
 	if err := util.ReadJSON(settingsPath, &settings); err != nil {
+		sessionLog.Warn("session.store.settings_read_failed",
+			"component", "session",
+			"subcomponent", "store",
+			"session", name,
+			"path", settingsPath,
+			"err", err,
+		)
 		return nil, fmt.Errorf("failed to read settings: %w", err)
 	}
 

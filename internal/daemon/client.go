@@ -64,7 +64,7 @@ func NudgeDiscoveryScan() {
 		defer cancel()
 		log.DebugContext(rpcCtx, "daemon.client.nudge.trigger_scan_rpc")
 		_, _ = c.rpc.TriggerScan(rpcCtx, &clydev1.TriggerScanRequest{})
-		c.conn.Close()
+		_ = c.conn.Close()
 		return
 	}
 	log.DebugContext(bg, "daemon.client.nudge.connect_failed_try_sigusr1", "err", err)
@@ -96,7 +96,7 @@ func RenameSessionViaDaemonOutcome(ctx context.Context, oldName, newName string)
 		log.DebugContext(ctx, "daemon.client.rename_session.connect_failed", "err", err)
 		return LifecycleOutcomeDegradedOffline, err
 	}
-	defer c.conn.Close()
+	defer func() { _ = c.conn.Close() }()
 	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	_, err = c.rpc.RenameSession(rpcCtx, &clydev1.RenameSessionRequest{
@@ -132,7 +132,7 @@ func DeleteSessionViaDaemonOutcome(ctx context.Context, name string) (LifecycleO
 		log.DebugContext(ctx, "daemon.client.delete_session.connect_failed", "err", err)
 		return LifecycleOutcomeDegradedOffline, err
 	}
-	defer c.conn.Close()
+	defer func() { _ = c.conn.Close() }()
 	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	_, err = c.rpc.DeleteSession(rpcCtx, &clydev1.DeleteSessionRequest{Name: name})
@@ -169,8 +169,15 @@ func SubscribeRegistry(parent context.Context) (<-chan *clydev1.SubscribeRegistr
 	log.DebugContext(ctx, "daemon.client.subscribe_registry.stream_open")
 	out := make(chan *clydev1.SubscribeRegistryResponse, 8)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				daemonClientLog(ctx).WarnContext(ctx, "daemon.client.subscribe_registry.panicked",
+					"panic", r,
+				)
+			}
+		}()
 		defer close(out)
-		defer c.conn.Close()
+		defer func() { _ = c.conn.Close() }()
 		loopLog := daemonClientLog(ctx)
 		for {
 			ev, err := stream.Recv()
@@ -197,7 +204,7 @@ func GetProviderStats(parent context.Context) (*clydev1.GetProviderStatsResponse
 		log.DebugContext(parent, "daemon.client.get_provider_stats.connect_failed", "err", err)
 		return nil, err
 	}
-	defer c.conn.Close()
+	defer func() { _ = c.conn.Close() }()
 	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 	resp, err := c.rpc.GetProviderStats(ctx, &clydev1.GetProviderStatsRequest{})
@@ -226,8 +233,15 @@ func SubscribeProviderStats(parent context.Context) (<-chan *clydev1.ProviderSta
 	}
 	out := make(chan *clydev1.ProviderStatsEvent, 8)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.WarnContext(ctx, "daemon.client.subscribe_provider_stats.panicked",
+					"panic", r,
+				)
+			}
+		}()
 		defer close(out)
-		defer c.conn.Close()
+		defer func() { _ = c.conn.Close() }()
 		for {
 			ev, err := stream.Recv()
 			if err != nil {
@@ -297,16 +311,33 @@ func ReloadDaemon(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 }
 
 func lockDaemonReload(ctx context.Context) (func(), error) {
+	log := daemonClientLog(ctx)
 	if err := config.EnsureRuntimeDir(); err != nil {
 		return nil, err
 	}
 	lockPath := filepath.Join(config.RuntimeDir(), "daemon.reload.lock")
 	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
+		log.WarnContext(ctx, "daemon.client.reload_lock.open_failed",
+			"lock_path", lockPath,
+			"err", err,
+		)
 		return nil, fmt.Errorf("open reload lock: %w", err)
 	}
 	done := make(chan error, 1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.WarnContext(ctx, "daemon.client.reload_lock.panicked",
+					"lock_path", lockPath,
+					"panic", r,
+				)
+				select {
+				case done <- fmt.Errorf("reload lock goroutine panic: %v", r):
+				case <-ctx.Done():
+				}
+			}
+		}()
 		done <- syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX)
 	}()
 	select {
@@ -316,6 +347,10 @@ func lockDaemonReload(ctx context.Context) (func(), error) {
 	case err := <-done:
 		if err != nil {
 			_ = lockFile.Close()
+			log.WarnContext(ctx, "daemon.client.reload_lock.lock_failed",
+				"lock_path", lockPath,
+				"err", err,
+			)
 			return nil, fmt.Errorf("lock reload: %w", err)
 		}
 	}
@@ -411,7 +446,7 @@ func connect(ctx context.Context) (*Client, error) {
 		grpc.WithStreamInterceptor(daemonStreamClientCorrelationInterceptor()),
 	)
 	if err != nil {
-		log.DebugContext(ctx, "daemon.client.connect.new_client_failed", "err", err)
+		log.WarnContext(ctx, "daemon.client.connect.new_client_failed", "err", err)
 		return nil, fmt.Errorf("dial daemon at %s: %w", socketPath, err)
 	}
 
@@ -427,8 +462,8 @@ func connect(ctx context.Context) (*Client, error) {
 		// vs a legitimate RPC error (which means daemon IS running).
 		// gRPC returns codes.Unavailable for transport failures.
 		if isTransportError(err) {
-			log.DebugContext(dialCtx, "daemon.client.connect.probe_transport_error", "err", err)
-			conn.Close()
+			log.WarnContext(dialCtx, "daemon.client.connect.probe_transport_error", "err", err)
+			_ = conn.Close()
 			return nil, fmt.Errorf("daemon not responding: %w", err)
 		}
 		log.DebugContext(dialCtx, "daemon.client.connect.probe_alive", "err", err)
@@ -441,13 +476,13 @@ func connect(ctx context.Context) (*Client, error) {
 	_, err = client.rpc.ListSessions(dialCtx, &clydev1.ListSessionsRequest{})
 	if err != nil {
 		if isIncompatibleDaemonError(err) {
-			log.DebugContext(dialCtx, "daemon.client.connect.probe_incompatible", "err", err)
-			conn.Close()
+			log.WarnContext(dialCtx, "daemon.client.connect.probe_incompatible", "err", err)
+			_ = conn.Close()
 			return nil, fmt.Errorf("daemon incompatible with this client: %w", err)
 		}
 		if isTransportError(err) {
-			log.DebugContext(dialCtx, "daemon.client.connect.probe_list_sessions_transport_error", "err", err)
-			conn.Close()
+			log.WarnContext(dialCtx, "daemon.client.connect.probe_list_sessions_transport_error", "err", err)
+			_ = conn.Close()
 			return nil, fmt.Errorf("daemon not responding: %w", err)
 		}
 	}
@@ -528,12 +563,20 @@ func ConnectOrStart(ctx context.Context) (*Client, error) {
 
 	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
+		log.WarnContext(ctx, "daemon.client.connect_or_start.lock_open_failed",
+			"lock_path", lockPath,
+			"err", err,
+		)
 		return nil, fmt.Errorf("open lock file: %w", err)
 	}
-	defer lockFile.Close()
+	defer func() { _ = lockFile.Close() }()
 
 	// Block until we get the lock.
 	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+		log.WarnContext(ctx, "daemon.client.connect_or_start.lock_failed",
+			"lock_path", lockPath,
+			"err", err,
+		)
 		return nil, fmt.Errorf("flock: %w", err)
 	}
 	defer func() {
@@ -550,7 +593,7 @@ func ConnectOrStart(ctx context.Context) (*Client, error) {
 	// We hold the lock and daemon is not running. Start it.
 	// Prefer launchctl on macOS (if the agent is registered), fall back to direct spawn.
 	if err := startDaemon(); err != nil {
-		log.DebugContext(ctx, "daemon.client.connect_or_start.start_daemon_failed", "err", err)
+		log.WarnContext(ctx, "daemon.client.connect_or_start.start_daemon_failed", "err", err)
 		return nil, fmt.Errorf("start daemon: %w", err)
 	}
 
@@ -644,7 +687,7 @@ func UpdateSessionRemoteControlViaDaemonOutcome(ctx context.Context, name string
 		log.DebugContext(ctx, "daemon.client.update_session_remote_control.connect_failed", "err", err)
 		return LifecycleOutcomeDegradedOffline, err
 	}
-	defer c.conn.Close()
+	defer func() { _ = c.conn.Close() }()
 	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	_, err = c.rpc.UpdateSessionSettings(rpcCtx, &clydev1.UpdateSessionSettingsRequest{
@@ -673,7 +716,7 @@ func UpdateSessionWorkspaceRootViaDaemonOutcome(ctx context.Context, name, works
 		log.DebugContext(ctx, "daemon.client.update_session_workspace_root.connect_failed", "err", err)
 		return LifecycleOutcomeDegradedOffline, err
 	}
-	defer c.conn.Close()
+	defer func() { _ = c.conn.Close() }()
 	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	_, err = c.rpc.UpdateSessionMetadata(rpcCtx, &clydev1.UpdateSessionMetadataRequest{
@@ -698,7 +741,7 @@ func UpdateGlobalRemoteControlViaDaemonOutcome(ctx context.Context, enabled bool
 		log.DebugContext(ctx, "daemon.client.update_global_remote_control.connect_failed", "err", err)
 		return LifecycleOutcomeDegradedOffline, err
 	}
-	defer c.conn.Close()
+	defer func() { _ = c.conn.Close() }()
 	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	_, err = c.rpc.UpdateGlobalSettings(rpcCtx, &clydev1.UpdateGlobalSettingsRequest{
@@ -721,7 +764,7 @@ func ListConfigControlsViaDaemon(ctx context.Context) ([]*clydev1.ConfigControl,
 		log.DebugContext(ctx, "daemon.client.list_config_controls.connect_failed", "err", err)
 		return nil, err
 	}
-	defer c.conn.Close()
+	defer func() { _ = c.conn.Close() }()
 	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	resp, err := c.rpc.ListConfigControls(rpcCtx, &clydev1.ListConfigControlsRequest{})
@@ -741,7 +784,7 @@ func UpdateConfigControlViaDaemon(ctx context.Context, key, value string) (*clyd
 		log.DebugContext(ctx, "daemon.client.update_config_control.connect_failed", "err", err)
 		return nil, err
 	}
-	defer c.conn.Close()
+	defer func() { _ = c.conn.Close() }()
 	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	resp, err := c.rpc.UpdateConfigControl(rpcCtx, &clydev1.UpdateConfigControlRequest{
@@ -798,7 +841,7 @@ func ListBridgesViaDaemon(ctx context.Context) ([]*clydev1.Bridge, error) {
 		log.DebugContext(ctx, "daemon.client.list_bridges.connect_failed", "err", err)
 		return nil, err
 	}
-	defer c.conn.Close()
+	defer func() { _ = c.conn.Close() }()
 	rpcCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	resp, err := c.rpc.ListBridges(rpcCtx, &clydev1.ListBridgesRequest{})
@@ -825,7 +868,7 @@ func StartRemoteSessionViaDaemon(ctx context.Context, sessionName, basedir strin
 		log.DebugContext(ctx, "daemon.client.start_remote_session.connect_failed", "err", err)
 		return nil, err
 	}
-	defer c.conn.Close()
+	defer func() { _ = c.conn.Close() }()
 	rpcCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	resp, err := c.rpc.StartRemoteSession(rpcCtx, &clydev1.StartRemoteSessionRequest{
@@ -860,7 +903,7 @@ func SendToSessionViaDaemon(ctx context.Context, sessionID, text string) (bool, 
 		log.DebugContext(ctx, "daemon.client.send_to_session.connect_failed", "err", err)
 		return false, err
 	}
-	defer c.conn.Close()
+	defer func() { _ = c.conn.Close() }()
 	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	resp, err := c.rpc.SendToSession(rpcCtx, &clydev1.SendToSessionRequest{
@@ -904,8 +947,16 @@ func TailTranscriptViaDaemon(parent context.Context, sessionID string, startOffs
 	log.DebugContext(ctx, "daemon.client.tail_transcript.stream_open")
 	out := make(chan *clydev1.TailTranscriptResponse, 64)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				daemonClientLog(ctx).WarnContext(ctx, "daemon.client.tail_transcript.panicked",
+					"session_id", sessionID,
+					"panic", r,
+				)
+			}
+		}()
 		defer close(out)
-		defer c.conn.Close()
+		defer func() { _ = c.conn.Close() }()
 		loopLog := daemonClientLog(ctx)
 		for {
 			line, err := stream.Recv()
@@ -990,9 +1041,17 @@ func openCompactStream(parent context.Context, in CompactRunOptions, apply bool)
 	out := make(chan *clydev1.CompactEvent, 64)
 	done := make(chan error, 1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.WarnContext(ctx, "daemon.client.compact_stream.panicked",
+					"apply", apply,
+					"panic", r,
+				)
+			}
+		}()
 		defer close(out)
 		defer close(done)
-		defer c.conn.Close()
+		defer func() { _ = c.conn.Close() }()
 		for {
 			ev, recvErr := stream.Recv()
 			if recvErr != nil {
@@ -1022,7 +1081,7 @@ func CompactUndoViaDaemon(ctx context.Context, sessionName string) (*clydev1.Com
 		log.DebugContext(ctx, "daemon.client.compact_undo.connect_failed", "err", err)
 		return nil, err
 	}
-	defer c.conn.Close()
+	defer func() { _ = c.conn.Close() }()
 	rpcCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	resp, rpcErr := c.rpc.CompactUndo(rpcCtx, &clydev1.CompactUndoRequest{SessionName: sessionName})
@@ -1042,7 +1101,7 @@ func ListSessionsViaDaemon(ctx context.Context) (*clydev1.ListSessionsResponse, 
 		log.DebugContext(ctx, "daemon.client.list_sessions.connect_failed", "err", err)
 		return nil, err
 	}
-	defer c.conn.Close()
+	defer func() { _ = c.conn.Close() }()
 	rpcCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	resp, rpcErr := c.rpc.ListSessions(rpcCtx, &clydev1.ListSessionsRequest{})
@@ -1062,7 +1121,7 @@ func GetSessionDetailViaDaemon(ctx context.Context, sessionName string) (*clydev
 		log.DebugContext(ctx, "daemon.client.session_detail.connect_failed", "err", err)
 		return nil, err
 	}
-	defer c.conn.Close()
+	defer func() { _ = c.conn.Close() }()
 	rpcCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	resp, rpcErr := c.rpc.GetSessionDetail(rpcCtx, &clydev1.GetSessionDetailRequest{SessionName: sessionName})
@@ -1084,7 +1143,7 @@ func GetSessionExportStatsViaDaemon(ctx context.Context, sessionName string) (*c
 		log.DebugContext(ctx, "daemon.client.session_export_stats.connect_failed", "err", err)
 		return nil, err
 	}
-	defer c.conn.Close()
+	defer func() { _ = c.conn.Close() }()
 	rpcCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	resp, rpcErr := c.rpc.GetSessionExportStats(rpcCtx, &clydev1.GetSessionExportStatsRequest{SessionName: sessionName})
@@ -1107,7 +1166,7 @@ func ExportSessionViaDaemon(ctx context.Context, req *clydev1.ExportSessionReque
 		log.DebugContext(ctx, "daemon.client.session_export.connect_failed", "err", err)
 		return nil, err
 	}
-	defer c.conn.Close()
+	defer func() { _ = c.conn.Close() }()
 	rpcCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	resp, rpcErr := c.rpc.ExportSession(rpcCtx, req)
@@ -1141,14 +1200,14 @@ func RestartManagedDaemon(ctx context.Context) error {
 	target := "gui/" + uid + "/" + launchAgentLabel
 	_ = exec.Command("launchctl", "bootout", target).Run()
 	if out, err := exec.Command("launchctl", "bootstrap", "gui/"+uid, plistPath).CombinedOutput(); err != nil {
-		log.DebugContext(ctx, "daemon.client.restart.bootstrap_failed",
+		log.WarnContext(ctx, "daemon.client.restart.bootstrap_failed",
 			"plist_path", plistPath,
 			"err", err,
 			"output", string(out))
 		return fmt.Errorf("bootstrap launch agent: %w", err)
 	}
 	if out, err := exec.Command("launchctl", "kickstart", "-k", target).CombinedOutput(); err != nil {
-		log.DebugContext(ctx, "daemon.client.restart.kickstart_failed",
+		log.WarnContext(ctx, "daemon.client.restart.kickstart_failed",
 			"target", target,
 			"err", err,
 			"output", string(out))
@@ -1201,6 +1260,7 @@ func spawnDaemonDirect() error {
 	log := daemonClientLog(bg)
 	self, err := os.Executable()
 	if err != nil {
+		log.WarnContext(bg, "daemon.client.spawn_direct.executable_failed", "err", err)
 		return fmt.Errorf("resolve own path: %w", err)
 	}
 
@@ -1214,7 +1274,17 @@ func spawnDaemonDirect() error {
 		return err
 	}
 	log.DebugContext(bg, "daemon.client.spawn_direct.started", "pid", daemonCmd.Process.Pid)
-	go func() { _ = daemonCmd.Wait() }()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.WarnContext(bg, "daemon.client.spawn_direct.wait_panicked",
+					"pid", daemonCmd.Process.Pid,
+					"panic", r,
+				)
+			}
+		}()
+		_ = daemonCmd.Wait()
+	}()
 	return nil
 }
 

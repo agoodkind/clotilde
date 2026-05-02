@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/gdamore/tcell/v2"
 )
@@ -707,7 +706,7 @@ func defaultExportFilename(sessionName string, format SessionExportFormat) strin
 		base = "session"
 	}
 	base = sanitizeExportFilenamePart(base)
-	date := time.Now().Format("2006-01-02")
+	date := currentUITime().Format("2006-01-02")
 	return date + "-" + base + "." + exportFormatExt(format)
 }
 

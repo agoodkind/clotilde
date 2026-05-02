@@ -72,7 +72,7 @@ func loadExportMessagesFromPath(path string, includeSystemPrompts bool, includeT
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return loadExportMessages(f, includeSystemPrompts, includeToolOutputs)
 }
 
@@ -112,12 +112,12 @@ func loadExportHistoryMessages(sess *session.Session, req *clydev1.ExportSession
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	gz, err := gzip.NewReader(f)
 	if err != nil {
 		return nil, err
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 	return loadExportMessages(gz, req.GetIncludeSystemPrompts(), req.GetIncludeToolOutputs())
 }
 

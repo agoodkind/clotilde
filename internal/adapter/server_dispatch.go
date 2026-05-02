@@ -221,7 +221,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 	if len(req.Messages) == 0 && len(req.Input) > 0 {
-		count, nerr := normalizeMessagesFromInput(&req)
+		count, nerr := parseMessagesFromInput(&req)
 		if nerr != nil {
 			slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(r.Context(), slog.LevelWarn, "adapter.messages.normalize_failed",
 				slog.String("request_id", reqID),
@@ -466,7 +466,7 @@ func buildWhitelistBody(req ChatRequest, maxBytes int) (string, bool) {
 	return logBody, bodyTruncated
 }
 
-func normalizeMessagesFromInput(req *ChatRequest) (int, error) {
+func parseMessagesFromInput(req *ChatRequest) (int, error) {
 	var inputItems []struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
@@ -484,7 +484,7 @@ func normalizeMessagesFromInput(req *ChatRequest) (int, error) {
 		if role == "" {
 			continue
 		}
-		content, err := normalizeInputContent(item.Content)
+		content, err := parseInputContent(item.Content)
 		if err != nil {
 			return 0, err
 		}
@@ -500,7 +500,7 @@ func normalizeMessagesFromInput(req *ChatRequest) (int, error) {
 	return len(messages), nil
 }
 
-func normalizeInputContent(raw json.RawMessage) (json.RawMessage, error) {
+func parseInputContent(raw json.RawMessage) (json.RawMessage, error) {
 	trimmed := strings.TrimSpace(string(raw))
 	if trimmed == "" || trimmed == "null" {
 		return json.RawMessage(`""`), nil
@@ -515,19 +515,19 @@ func normalizeInputContent(raw json.RawMessage) (json.RawMessage, error) {
 		if err := json.Unmarshal(raw, &part); err != nil {
 			return nil, fmt.Errorf("invalid input content: %w", err)
 		}
-		return normalizeInputParts([]map[string]any{part})
+		return parseInputParts([]map[string]any{part})
 	case '[':
 		var parts []map[string]any
 		if err := json.Unmarshal(raw, &parts); err != nil {
 			return nil, fmt.Errorf("invalid input content: %w", err)
 		}
-		return normalizeInputParts(parts)
+		return parseInputParts(parts)
 	default:
 		return nil, fmt.Errorf("invalid input content type")
 	}
 }
 
-func normalizeInputParts(parts []map[string]any) (json.RawMessage, error) {
+func parseInputParts(parts []map[string]any) (json.RawMessage, error) {
 	out := make([]map[string]any, 0, len(parts))
 	for _, p := range parts {
 		typ, _ := p["type"].(string)

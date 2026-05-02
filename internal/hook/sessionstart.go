@@ -32,7 +32,7 @@ func ProcessSessionStart(
 	// Drain stdin first so claude doesn't block on the pipe.
 	if os.Getenv("CLYDE_SUPPRESS_HOOKS") != "" {
 		_, _ = io.Copy(io.Discard, eventJSON)
-		log.Info("hook.sessionstart.suppressed",
+		log.InfoContext(ctx, "hook.sessionstart.suppressed",
 			"component", "hook",
 			"subject", "sessionstart",
 			"reason", "CLYDE_SUPPRESS_HOOKS",
@@ -40,7 +40,7 @@ func ProcessSessionStart(
 		return Result{SkippedDuplicate: true}, nil
 	}
 	if store == nil {
-		log.Error("hook.sessionstart.invalid_store",
+		log.ErrorContext(ctx, "hook.sessionstart.invalid_store",
 			"component", "hook",
 			"subject", "sessionstart",
 			slog.String("err", "nil store"),
@@ -50,7 +50,7 @@ func ProcessSessionStart(
 
 	raw, err := io.ReadAll(eventJSON)
 	if err != nil {
-		log.Error("hook.sessionstart.read_failed",
+		log.ErrorContext(ctx, "hook.sessionstart.read_failed",
 			"component", "hook",
 			"subject", "sessionstart",
 			"err", err,
@@ -60,7 +60,7 @@ func ProcessSessionStart(
 
 	var hookData SessionStartInput
 	if err := json.Unmarshal(raw, &hookData); err != nil {
-		log.Error("hook.sessionstart.parse_failed",
+		log.ErrorContext(ctx, "hook.sessionstart.parse_failed",
 			"component", "hook",
 			"subject", "sessionstart",
 			"err", err,
@@ -68,7 +68,7 @@ func ProcessSessionStart(
 		return Result{}, fmt.Errorf("failed to parse hook input: %w", err)
 	}
 
-	log.Info("hook.sessionstart.received",
+	log.InfoContext(ctx, "hook.sessionstart.received",
 		"component", "hook",
 		"subject", "sessionstart",
 		"session_id", hookData.SessionID,
@@ -77,7 +77,7 @@ func ProcessSessionStart(
 
 	deps := defaultDeps(cfg)
 	if err := deps.logRawEvent(raw, hookData.SessionID); err != nil {
-		log.Warn("hook.sessionstart.raw_log_failed",
+		log.WarnContext(ctx, "hook.sessionstart.raw_log_failed",
 			"component", "hook",
 			"subject", "sessionstart",
 			"session_id", hookData.SessionID,
@@ -91,7 +91,7 @@ func ProcessSessionStart(
 	// claude -p chain (or some other unintended fanout) and must
 	// exit fast to avoid a per-spawn process explosion.
 	if hasAncestorHook() {
-		log.Warn("hook.sessionstart.ancestor_loop_detected",
+		log.WarnContext(ctx, "hook.sessionstart.ancestor_loop_detected",
 			"component", "hook",
 			"subject", "sessionstart",
 			"session_id", hookData.SessionID,
@@ -106,7 +106,7 @@ func ProcessSessionStart(
 
 	marker := hookData.SessionID + ":" + hookData.Source
 	if isHookExecuted(marker) {
-		log.Info("hook.sessionstart.skipped_duplicate",
+		log.InfoContext(ctx, "hook.sessionstart.skipped_duplicate",
 			"component", "hook",
 			"subject", "sessionstart",
 			"session_id", hookData.SessionID,
@@ -121,7 +121,7 @@ func ProcessSessionStart(
 	}
 
 	markHookExecuted(marker)
-	log.Debug("hook.sessionstart.marker_written",
+	log.DebugContext(ctx, "hook.sessionstart.marker_written",
 		"component", "hook",
 		"subject", "sessionstart",
 		"marker", marker,
@@ -134,7 +134,7 @@ func ProcessSessionStart(
 		handleStartupOrResume(ctx, log, deps, hookData, store, out, errOut)
 	case "compact":
 		if err := handleCompact(ctx, log, hookData, store, out, errOut); err != nil {
-			log.Error("hook.sessionstart.compact_failed",
+			log.ErrorContext(ctx, "hook.sessionstart.compact_failed",
 				"component", "hook",
 				"subject", "sessionstart",
 				"err", err,
@@ -143,7 +143,7 @@ func ProcessSessionStart(
 		}
 	case "clear":
 		if err := handleClear(ctx, log, hookData, store, out, errOut); err != nil {
-			log.Error("hook.sessionstart.clear_failed",
+			log.ErrorContext(ctx, "hook.sessionstart.clear_failed",
 				"component", "hook",
 				"subject", "sessionstart",
 				"err", err,
@@ -156,7 +156,7 @@ func ProcessSessionStart(
 
 	res.SessionName = os.Getenv("CLYDE_SESSION_NAME")
 
-	log.Info("hook.sessionstart.completed",
+	log.InfoContext(ctx, "hook.sessionstart.completed",
 		"component", "hook",
 		"subject", "sessionstart",
 		"session_id", hookData.SessionID,

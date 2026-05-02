@@ -112,19 +112,39 @@ func readNonEmpty(path string) (string, bool) {
 // file format deterministic. The bytes come from crypto/rand so they
 // remain unique across hosts.
 func generateInstallationID() (string, error) {
+	log := codexConcernLog.Logger()
 	var buf [16]byte
 	if _, err := rand.Read(buf[:]); err != nil {
+		log.Warn("adapter.codex.installation_id.rand_failed",
+			"subcomponent", "codex",
+			"err", err.Error(),
+		)
 		return "", fmt.Errorf("codex installation id rand: %w", err)
 	}
 	return hex.EncodeToString(buf[:]), nil
 }
 
 func persistInstallationID(path, id string) error {
+	log := codexConcernLog.Logger()
 	if path == "" {
 		return errors.New("codex installation id path is empty")
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		log.Warn("adapter.codex.installation_id.mkdir_failed",
+			"subcomponent", "codex",
+			"path", filepath.Dir(path),
+			"err", err.Error(),
+		)
 		return fmt.Errorf("codex installation id mkdir: %w", err)
 	}
-	return os.WriteFile(path, []byte(id+"\n"), 0o600)
+	if err := os.WriteFile(path, []byte(id+"\n"), 0o600); err != nil {
+		log.Warn("adapter.codex.installation_id.write_failed",
+			"subcomponent", "codex",
+			"path", path,
+			"id_len", len(id),
+			"err", err.Error(),
+		)
+		return fmt.Errorf("codex installation id write: %w", err)
+	}
+	return nil
 }

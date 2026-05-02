@@ -125,7 +125,7 @@ func deleteTrackedSession(
 	})
 	if err != nil {
 		_, _ = fmt.Fprintln(out, ui.Warning(fmt.Sprintf("Failed to delete provider artifacts: %v", err)))
-		log.Error("prune.delete.provider_artifacts_failed",
+		log.ErrorContext(ctx, "prune.delete.provider_artifacts_failed",
 			"component", "prune",
 			"session", sess.Name,
 			"provider", sess.ProviderID(),
@@ -136,14 +136,14 @@ func deleteTrackedSession(
 	if ok, derr := daemon.DeleteSessionViaDaemon(ctx, sess.Name); ok {
 		_ = derr
 	} else if err := store.Delete(sess.Name); err != nil {
-		log.Error("prune.delete.folder_failed", "component", "prune", "session", sess.Name, "err", err)
+		log.ErrorContext(ctx, "prune.delete.folder_failed", "component", "prune", "session", sess.Name, "err", err)
 		return fmt.Errorf("failed to delete session: %w", err)
 	}
 
 	if sess.Metadata.HasCustomOutputStyle {
 		if err := outputstyle.DeleteCustomStyleFile(config.GlobalOutputStyleRoot(), sess.Name); err != nil {
 			_, _ = fmt.Fprintln(out, ui.Warning(fmt.Sprintf("Failed to delete output style file: %v", err)))
-			log.Error("prune.delete.style_failed", "component", "prune", "session", sess.Name, "err", err)
+			log.ErrorContext(ctx, "prune.delete.style_failed", "component", "prune", "session", sess.Name, "err", err)
 		}
 	}
 
@@ -155,7 +155,7 @@ func deleteTrackedSession(
 	}
 	_, _ = fmt.Fprintln(out, ui.Success(fmt.Sprintf("Deleted session '%s'", sess.Name)))
 	_, _ = fmt.Fprintf(out, "  Session folder, %d transcript(s), %d agent log(s)\n", transcriptCount, agentLogCount)
-	log.Info("prune.delete.completed",
+	log.InfoContext(ctx, "prune.delete.completed",
 		"component", "prune",
 		"session", sess.Name,
 		"transcripts", transcriptCount,

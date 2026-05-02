@@ -58,11 +58,20 @@ func Setup(cfg config.LoggingConfig, role ProcessRole) (io.Closer, error) {
 	switch level {
 	case "debug", "info", "warn", "error":
 	default:
+		slog.Warn("slogger.setup.invalid_level",
+			"component", "slogger",
+			"level", level,
+		)
 		return nopCloser{}, fmt.Errorf("slogger: logging.level required, must be one of debug|info|warn|error, got %q", level)
 	}
 
 	path := defaultPath(cfg, role)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		slog.Warn("slogger.setup.mkdir_failed",
+			"component", "slogger",
+			"path", filepath.Dir(path),
+			"err", err,
+		)
 		return nopCloser{}, fmt.Errorf("slogger: mkdir %s: %w", filepath.Dir(path), err)
 	}
 	concernRoot := defaultConcernRoot(cfg, role)
@@ -73,6 +82,11 @@ func Setup(cfg config.LoggingConfig, role ProcessRole) (io.Closer, error) {
 	if !rotationEnabled {
 		file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 		if err != nil {
+			slog.Warn("slogger.setup.open_json_log_failed",
+				"component", "slogger",
+				"path", path,
+				"err", err,
+			)
 			return nopCloser{}, fmt.Errorf("slogger: open json log file %s: %w", path, err)
 		}
 		lockedFile := gklog.NewLockedWriteCloser(path, file)

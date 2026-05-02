@@ -3,6 +3,7 @@ package mitm
 import (
 	"fmt"
 	"go/format"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,16 +37,33 @@ func GenerateWireConstants(snap Snapshot, opts CodegenOptions) (string, error) {
 		dir = filepath.Join("internal", "adapter", opts.PackageName)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
+		slog.Warn("mitm.codegen.mkdir_failed",
+			"component", "mitm",
+			"dir", dir,
+			"package", opts.PackageName,
+			"err", err,
+		)
 		return "", fmt.Errorf("codegen mkdir: %w", err)
 	}
 
 	body := buildWireConstantsSource(snap, opts)
 	formatted, err := format.Source([]byte(body))
 	if err != nil {
+		slog.Warn("mitm.codegen.gofmt_failed",
+			"component", "mitm",
+			"package", opts.PackageName,
+			"err", err,
+		)
 		return "", fmt.Errorf("codegen gofmt: %w\n%s", err, body)
 	}
 	out := filepath.Join(dir, "wire_constants_gen.go")
 	if err := os.WriteFile(out, formatted, 0o644); err != nil {
+		slog.Warn("mitm.codegen.write_failed",
+			"component", "mitm",
+			"path", out,
+			"package", opts.PackageName,
+			"err", err,
+		)
 		return "", fmt.Errorf("codegen write: %w", err)
 	}
 	return out, nil
@@ -64,7 +82,7 @@ func buildWireConstantsSource(snap Snapshot, opts CodegenOptions) string {
 	if snap.Upstream.CapturedAt != "" {
 		b.WriteString(snap.Upstream.CapturedAt)
 	} else {
-		b.WriteString(time.Now().UTC().Format(time.RFC3339))
+		b.WriteString(currentTime().UTC().Format(time.RFC3339))
 	}
 	b.WriteString("\n//\n// Run `clyde mitm codegen --upstream ")
 	b.WriteString(snap.Upstream.Name)

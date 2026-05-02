@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"sort"
 	"time"
 )
@@ -167,6 +168,7 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 		array := Synthesize(in.Slice, opts)
 		tail, err := in.Counter.CountSyntheticUser(ctx, array)
 		if err != nil {
+			slog.ErrorContext(ctx, "compact.plan.count_failed", "component", "compact", "step", label, "err", err)
 			return IterationRecord{}, fmt.Errorf("count_tokens after %q: %w", label, err)
 		}
 		ctxTotal := in.StaticOverhead + tail + in.Reserved

@@ -40,11 +40,11 @@ func PruneEphemeral(
 	if log == nil {
 		log = slog.Default()
 	}
-	log.Info("prune.ephemeral.started", "component", "prune", "dry_run", opts.DryRun)
+	log.InfoContext(ctx, "prune.ephemeral.started", "component", "prune", "dry_run", opts.DryRun)
 
 	all, err := store.List()
 	if err != nil {
-		log.Error("prune.ephemeral.list_failed", "component", "prune", "err", err)
+		log.ErrorContext(ctx, "prune.ephemeral.list_failed", "component", "prune", "err", err)
 		return Result{}, fmt.Errorf("listing sessions: %w", err)
 	}
 
@@ -52,7 +52,7 @@ func PruneEphemeral(
 	for _, sess := range all {
 		if isEphemeralWorkspace(sess.Metadata.WorkspaceRoot) {
 			targets = append(targets, sess)
-			log.Debug("prune.ephemeral.candidate",
+			log.DebugContext(ctx, "prune.ephemeral.candidate",
 				"component", "prune",
 				"session", sess.Name,
 				"workspace", sess.Metadata.WorkspaceRoot,
@@ -62,7 +62,7 @@ func PruneEphemeral(
 
 	if len(targets) == 0 {
 		_, _ = fmt.Fprintln(out, "No ephemeral sessions found.")
-		log.Info("prune.ephemeral.complete", "component", "prune", "considered", 0, "pruned", 0)
+		log.InfoContext(ctx, "prune.ephemeral.complete", "component", "prune", "considered", 0, "pruned", 0)
 		return Result{Considered: 0, Pruned: 0}, nil
 	}
 
@@ -73,7 +73,7 @@ func PruneEphemeral(
 
 	if opts.DryRun {
 		_, _ = fmt.Fprintln(out, "\n[dry-run] No deletions performed.")
-		log.Info("prune.ephemeral.complete", "component", "prune", "considered", len(targets), "pruned", 0, "dry_run", true)
+		log.InfoContext(ctx, "prune.ephemeral.complete", "component", "prune", "considered", len(targets), "pruned", 0, "dry_run", true)
 		return Result{Considered: len(targets), Pruned: 0}, nil
 	}
 
@@ -87,7 +87,7 @@ func PruneEphemeral(
 		answer = strings.ToLower(strings.TrimSpace(answer))
 		if answer != "y" && answer != "yes" {
 			_, _ = fmt.Fprintln(out, "Cancelled.")
-			log.Info("prune.ephemeral.cancelled", "component", "prune", "considered", len(targets))
+			log.InfoContext(ctx, "prune.ephemeral.cancelled", "component", "prune", "considered", len(targets))
 			return Result{Considered: len(targets), Pruned: 0}, nil
 		}
 	}
@@ -95,19 +95,19 @@ func PruneEphemeral(
 	var failures []DeleteFailure
 	pruned := 0
 	for _, sess := range targets {
-		log.Debug("prune.ephemeral.deleting", "component", "prune", "session", sess.Name)
+		log.DebugContext(ctx, "prune.ephemeral.deleting", "component", "prune", "session", sess.Name)
 		if err := deleteTrackedSession(ctx, log, out, sess, store); err != nil {
 			_, _ = fmt.Fprintf(out, "  FAILED %s: %v\n", sess.Name, err)
-			log.Error("prune.ephemeral.delete_failed", "component", "prune", "session", sess.Name, "err", err)
+			log.ErrorContext(ctx, "prune.ephemeral.delete_failed", "component", "prune", "session", sess.Name, "err", err)
 			failures = append(failures, DeleteFailure{Target: sess.Name, Err: err})
 			continue
 		}
 		pruned++
-		log.Debug("prune.ephemeral.deleted", "component", "prune", "session", sess.Name)
+		log.DebugContext(ctx, "prune.ephemeral.deleted", "component", "prune", "session", sess.Name)
 	}
 
 	_, _ = fmt.Fprintf(out, "\nDeleted %d of %d ephemeral sessions.\n", pruned, len(targets))
-	log.Info("prune.ephemeral.complete",
+	log.InfoContext(ctx, "prune.ephemeral.complete",
 		"component", "prune",
 		"considered", len(targets),
 		"pruned", pruned,

@@ -236,13 +236,20 @@ func newProgressView(w io.Writer, target int, mode Mode, isTTY bool, upfront Upf
 		target:    target,
 		mode:      mode,
 		isTTY:     isTTY,
-		startedAt: time.Now(),
+		startedAt: cliCompactClock.Now(),
 		upfront:   upfront,
 		stop:      make(chan progressSignal),
 		done:      make(chan progressSignal),
 	}
 	if isTTY {
-		go p.animate()
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					cliCompactLog.Logger().Error("cli.compact.progress_panic", "panic", r, "err", fmt.Errorf("panic: %v", r))
+				}
+			}()
+			p.animate()
+		}()
 		p.draw()
 	} else {
 		close(p.done)
@@ -257,7 +264,7 @@ func newProgressView(w io.Writer, target int, mode Mode, isTTY bool, upfront Upf
 func (p *progressView) animate() {
 	interval := time.Second / spinnerFPS
 	t := time.NewTicker(interval)
-	defer t.Stop()
+	defer func() { t.Stop() }()
 	defer close(p.done)
 	for {
 		select {

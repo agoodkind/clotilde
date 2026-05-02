@@ -165,7 +165,7 @@ func (s *Server) executeAnthropicPreparedCollect(
 		server:      s,
 		eventWriter: writer,
 	}
-	started := time.Now()
+	started := adapterClock.Now()
 	if err := anthropicbackend.CollectResponse(
 		dispatcher,
 		nil,
@@ -220,7 +220,7 @@ func (s *Server) executeAnthropicPreparedStream(
 		sse:         &providerAnthropicSSEWriter{writer: streamWriter},
 		eventWriter: writer,
 	}
-	started := time.Now()
+	started := adapterClock.Now()
 	request := (&http.Request{}).WithContext(ctx)
 	if err := anthropicbackend.StreamResponse(
 		dispatcher,
@@ -268,6 +268,7 @@ func (s *Server) executeAnthropicPreparedStreamNative(
 	if err != nil {
 		return adapterprovider.Result{}, err
 	}
+	defer func() { _ = resp.Body.Close() }()
 	if err := writer.relay(resp); err != nil {
 		return adapterprovider.Result{}, err
 	}

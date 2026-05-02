@@ -38,14 +38,14 @@ func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript
 
 	// "quick" is embedding-only: no LLM involved.
 	if depth == "quick" {
-		log.Info("search starting (embedding only)",
+		log.InfoContext(ctx, "search starting (embedding only)",
 			"query", query,
 			"messages", len(messages),
 			"depth", depth,
 		)
-		start := time.Now()
+		start := searchClock.Now()
 		results, err := embeddingOnlySearch(ctx, log, messages, query, cfg)
-		log.Info("search complete",
+		log.InfoContext(ctx, "search complete",
 			"total_matches", len(results),
 			"total_duration", time.Since(start).Round(time.Millisecond),
 		)
@@ -54,7 +54,7 @@ func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript
 
 	// "extra-deep" runs the full pipeline and warns about runtime.
 	if depth == "extra-deep" {
-		log.Warn("extra-deep search uses the full pipeline including large model verification; this may take 10+ minutes")
+		log.WarnContext(ctx, "extra-deep search uses the full pipeline including large model verification; this may take 10+ minutes")
 	}
 
 	pipeline := cfg.Local.ResolvePipeline(depth)
@@ -62,13 +62,13 @@ func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript
 		return nil, fmt.Errorf("no search pipeline configured")
 	}
 
-	log.Info("search starting",
+	log.InfoContext(ctx, "search starting",
 		"query", query,
 		"messages", len(messages),
 		"depth", depth,
 		"layers", len(pipeline),
 	)
-	searchStart := time.Now()
+	searchStart := searchClock.Now()
 
 	// Track current model so we only swap when needed
 	currentModel := ""
@@ -76,7 +76,7 @@ func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript
 	// Layer 1: sweep with fast model
 	sweepLayer := pipeline[0]
 	if cfg.Backend == "local" {
-		log.Info("loading sweep model", "model", sweepLayer.Model)
+		log.InfoContext(ctx, "loading sweep model", "model", sweepLayer.Model)
 		if err := lmctl.EnsureLoaded(ctx, sweepLayer.Model,
 			lmctl.WithContextLength(cfg.Local.ContextLength),
 			lmctl.WithMaxMemoryGB(cfg.Local.MaxMemoryGB),
@@ -86,10 +86,10 @@ func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript
 		}
 		currentModel = sweepLayer.Model
 	}
-	sweepStart := time.Now()
+	sweepStart := searchClock.Now()
 	sweepClient := newClientForModel(cfg, sweepLayer.Model)
 	matched := sweepChunks(ctx, log, sweepClient, messages, query, cfg)
-	log.Info("sweep complete",
+	log.InfoContext(ctx, "sweep complete",
 		"model", sweepLayer.Model,
 		"matches", len(matched),
 		"duration", time.Since(sweepStart).Round(time.Millisecond),
@@ -98,32 +98,32 @@ func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript
 	// Layer 2+: rerank/deep passes with progressively smarter models
 	for i := 1; i < len(pipeline); i++ {
 		if len(matched) == 0 {
-			log.Debug("no matches, skipping remaining layers")
+			log.DebugContext(ctx, "no matches, skipping remaining layers")
 			break
 		}
 		layer := pipeline[i]
 
 		// Skip rerank if only 1 result (nothing to filter), but still run deep
 		if len(matched) <= 1 && layer.Name != "deep" {
-			log.Debug("skipping rerank layer (single result)", "layer", layer.Name)
+			log.DebugContext(ctx, "skipping rerank layer (single result)", "layer", layer.Name)
 			continue
 		}
 
 		// Swap model if this layer uses a different one
 		if cfg.Backend == "local" && layer.Model != currentModel {
-			log.Debug("swapping model", "from", currentModel, "to", layer.Model, "layer", layer.Name)
+			log.DebugContext(ctx, "swapping model", "from", currentModel, "to", layer.Model, "layer", layer.Name)
 			if err := lmctl.EnsureLoaded(ctx, layer.Model,
 				lmctl.WithContextLength(cfg.Local.ContextLength),
 				lmctl.WithMaxMemoryGB(cfg.Local.MaxMemoryGB),
 				lmctl.WithWarmup(cfg.Local.URL, cfg.Local.Token),
 			); err != nil {
-				log.Warn("model load failed, skipping layer", "model", layer.Model, "err", err)
+				log.WarnContext(ctx, "model load failed, skipping layer", "model", layer.Model, "err", err)
 				continue
 			}
 			currentModel = layer.Model
 		}
 
-		layerStart := time.Now()
+		layerStart := searchClock.Now()
 		layerClient := newClientForModel(cfg, layer.Model)
 
 		beforeCount := len(matched)
@@ -133,7 +133,7 @@ func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript
 		default:
 			matched = rerankResults(ctx, layerClient, matched, query)
 		}
-		log.Debug("layer complete",
+		log.DebugContext(ctx, "layer complete",
 			"layer", layer.Name,
 			"model", layer.Model,
 			"before", beforeCount,
@@ -142,7 +142,7 @@ func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript
 		)
 	}
 
-	log.Info("search complete",
+	log.InfoContext(ctx, "search complete",
 		"total_matches", len(matched),
 		"total_duration", time.Since(searchStart).Round(time.Millisecond),
 	)
@@ -157,13 +157,14 @@ func embeddingOnlySearch(ctx context.Context, log *slog.Logger, messages []trans
 		chunkSize = defaultChunkChars
 	}
 	chunks := chunkMessages(messages, chunkSize)
-	log.Info("quick search: chunked messages", "chunks", len(chunks), "messages", len(messages))
+	log.InfoContext(ctx, "quick search: chunked messages", "chunks", len(chunks), "messages", len(messages))
 
 	if cfg.Backend != "local" {
 		return nil, fmt.Errorf("quick depth requires local backend with embedding model")
 	}
 
 	if err := ensureEmbeddingModelReady(ctx, cfg.Local); err != nil {
+		log.ErrorContext(ctx, "quick search: embedding model load failed", "err", err)
 		return nil, fmt.Errorf("failed to load embedding model: %w", err)
 	}
 
@@ -184,20 +185,22 @@ func embeddingOnlySearch(ctx context.Context, log *slog.Logger, messages []trans
 	}
 
 	// Embed query
-	queryEmbStart := time.Now()
+	queryEmbStart := searchClock.Now()
 	queryEmb, err := filter.embed(ctx, []string{query})
 	if err != nil {
+		log.ErrorContext(ctx, "quick search: query embedding failed", "err", err)
 		return nil, fmt.Errorf("embedding query failed: %w", err)
 	}
-	log.Debug("quick search: query embedded", "duration", time.Since(queryEmbStart).Round(time.Millisecond))
+	log.DebugContext(ctx, "quick search: query embedded", "duration", time.Since(queryEmbStart).Round(time.Millisecond))
 
 	// Embed all chunks in one batch
-	chunksEmbStart := time.Now()
+	chunksEmbStart := searchClock.Now()
 	chunkEmbs, err := filter.embed(ctx, chunkTexts)
 	if err != nil {
+		log.ErrorContext(ctx, "quick search: chunk embedding failed", "chunks", len(chunkTexts), "err", err)
 		return nil, fmt.Errorf("embedding chunks failed: %w", err)
 	}
-	log.Debug("quick search: chunks embedded", "chunks", len(chunkTexts), "duration", time.Since(chunksEmbStart).Round(time.Millisecond))
+	log.DebugContext(ctx, "quick search: chunks embedded", "chunks", len(chunkTexts), "duration", time.Since(chunksEmbStart).Round(time.Millisecond))
 
 	if len(queryEmb) == 0 || len(chunkEmbs) != len(chunks) {
 		return nil, fmt.Errorf("unexpected embedding response lengths")
@@ -226,7 +229,7 @@ func embeddingOnlySearch(ctx context.Context, log *slog.Logger, messages []trans
 		}
 	}
 
-	log.Info("quick search: embedding scored",
+	log.InfoContext(ctx, "quick search: embedding scored",
 		"total_chunks", len(chunks),
 		"hits", len(hits),
 		"threshold", filter.threshold,
@@ -251,7 +254,7 @@ func sweepChunks(ctx context.Context, log *slog.Logger, client Client, messages 
 		chunkSize = defaultChunkChars
 	}
 	chunks := chunkMessages(messages, chunkSize)
-	log.Info("sweep: chunked messages", "chunks", len(chunks), "messages", len(messages), "chunk_size", chunkSize)
+	log.InfoContext(ctx, "sweep: chunked messages", "chunks", len(chunks), "messages", len(messages), "chunk_size", chunkSize)
 
 	// Pre-filter with embeddings if available (local backend only).
 	// The embedding model is tiny (~0.1 GB) and can coexist with inference models.
@@ -283,15 +286,20 @@ func sweepChunks(ctx context.Context, log *slog.Logger, client Client, messages 
 	for i, chunk := range chunks {
 		wg.Add(1)
 		go func(idx int, msgs []transcript.Message) {
+			defer func() {
+				if r := recover(); r != nil {
+					log.ErrorContext(ctx, "sweep: chunk worker panic", "chunk", idx, "panic", r, "err", fmt.Errorf("panic: %v", r))
+				}
+			}()
 			defer wg.Done()
 			sem <- searchConcurrencyPermit{Acquired: true}
 			defer func() { <-sem }()
 
-			chunkStart := time.Now()
+			chunkStart := searchClock.Now()
 			res, err := searchChunk(ctx, client, msgs, query)
 			results[idx] = chunkResult{idx: idx, result: res, err: err}
 			hit := res != nil && len(res.Messages) > 0
-			log.Debug("sweep: chunk done",
+			log.DebugContext(ctx, "sweep: chunk done",
 				"chunk", idx,
 				"messages", len(msgs),
 				"hit", hit,

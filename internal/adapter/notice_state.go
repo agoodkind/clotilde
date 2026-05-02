@@ -80,7 +80,7 @@ func claimLocked(kind string, resetsAt time.Time, force bool) (bool, error) {
 		return false, nil
 	}
 
-	now := time.Now().UTC()
+	now := adapterClock.Now().UTC()
 	pruneNoticeStateLocked(state, now)
 	state[key] = now.Unix()
 	if err := writeNoticeStateLocked(state); err != nil {
@@ -90,36 +90,71 @@ func claimLocked(kind string, resetsAt time.Time, force bool) (bool, error) {
 }
 
 func readNoticeStateLocked() (map[string]int64, error) {
+	log := adapterHTTPErrorLog.Logger()
 	path := noticeStatePath()
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, err
 		}
+		log.Warn("adapter.notice.state_read_failed",
+			"subcomponent", "adapter",
+			"path", path,
+			"err", err.Error(),
+		)
 		return nil, fmt.Errorf("read notice state %s: %w", path, err)
 	}
 	state := map[string]int64{}
 	if err := json.Unmarshal(raw, &state); err != nil {
+		log.Warn("adapter.notice.state_unmarshal_failed",
+			"subcomponent", "adapter",
+			"path", path,
+			"raw_bytes", len(raw),
+			"err", err.Error(),
+		)
 		return nil, fmt.Errorf("unmarshal notice state %s: %w", path, err)
 	}
 	return state, nil
 }
 
 func writeNoticeStateLocked(state map[string]int64) error {
+	log := adapterHTTPErrorLog.Logger()
 	path := noticeStatePath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		log.Warn("adapter.notice.state_mkdir_failed",
+			"subcomponent", "adapter",
+			"path", filepath.Dir(path),
+			"err", err.Error(),
+		)
 		return fmt.Errorf("mkdir notice state dir %s: %w", filepath.Dir(path), err)
 	}
 	if len(state) == 0 {
 		raw, err := json.Marshal(map[string]int64{})
 		if err != nil {
+			log.Warn("adapter.notice.state_marshal_failed",
+				"subcomponent", "adapter",
+				"entry_count", len(state),
+				"err", err.Error(),
+			)
 			return fmt.Errorf("marshal notice state: %w", err)
 		}
 		tmp := path + ".tmp"
 		if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+			log.Warn("adapter.notice.state_temp_write_failed",
+				"subcomponent", "adapter",
+				"path", tmp,
+				"raw_bytes", len(raw),
+				"err", err.Error(),
+			)
 			return fmt.Errorf("write temp notice state: %w", err)
 		}
 		if err := os.Rename(tmp, path); err != nil {
+			log.Warn("adapter.notice.state_rename_failed",
+				"subcomponent", "adapter",
+				"tmp_path", tmp,
+				"path", path,
+				"err", err.Error(),
+			)
 			return fmt.Errorf("rename notice state: %w", err)
 		}
 		return nil
@@ -127,13 +162,30 @@ func writeNoticeStateLocked(state map[string]int64) error {
 
 	raw, err := json.Marshal(state)
 	if err != nil {
+		log.Warn("adapter.notice.state_marshal_failed",
+			"subcomponent", "adapter",
+			"entry_count", len(state),
+			"err", err.Error(),
+		)
 		return fmt.Errorf("marshal notice state: %w", err)
 	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		log.Warn("adapter.notice.state_temp_write_failed",
+			"subcomponent", "adapter",
+			"path", tmp,
+			"raw_bytes", len(raw),
+			"err", err.Error(),
+		)
 		return fmt.Errorf("write temp notice state: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
+		log.Warn("adapter.notice.state_rename_failed",
+			"subcomponent", "adapter",
+			"tmp_path", tmp,
+			"path", path,
+			"err", err.Error(),
+		)
 		return fmt.Errorf("rename notice state: %w", err)
 	}
 	return nil
@@ -144,7 +196,7 @@ func pruneNoticeStateLocked(state map[string]int64, now time.Time) {
 		return
 	}
 	if now.IsZero() {
-		now = time.Now().UTC()
+		now = adapterClock.Now().UTC()
 	}
 	for key := range state {
 		_, resetAt, ok := parseNoticeStateKey(key)

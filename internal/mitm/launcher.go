@@ -39,6 +39,7 @@ func LaunchUpstream(ctx context.Context, opts LaunchUpstreamOptions) error {
 	log = slogger.WithConcern(log, slogger.ConcernProviderMITMLifecycle)
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
+		log.WarnContext(ctx, "mitm.launch.config_load_failed", "err", err)
 		return fmt.Errorf("load config: %w", err)
 	}
 	// Force MITM enablement for the upstream's family so the always-on
@@ -50,6 +51,7 @@ func LaunchUpstream(ctx context.Context, opts LaunchUpstreamOptions) error {
 	}
 	proxy, err := EnsureStarted(cfg.MITM, log.With("subcomponent", "mitm-launch"))
 	if err != nil {
+		log.WarnContext(ctx, "mitm.launch.ensure_proxy_failed", "err", err)
 		return fmt.Errorf("ensure proxy: %w", err)
 	}
 	proxyURL := proxy.base
@@ -58,6 +60,10 @@ func LaunchUpstream(ctx context.Context, opts LaunchUpstreamOptions) error {
 	}
 	binary, err := opts.Profile.BinaryFinder()
 	if err != nil {
+		log.WarnContext(ctx, "mitm.launch.binary_resolve_failed",
+			"upstream", opts.Profile.Name,
+			"err", err,
+		)
 		return fmt.Errorf("resolve %s binary: %w", opts.Profile.Name, err)
 	}
 	binary = strings.TrimSpace(binary)
@@ -80,7 +86,7 @@ func LaunchUpstream(ctx context.Context, opts LaunchUpstreamOptions) error {
 	args = append(args, opts.Profile.ChromiumFlags(proxyURL)...)
 	args = append(args, opts.ExtraArgs...)
 
-	log.Info("mitm.launch.starting",
+	log.InfoContext(ctx, "mitm.launch.starting",
 		"upstream", opts.Profile.Name,
 		"binary", binary,
 		"proxy_url", proxyURL,
@@ -95,16 +101,20 @@ func LaunchUpstream(ctx context.Context, opts LaunchUpstreamOptions) error {
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	if err := cmd.Start(); err != nil {
+		log.WarnContext(ctx, "mitm.launch.start_failed",
+			"upstream", opts.Profile.Name,
+			"binary", binary,
+			"err", err,
+		)
 		return fmt.Errorf("start %s: %w", opts.Profile.Name, err)
 	}
 	// Release the child so it survives the clyde process exit.
 	if err := cmd.Process.Release(); err != nil {
-		log.Warn("mitm.launch.release_failed", "err", err)
+		log.WarnContext(ctx, "mitm.launch.release_failed", "err", err)
 	}
-	log.Info("mitm.launch.detached",
+	log.InfoContext(ctx, "mitm.launch.detached",
 		"upstream", opts.Profile.Name,
 		"pid", cmd.Process.Pid,
 	)
-	_ = ctx
 	return nil
 }

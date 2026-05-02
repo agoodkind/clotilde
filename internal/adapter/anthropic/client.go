@@ -85,12 +85,13 @@ func managerWrap(m *oauth.Manager) OAuthSource {
 // for each decoded stream event (text, tool-use lifecycle, thinking,
 // and final stop).
 func (c *Client) StreamEvents(ctx context.Context, req Request, sink EventSink) (Usage, string, error) {
+	log := anthropicRequestLog.Logger()
 	req.Stream = true
 	resp, err := c.do(ctx, req)
 	if err != nil {
 		return Usage{}, "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	usage := Usage{}
 	stopReason := ""
@@ -116,6 +117,11 @@ func (c *Client) StreamEvents(ctx context.Context, req Request, sink EventSink) 
 		}
 	}
 	if err := scanner.Err(); err != nil {
+		log.WarnContext(ctx, "anthropic.stream.scan_failed",
+			"subcomponent", "anthropic",
+			"model", req.Model,
+			"err", err.Error(),
+		)
 		return usage, stopReason, fmt.Errorf("anthropic stream scan: %w", err)
 	}
 	return usage, stopReason, nil
@@ -129,6 +135,7 @@ func (c *Client) Do(ctx context.Context, req Request) (*http.Response, error) {
 }
 
 func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
+	log := anthropicRequestLog.Logger()
 	if c.oauth == nil {
 		return nil, errors.New("anthropic client missing oauth source")
 	}
@@ -137,16 +144,32 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	}
 	body, err := json.Marshal(req)
 	if err != nil {
+		log.WarnContext(ctx, "anthropic.messages.marshal_failed",
+			"subcomponent", "anthropic",
+			"model", req.Model,
+			"err", err.Error(),
+		)
 		return nil, fmt.Errorf("marshal anthropic request: %w", err)
 	}
 
 	token, err := c.oauth.Token(ctx)
 	if err != nil {
+		log.WarnContext(ctx, "anthropic.messages.auth_lookup_failed",
+			"subcomponent", "anthropic",
+			"model", req.Model,
+			"err", err.Error(),
+		)
 		return nil, fmt.Errorf("oauth token: %w", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.MessagesURL, bytes.NewReader(body))
 	if err != nil {
+		log.WarnContext(ctx, "anthropic.messages.request_build_failed",
+			"subcomponent", "anthropic",
+			"model", req.Model,
+			"url", c.cfg.MessagesURL,
+			"err", err.Error(),
+		)
 		return nil, fmt.Errorf("build messages request: %w", err)
 	}
 	// Wire signals required by the upstream identity check; values come from cfg.
@@ -220,13 +243,13 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		for k := range dropped {
 			keys = append(keys, k)
 		}
-		anthropicRequestLog.Logger().Warn("anthropic.probe.headers_dropped",
+		log.WarnContext(ctx, "anthropic.probe.headers_dropped",
 			"subcomponent", "anthropic",
 			"dropped", keys,
 		)
 	}
 
-	anthropicRequestLog.Logger().Debug("anthropic.messages.request",
+	log.DebugContext(ctx, "anthropic.messages.request",
 		"subcomponent", "anthropic",
 		"model", req.Model,
 		"url", c.cfg.MessagesURL,
@@ -236,7 +259,7 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		"body_b64", base64.StdEncoding.EncodeToString(body),
 	)
 
-	postStarted := time.Now()
+	postStarted := anthropicClock.Now()
 	resp, err := c.http.Do(httpReq)
 	if resp != nil {
 		// We set Accept-Encoding explicitly, so Go's transparent gzip
@@ -467,7 +490,7 @@ func (d *decodedBody) Close() error {
 // Returns the bytes the caller would have seen as if no encoding was
 // applied.
 func readDecodedBody(resp *http.Response) []byte {
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	b, _ := io.ReadAll(resp.Body)
 	return b
 }

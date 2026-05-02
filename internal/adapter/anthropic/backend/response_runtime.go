@@ -444,7 +444,7 @@ func StreamResponse(
 		_ = emitChunk(adapteropenai.StreamChunk{
 			ID:      reqID,
 			Object:  "chat.completion.chunk",
-			Created: time.Now().Unix(),
+			Created: backendClock.Now().Unix(),
 			Model:   model.Alias,
 			Choices: []adapteropenai.StreamChoice{{
 				Index: 0,
@@ -461,7 +461,7 @@ func StreamResponse(
 	finishChunk := adapteropenai.StreamChunk{
 		ID:      reqID,
 		Object:  "chat.completion.chunk",
-		Created: time.Now().Unix(),
+		Created: backendClock.Now().Unix(),
 		Model:   model.Alias,
 		Choices: []adapteropenai.StreamChoice{{Index: 0, Delta: adapteropenai.StreamDelta{}, FinishReason: &finishReason}},
 	}
@@ -486,7 +486,7 @@ func StreamResponse(
 		_ = sw.EmitStreamChunk(d.SystemFingerprint(), adapteropenai.StreamChunk{
 			ID:      reqID,
 			Object:  "chat.completion.chunk",
-			Created: time.Now().Unix(),
+			Created: backendClock.Now().Unix(),
 			Model:   model.Alias,
 			Choices: []adapteropenai.StreamChoice{},
 			Usage:   &finalUsage,

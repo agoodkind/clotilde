@@ -54,16 +54,26 @@ func DeviceID() (string, error) {
 }
 
 func readOrGenerateDeviceID() (string, error) {
+	log := anthropicRequestLog.Logger()
 	stateHome := os.Getenv("XDG_STATE_HOME")
 	if stateHome == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
+			log.Warn("anthropic.identity.home_dir_failed",
+				"subcomponent", "anthropic_identity",
+				"err", err.Error(),
+			)
 			return "", fmt.Errorf("user home dir: %w", err)
 		}
 		stateHome = filepath.Join(home, ".local", "state")
 	}
 	dir := filepath.Join(stateHome, "clyde", "adapter", "anthropic")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
+		log.Warn("anthropic.identity.device_dir_failed",
+			"subcomponent", "anthropic_identity",
+			"path", dir,
+			"err", err.Error(),
+		)
 		return "", fmt.Errorf("create device dir: %w", err)
 	}
 	path := filepath.Join(dir, "device_id")
@@ -76,6 +86,11 @@ func readOrGenerateDeviceID() (string, error) {
 	sum := sha256.Sum256([]byte(seed))
 	id := hex.EncodeToString(sum[:])
 	if err := os.WriteFile(path, []byte(id), 0o600); err != nil {
+		log.Warn("anthropic.identity.device_id_write_failed",
+			"subcomponent", "anthropic_identity",
+			"path", path,
+			"err", err.Error(),
+		)
 		return "", fmt.Errorf("persist device_id: %w", err)
 	}
 	return id, nil

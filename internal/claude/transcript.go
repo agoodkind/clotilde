@@ -140,7 +140,7 @@ func LoadAllMessages(transcriptPath string, maxLen int) []RecentMessage {
 	if err != nil {
 		return nil
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	parsed, err := itranscript.Parse(f)
 	if err != nil {

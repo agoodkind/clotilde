@@ -8,6 +8,7 @@ package compact
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,6 +39,7 @@ import (
 func AnthropicAPIKey() (string, error) {
 	path, err := globalConfigPath()
 	if err != nil {
+		slog.Error("compact.config.path_failed", "component", "compact", "err", err)
 		return "", fmt.Errorf("resolve global config path: %w", err)
 	}
 	data, err := os.ReadFile(path)
@@ -45,6 +47,7 @@ func AnthropicAPIKey() (string, error) {
 		if os.IsNotExist(err) {
 			return "", ErrNoConfig
 		}
+		slog.Error("compact.config.read_failed", "component", "compact", "path", path, "err", err)
 		return "", fmt.Errorf("read global config: %w", err)
 	}
 	var cfg struct {
@@ -53,6 +56,7 @@ func AnthropicAPIKey() (string, error) {
 		} `toml:"defaults"`
 	}
 	if err := toml.Unmarshal(data, &cfg); err != nil {
+		slog.Error("compact.config.parse_failed", "component", "compact", "path", path, "err", err)
 		return "", fmt.Errorf("parse global config: %w", err)
 	}
 	key := strings.TrimSpace(cfg.Defaults.AnthropicAPIKey)

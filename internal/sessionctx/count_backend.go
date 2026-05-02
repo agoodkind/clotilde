@@ -51,7 +51,7 @@ func (c *countBackend) Count(ctx context.Context, content []compact.OutputBlock,
 	}
 
 	counter := c.builder(c.apiKey, effectiveModel)
-	started := time.Now()
+	started := currentTime()
 	sessionContextLog.Logger().Debug("session.context.count.started",
 		"component", "sessionctx",
 		"subcomponent", "count",

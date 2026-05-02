@@ -208,6 +208,7 @@ func assistantHasToolUse(msg AnthMessage) bool {
 }
 
 func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBlock, error) {
+	log := anthropicBackendLog.Logger()
 	parts, _ := normalizeContent(msg.Content)
 	var blocks []AnthContentBlock
 	for partIdx, p := range parts {
@@ -223,10 +224,21 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 			}
 			src, err := imageURLToSource(p.ImageURL.URL)
 			if err != nil {
+				log.Warn("adapter.anthropic.user_part.image_rejected",
+					"subcomponent", "anthropic_mapper",
+					"msg_idx", msgIdx,
+					"part_idx", partIdx,
+					"err", err.Error(),
+				)
 				return nil, err
 			}
 			blocks = append(blocks, AnthContentBlock{Type: "image", Source: src})
 		case "input_audio":
+			log.Warn("adapter.anthropic.user_part.audio_rejected",
+				"subcomponent", "anthropic_mapper",
+				"msg_idx", msgIdx,
+				"part_idx", partIdx,
+			)
 			return nil, fmt.Errorf("%w: message %d part %d", ErrAudioUnsupported, msgIdx, partIdx)
 		case "refusal":
 			if p.Refusal == "" {
@@ -243,7 +255,7 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 				ToolUseID:     p.ToolUseID,
 				ResultContent: result,
 			})
-			anthropicBackendLog.Logger().Debug("adapter.anthropic.tool_result.translated",
+			log.Debug("adapter.anthropic.tool_result.translated",
 				"subcomponent", "anthropic",
 				"msg_idx", msgIdx,
 				"part_idx", partIdx,
@@ -252,7 +264,7 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 				"carrier", "user_part",
 			)
 		default:
-			anthropicBackendLog.Logger().Warn("adapter.anthropic.user_part.unknown_type",
+			log.Warn("adapter.anthropic.user_part.unknown_type",
 				"subcomponent", "anthropic",
 				"msg_idx", msgIdx,
 				"part_idx", partIdx,
@@ -310,6 +322,7 @@ func flattenToolResultContent(raw json.RawMessage) string {
 }
 
 func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBlock, error) {
+	log := anthropicBackendLog.Logger()
 	parts, _ := normalizeContent(msg.Content)
 	var blocks []AnthContentBlock
 	for partIdx, p := range parts {
@@ -341,10 +354,21 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage) ([]AnthConten
 			}
 			src, err := imageURLToSource(p.ImageURL.URL)
 			if err != nil {
+				log.Warn("adapter.anthropic.assistant_part.image_rejected",
+					"subcomponent", "anthropic_mapper",
+					"msg_idx", msgIdx,
+					"part_idx", partIdx,
+					"err", err.Error(),
+				)
 				return nil, err
 			}
 			blocks = append(blocks, AnthContentBlock{Type: "image", Source: src})
 		case "input_audio":
+			log.Warn("adapter.anthropic.assistant_part.audio_rejected",
+				"subcomponent", "anthropic_mapper",
+				"msg_idx", msgIdx,
+				"part_idx", partIdx,
+			)
 			return nil, fmt.Errorf("%w: message %d part %d", ErrAudioUnsupported, msgIdx, partIdx)
 		case "refusal":
 			refusal := stripNotice(p.Refusal, msgIdx, partIdx)
@@ -363,7 +387,7 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage) ([]AnthConten
 				Name:  p.Name,
 				Input: input,
 			})
-			anthropicBackendLog.Logger().Debug("adapter.anthropic.tool_use.translated",
+			log.Debug("adapter.anthropic.tool_use.translated",
 				"subcomponent", "anthropic",
 				"msg_idx", msgIdx,
 				"part_idx", partIdx,
@@ -375,7 +399,7 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage) ([]AnthConten
 		case "thinking":
 			continue
 		default:
-			anthropicBackendLog.Logger().Warn("adapter.anthropic.assistant_part.unknown_type",
+			log.Warn("adapter.anthropic.assistant_part.unknown_type",
 				"subcomponent", "anthropic",
 				"msg_idx", msgIdx,
 				"part_idx", partIdx,

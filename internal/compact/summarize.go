@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"sort"
 	"strings"
@@ -72,7 +73,7 @@ func SummarizeDropped(ctx context.Context, slice *Slice, opts SynthOptions, sopt
 	}
 	args = append(args, prompt)
 
-	started := time.Now()
+	started := compactClock.Now()
 	compactLog.Logger().Info("compact.summarize.spawned",
 		"component", "compact",
 		"subcomponent", "summarize",
@@ -90,7 +91,7 @@ func SummarizeDropped(ctx context.Context, slice *Slice, opts SynthOptions, sopt
 		if len(tail) > 1024 {
 			tail = tail[len(tail)-1024:]
 		}
-		compactLog.Logger().Warn("compact.summarize.failed",
+		slog.WarnContext(ctx, "compact.summarize.failed",
 			"component", "compact",
 			"subcomponent", "summarize",
 			"duration_ms", time.Since(started).Milliseconds(),

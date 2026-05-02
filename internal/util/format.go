@@ -36,7 +36,7 @@ func FormatSize(bytes int64) string {
 // FormatRelativeTime formats a time as a human-readable relative string.
 // Examples: "just now", "5 minutes ago", "2 hours ago", "3 days ago", "2024-01-15"
 func FormatRelativeTime(t time.Time) string {
-	now := time.Now()
+	now := currentTime()
 	diff := now.Sub(t)
 
 	switch {

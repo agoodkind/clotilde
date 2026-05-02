@@ -55,7 +55,7 @@ func LoadingSpinnerGlyph(frame int) string {
 }
 
 func currentLoadingFrame() int {
-	return int(time.Now().UnixNano() / int64(loadingFrameInterval))
+	return int(currentUITime().UnixNano() / int64(loadingFrameInterval))
 }
 
 func loadingValue(status string) string {

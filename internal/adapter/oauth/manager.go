@@ -50,6 +50,7 @@ func NewManager(oauthCfg config.AdapterOAuth, credentialsDir string) *Manager {
 // per-process mutex; cross-process races are handled by the file
 // lock and post-lock re-read.
 func (m *Manager) Token(ctx context.Context) (string, error) {
+	log := oauthLog.Logger()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -59,6 +60,12 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 	if tokens == nil {
 		fresh, err := readCredentials(m.credentialsDir, m.oauthCfg.KeychainService)
 		if err != nil {
+			log.WarnContext(ctx, "oauth.store.read_failed",
+				"subcomponent", "oauth",
+				"store_dir", m.credentialsDir,
+				"keychain_service_present", m.oauthCfg.KeychainService != "",
+				"err", err.Error(),
+			)
 			return "", fmt.Errorf("read credentials: %w", err)
 		}
 		if fresh == nil {
@@ -69,23 +76,23 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 	}
 
 	if !isExpired(tokens) {
-		oauthLog.Logger().Debug("oauth.token.cache_hit",
+		log.DebugContext(ctx, "oauth.auth.cache_hit",
 			"subcomponent", "oauth",
 			"expires_at_ms", tokens.ExpiresAt,
 		)
 		return tokens.AccessToken, nil
 	}
 
-	refreshStarted := time.Now()
+	refreshStarted := oauthClock.Now()
 	refreshed, err := m.refreshLocked(ctx, tokens)
 	if err != nil {
-		oauthLog.Logger().Error("oauth.token.refresh_failed",
+		log.ErrorContext(ctx, "oauth.auth.refresh_failed",
 			"subcomponent", "oauth",
 			"duration_ms", time.Since(refreshStarted).Milliseconds(),
 			"err", err,
 		)
 		if isInvalidGrant(err) {
-			oauthLog.Logger().Info("oauth.refresh.invalid_grant_detected",
+			log.InfoContext(ctx, "oauth.refresh.invalid_grant_detected",
 				"subcomponent", "oauth",
 			)
 			if reErr := m.autoRelogin(ctx, err); reErr != nil {
@@ -93,6 +100,12 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 			}
 			fresh, readErr := readCredentials(m.credentialsDir, m.oauthCfg.KeychainService)
 			if readErr != nil {
+				log.WarnContext(ctx, "oauth.store.post_relogin_read_failed",
+					"subcomponent", "oauth",
+					"store_dir", m.credentialsDir,
+					"keychain_service_present", m.oauthCfg.KeychainService != "",
+					"err", readErr.Error(),
+				)
 				return "", fmt.Errorf("post-relogin read credentials: %w", readErr)
 			}
 			if fresh == nil {
@@ -100,7 +113,7 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 			}
 			m.cached = fresh
 			if !isExpired(fresh) {
-				oauthLog.Logger().Info("oauth.token.refreshed_via_relogin",
+				log.InfoContext(ctx, "oauth.auth.refreshed_via_relogin",
 					"subcomponent", "oauth",
 					"duration_ms", time.Since(refreshStarted).Milliseconds(),
 					"expires_at_ms", fresh.ExpiresAt,
@@ -109,10 +122,15 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 			}
 			retried, retryErr := m.refreshLocked(ctx, fresh)
 			if retryErr != nil {
+				log.ErrorContext(ctx, "oauth.auth.post_relogin_refresh_failed",
+					"subcomponent", "oauth",
+					"duration_ms", time.Since(refreshStarted).Milliseconds(),
+					"err", retryErr.Error(),
+				)
 				return "", fmt.Errorf("post-relogin refresh: %w", retryErr)
 			}
 			m.cached = retried
-			oauthLog.Logger().Info("oauth.token.refreshed_via_relogin",
+			log.InfoContext(ctx, "oauth.auth.refreshed_via_relogin",
 				"subcomponent", "oauth",
 				"duration_ms", time.Since(refreshStarted).Milliseconds(),
 				"expires_at_ms", retried.ExpiresAt,
@@ -122,7 +140,7 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 		return "", err
 	}
 	m.cached = refreshed
-	oauthLog.Logger().Info("oauth.token.refreshed",
+	log.InfoContext(ctx, "oauth.auth.refreshed",
 		"subcomponent", "oauth",
 		"duration_ms", time.Since(refreshStarted).Milliseconds(),
 		"expires_at_ms", refreshed.ExpiresAt,
@@ -166,5 +184,5 @@ func isExpired(t *Tokens) bool {
 		return false
 	}
 	expiresAt := time.UnixMilli(t.ExpiresAt)
-	return time.Now().Add(refreshSafetyWindow).After(expiresAt)
+	return oauthClock.Now().Add(refreshSafetyWindow).After(expiresAt)
 }

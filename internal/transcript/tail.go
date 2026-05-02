@@ -54,12 +54,24 @@ type Tailer struct {
 // start. Any positive value resumes from that exact byte position
 // (typically obtained from a previous TailLine.ByteOffset + len).
 func OpenTailer(path string, startOffset int64) (*Tailer, error) {
+	log := transcriptLog()
 	notif, err := fsnotify.NewWatcher()
 	if err != nil {
+		log.Warn("transcript.tail.fsnotify_failed",
+			"component", "transcript",
+			"path", path,
+			"err", err,
+		)
 		return nil, fmt.Errorf("fsnotify: %w", err)
 	}
 	if err := notif.Add(filepath.Dir(path)); err != nil {
-		notif.Close()
+		_ = notif.Close()
+		log.Warn("transcript.tail.watch_dir_failed",
+			"component", "transcript",
+			"path", path,
+			"dir", filepath.Dir(path),
+			"err", err,
+		)
 		return nil, fmt.Errorf("watch dir: %w", err)
 	}
 	if _, err := os.Stat(path); err == nil {
@@ -80,7 +92,18 @@ func OpenTailer(path string, startOffset int64) (*Tailer, error) {
 	} else {
 		t.offset = startOffset
 	}
-	go t.loop()
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				log.Error("transcript.tail.loop_panic",
+					"component", "transcript",
+					"path", path,
+					"err", fmt.Errorf("panic: %v", recovered),
+				)
+			}
+		}()
+		t.loop()
+	}()
 	return t, nil
 }
 
@@ -142,7 +165,7 @@ func (t *Tailer) drain() {
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if _, err := f.Seek(t.offset, io.SeekStart); err != nil {
 		return
 	}

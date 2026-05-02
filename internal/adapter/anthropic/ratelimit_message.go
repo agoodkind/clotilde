@@ -30,14 +30,14 @@ func FormatRateLimitMessage(h http.Header) string {
 
 	resetMsg := ""
 	if !resetAt.IsZero() {
-		resetMsg = " · resets " + formatResetTime(resetAt, time.Now())
+		resetMsg = " · resets " + formatResetTime(resetAt, anthropicClock.Now())
 	}
 
 	if overage == "rejected" {
 		earliest := earliestReset(resetAt, overageResetAt)
 		suffix := ""
 		if !earliest.IsZero() {
-			suffix = " · resets " + formatResetTime(earliest, time.Now())
+			suffix = " · resets " + formatResetTime(earliest, anthropicClock.Now())
 		}
 		if overageDisabled == "out_of_credits" {
 			return "You're out of extra usage" + suffix

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
-	"time"
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
@@ -84,7 +83,7 @@ func MergeCollectedEvents(
 	return adapteropenai.ChatResponse{
 		ID:                reqID,
 		Object:            "chat.completion",
-		Created:           time.Now().Unix(),
+		Created:           backendClock.Now().Unix(),
 		Model:             modelAlias,
 		SystemFingerprint: systemFingerprint,
 		Choices: []adapteropenai.ChatChoice{{

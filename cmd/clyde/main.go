@@ -85,12 +85,15 @@ func run() int {
 
 	clydeMainLog.Logger().Debug("cli.execute.invoked", "component", "cli")
 
+	dashboardExitCode := 0
 	root := &cobra.Command{
 		Use:     "clyde",
 		Short:   "Named sessions and append-only compaction for Claude Code",
 		Long:    `Clyde wraps Claude Code with human-friendly session names and append-only compaction. Run with no args for the TUI dashboard.`,
 		Version: "DEVELOPMENT",
-		Run:     cmd.RunDashboard,
+		Run: func(c *cobra.Command, args []string) {
+			dashboardExitCode = cmd.RunDashboard(c, args)
+		},
 	}
 	root.CompletionOptions.DisableDefaultCmd = true
 
@@ -117,6 +120,9 @@ func run() int {
 		}
 		_, _ = fmt.Fprintln(f.IOStreams.Err, "Error:", err)
 		return 1
+	}
+	if dashboardExitCode != 0 {
+		return dashboardExitCode
 	}
 	clydeMainLog.Logger().Info("cli.execute.completed", "component", "cli")
 	return 0

@@ -56,12 +56,21 @@ func RunCaptureSession(ctx context.Context, opts CaptureSessionOptions) (Capture
 
 	binary, err := opts.Profile.ResolvedBinary()
 	if err != nil {
+		log.WarnContext(ctx, "mitm.capture.binary_resolve_failed",
+			"upstream", opts.Profile.Name,
+			"err", err,
+		)
 		return CaptureSessionResult{}, fmt.Errorf("resolve binary: %w", err)
 	}
 
-	timestamp := time.Now().UTC().Format("20060102T150405Z")
+	timestamp := currentTime().UTC().Format("20060102T150405Z")
 	captureDir := filepath.Join(opts.CaptureRoot, opts.Profile.Name, timestamp)
 	if err := os.MkdirAll(captureDir, 0o755); err != nil {
+		log.WarnContext(ctx, "mitm.capture.mkdir_failed",
+			"upstream", opts.Profile.Name,
+			"capture_dir", captureDir,
+			"err", err,
+		)
 		return CaptureSessionResult{}, fmt.Errorf("create capture dir: %w", err)
 	}
 
@@ -73,9 +82,14 @@ func RunCaptureSession(ctx context.Context, opts CaptureSessionOptions) (Capture
 
 	proxy, err := startCaptureProxy(opts.ProxyHost, cfg, log)
 	if err != nil {
+		log.WarnContext(ctx, "mitm.capture.proxy_start_failed",
+			"upstream", opts.Profile.Name,
+			"proxy_host", opts.ProxyHost,
+			"err", err,
+		)
 		return CaptureSessionResult{}, fmt.Errorf("start proxy: %w", err)
 	}
-	defer proxy.Shutdown()
+	defer func() { proxy.Shutdown() }()
 	proxyURL := proxy.URL()
 
 	// Compose env vars per profile. We deliberately do NOT set
@@ -100,8 +114,8 @@ func RunCaptureSession(ctx context.Context, opts CaptureSessionOptions) (Capture
 	args = append(args, opts.Profile.ChromiumFlags(proxyURL)...)
 	args = append(args, opts.ExtraArgs...)
 
-	startedAt := time.Now()
-	log.Info("mitm.capture.session_starting",
+	startedAt := currentTime()
+	log.InfoContext(ctx, "mitm.capture.session_starting",
 		"upstream", opts.Profile.Name,
 		"binary", binary,
 		"capture_dir", captureDir,
@@ -120,14 +134,29 @@ func RunCaptureSession(ctx context.Context, opts CaptureSessionOptions) (Capture
 	// capture cleanly.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
+	defer func() { signal.Stop(sigCh) }()
 
 	if err := cmd.Start(); err != nil {
+		log.WarnContext(ctx, "mitm.capture.upstream_start_failed",
+			"upstream", opts.Profile.Name,
+			"binary", binary,
+			"err", err,
+		)
 		return CaptureSessionResult{}, fmt.Errorf("start %s: %w", opts.Profile.Name, err)
 	}
 
 	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				log.ErrorContext(ctx, "mitm.capture.wait_panic",
+					"upstream", opts.Profile.Name,
+					"err", fmt.Errorf("panic: %v", recovered),
+				)
+			}
+		}()
+		done <- cmd.Wait()
+	}()
 
 	select {
 	case <-ctx.Done():
@@ -138,13 +167,13 @@ func RunCaptureSession(ctx context.Context, opts CaptureSessionOptions) (Capture
 		<-done
 	case err := <-done:
 		if err != nil && !isExpectedExit(err) {
-			log.Warn("mitm.capture.upstream_exited_with_error", "err", err)
+			log.WarnContext(ctx, "mitm.capture.upstream_exited_with_error", "err", err)
 		}
 	}
 
-	endedAt := time.Now()
+	endedAt := currentTime()
 	transcript := filepath.Join(captureDir, "capture.jsonl")
-	log.Info("mitm.capture.session_ended",
+	log.InfoContext(ctx, "mitm.capture.session_ended",
 		"upstream", opts.Profile.Name,
 		"transcript", transcript,
 		"duration_ms", endedAt.Sub(startedAt).Milliseconds(),
@@ -203,6 +232,13 @@ func startCaptureProxy(addr string, cfg config.MITMConfig, log *slog.Logger) (*c
 	srv := &http.Server{Handler: http.HandlerFunc(proxy.handle)}
 	proxy.server = srv
 	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				log.Error("mitm.capture.proxy_serve_panic",
+					"err", fmt.Errorf("panic: %v", recovered),
+				)
+			}
+		}()
 		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			log.Warn("mitm.capture.proxy_serve_failed", "err", err)
 		}

@@ -12,6 +12,7 @@ package bridge
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,14 +69,29 @@ type Watcher struct {
 func Start(dir string) (*Watcher, error) {
 	notif, err := fsnotify.NewWatcher()
 	if err != nil {
+		slog.Warn("bridge.watch.fsnotify_failed",
+			"component", "bridge",
+			"path", dir,
+			"err", err,
+		)
 		return nil, fmt.Errorf("fsnotify: %w", err)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		notif.Close()
+		_ = notif.Close()
+		slog.Warn("bridge.watch.mkdir_failed",
+			"component", "bridge",
+			"path", dir,
+			"err", err,
+		)
 		return nil, fmt.Errorf("ensure session dir: %w", err)
 	}
 	if err := notif.Add(dir); err != nil {
-		notif.Close()
+		_ = notif.Close()
+		slog.Warn("bridge.watch.add_failed",
+			"component", "bridge",
+			"path", dir,
+			"err", err,
+		)
 		return nil, fmt.Errorf("watch %s: %w", dir, err)
 	}
 	w := &Watcher{
@@ -92,7 +108,18 @@ func Start(dir string) (*Watcher, error) {
 	// goroutine. The fsnotify loop runs in its own goroutine so it
 	// can pick up subsequent changes.
 	w.initialScan()
-	go w.loop()
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				slog.Error("bridge.watch.loop_panic",
+					"component", "bridge",
+					"path", dir,
+					"err", fmt.Errorf("panic: %v", recovered),
+				)
+			}
+		}()
+		w.loop()
+	}()
 	return w, nil
 }
 

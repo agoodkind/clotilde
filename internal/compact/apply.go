@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"slices"
 	"time"
@@ -53,17 +54,19 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 
 	stat, err := os.Stat(path)
 	if err != nil {
+		slog.Error("compact.apply.stat_failed", "component", "compact", "path", path, "err", err)
 		return nil, fmt.Errorf("stat transcript: %w", err)
 	}
 	preOffset := stat.Size()
 
 	snapPath, err := snapshotGzip(path, in.SessionID)
 	if err != nil {
+		slog.Error("compact.apply.snapshot_failed", "component", "compact", "path", path, "session_id", in.SessionID, "err", err)
 		return nil, fmt.Errorf("snapshot: %w", err)
 	}
 
 	parentUUID := lastChainUUID(in.Slice)
-	now := time.Now().UTC()
+	now := compactClock.Now().UTC()
 	boundaryUUID := uuid.NewString()
 	syntheticUUID := uuid.NewString()
 
@@ -77,6 +80,7 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 		PreCompactTok: in.PreCompactTok,
 	})
 	if err != nil {
+		slog.Error("compact.apply.build_boundary_failed", "component", "compact", "session_id", in.SessionID, "err", err)
 		return nil, fmt.Errorf("build boundary: %w", err)
 	}
 	syntheticLine, err := buildSyntheticUserEntry(syntheticEntryArgs{
@@ -89,29 +93,36 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 		Content:    in.BoundaryTail,
 	})
 	if err != nil {
+		slog.Error("compact.apply.build_synthetic_failed", "component", "compact", "session_id", in.SessionID, "err", err)
 		return nil, fmt.Errorf("build synthetic user: %w", err)
 	}
 
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
+		slog.Error("compact.apply.open_failed", "component", "compact", "path", path, "err", err)
 		return nil, fmt.Errorf("open transcript for append: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if _, err := f.Write(append(boundaryLine, '\n')); err != nil {
+		slog.Error("compact.apply.append_boundary_failed", "component", "compact", "path", path, "err", err)
 		return nil, fmt.Errorf("append boundary: %w", err)
 	}
 	if _, err := f.Write(append(syntheticLine, '\n')); err != nil {
+		slog.Error("compact.apply.append_synthetic_failed", "component", "compact", "path", path, "err", err)
 		return nil, fmt.Errorf("append synthetic user: %w", err)
 	}
 	if err := f.Sync(); err != nil {
+		slog.Error("compact.apply.fsync_failed", "component", "compact", "path", path, "err", err)
 		return nil, fmt.Errorf("fsync: %w", err)
 	}
 
 	postStat, err := os.Stat(path)
 	if err != nil {
+		slog.Error("compact.apply.post_stat_failed", "component", "compact", "path", path, "err", err)
 		return nil, fmt.Errorf("post-apply stat: %w", err)
 	}
 	if err := validateAppendedJSONL(path, preOffset); err != nil {
+		slog.Error("compact.apply.validation_failed", "component", "compact", "path", path, "err", err)
 		return nil, fmt.Errorf("validate appended jsonl: %w", err)
 	}
 
@@ -135,6 +146,7 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 		SyntheticUUID:  syntheticUUID,
 	})
 	if err != nil {
+		slog.Error("compact.apply.ledger_append_failed", "component", "compact", "session_id", in.SessionID, "err", err)
 		return nil, fmt.Errorf("append ledger: %w", err)
 	}
 	res.LedgerPath = ledgerPath
@@ -144,10 +156,12 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 func validateAppendedJSONL(path string, preOffset int64) error {
 	f, err := os.Open(path)
 	if err != nil {
+		slog.Error("compact.apply.validate_open_failed", "component", "compact", "path", path, "err", err)
 		return fmt.Errorf("open transcript: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if _, err := f.Seek(preOffset, io.SeekStart); err != nil {
+		slog.Error("compact.apply.validate_seek_failed", "component", "compact", "path", path, "offset", preOffset, "err", err)
 		return fmt.Errorf("seek transcript: %w", err)
 	}
 	scanner := bufio.NewScanner(f)
@@ -161,6 +175,7 @@ func validateAppendedJSONL(path string, preOffset int64) error {
 		lines = append(lines, line)
 	}
 	if err := scanner.Err(); err != nil {
+		slog.Error("compact.apply.validate_read_failed", "component", "compact", "path", path, "err", err)
 		return fmt.Errorf("read transcript tail: %w", err)
 	}
 	if len(lines) < 2 {
@@ -174,6 +189,7 @@ func validateAppendedJSONL(path string, preOffset int64) error {
 		} `json:"compactMetadata"`
 	}
 	if err := json.Unmarshal([]byte(lines[0]), &boundary); err != nil {
+		slog.Error("compact.apply.validate_boundary_unmarshal_failed", "component", "compact", "path", path, "err", err)
 		return fmt.Errorf("unmarshal boundary line: %w", err)
 	}
 	if boundary.Type != "system" || boundary.Subtype != "compact_boundary" {
@@ -184,6 +200,7 @@ func validateAppendedJSONL(path string, preOffset int64) error {
 		CompactSummary bool   `json:"isCompactSummary"`
 	}
 	if err := json.Unmarshal([]byte(lines[1]), &synthetic); err != nil {
+		slog.Error("compact.apply.validate_synthetic_unmarshal_failed", "component", "compact", "path", path, "err", err)
 		return fmt.Errorf("unmarshal synthetic line: %w", err)
 	}
 	if synthetic.Type != "user" || !synthetic.CompactSummary {
@@ -253,19 +270,22 @@ type syntheticMessage struct {
 // sessionStoragePortable.ts) detects it.
 func buildBoundaryEntry(a boundaryEntryArgs) ([]byte, error) {
 	meta := compactMetadata{Trigger: "manual", PreCompactTokenCount: a.PreCompactTok}
-	fields := []orderedJSONField{
-		mustField("parentUuid", optionalString(a.ParentUUID)),
-		mustField("isSidechain", false),
-		mustField("type", "system"),
-		mustField("subtype", "compact_boundary"),
-		mustField("content", "Conversation compacted by clyde."),
-		mustField("isMeta", true),
-		mustField("timestamp", a.Timestamp.Format(time.RFC3339Nano)),
-		mustField("uuid", a.UUID),
-		mustField("compactMetadata", meta),
-		mustField("cwd", a.Cwd),
-		mustField("sessionId", a.SessionID),
-		mustField("version", a.Version),
+	fields, err := orderedFields(
+		field("parentUuid", optionalString(a.ParentUUID)),
+		field("isSidechain", false),
+		field("type", "system"),
+		field("subtype", "compact_boundary"),
+		field("content", "Conversation compacted by clyde."),
+		field("isMeta", true),
+		field("timestamp", a.Timestamp.Format(time.RFC3339Nano)),
+		field("uuid", a.UUID),
+		field("compactMetadata", meta),
+		field("cwd", a.Cwd),
+		field("sessionId", a.SessionID),
+		field("version", a.Version),
+	)
+	if err != nil {
+		return nil, err
 	}
 	return orderedJSON(fields).Marshal()
 }
@@ -282,17 +302,20 @@ type syntheticEntryArgs struct {
 
 func buildSyntheticUserEntry(a syntheticEntryArgs) ([]byte, error) {
 	message := syntheticMessage{Role: "user", Content: a.Content}
-	fields := []orderedJSONField{
-		mustField("parentUuid", optionalString(a.ParentUUID)),
-		mustField("isSidechain", false),
-		mustField("type", "user"),
-		mustField("isCompactSummary", true),
-		mustField("timestamp", a.Timestamp.Format(time.RFC3339Nano)),
-		mustField("uuid", a.UUID),
-		mustField("message", message),
-		mustField("cwd", a.Cwd),
-		mustField("sessionId", a.SessionID),
-		mustField("version", a.Version),
+	fields, err := orderedFields(
+		field("parentUuid", optionalString(a.ParentUUID)),
+		field("isSidechain", false),
+		field("type", "user"),
+		field("isCompactSummary", true),
+		field("timestamp", a.Timestamp.Format(time.RFC3339Nano)),
+		field("uuid", a.UUID),
+		field("message", message),
+		field("cwd", a.Cwd),
+		field("sessionId", a.SessionID),
+		field("version", a.Version),
+	)
+	if err != nil {
+		return nil, err
 	}
 	return orderedJSON(fields).Marshal()
 }
@@ -333,20 +356,34 @@ func (o optionalString) MarshalJSON() ([]byte, error) {
 	return json.Marshal(string(o))
 }
 
-// mustField pre-encodes a typed value and pairs it with key. The
+// pendingJSONField holds a typed key/value pair before encoding.
+type pendingJSONField struct {
+	Key      string
+	RawValue json.RawMessage
+	Err      error
+}
+
+// field pre-encodes a typed value and pairs it with key. The
 // generic constraint means only the listed concrete types compile;
 // any attempt to pass an interface or unknown struct is a build
 // error rather than a runtime surprise.
-func mustField[T jsonEncodable](key string, value T) orderedJSONField {
+func field[T jsonEncodable](key string, value T) pendingJSONField {
 	encoded, err := json.Marshal(value)
 	if err != nil {
-		// json.Marshal on the constrained set above cannot fail in
-		// practice; panic surfaces a programmer error rather than
-		// hiding it behind an error return that complicates every
-		// call site.
-		panic(fmt.Sprintf("orderedJSON: marshal %q: %v", key, err))
+		return pendingJSONField{Key: key, Err: fmt.Errorf("orderedJSON: marshal %q: %w", key, err)}
 	}
-	return orderedJSONField{Key: key, RawValue: encoded}
+	return pendingJSONField{Key: key, RawValue: encoded}
+}
+
+func orderedFields(fields ...pendingJSONField) ([]orderedJSONField, error) {
+	out := make([]orderedJSONField, 0, len(fields))
+	for _, f := range fields {
+		if f.Err != nil {
+			return nil, f.Err
+		}
+		out = append(out, orderedJSONField{Key: f.Key, RawValue: f.RawValue})
+	}
+	return out, nil
 }
 
 // Marshal concatenates the pre-encoded fields into one JSON object,
@@ -359,6 +396,7 @@ func (o orderedJSON) Marshal() ([]byte, error) {
 		}
 		key, err := json.Marshal(f.Key)
 		if err != nil {
+			slog.Error("compact.apply.ordered_json_key_failed", "component", "compact", "key", f.Key, "err", err)
 			return nil, fmt.Errorf("orderedJSON: marshal key %q: %w", f.Key, err)
 		}
 		out = append(out, key...)

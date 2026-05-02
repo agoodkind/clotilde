@@ -36,7 +36,7 @@ func ensureEmbeddingModelReady(ctx context.Context, cfg config.SearchLocal) erro
 	if strings.TrimSpace(cfg.EmbeddingURL) != "" {
 		return preloadLmdEmbedding(ctx, cfg, model)
 	}
-	start := time.Now()
+	start := searchClock.Now()
 	err := lmctl.EnsureLoaded(ctx, model, lmctl.WithMaxMemoryGB(cfg.MaxMemoryGB))
 	if err != nil {
 		log.ErrorContext(ctx, "search.embed.ensure_ready.failed",
@@ -75,7 +75,7 @@ func preloadLmdEmbedding(ctx context.Context, cfg config.SearchLocal, model stri
 		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 	client := &http.Client{Timeout: 120 * time.Second}
-	started := time.Now()
+	started := searchClock.Now()
 	resp, err := client.Do(req)
 	if err != nil {
 		log.ErrorContext(ctx, "search.embed.preload_lmd.failed",
@@ -85,7 +85,7 @@ func preloadLmdEmbedding(ctx context.Context, cfg config.SearchLocal, model stri
 		)
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		log.WarnContext(ctx, "search.embed.preload_lmd.failed",

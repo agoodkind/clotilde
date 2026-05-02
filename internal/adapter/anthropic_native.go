@@ -303,7 +303,6 @@ func (w *nativeAnthropicStreamWriter) relay(resp *http.Response) error {
 	if w == nil {
 		return fmt.Errorf("native anthropic stream writer missing")
 	}
-	defer resp.Body.Close()
 	w.commit(resp.Header.Clone())
 	buf := make([]byte, 4096)
 	for {

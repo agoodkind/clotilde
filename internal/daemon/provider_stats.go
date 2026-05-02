@@ -85,7 +85,7 @@ func newProviderStatsHub(log *slog.Logger) *providerStatsHub {
 		active:       make(map[string]activeProviderRequest),
 		terminalSeen: make(map[string]adapterruntime.RequestStage),
 		subscribers:  make(providerStatsSubscriberSet),
-		loadedAt:     time.Now(),
+		loadedAt:     daemonNow(),
 	}
 	h.replayLogs()
 	return h
@@ -100,7 +100,7 @@ func (h *providerStatsHub) replayLogs() {
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 256*1024), 4*1024*1024)
@@ -122,7 +122,7 @@ func (h *providerStatsHub) replayLogs() {
 			"path", path,
 		)
 	}
-	h.loadedAt = time.Now()
+	h.loadedAt = daemonNow()
 }
 
 func resolveProviderStatsLogPath() (string, error) {
@@ -244,7 +244,7 @@ func (h *providerStatsHub) apply(ev adapterruntime.RequestEvent, broadcast bool)
 
 	agg := h.ensureProvider(ev.Provider)
 	if agg.LastSeenUnix == 0 {
-		agg.LastSeenUnix = time.Now().Unix()
+		agg.LastSeenUnix = daemonNow().Unix()
 	}
 	key := providerRequestKey(ev.Provider, ev.RequestID)
 
@@ -293,7 +293,7 @@ func (h *providerStatsHub) apply(ev adapterruntime.RequestEvent, broadcast bool)
 			agg.Error = ev.Err
 		}
 	}
-	agg.LastSeenUnix = time.Now().Unix()
+	agg.LastSeenUnix = daemonNow().Unix()
 	stats := h.protoFor(agg)
 	if broadcast {
 		h.broadcastLocked(stats)
@@ -365,7 +365,7 @@ func (h *providerStatsHub) unsubscribe(ch chan *clydev1.ProviderStatsEvent) {
 func (h *providerStatsHub) broadcastLocked(stats *clydev1.ProviderStats) {
 	ev := &clydev1.ProviderStatsEvent{
 		Stats:         stats,
-		EmittedAtUnix: time.Now().Unix(),
+		EmittedAtUnix: daemonNow().Unix(),
 	}
 	for ch := range h.subscribers {
 		select {

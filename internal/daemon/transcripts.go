@@ -6,6 +6,8 @@
 package daemon
 
 import (
+	"context"
+	"log/slog"
 	"sync"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
@@ -58,7 +60,18 @@ func (h *transcriptHub) Subscribe(sessionID, path string, startOffset int64) (<-
 			stop:           make(chan transcriptHubSignal),
 		}
 		h.entries[sessionID] = entry
-		go h.fanOut(sessionID, entry)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.WarnContext(context.Background(), "daemon.transcript_hub.fanout_panicked",
+						"component", "daemon",
+						"session_id", sessionID,
+						"panic", r,
+					)
+				}
+			}()
+			h.fanOut(sessionID, entry)
+		}()
 	}
 
 	ch := make(chan *clydev1.TailTranscriptResponse, 64)

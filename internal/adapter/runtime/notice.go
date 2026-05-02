@@ -22,7 +22,7 @@ func EvaluateNoticeFromHeaders(h http.Header, noticesEnabled bool, claim noticeC
 	if !noticesEnabled {
 		return nil
 	}
-	notice := anthropic.EvaluateNotice(h, time.Now().UTC())
+	notice := anthropic.EvaluateNotice(h, runtimeClock.Now().UTC())
 	if notice == nil || claim == nil {
 		return nil
 	}
@@ -54,7 +54,7 @@ func openAINoticeChunk(reqID, modelAlias, text string) adapteropenai.StreamChunk
 	return adapteropenai.StreamChunk{
 		ID:      reqID,
 		Object:  "chat.completion.chunk",
-		Created: time.Now().Unix(),
+		Created: runtimeClock.Now().Unix(),
 		Model:   modelAlias,
 		Choices: []adapteropenai.StreamChoice{{
 			Index: 0,

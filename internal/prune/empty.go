@@ -27,7 +27,7 @@ func findEmptySessions(store session.Store, settings EmptySettings) ([]*session.
 	}
 	var hits []*session.Session
 	var reasons []string
-	cutoff := time.Now().Add(-settings.MinAge)
+	cutoff := pruneClock.Now().Add(-settings.MinAge)
 
 	for _, sess := range all {
 		transcriptPath := sess.Metadata.ProviderTranscriptPath()
@@ -67,7 +67,7 @@ func countTranscript(path string) (lines, realAssistant int) {
 	if err != nil {
 		return 0, 0
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 4*1024*1024)
 	for scanner.Scan() {
@@ -99,7 +99,7 @@ func PruneEmpty(
 	if log == nil {
 		log = slog.Default()
 	}
-	log.Info("prune.empty.started", "component", "prune", "dry_run", opts.DryRun)
+	log.InfoContext(ctx, "prune.empty.started", "component", "prune", "dry_run", opts.DryRun)
 
 	settings := opts.Empty
 	if settings.MaxLines == 0 {
@@ -111,18 +111,18 @@ func PruneEmpty(
 
 	hits, reasons, err := findEmptySessions(store, settings)
 	if err != nil {
-		log.Error("prune.empty.list_failed", "component", "prune", "err", err)
+		log.ErrorContext(ctx, "prune.empty.list_failed", "component", "prune", "err", err)
 		return Result{}, err
 	}
 
 	if len(hits) == 0 {
 		_, _ = fmt.Fprintln(out, "No empty sessions found.")
-		log.Info("prune.empty.complete", "component", "prune", "considered", 0, "pruned", 0)
+		log.InfoContext(ctx, "prune.empty.complete", "component", "prune", "considered", 0, "pruned", 0)
 		return Result{Considered: 0, Pruned: 0}, nil
 	}
 
 	for index, sess := range hits {
-		log.Debug("prune.empty.candidate",
+		log.DebugContext(ctx, "prune.empty.candidate",
 			"component", "prune",
 			"session", sess.Name,
 			"reason", reasons[index],
@@ -136,7 +136,7 @@ func PruneEmpty(
 
 	if opts.DryRun {
 		_, _ = fmt.Fprintln(out, "\n[dry-run] No deletions performed.")
-		log.Info("prune.empty.complete", "component", "prune", "considered", len(hits), "pruned", 0, "dry_run", true)
+		log.InfoContext(ctx, "prune.empty.complete", "component", "prune", "considered", len(hits), "pruned", 0, "dry_run", true)
 		return Result{Considered: len(hits), Pruned: 0}, nil
 	}
 
@@ -149,7 +149,7 @@ func PruneEmpty(
 		_, _ = fmt.Fscanln(opts.Input, &answer)
 		if !strings.EqualFold(strings.TrimSpace(answer), "y") && !strings.EqualFold(strings.TrimSpace(answer), "yes") {
 			_, _ = fmt.Fprintln(out, "Cancelled.")
-			log.Info("prune.empty.cancelled", "component", "prune", "considered", len(hits))
+			log.InfoContext(ctx, "prune.empty.cancelled", "component", "prune", "considered", len(hits))
 			return Result{Considered: len(hits), Pruned: 0}, nil
 		}
 	}
@@ -157,19 +157,19 @@ func PruneEmpty(
 	var failures []DeleteFailure
 	pruned := 0
 	for _, sess := range hits {
-		log.Debug("prune.empty.deleting", "component", "prune", "session", sess.Name)
+		log.DebugContext(ctx, "prune.empty.deleting", "component", "prune", "session", sess.Name)
 		if err := deleteTrackedSession(ctx, log, out, sess, store); err != nil {
 			_, _ = fmt.Fprintf(out, "  FAIL %s: %v\n", sess.Name, err)
-			log.Error("prune.empty.delete_failed", "component", "prune", "session", sess.Name, "err", err)
+			log.ErrorContext(ctx, "prune.empty.delete_failed", "component", "prune", "session", sess.Name, "err", err)
 			failures = append(failures, DeleteFailure{Target: sess.Name, Err: err})
 			continue
 		}
 		pruned++
-		log.Debug("prune.empty.deleted", "component", "prune", "session", sess.Name)
+		log.DebugContext(ctx, "prune.empty.deleted", "component", "prune", "session", sess.Name)
 	}
 
 	_, _ = fmt.Fprintf(out, "\nDeleted %d of %d empty sessions.\n", pruned, len(hits))
-	log.Info("prune.empty.complete",
+	log.InfoContext(ctx, "prune.empty.complete",
 		"component", "prune",
 		"considered", len(hits),
 		"pruned", pruned,

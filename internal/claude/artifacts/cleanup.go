@@ -61,6 +61,13 @@ func DeleteSessionData(clydeRoot, sessionID, transcriptPath string) (*DeletedFil
 	if transcriptPath != "" {
 		if util.FileExists(transcriptPath) {
 			if err := os.Remove(transcriptPath); err != nil {
+				cleanupLog.Warn("claude.cleanup.transcript_delete_failed",
+					"component", "claude",
+					"subcomponent", "cleanup",
+					"session_id", sessionID,
+					"path", transcriptPath,
+					"err", err,
+				)
 				return deleted, fmt.Errorf("failed to delete transcript: %w", err)
 			}
 			deleted.Transcript = append(deleted.Transcript, transcriptPath)
@@ -70,12 +77,25 @@ func DeleteSessionData(clydeRoot, sessionID, transcriptPath string) (*DeletedFil
 		projectDir := projectDir(clydeRoot)
 		homeDir, err := util.HomeDir()
 		if err != nil {
+			cleanupLog.Warn("claude.cleanup.home_dir_failed",
+				"component", "claude",
+				"subcomponent", "cleanup",
+				"session_id", sessionID,
+				"err", err,
+			)
 			return deleted, fmt.Errorf("failed to get home directory: %w", err)
 		}
 		claudeProjectDir = filepath.Join(homeDir, ".claude", "projects", projectDir)
 		transcriptPath := filepath.Join(claudeProjectDir, sessionID+".jsonl")
 		if util.FileExists(transcriptPath) {
 			if err := os.Remove(transcriptPath); err != nil {
+				cleanupLog.Warn("claude.cleanup.transcript_delete_failed",
+					"component", "claude",
+					"subcomponent", "cleanup",
+					"session_id", sessionID,
+					"path", transcriptPath,
+					"err", err,
+				)
 				return deleted, fmt.Errorf("failed to delete transcript: %w", err)
 			}
 			deleted.Transcript = append(deleted.Transcript, transcriptPath)
@@ -107,16 +127,36 @@ func deleteAgentLogs(claudeProjectDir, sessionID string) ([]string, error) {
 	pattern := filepath.Join(claudeProjectDir, "agent-*.jsonl")
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
+		cleanupLog.Warn("claude.cleanup.agent_glob_failed",
+			"component", "claude",
+			"subcomponent", "cleanup",
+			"session_id", sessionID,
+			"pattern", pattern,
+			"err", err,
+		)
 		return deletedLogs, fmt.Errorf("failed to find agent logs: %w", err)
 	}
 	for _, logPath := range matches {
 		containsSession, err := fileContainsSessionID(logPath, sessionID)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to check %s: %v\n", logPath, err)
+			cleanupLog.Warn("claude.cleanup.agent_log_check_failed",
+				"component", "claude",
+				"subcomponent", "cleanup",
+				"session_id", sessionID,
+				"path", logPath,
+				"err", err,
+			)
 			continue
 		}
 		if containsSession {
 			if err := os.Remove(logPath); err != nil {
+				cleanupLog.Warn("claude.cleanup.agent_log_delete_failed",
+					"component", "claude",
+					"subcomponent", "cleanup",
+					"session_id", sessionID,
+					"path", logPath,
+					"err", err,
+				)
 				return deletedLogs, fmt.Errorf("failed to delete agent log %s: %w", logPath, err)
 			}
 			deletedLogs = append(deletedLogs, logPath)

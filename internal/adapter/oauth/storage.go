@@ -27,11 +27,17 @@ func readCredentials(dir, keychainService string) (*Tokens, error) {
 }
 
 func readKeychain(keychainService string) (*Tokens, error) {
+	log := oauthLog.Logger()
 	cmd := exec.Command("security", "find-generic-password",
 		"-s", keychainService, "-w")
 	cmd.Stderr = io.Discard
 	out, err := cmd.Output()
 	if err != nil {
+		log.Warn("oauth.keychain.read_failed",
+			"subcomponent", "oauth",
+			"keychain_service_present", keychainService != "",
+			"err", err.Error(),
+		)
 		return nil, fmt.Errorf("security find-generic-password: %w", err)
 	}
 	out = bytes.TrimSpace(out)
@@ -39,11 +45,17 @@ func readKeychain(keychainService string) (*Tokens, error) {
 }
 
 func readCredentialsFile(path string) (*Tokens, error) {
+	log := oauthLog.Logger()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
+		log.Warn("oauth.store_file.read_failed",
+			"subcomponent", "oauth",
+			"path", path,
+			"err", err.Error(),
+		)
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
 	return parseCredentialsBlob(data)
@@ -64,6 +76,7 @@ func parseCredentialsBlob(data []byte) (*Tokens, error) {
 // mtime change and resync (per the CLI's own
 // invalidateOAuthCacheIfDiskChanged logic).
 func writeCredentials(dir string, tokens *Tokens) error {
+	log := oauthLog.Logger()
 	credsPath := filepath.Join(dir, ".credentials.json")
 
 	merged := map[string]json.RawMessage{}
@@ -73,23 +86,52 @@ func writeCredentials(dir string, tokens *Tokens) error {
 
 	encoded, err := json.Marshal(tokens)
 	if err != nil {
+		log.Warn("oauth.store.marshal_payload_failed",
+			"subcomponent", "oauth",
+			"store_dir", dir,
+			"payload_present", tokens != nil,
+			"err", err.Error(),
+		)
 		return fmt.Errorf("marshal tokens: %w", err)
 	}
 	merged["claudeAiOauth"] = encoded
 
 	out, err := json.MarshalIndent(merged, "", "  ")
 	if err != nil {
+		log.Warn("oauth.store.marshal_merged_failed",
+			"subcomponent", "oauth",
+			"store_dir", dir,
+			"entry_count", len(merged),
+			"err", err.Error(),
+		)
 		return fmt.Errorf("marshal merged credentials: %w", err)
 	}
 
 	if err := os.MkdirAll(dir, 0o700); err != nil {
+		log.Warn("oauth.store.mkdir_failed",
+			"subcomponent", "oauth",
+			"store_dir", dir,
+			"err", err.Error(),
+		)
 		return fmt.Errorf("mkdir credentials dir: %w", err)
 	}
 	tmp := credsPath + ".tmp"
 	if err := os.WriteFile(tmp, out, 0o600); err != nil {
+		log.Warn("oauth.store.temp_write_failed",
+			"subcomponent", "oauth",
+			"path", tmp,
+			"output_bytes", len(out),
+			"err", err.Error(),
+		)
 		return fmt.Errorf("write temp credentials: %w", err)
 	}
 	if err := os.Rename(tmp, credsPath); err != nil {
+		log.Warn("oauth.store.rename_failed",
+			"subcomponent", "oauth",
+			"tmp_path", tmp,
+			"path", credsPath,
+			"err", err.Error(),
+		)
 		return fmt.Errorf("rename temp credentials: %w", err)
 	}
 	return nil

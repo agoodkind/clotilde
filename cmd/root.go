@@ -40,24 +40,24 @@ import (
 // (resume, delete, rename, view, remote-control toggle, send-to,
 // tail-transcript). New sessions from the TUI launch `claude` with
 // CLYDE_SESSION_NAME set; the SessionStart hook adopts the row.
-func RunDashboard(cmd *cobra.Command, args []string) {
+func RunDashboard(cmd *cobra.Command, args []string) int {
 	// Non-interactive (piped) invocation: forward to real claude.
 	if !isatty.IsTerminal(os.Stdin.Fd()) {
-		os.Exit(ForwardToClaude(os.Args[1:]))
+		return ForwardToClaude(os.Args[1:])
 	}
 
 	// Non-TTY stdout: show help. Avoids drawing the TUI into a pipe.
 	if !isatty.IsTerminal(os.Stdout.Fd()) {
 		_ = cmd.Help()
-		return
+		return 0
 	}
 
-	runDashboardTUI()
+	return runDashboardTUI()
 }
 
 // runDashboardTUI opens the session dashboard. Caller must ensure stdin and
 // stdout are TTYs (see RunDashboard).
-func runDashboardTUI() {
+func runDashboardTUI() int {
 	daemon.NudgeDiscoveryScan()
 	cmdUILog.Logger().Info("dashboard.opened", "component", "tui")
 
@@ -71,9 +71,10 @@ func runDashboardTUI() {
 			"component", "tui",
 			"err", err,
 		)
-		os.Exit(1)
+		return 1
 	}
 	cmdUILog.Logger().Info("dashboard.closed", "component", "tui")
+	return 0
 }
 
 // RunBasedirLaunch opens the dashboard biased toward one workspace root.
@@ -131,7 +132,7 @@ func consumeTUIReturnSession() *session.Session {
 	}
 	store, err := session.NewGlobalFileStoreReadOnly()
 	if err != nil {
-		cmdUILog.Logger().Warn("dashboard.return_session.store_failed",
+		cmdLog.Warn("dashboard.return_session.store_failed",
 			"component", "tui",
 			"session", sessionName,
 			"session_id", sessionID,
@@ -140,7 +141,7 @@ func consumeTUIReturnSession() *session.Session {
 	}
 	sess, err := store.Resolve(query)
 	if err != nil || sess == nil {
-		cmdUILog.Logger().Warn("dashboard.return_session.resolve_failed",
+		cmdLog.Warn("dashboard.return_session.resolve_failed",
 			"component", "tui",
 			"session", sessionName,
 			"session_id", sessionID,
@@ -179,6 +180,14 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			}
 			out := make(chan ui.ProviderStats, 8)
 			go func() {
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						cmdUILog.Logger().Error("dashboard.provider_stats.forwarder_panic",
+							"component", "tui",
+							"err", fmt.Errorf("panic: %v", recovered),
+						)
+					}
+				}()
 				defer close(out)
 				for ev := range raw {
 					if ev == nil || ev.GetStats() == nil {
@@ -259,6 +268,15 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			}
 			go func(name, workspaceRoot string) {
 				defer func() {
+					if recovered := recover(); recovered != nil {
+						cmdUILog.Logger().Error("dashboard.refresh_summary.worker_panic",
+							"component", "tui",
+							"session", name,
+							"err", fmt.Errorf("panic: %v", recovered),
+						)
+					}
+				}()
+				defer func() {
 					if onDone != nil {
 						onDone(nil)
 					}
@@ -299,7 +317,7 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 				if err != nil {
 					return
 				}
-				defer client.Close()
+				defer func() { _ = client.Close() }()
 				_ = client.UpdateContext(name, workspaceRoot, messages)
 			}(sess.Name, sess.Metadata.WorkspaceRoot)
 			return nil
@@ -346,6 +364,14 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			}
 			out := make(chan ui.SessionEvent, 8)
 			go func() {
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						cmdUILog.Logger().Error("dashboard.registry.forwarder_panic",
+							"component", "tui",
+							"err", fmt.Errorf("panic: %v", recovered),
+						)
+					}
+				}()
 				defer close(out)
 				for ev := range raw {
 					out <- sessionEventFromProto(ev)
@@ -414,6 +440,15 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			}
 			out := make(chan ui.TranscriptEntry, 32)
 			go func() {
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						cmdUILog.Logger().Error("dashboard.transcript.forwarder_panic",
+							"component", "tui",
+							"session_id", sessionID,
+							"err", fmt.Errorf("panic: %v", recovered),
+						)
+					}
+				}()
 				defer close(out)
 				for ln := range raw {
 					ts := time.Time{}
@@ -450,6 +485,15 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			}
 			out := make(chan ui.CompactEvent, 64)
 			go func() {
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						cmdUILog.Logger().Error("dashboard.compact_preview.forwarder_panic",
+							"component", "tui",
+							"session", req.SessionName,
+							"err", fmt.Errorf("panic: %v", recovered),
+						)
+					}
+				}()
 				defer close(out)
 				for ev := range raw {
 					out <- compactEventFromProto(ev)
@@ -476,6 +520,15 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			}
 			out := make(chan ui.CompactEvent, 64)
 			go func() {
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						cmdUILog.Logger().Error("dashboard.compact_apply.forwarder_panic",
+							"component", "tui",
+							"session", req.SessionName,
+							"err", fmt.Errorf("panic: %v", recovered),
+						)
+					}
+				}()
 				defer close(out)
 				for ev := range raw {
 					out <- compactEventFromProto(ev)
@@ -830,7 +883,7 @@ func applyClaudeMITMEnv(env []string) []string {
 	}
 	extra, err := mitm.ClaudeEnv(context.Background(), cfg.MITM, slog.Default())
 	if err != nil {
-		cmdUILog.Logger().Warn("forward.mitm.claude_env_failed", "component", "cli", "err", err)
+		cmdLog.Warn("forward.mitm.claude_env_failed", "component", "cli", "err", err)
 		return env
 	}
 	out := append([]string(nil), env...)
@@ -915,7 +968,7 @@ func ForwardToClaudeThenDashboard(args []string) int {
 		}
 	}
 	_ = runClaudeWithEnv(args, env)
-	runDashboardTUI()
+	_ = runDashboardTUI()
 	return 0
 }
 
@@ -960,7 +1013,7 @@ func nextChatSessionName(store session.Store) (string, error) {
 	for _, s := range list {
 		taken[s.Name] = true
 	}
-	base := "chat-" + time.Now().UTC().Format("20060102-150405")
+	base := "chat-" + currentTime().UTC().Format("20060102-150405")
 	name := session.UniqueName(base, taken)
 	if taken[name] {
 		return "", fmt.Errorf("could not allocate a unique session name")
@@ -979,6 +1032,10 @@ func startNewSessionInDir(basedir string, store session.Store, dashboardFallback
 	if workDir == "" {
 		wd, err := os.Getwd()
 		if err != nil {
+			cmdLog.Warn("session.new.workdir_resolve_failed",
+				"component", "cli",
+				"err", err,
+			)
 			return fmt.Errorf("resolve working directory: %w", err)
 		}
 		workDir = wd
@@ -1062,5 +1119,11 @@ func daemonLifecycleError(action string, outcome daemon.LifecycleOutcome, err er
 	if err == nil {
 		return fmt.Errorf("daemon %s %s", action, outcome)
 	}
+	cmdLog.Warn("daemon.lifecycle.failed",
+		"component", "cli",
+		"action", action,
+		"outcome", outcome,
+		"err", err,
+	)
 	return fmt.Errorf("daemon %s %s: %w", action, outcome, err)
 }

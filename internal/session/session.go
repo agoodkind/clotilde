@@ -79,7 +79,7 @@ type Permissions struct {
 
 // NewSession creates a new session with the given name and UUID.
 func NewSession(name, sessionID string) *Session {
-	now := time.Now()
+	now := currentTime()
 	sess := &Session{
 		Name: name,
 		Metadata: Metadata{
@@ -97,7 +97,7 @@ func NewSession(name, sessionID string) *Session {
 
 // UpdateLastAccessed updates the lastAccessed timestamp to now.
 func (s *Session) UpdateLastAccessed() {
-	s.Metadata.LastAccessed = time.Now()
+	s.Metadata.LastAccessed = currentTime()
 }
 
 // ProviderID returns the normalized provider for the session.

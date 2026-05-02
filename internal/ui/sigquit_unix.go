@@ -5,12 +5,12 @@ package ui
 import (
 	"bytes"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime/pprof"
 	"syscall"
-	"time"
 
 	"goodkind.io/clyde/internal/config"
 )
@@ -21,6 +21,11 @@ func installSIGQUITDumpHandler() func() {
 	done := make(chan struct{})
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("sigquit_dump_handler", fmt.Sprint(r))
+			}
+		}()
 		for {
 			select {
 			case <-done:
@@ -52,16 +57,27 @@ func installSIGQUITDumpHandler() func() {
 func writeSIGQUITDump() (string, error) {
 	stateDir := config.DefaultStateDir()
 	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		slog.Error("tui.signal.sigquit.mkdir_failed",
+			"component", "tui",
+			"state_dir", stateDir,
+			"err", err)
 		return "", fmt.Errorf("mkdir state dir: %w", err)
 	}
 
 	var buf bytes.Buffer
 	if err := pprof.Lookup("goroutine").WriteTo(&buf, 2); err != nil {
+		slog.Error("tui.signal.sigquit.profile_failed",
+			"component", "tui",
+			"err", err)
 		return "", fmt.Errorf("write goroutine profile: %w", err)
 	}
 
-	path := filepath.Join(stateDir, fmt.Sprintf("sigquit-goroutines-%s.txt", time.Now().UTC().Format("20060102T150405.000000000Z")))
+	path := filepath.Join(stateDir, fmt.Sprintf("sigquit-goroutines-%s.txt", currentUITime().UTC().Format("20060102T150405.000000000Z")))
 	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		slog.Error("tui.signal.sigquit.write_failed",
+			"component", "tui",
+			"path", path,
+			"err", err)
 		return "", fmt.Errorf("write dump file: %w", err)
 	}
 	return path, nil

@@ -171,8 +171,8 @@ STATICCHECK_EXTRA_FLAGS         ?= \
 	-goroutine_without_recover \
 	-silent_defer_close \
 	-slog_missing_trace_id \
-	-grpc_handler_missing_peer_enrichment \
-	-sensitive_field_in_log
+	-sensitive_field_in_log \
+	-grpc_handler_missing_peer_enrichment
 STATICCHECK_EXTRA_TARGETS       ?= ./...
 STATICCHECK_EXTRA_BASELINE      ?= .staticcheck-extra-baseline.txt
 STATICCHECK_EXTRA_EXCLUDE_PATHS ?= \.pb\.go:|/api/

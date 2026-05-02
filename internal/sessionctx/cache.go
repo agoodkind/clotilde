@@ -75,7 +75,7 @@ func (c *memoryCache) put(payload *cachedUsage) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.payload = payload
-	c.loadedAt = time.Now()
+	c.loadedAt = currentTime()
 }
 
 func (c *memoryCache) invalidate() {
@@ -114,10 +114,22 @@ func (d *diskCache) read(opts UsageOptions) (*cachedUsage, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
+		contextLog.Warn("session.context.disk_cache.read_file_failed",
+			"component", "sessionctx",
+			"subcomponent", "disk_cache",
+			"path", d.path,
+			"err", err,
+		)
 		return nil, fmt.Errorf("diskcache read: %w", err)
 	}
 	var payload cachedUsage
 	if err := json.Unmarshal(data, &payload); err != nil {
+		contextLog.Warn("session.context.disk_cache.decode_failed",
+			"component", "sessionctx",
+			"subcomponent", "disk_cache",
+			"path", d.path,
+			"err", err,
+		)
 		return nil, fmt.Errorf("diskcache decode: %w", err)
 	}
 	if payload.SchemaVersion != diskCacheSchemaV {
@@ -147,7 +159,7 @@ func (d *diskCache) read(opts UsageOptions) (*cachedUsage, error) {
 // the fresh value; a missed disk write only hurts the next process.
 func (d *diskCache) write(payload *cachedUsage) {
 	if err := os.MkdirAll(filepath.Dir(d.path), 0o755); err != nil {
-		sessionContextLog.Logger().Warn("session.context.disk_cache.mkdir_failed",
+		contextLog.Warn("session.context.disk_cache.mkdir_failed",
 			"component", "sessionctx",
 			"subcomponent", "disk_cache",
 			"path", d.path,
@@ -157,7 +169,7 @@ func (d *diskCache) write(payload *cachedUsage) {
 	}
 	encoded, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
-		sessionContextLog.Logger().Warn("session.context.disk_cache.encode_failed",
+		contextLog.Warn("session.context.disk_cache.encode_failed",
 			"component", "sessionctx",
 			"subcomponent", "disk_cache",
 			"err", err,
@@ -166,7 +178,7 @@ func (d *diskCache) write(payload *cachedUsage) {
 	}
 	tmp := d.path + ".tmp"
 	if err := os.WriteFile(tmp, encoded, 0o644); err != nil {
-		sessionContextLog.Logger().Warn("session.context.disk_cache.write_failed",
+		contextLog.Warn("session.context.disk_cache.write_failed",
 			"component", "sessionctx",
 			"subcomponent", "disk_cache",
 			"path", tmp,
@@ -176,7 +188,7 @@ func (d *diskCache) write(payload *cachedUsage) {
 	}
 	if err := os.Rename(tmp, d.path); err != nil {
 		_ = os.Remove(tmp)
-		sessionContextLog.Logger().Warn("session.context.disk_cache.rename_failed",
+		contextLog.Warn("session.context.disk_cache.rename_failed",
 			"component", "sessionctx",
 			"subcomponent", "disk_cache",
 			"path", d.path,
@@ -194,7 +206,7 @@ func (d *diskCache) write(payload *cachedUsage) {
 
 func (d *diskCache) invalidate() {
 	if err := os.Remove(d.path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		sessionContextLog.Logger().Warn("session.context.disk_cache.invalidate_failed",
+		contextLog.Warn("session.context.disk_cache.invalidate_failed",
 			"component", "sessionctx",
 			"subcomponent", "disk_cache",
 			"path", d.path,

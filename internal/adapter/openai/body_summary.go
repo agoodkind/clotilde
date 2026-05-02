@@ -3,6 +3,7 @@ package openai
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sort"
 )
@@ -55,8 +56,14 @@ type ToolSummary struct {
 }
 
 func SummarizeChatBody(raw []byte) (BodySummary, error) {
+	log := slog.Default()
 	var req ChatRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
+		log.Warn("adapter.openai.body_summary.decode_failed",
+			"subcomponent", "openai",
+			"body_bytes", len(raw),
+			"err", err.Error(),
+		)
 		return BodySummary{}, fmt.Errorf("invalid chat request: %w", err)
 	}
 	return SummarizeChatRequest(req), nil

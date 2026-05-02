@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,6 +70,11 @@ func newCodegenCmd(f *cli.Factory) *cobra.Command {
 			if isV2Snapshot(args[0]) {
 				snap, err := mitmpkg.LoadSnapshotV2TOML(args[0])
 				if err != nil {
+					slog.WarnContext(cmd.Context(), "mitm.codegen.load_v2_reference_failed",
+						"component", "mitm",
+						"path", args[0],
+						"err", err,
+					)
 					return fmt.Errorf("load v2 reference: %w", err)
 				}
 				out, err := mitmpkg.GenerateWireFlavors(snap, mitmpkg.CodegenOptions{
@@ -84,6 +90,11 @@ func newCodegenCmd(f *cli.Factory) *cobra.Command {
 			}
 			snap, err := mitmpkg.LoadSnapshotTOML(args[0])
 			if err != nil {
+				slog.WarnContext(cmd.Context(), "mitm.codegen.load_reference_failed",
+					"component", "mitm",
+					"path", args[0],
+					"err", err,
+				)
 				return fmt.Errorf("load reference: %w", err)
 			}
 			out, err := mitmpkg.GenerateWireConstants(snap, mitmpkg.CodegenOptions{
@@ -391,10 +402,20 @@ func newDiffCmd(f *cli.Factory) *cobra.Command {
 			if isV2Snapshot(args[0]) {
 				ref, err := mitmpkg.LoadSnapshotV2TOML(args[0])
 				if err != nil {
+					slog.WarnContext(cmd.Context(), "mitm.diff.load_v2_reference_failed",
+						"component", "mitm",
+						"path", args[0],
+						"err", err,
+					)
 					return fmt.Errorf("load v2 reference: %w", err)
 				}
 				cand, err := mitmpkg.LoadSnapshotV2TOML(args[1])
 				if err != nil {
+					slog.WarnContext(cmd.Context(), "mitm.diff.load_v2_candidate_failed",
+						"component", "mitm",
+						"path", args[1],
+						"err", err,
+					)
 					return fmt.Errorf("load v2 candidate: %w", err)
 				}
 				report := mitmpkg.DiffSnapshotsV2(ref, cand)
@@ -406,10 +427,20 @@ func newDiffCmd(f *cli.Factory) *cobra.Command {
 			}
 			ref, err := mitmpkg.LoadSnapshotTOML(args[0])
 			if err != nil {
+				slog.WarnContext(cmd.Context(), "mitm.diff.load_reference_failed",
+					"component", "mitm",
+					"path", args[0],
+					"err", err,
+				)
 				return fmt.Errorf("load reference: %w", err)
 			}
 			cand, err := mitmpkg.LoadSnapshotTOML(args[1])
 			if err != nil {
+				slog.WarnContext(cmd.Context(), "mitm.diff.load_candidate_failed",
+					"component", "mitm",
+					"path", args[1],
+					"err", err,
+				)
 				return fmt.Errorf("load candidate: %w", err)
 			}
 			report := mitmpkg.DiffSnapshots(ref, cand)

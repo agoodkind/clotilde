@@ -66,7 +66,7 @@ func (c *discoveryCache) Get() ([]DiscoveryResult, error) {
 		return c.results, nil
 	}
 
-	started := time.Now()
+	started := currentTime()
 	results, err := c.scanAll()
 	elapsedMs := time.Since(started).Milliseconds()
 	if err != nil {
@@ -82,7 +82,7 @@ func (c *discoveryCache) Get() ([]DiscoveryResult, error) {
 		return nil, err
 	}
 	c.results = results
-	c.loaded = time.Now()
+	c.loaded = currentTime()
 	sessionResolveLog.Logger().Debug("session.resolve.cache_refresh",
 		"component", "session",
 		"subcomponent", "resolve_cache",

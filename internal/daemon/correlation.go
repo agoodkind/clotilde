@@ -26,7 +26,7 @@ func daemonUnaryCorrelationInterceptor(log *slog.Logger) grpc.UnaryServerInterce
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		corr := correlation.FromIncomingMetadata(ctx).Child()
 		ctx = daemonCorrelationContext(ctx, log, corr)
-		started := time.Now()
+		started := daemonNow()
 		attrs := []slog.Attr{
 			slog.String("component", "daemon"),
 			slog.String("method", info.FullMethod),
@@ -43,7 +43,7 @@ func daemonStreamCorrelationInterceptor(log *slog.Logger) grpc.StreamServerInter
 	return func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		corr := correlation.FromIncomingMetadata(stream.Context()).Child()
 		ctx := daemonCorrelationContext(stream.Context(), log, corr)
-		started := time.Now()
+		started := daemonNow()
 		attrs := []slog.Attr{
 			slog.String("component", "daemon"),
 			slog.String("method", info.FullMethod),

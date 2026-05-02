@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -37,6 +38,7 @@ func backupsDir(sessionID string) (string, error) {
 	}
 	dir := filepath.Join(root, "backups")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
+		slog.Error("compact.backup.mkdir_failed", "component", "compact", "session_id", sessionID, "dir", dir, "err", err)
 		return "", fmt.Errorf("mkdir backups: %w", err)
 	}
 	return dir, nil
@@ -52,41 +54,48 @@ func snapshotGzip(srcPath, sessionID string) (string, error) {
 	}
 	in, err := os.Open(srcPath)
 	if err != nil {
+		slog.Error("compact.backup.snapshot_open_failed", "component", "compact", "path", srcPath, "err", err)
 		return "", fmt.Errorf("open transcript for snapshot: %w", err)
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
-	ts := time.Now().UTC().Format("20060102-150405.000")
+	ts := compactClock.Now().UTC().Format("20060102-150405.000")
 	short := uuid.NewString()[:8]
 	dst := filepath.Join(dir, fmt.Sprintf("%s-%s.jsonl.gz", ts, short))
 	tmp := dst + ".tmp"
 	out, err := os.Create(tmp)
 	if err != nil {
+		slog.Error("compact.backup.snapshot_create_failed", "component", "compact", "path", tmp, "err", err)
 		return "", fmt.Errorf("create snapshot: %w", err)
 	}
 	gz := gzip.NewWriter(out)
 	if _, err := io.Copy(gz, in); err != nil {
-		gz.Close()
-		out.Close()
-		os.Remove(tmp)
+		_ = gz.Close()
+		_ = out.Close()
+		_ = os.Remove(tmp)
+		slog.Error("compact.backup.snapshot_copy_failed", "component", "compact", "src", srcPath, "dst", tmp, "err", err)
 		return "", fmt.Errorf("gzip copy: %w", err)
 	}
 	if err := gz.Close(); err != nil {
-		out.Close()
-		os.Remove(tmp)
+		_ = out.Close()
+		_ = os.Remove(tmp)
+		slog.Error("compact.backup.snapshot_gzip_close_failed", "component", "compact", "path", tmp, "err", err)
 		return "", fmt.Errorf("gzip close: %w", err)
 	}
 	if err := out.Sync(); err != nil {
-		out.Close()
-		os.Remove(tmp)
+		_ = out.Close()
+		_ = os.Remove(tmp)
+		slog.Error("compact.backup.snapshot_sync_failed", "component", "compact", "path", tmp, "err", err)
 		return "", fmt.Errorf("snapshot sync: %w", err)
 	}
 	if err := out.Close(); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
+		slog.Error("compact.backup.snapshot_close_failed", "component", "compact", "path", tmp, "err", err)
 		return "", fmt.Errorf("snapshot close: %w", err)
 	}
 	if err := os.Rename(tmp, dst); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
+		slog.Error("compact.backup.snapshot_rename_failed", "component", "compact", "tmp", tmp, "dst", dst, "err", err)
 		return "", fmt.Errorf("snapshot rename: %w", err)
 	}
 	return dst, nil
@@ -110,14 +119,17 @@ func appendLedger(sessionID string, entry LedgerEntry) (string, error) {
 	}
 	encoded, err := json.Marshal(entry)
 	if err != nil {
+		slog.Error("compact.ledger.encode_failed", "component", "compact", "session_id", sessionID, "err", err)
 		return "", fmt.Errorf("encode ledger entry: %w", err)
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
+		slog.Error("compact.ledger.open_failed", "component", "compact", "session_id", sessionID, "path", path, "err", err)
 		return "", fmt.Errorf("open ledger: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if _, err := f.Write(append(encoded, '\n')); err != nil {
+		slog.Error("compact.ledger.append_failed", "component", "compact", "session_id", sessionID, "path", path, "err", err)
 		return "", fmt.Errorf("append ledger: %w", err)
 	}
 	return path, nil
@@ -135,9 +147,10 @@ func ReadLedger(sessionID string) ([]LedgerEntry, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
+		slog.Error("compact.ledger.read_open_failed", "component", "compact", "session_id", sessionID, "path", path, "err", err)
 		return nil, fmt.Errorf("open ledger: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var out []LedgerEntry
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1<<16), 1<<20)
@@ -149,6 +162,7 @@ func ReadLedger(sessionID string) ([]LedgerEntry, error) {
 		out = append(out, entry)
 	}
 	if err := scanner.Err(); err != nil {
+		slog.Error("compact.ledger.scan_failed", "component", "compact", "session_id", sessionID, "path", path, "err", err)
 		return nil, fmt.Errorf("scan ledger: %w", err)
 	}
 	return out, nil
@@ -174,6 +188,7 @@ func Undo(sessionID, transcriptPath string) (LedgerEntry, error) {
 
 	stat, err := os.Stat(transcriptPath)
 	if err != nil {
+		slog.Error("compact.undo.stat_failed", "component", "compact", "session_id", sessionID, "path", transcriptPath, "err", err)
 		return LedgerEntry{}, fmt.Errorf("stat transcript: %w", err)
 	}
 	if stat.Size() < last.PreApplyOffset {
@@ -183,9 +198,11 @@ func Undo(sessionID, transcriptPath string) (LedgerEntry, error) {
 			return LedgerEntry{}, fmt.Errorf("transcript size %d < pre_apply_offset %d and no snapshot path", stat.Size(), last.PreApplyOffset)
 		}
 		if err := restoreFromSnapshot(last.SnapshotPath, transcriptPath); err != nil {
+			slog.Error("compact.undo.restore_failed", "component", "compact", "session_id", sessionID, "snapshot", last.SnapshotPath, "transcript", transcriptPath, "err", err)
 			return LedgerEntry{}, fmt.Errorf("restore from snapshot: %w", err)
 		}
 	} else if err := os.Truncate(transcriptPath, last.PreApplyOffset); err != nil {
+		slog.Error("compact.undo.truncate_failed", "component", "compact", "session_id", sessionID, "path", transcriptPath, "offset", last.PreApplyOffset, "err", err)
 		return LedgerEntry{}, fmt.Errorf("truncate: %w", err)
 	}
 
@@ -194,12 +211,14 @@ func Undo(sessionID, transcriptPath string) (LedgerEntry, error) {
 		// Fall back to snapshot restore.
 		if last.SnapshotPath != "" {
 			if err := restoreFromSnapshot(last.SnapshotPath, transcriptPath); err != nil {
+				slog.Error("compact.undo.post_truncate_restore_failed", "component", "compact", "session_id", sessionID, "snapshot", last.SnapshotPath, "transcript", transcriptPath, "err", err)
 				return LedgerEntry{}, fmt.Errorf("post-truncate restore: %w", err)
 			}
 		}
 	}
 
 	if err := rewriteLedgerWithoutLast(sessionID); err != nil {
+		slog.Error("compact.undo.rewrite_ledger_failed", "component", "compact", "session_id", sessionID, "err", err)
 		return LedgerEntry{}, fmt.Errorf("rewrite ledger: %w", err)
 	}
 	return last, nil
@@ -210,34 +229,44 @@ func Undo(sessionID, transcriptPath string) (LedgerEntry, error) {
 func restoreFromSnapshot(snapshotPath, transcriptPath string) error {
 	in, err := os.Open(snapshotPath)
 	if err != nil {
+		slog.Error("compact.restore.open_snapshot_failed", "component", "compact", "snapshot", snapshotPath, "err", err)
 		return fmt.Errorf("open snapshot: %w", err)
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	gz, err := gzip.NewReader(in)
 	if err != nil {
+		slog.Error("compact.restore.gzip_open_failed", "component", "compact", "snapshot", snapshotPath, "err", err)
 		return fmt.Errorf("gzip open: %w", err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 	tmp := transcriptPath + ".restore.tmp"
 	out, err := os.Create(tmp)
 	if err != nil {
+		slog.Error("compact.restore.create_tmp_failed", "component", "compact", "tmp", tmp, "err", err)
 		return fmt.Errorf("create restore tmp: %w", err)
 	}
 	if _, err := io.Copy(out, gz); err != nil {
-		out.Close()
-		os.Remove(tmp)
+		_ = out.Close()
+		_ = os.Remove(tmp)
+		slog.Error("compact.restore.decompress_failed", "component", "compact", "snapshot", snapshotPath, "tmp", tmp, "err", err)
 		return fmt.Errorf("decompress: %w", err)
 	}
 	if err := out.Sync(); err != nil {
-		out.Close()
-		os.Remove(tmp)
+		_ = out.Close()
+		_ = os.Remove(tmp)
+		slog.Error("compact.restore.sync_failed", "component", "compact", "tmp", tmp, "err", err)
 		return fmt.Errorf("sync restore: %w", err)
 	}
 	if err := out.Close(); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
+		slog.Error("compact.restore.close_failed", "component", "compact", "tmp", tmp, "err", err)
 		return fmt.Errorf("close restore: %w", err)
 	}
-	return os.Rename(tmp, transcriptPath)
+	if err := os.Rename(tmp, transcriptPath); err != nil {
+		slog.Error("compact.restore.rename_failed", "component", "compact", "tmp", tmp, "transcript", transcriptPath, "err", err)
+		return err
+	}
+	return nil
 }
 
 // rewriteLedgerWithoutLast atomically rewrites the ledger file with
@@ -258,6 +287,7 @@ func rewriteLedgerWithoutLast(sessionID string) error {
 	tmp := path + ".tmp"
 	f, err := os.Create(tmp)
 	if err != nil {
+		slog.Error("compact.ledger.rewrite_create_failed", "component", "compact", "session_id", sessionID, "tmp", tmp, "err", err)
 		return fmt.Errorf("create tmp ledger: %w", err)
 	}
 	for _, entry := range keep {

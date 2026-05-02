@@ -40,7 +40,7 @@ func newProbeBackend(sessionID, workDir string) *probeBackend {
 // wraps this with CapturedAt and Source=SourceProbe before returning
 // to callers and before writing to cache.
 func (p *probeBackend) Fetch(ctx context.Context) (compact.ContextUsage, error) {
-	started := time.Now()
+	started := currentTime()
 	sessionContextLog.Logger().Debug("session.context.probe.started",
 		"component", "sessionctx",
 		"subcomponent", "probe",

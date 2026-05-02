@@ -6,6 +6,7 @@ package ui
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os/exec"
 	"runtime"
@@ -36,6 +37,11 @@ func CopyToClipboard(text string) error {
 			continue
 		}
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logUIGoroutinePanic("clipboard_write", fmt.Sprint(r))
+				}
+			}()
 			_, _ = io.WriteString(stdin, text)
 			_ = stdin.Close()
 		}()

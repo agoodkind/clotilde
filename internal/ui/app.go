@@ -364,6 +364,7 @@ type App struct {
 	screenMu sync.RWMutex
 	screen   tcell.Screen
 	cb       AppCallbacks
+	clock    uiClock
 
 	// Widgets
 	tabs    *TabBarWidget
@@ -583,8 +584,11 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	if len(opts) > 0 {
 		opt = opts[0]
 	}
+	clock := defaultUIClock
+	now := clock.Now()
 	a := &App{
 		cb:                 cb,
+		clock:              clock,
 		sessions:           sessions,
 		mode:               StatusBrowse,
 		modelCache:         make(map[string]string),
@@ -606,12 +610,12 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 		startupLoading:     len(sessions) == 0,
 		configLoading:      cb.LoadConfigControls != nil,
 		appFocused:         true,
-		lastNonInterruptAt: time.Now(),
-		heartbeatStartedAt: time.Now(),
-		lastHeartbeatAt:    time.Now(),
+		lastNonInterruptAt: now,
+		heartbeatStartedAt: now,
+		lastHeartbeatAt:    now,
 		buildHash:          shortStableHash(gklogversion.String()),
 		executableHash:     currentExecutableHash(),
-		runHash:            shortStableHash(fmt.Sprintf("%d:%d", os.Getpid(), time.Now().UnixNano())),
+		runHash:            shortStableHash(fmt.Sprintf("%d:%d", os.Getpid(), now.UnixNano())),
 	}
 	// Default suspendImpl: real teardown / exec / reinit. Tests
 	// replace this before driving events so the resume cycle can be
@@ -891,7 +895,7 @@ func valueOr(v, fallback string) string {
 }
 
 // Run starts the event loop.
-func (a *App) Run() error {
+func (a *App) Run() (err error) {
 	if err := a.initScreen(); err != nil {
 		return err
 	}
@@ -910,7 +914,12 @@ func (a *App) Run() error {
 		}
 		if r := recover(); r != nil {
 			a.teardownScreen()
-			panic(r)
+			err = fmt.Errorf("tui panic: %v", r)
+			tuiLog.Logger().Error("tui.run.panic",
+				"component", "tui",
+				"recover", fmt.Sprint(r),
+				"err", err)
+			return
 		}
 		a.teardownScreen()
 		if a.reloadExecPath != "" {
@@ -938,40 +947,89 @@ func (a *App) Run() error {
 	// triggers a redraw when something is actually loading, so an idle
 	// dashboard does not waste CPU.
 	stopTicker := make(chan struct{})
-	go a.runSpinnerTicker(stopTicker)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("spinner_ticker", fmt.Sprint(r))
+			}
+		}()
+		a.runSpinnerTicker(stopTicker)
+	}()
 	defer close(stopTicker)
 
 	// Health ticker posts a low-rate interrupt used to emit liveness
 	// summaries and detect frame stalls even when only spinner interrupts
 	// are flowing.
 	stopHealthTicker := make(chan struct{})
-	go a.runHealthTicker(stopHealthTicker)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("health_ticker", fmt.Sprint(r))
+			}
+		}()
+		a.runHealthTicker(stopHealthTicker)
+	}()
 	defer close(stopHealthTicker)
 
 	stopReloadWatcher := make(chan struct{})
-	go a.runSelfReloadWatcher(stopReloadWatcher)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("self_reload_watcher", fmt.Sprint(r))
+			}
+		}()
+		a.runSelfReloadWatcher(stopReloadWatcher)
+	}()
 	defer close(stopReloadWatcher)
 
 	stopSessionRefresh := make(chan struct{})
-	go a.runSessionRefreshTicker(stopSessionRefresh)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("session_refresh_ticker", fmt.Sprint(r))
+			}
+		}()
+		a.runSessionRefreshTicker(stopSessionRefresh)
+	}()
 	defer close(stopSessionRefresh)
 
 	// Registry stream supervisor keeps daemon subscriptions healthy even
 	// when the daemon restarts. The dashboard remains usable in offline
 	// mode and the polling watcher above still refreshes snapshots.
 	stopRegistry := make(chan struct{})
-	go a.runRegistrySupervisor(stopRegistry)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("registry_supervisor", fmt.Sprint(r))
+			}
+		}()
+		a.runRegistrySupervisor(stopRegistry)
+	}()
 	defer close(stopRegistry)
 
 	stopProviderStats := make(chan struct{})
-	go a.runProviderStatsSupervisor(stopProviderStats)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("provider_stats_supervisor", fmt.Sprint(r))
+			}
+		}()
+		a.runProviderStatsSupervisor(stopProviderStats)
+	}()
 	defer close(stopProviderStats)
 
 	// Idle sweeper that regenerates stale session summaries one at a
 	// time while the user is inactive. Rate limited so it never floods
 	// the daemon or the upstream LLM.
 	stopSweep := make(chan struct{})
-	go a.runIdleSummarySweeper(stopSweep)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("idle_summary_sweeper", fmt.Sprint(r))
+			}
+		}()
+		a.runIdleSummarySweeper(stopSweep)
+	}()
 	defer close(stopSweep)
 
 	nilEventStreak := 0
@@ -981,7 +1039,7 @@ func (a *App) Run() error {
 			tuiLog.Logger().Error("tui.loop screen is nil, exiting", "err", "screen_nil")
 			return nil
 		}
-		pollStartedAt := time.Now()
+		pollStartedAt := a.now()
 		ev := a.pollEvent()
 		pollDuration := time.Since(pollStartedAt)
 		if ev == nil {
@@ -1002,7 +1060,9 @@ func (a *App) Run() error {
 				"reinit_attempted", reinitAttemptedAfterNil)
 			if nilEventStreak < 2 {
 				tuiLog.Logger().Debug("tui.loop nil event temporary; sleeping briefly")
-				time.Sleep(20 * time.Millisecond)
+				if !waitForTimer(stopTicker, 20*time.Millisecond) {
+					return nil
+				}
 				continue
 			}
 
@@ -1042,7 +1102,7 @@ func (a *App) Run() error {
 			}
 		}
 		a.lastEventType = eventType
-		a.lastEventAt = time.Now()
+		a.lastEventAt = a.now()
 		if eventType != "*tcell.EventInterrupt" {
 			a.lastNonInterruptType = eventType
 			a.lastNonInterruptAt = a.lastEventAt
@@ -1054,7 +1114,7 @@ func (a *App) Run() error {
 			tuiLog.Logger().Debug("tui.loop screen became nil before dispatch")
 			continue
 		}
-		handleStartedAt := time.Now()
+		handleStartedAt := a.now()
 		a.handleEvent(ev)
 		handleDuration := time.Since(handleStartedAt)
 		drawDuration := time.Duration(0)
@@ -1072,7 +1132,7 @@ func (a *App) Run() error {
 				"overlay_type", fmt.Sprintf("%T", a.overlay))
 		}
 		if shouldDraw {
-			drawStartedAt := time.Now()
+			drawStartedAt := a.now()
 			a.draw()
 			drawDuration = time.Since(drawStartedAt)
 			if a.pendingResizeDisplaySync && a.screen != nil {
@@ -1114,7 +1174,7 @@ type healthTick struct{}
 // pending so this does not burn CPU on an idle dashboard.
 func (a *App) runSpinnerTicker(stop <-chan struct{}) {
 	t := time.NewTicker(100 * time.Millisecond)
-	defer t.Stop()
+	defer func() { t.Stop() }()
 	for {
 		select {
 		case <-stop:
@@ -1129,7 +1189,7 @@ func (a *App) runSpinnerTicker(stop <-chan struct{}) {
 // progress and warns when draw() has not advanced recently.
 func (a *App) runHealthTicker(stop <-chan struct{}) {
 	t := time.NewTicker(25 * time.Second)
-	defer t.Stop()
+	defer func() { t.Stop() }()
 	for {
 		select {
 		case <-stop:
@@ -1154,7 +1214,7 @@ func (a *App) runSelfReloadWatcher(stop <-chan struct{}) {
 		"size", a.executableBaselineSize())
 
 	t := time.NewTicker(2 * time.Second)
-	defer t.Stop()
+	defer func() { t.Stop() }()
 	for {
 		select {
 		case <-stop:
@@ -1228,10 +1288,17 @@ func (a *App) executableBaselineSize() int64 {
 func currentExecutableSnapshot() (executableSnapshot, error) {
 	path, err := os.Executable()
 	if err != nil {
+		slog.Warn("tui.self_reload.executable_resolve_failed",
+			"component", "tui",
+			"err", err)
 		return executableSnapshot{}, fmt.Errorf("resolve executable: %w", err)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
+		slog.Warn("tui.self_reload.executable_stat_failed",
+			"component", "tui",
+			"path", path,
+			"err", err)
 		return executableSnapshot{}, fmt.Errorf("stat executable: %w", err)
 	}
 	if err := validateExecutableCandidate(path, info); err != nil {
@@ -1611,7 +1678,12 @@ func (a *App) requestSessionsAsync(reason string) {
 	a.sessionsLoading = true
 	a.sessionsLoadingMu.Unlock()
 	go func() {
-		started := time.Now()
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("sessions_load", fmt.Sprint(r))
+			}
+		}()
+		started := a.now()
 		snapshot, err := a.cb.ListSessions()
 		tuiLog.Logger().Debug("tui.sessions.load.finished",
 			"component", "tui",
@@ -1628,6 +1700,11 @@ func (a *App) refreshConfigControls() {
 	}
 	a.configLoading = true
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("config_controls_load", fmt.Sprint(r))
+			}
+		}()
 		controls, err := a.cb.LoadConfigControls()
 		a.postInterrupt(configControlsLoaded{controls: controls, err: err})
 	}()
@@ -1859,7 +1936,7 @@ func copyContextStateMap(in map[string]SessionContextState) map[string]SessionCo
 // Called from handleKey and handleMouse so the watcher can see activity.
 func (a *App) noteInteraction() {
 	a.interactionMu.Lock()
-	a.lastInteraction = time.Now()
+	a.lastInteraction = a.now()
 	a.interactionMu.Unlock()
 }
 
@@ -1900,7 +1977,7 @@ func (a *App) runRegistrySupervisor(stop <-chan struct{}) {
 		default:
 		}
 
-		subscribeStartedAt := time.Now()
+		subscribeStartedAt := a.now()
 		tuiLog.Logger().Debug("tui.registry_supervisor.subscribe_begin",
 			"component", "tui",
 			"started_at", subscribeStartedAt.Format(time.RFC3339Nano))
@@ -1929,6 +2006,11 @@ func (a *App) runRegistrySupervisor(stop <-chan struct{}) {
 
 		done := make(chan struct{})
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logUIGoroutinePanic("registry_subscriber", fmt.Sprint(r))
+				}
+			}()
 			defer close(done)
 			a.runRegistrySubscriber(events)
 		}()
@@ -1992,6 +2074,11 @@ func (a *App) runProviderStatsSupervisor(stop <-chan struct{}) {
 
 		done := make(chan struct{})
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logUIGoroutinePanic("provider_stats_subscriber", fmt.Sprint(r))
+				}
+			}()
 			defer close(done)
 			a.runProviderStatsSubscriber(events)
 		}()
@@ -2040,13 +2127,17 @@ func (a *App) applyProviderStats(update ProviderStats) {
 		}
 		return a.stats.Providers[i].Provider < a.stats.Providers[j].Provider
 	})
-	a.stats.LoadedAt = time.Now()
+	a.stats.LoadedAt = a.now()
 	a.statsLoaded = true
 }
 
 func waitForRegistryRetry(stop <-chan struct{}, delay time.Duration) bool {
+	return waitForTimer(stop, delay)
+}
+
+func waitForTimer(stop <-chan struct{}, delay time.Duration) bool {
 	timer := time.NewTimer(delay)
-	defer timer.Stop()
+	defer func() { timer.Stop() }()
 	select {
 	case <-stop:
 		return false
@@ -2070,7 +2161,7 @@ func (a *App) setDaemonOnline(source string) {
 	previousErr := a.daemonLastErr
 	a.daemonOnline = true
 	a.daemonLastErr = ""
-	a.daemonLastSeen = time.Now()
+	a.daemonLastSeen = a.now()
 	a.daemonMu.Unlock()
 
 	if !wasOnline {
@@ -2167,7 +2258,7 @@ func (a *App) showSessionsEmptyState() bool {
 }
 
 func (a *App) logHealthTick() {
-	now := time.Now()
+	now := a.now()
 	drawDelta := a.drawCount - a.healthLastDraw
 	spinDelta := a.spinnerFrame - a.healthLastSpin
 	sinceLastDraw := time.Duration(0)
@@ -2256,7 +2347,7 @@ func (a *App) runIdleSummarySweeper(stop <-chan struct{}) {
 	const tick = 15 * time.Second
 	const idleFor = 30 * time.Second
 	t := time.NewTicker(tick)
-	defer t.Stop()
+	defer func() { t.Stop() }()
 	for {
 		select {
 		case <-stop:
@@ -2337,6 +2428,11 @@ func (a *App) requestExportStatsAsync(sess *session.Session) {
 	}
 	a.exportStatsLoading[name] = true
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("export_stats_load", fmt.Sprint(r))
+			}
+		}()
 		stats, err := a.cb.LoadExportStats(sess)
 		a.postInterrupt(exportStatsLoaded{name: name, stats: stats, err: err})
 	}()
@@ -2398,9 +2494,15 @@ func (a *App) initScreen() error {
 	tuiLog.Logger().Info("tui.initScreen.start", "current_screen", fmt.Sprintf("%p", a.screen))
 	scr, err := tcell.NewScreen()
 	if err != nil {
+		slog.Error("tui.initScreen.new_screen_failed",
+			"component", "tui",
+			"err", err)
 		return fmt.Errorf("tcell NewScreen: %w", err)
 	}
 	if err := scr.Init(); err != nil {
+		slog.Error("tui.initScreen.init_failed",
+			"component", "tui",
+			"err", err)
 		return fmt.Errorf("tcell Init: %w", err)
 	}
 	enableAppMouse(scr)
@@ -2439,7 +2541,7 @@ func (a *App) screenSizeSnapshot() (int, int) {
 }
 
 func (a *App) runTerminalCall(call string, fn func()) {
-	startedAt := time.Now()
+	startedAt := a.now()
 	width, height := a.screenSizeSnapshot()
 	overlayType := fmt.Sprintf("%T", a.overlay)
 	tuiLog.Logger().Debug("tui.terminal_call.begin",
@@ -2614,7 +2716,7 @@ func (a *App) handleEvent(ev tcell.Event) {
 				a.populateDetails()
 			}
 		case healthTick:
-			a.lastHeartbeatAt = time.Now()
+			a.lastHeartbeatAt = a.now()
 			a.logHealthTick()
 		case modelsPrewarmed:
 			maps.Copy(a.modelCache, d.models)
@@ -2679,7 +2781,14 @@ func (a *App) handleEvent(ev tcell.Event) {
 					break
 				}
 				a.compactCancel = d.cancel
-				go a.runCompactStream(d.events, d.done, d.action)
+				go func() {
+					defer func() {
+						if r := recover(); r != nil {
+							logUIGoroutinePanic("compact_stream", fmt.Sprint(r))
+						}
+					}()
+					a.runCompactStream(d.events, d.done, d.action)
+				}()
 			}
 		case compactStreamDone:
 			a.compactCancel = nil
@@ -2710,7 +2819,14 @@ func (a *App) handleEvent(ev tcell.Event) {
 				}
 				a.sidecarTailPending = false
 				a.sidecarCancel = d.cancel
-				go a.runSidecarTail(d.events, a.sidecar)
+				go func() {
+					defer func() {
+						if r := recover(); r != nil {
+							logUIGoroutinePanic("sidecar_tail", fmt.Sprint(r))
+						}
+					}()
+					a.runSidecarTail(d.events, a.sidecar)
+				}()
 			}
 		case sidecarSendDone:
 			if a.sidecar != nil {
@@ -2738,6 +2854,11 @@ func (a *App) handleEvent(ev tcell.Event) {
 				}
 				panel.status = "sending..."
 				go func() {
+					defer func() {
+						if r := recover(); r != nil {
+							logUIGoroutinePanic("sidecar_send", fmt.Sprint(r))
+						}
+					}()
 					err := a.cb.SendToSession(d.sessionID, text)
 					a.postInterrupt(sidecarSendDone{err: err})
 				}()
@@ -3322,7 +3443,7 @@ func (a *App) invokeLegendAction(action LegendAction) {
 // ---------------- Drawing ----------------
 
 func (a *App) draw() {
-	drawStartedAt := time.Now()
+	drawStartedAt := a.now()
 	a.layout()
 	layoutDuration := time.Since(drawStartedAt)
 
@@ -3334,7 +3455,7 @@ func (a *App) draw() {
 	// previous frame linger in those gutters and the UI visibly corrupts
 	// the longer the user interacts with it.
 	w, h := a.screen.Size()
-	clearStartedAt := time.Now()
+	clearStartedAt := a.now()
 	for y := range h {
 		for x := range w {
 			a.screen.SetContent(x, y, ' ', nil, tcell.StyleDefault)
@@ -3413,7 +3534,7 @@ func (a *App) draw() {
 	// Status bar
 	a.status.Mode = a.mode
 	a.status.Position = a.positionTextFor()
-	a.status.Clock = time.Now().Format("15:04:05")
+	a.status.Clock = a.now().Format("15:04:05")
 	a.status.LegendOverride = nil
 	if provider, ok := a.overlay.(LegendProvider); ok {
 		a.status.LegendOverride = provider.StatusLegendActions()
@@ -3442,14 +3563,14 @@ func (a *App) draw() {
 		a.overlay.Draw(a.screen, Rect{X: 0, Y: 0, W: ww, H: hh})
 	}
 
-	showStartedAt := time.Now()
+	showStartedAt := a.now()
 	a.runTerminalCall("show", func() {
 		a.screen.Show()
 	})
 	showDuration := time.Since(showStartedAt)
 	totalDuration := time.Since(drawStartedAt)
 	a.drawCount++
-	a.lastDrawAt = time.Now()
+	a.lastDrawAt = a.now()
 	a.lastDrawSpinner = a.spinnerFrame
 	overlayDuration := time.Duration(0)
 	if a.overlay != nil {
@@ -3573,7 +3694,7 @@ func (a *App) positionTextFor() string {
 
 // populateTable rebuilds the table rows from the current visible sessions.
 func (a *App) populateTable() {
-	startedAt := time.Now()
+	startedAt := a.now()
 	rows := make([][]TableCell, 0, len(a.visibleIdx)+1)
 	a.tableRowIdx = a.tableRowIdx[:0]
 	insertedGlobalSeparator := false
@@ -4120,6 +4241,11 @@ func (a *App) loadDetailAsync(sess *session.Session) {
 	a.detailMu.Unlock()
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("detail_load", fmt.Sprint(r))
+			}
+		}()
 		detail, err := a.cb.GetSessionDetail(sess)
 		a.postInterrupt(detailsLoaded{name: name, detail: detail, err: err})
 	}()
@@ -4417,6 +4543,11 @@ func (a *App) openSidecarLaunchTypeModal(basedir string) {
 		a.sidecarSessionID = ""
 		a.sidecarTailPending = false
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logUIGoroutinePanic("sidecar_launch", fmt.Sprint(r))
+				}
+			}()
 			if a.cb.StartRemoteSession == nil {
 				a.postInterrupt(sidecarLaunchDone{err: fmt.Errorf("daemon remote launch unavailable")})
 				return
@@ -4531,6 +4662,11 @@ func (a *App) viewSelected() {
 	}
 	sess := a.selected
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("view_content", fmt.Sprint(r))
+			}
+		}()
 		content := a.cb.ViewContent(sess)
 		a.postInterrupt(viewContentLoaded{sessionName: sess.Name, content: content})
 	}()
@@ -4558,6 +4694,11 @@ func (a *App) openDeleteConfirm() {
 		if idx == 1 {
 			a.deselect()
 			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						logUIGoroutinePanic("delete_session", fmt.Sprint(r))
+					}
+				}()
 				_ = a.cb.DeleteSession(sess)
 				a.requestSessionsAsync("delete")
 			}()
@@ -4649,6 +4790,11 @@ func (a *App) startCompactRun(req CompactRunRequest, apply bool, panel *CompactP
 	}
 	panel.SetBusy(action, true)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("compact_open", fmt.Sprint(r))
+			}
+		}()
 		events, done, cancel, err := runner(req)
 		a.postInterrupt(compactStreamOpened{
 			action: action,
@@ -4681,6 +4827,11 @@ func (a *App) startCompactUndo(sessionName string, panel *CompactPanel) {
 	}
 	panel.SetBusy("undo", true)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("compact_undo", fmt.Sprint(r))
+			}
+		}()
 		result, err := a.cb.CompactUndo(sessionName)
 		a.postInterrupt(compactUndoDone{
 			result: result,
@@ -4798,6 +4949,11 @@ func (a *App) pinSidecar(sess *session.Session) {
 		}
 		panel.status = "sending..."
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logUIGoroutinePanic("sidecar_pin_send", fmt.Sprint(r))
+				}
+			}()
 			err := a.cb.SendToSession(sess.Metadata.ProviderSessionID(), text)
 			a.postInterrupt(sidecarSendDone{err: err})
 		}()
@@ -4813,6 +4969,11 @@ func (a *App) pinSidecar(sess *session.Session) {
 	}
 	panel.status = "opening tail..."
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("sidecar_tail_open", fmt.Sprint(r))
+			}
+		}()
 		events, cancel, err := a.cb.TailTranscript(sess.Metadata.ProviderSessionID(), -1)
 		a.postInterrupt(sidecarTailOpened{events: events, cancel: cancel, err: err})
 	}()
@@ -4844,6 +5005,11 @@ func (a *App) maybeOpenSidecarTail() {
 	}
 	a.sidecar.status = "opening tail..."
 	go func(sessionID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("sidecar_tail_reopen", fmt.Sprint(r))
+			}
+		}()
 		events, cancel, err := a.cb.TailTranscript(sessionID, -1)
 		if err != nil {
 			if strings.Contains(strings.ToLower(err.Error()), "no transcript") {
@@ -5033,6 +5199,11 @@ func (a *App) persistConfigControl(key, value string) {
 	}
 	a.configLoading = true
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("config_control_update", fmt.Sprint(r))
+			}
+		}()
 		err := a.cb.UpdateConfigControl(key, value)
 		if err != nil {
 			a.postInterrupt(configControlsLoaded{err: err})
@@ -5284,6 +5455,11 @@ func (a *App) remoteControlEntry(sess *session.Session, close func()) OptionsMod
 			if a.cb.SetRemoteControl != nil {
 				a.remoteControlCache[sess.Name] = !enabled
 				go func() {
+					defer func() {
+						if r := recover(); r != nil {
+							logUIGoroutinePanic("remote_control_update", fmt.Sprint(r))
+						}
+					}()
 					_ = a.cb.SetRemoteControl(sess, !enabled)
 					a.requestSessionsAsync("remote_control")
 				}()
@@ -5579,6 +5755,11 @@ func (a *App) openRenamePrompt(sess *session.Session) {
 		sess.Name = newName
 		if a.cb.RenameSession != nil {
 			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						logUIGoroutinePanic("rename_session", fmt.Sprint(r))
+					}
+				}()
 				if _, err := a.cb.RenameSession(sess); err != nil {
 					sess.Name = oldName
 				}
@@ -5610,6 +5791,11 @@ func (a *App) openBasedirEditor(sess *session.Session) {
 		}
 		if a.cb.SetBasedir != nil {
 			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						logUIGoroutinePanic("set_basedir", fmt.Sprint(r))
+					}
+				}()
 				_ = a.cb.SetBasedir(sess, newPath)
 				a.requestSessionsAsync("basedir")
 			}()
@@ -5667,6 +5853,11 @@ func (a *App) exportSessionWithRequest(sess *session.Session, req SessionExportR
 	}
 	panel.status = "export in progress..."
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("export_session", fmt.Sprint(r))
+			}
+		}()
 		body, err := a.cb.ExportSession(sess, req)
 		if err != nil {
 			a.postInterrupt(exportFinished{title: "Export failed", body: err.Error(), stack: true})
@@ -5858,6 +6049,11 @@ func (a *App) requestStatsAsync(source string) {
 	a.statsMu.Unlock()
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("stats_load", fmt.Sprint(r))
+			}
+		}()
 		stats, err := a.cb.LoadStats()
 		a.statsMu.Lock()
 		a.statsLoading = false
@@ -5886,6 +6082,11 @@ func (a *App) restartDaemonAsync() {
 	a.postInterrupt(a)
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("daemon_restart", fmt.Sprint(r))
+			}
+		}()
 		if err := a.cb.RestartDaemon(); err != nil {
 			a.setDaemonOffline("restart", err)
 			return
@@ -5914,7 +6115,7 @@ func (a *App) restartDaemonAsync() {
 // next operator a single grep to find the root cause when a freeze
 // recurs (look for "tui.suspend" in the JSONL log).
 func (a *App) suspendAndRun(fn func()) {
-	totalStartedAt := time.Now()
+	totalStartedAt := a.now()
 	const callbackWarnInitial = 10 * time.Second
 	const callbackWarnEvery = 30 * time.Second
 	if a.screen == nil {
@@ -5929,18 +6130,23 @@ func (a *App) suspendAndRun(fn func()) {
 	}
 	tuiLog.Logger().Info("tui.suspend.start", "screen", fmt.Sprintf("%p", a.screen))
 	tuiLog.Logger().Info("tui.suspend teardown")
-	teardownStartedAt := time.Now()
+	teardownStartedAt := a.now()
 	a.teardownScreen()
 	teardownDuration := time.Since(teardownStartedAt)
 	tuiLog.Logger().Info("tui.suspend teardown complete", "screen", fmt.Sprintf("%p", a.screen))
 	writeSuspendTerminalPrep(os.Stdout)
 	tuiLog.Logger().Debug("tui.suspend.terminal_prepared", "component", "tui")
-	callbackStartedAt := time.Now()
+	callbackStartedAt := a.now()
 	callbackDone := make(chan struct{})
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("suspend_callback_watchdog", fmt.Sprint(r))
+			}
+		}()
 		nextWarning := callbackWarnInitial
 		timer := time.NewTimer(nextWarning)
-		defer timer.Stop()
+		defer func() { timer.Stop() }()
 		for {
 			select {
 			case <-callbackDone:
@@ -5973,7 +6179,7 @@ func (a *App) suspendAndRun(fn func()) {
 		return
 	}
 	tuiLog.Logger().Info("tui.suspend reinit")
-	reinitStartedAt := time.Now()
+	reinitStartedAt := a.now()
 	if err := a.initScreen(); err != nil {
 		tuiLog.Logger().Error("tui.suspend reinit failed", "error", err, "err", err)
 		// Mark the loop dead and bail. Without a screen the main loop
@@ -5989,7 +6195,7 @@ func (a *App) suspendAndRun(fn func()) {
 			a.running = false
 		}
 	}()
-	drawStartedAt := time.Now()
+	drawStartedAt := a.now()
 	a.draw()
 	drawDuration := time.Since(drawStartedAt)
 	tuiLog.Logger().Info("tui.suspend resumed")

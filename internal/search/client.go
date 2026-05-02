@@ -76,9 +76,9 @@ func newLocalClient(cfg config.SearchLocal) *localClient {
 func (c *localClient) Complete(ctx context.Context, prompt string) (string, error) {
 	log := slog.Default()
 	promptLen := len(prompt)
-	start := time.Now()
+	start := searchClock.Now()
 
-	log.Debug("llm request",
+	log.DebugContext(ctx, "llm request",
 		"model", c.model,
 		"prompt_chars", promptLen,
 		"prompt_preview", truncate(prompt, 200),
@@ -97,7 +97,7 @@ func (c *localClient) Complete(ctx context.Context, prompt string) (string, erro
 	elapsed := time.Since(start)
 
 	if err != nil {
-		log.Error("llm request failed",
+		log.ErrorContext(ctx, "llm request failed",
 			"model", c.model,
 			"duration", elapsed.Round(time.Millisecond),
 			"err", err,
@@ -105,12 +105,12 @@ func (c *localClient) Complete(ctx context.Context, prompt string) (string, erro
 		return "", fmt.Errorf("local LLM request failed: %w", err)
 	}
 	if len(resp.Choices) == 0 {
-		log.Warn("llm returned no choices", "model", c.model, "duration", elapsed.Round(time.Millisecond))
+		log.WarnContext(ctx, "llm returned no choices", "model", c.model, "duration", elapsed.Round(time.Millisecond))
 		return "", fmt.Errorf("local LLM returned no choices")
 	}
 
 	result := resp.Choices[0].Message.Content
-	log.Info("llm response",
+	log.InfoContext(ctx, "llm response",
 		"model", c.model,
 		"prompt_chars", promptLen,
 		"response_chars", len(result),
@@ -147,6 +147,7 @@ func (c *claudeClient) Complete(ctx context.Context, prompt string) (string, err
 	cmd := exec.CommandContext(ctx, "claude", "-p", "--model", c.model, prompt)
 	output, err := cmd.Output()
 	if err != nil {
+		slog.ErrorContext(ctx, "claude search request failed", "model", c.model, "err", err)
 		return "", fmt.Errorf("claude -p failed: %w", err)
 	}
 	return strings.TrimSpace(string(output)), nil

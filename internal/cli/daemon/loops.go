@@ -63,8 +63,16 @@ func pruneLoop() daemonsvc.ExtraLoop {
 
 		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.WarnContext(ctx, "prune.loop.panicked",
+						"component", "prune",
+						"panic", r,
+					)
+				}
+			}()
 			ticker := time.NewTicker(interval)
-			defer ticker.Stop()
+			defer func() { ticker.Stop() }()
 			runPruneTick(ctx, log, cfg.Prune, emptySettings, autonameMinAge)
 			for {
 				select {
@@ -118,7 +126,7 @@ func runOnePrune(
 	kind prune.Kind,
 	opts prune.Options,
 ) {
-	started := time.Now()
+	started := cliDaemonNow()
 	res, err := prune.Run(ctx, kind, store, log, io.Discard, opts)
 	elapsed := time.Since(started)
 	if err != nil {
@@ -176,8 +184,16 @@ func oauthLoop() daemonsvc.ExtraLoop {
 
 		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.WarnContext(ctx, "oauth.refresher.panicked",
+						"component", "oauth",
+						"panic", r,
+					)
+				}
+			}()
 			ticker := time.NewTicker(interval)
-			defer ticker.Stop()
+			defer func() { ticker.Stop() }()
 			runOAuthRefresh(ctx, log)
 			for {
 				select {
@@ -228,8 +244,16 @@ func driftLoop() daemonsvc.ExtraLoop {
 
 		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.WarnContext(ctx, "mitm.drift.loop.panicked",
+						"component", "mitm-drift",
+						"panic", r,
+					)
+				}
+			}()
 			ticker := time.NewTicker(interval)
-			defer ticker.Stop()
+			defer func() { ticker.Stop() }()
 			runDriftTick(ctx, log, cfg.MITM, dcfg, upstreams)
 			for {
 				select {
@@ -267,7 +291,7 @@ func runDriftTick(
 	if logDir == "" {
 		logDir = defaultDriftLogDir()
 	}
-	tickStarted := time.Now()
+	tickStarted := cliDaemonNow()
 	summary := driftTickSummary{}
 	captureRoot := strings.TrimSpace(dcfg.CaptureRoot)
 	if captureRoot == "" {
@@ -342,7 +366,7 @@ func runOAuthRefresh(ctx context.Context, log *slog.Logger) {
 	mgr := adapteroauth.NewManager(cfg.Adapter.OAuth, "")
 	timeoutCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	started := time.Now()
+	started := cliDaemonNow()
 	token, err := mgr.Token(timeoutCtx)
 	elapsed := time.Since(started)
 	if err != nil {

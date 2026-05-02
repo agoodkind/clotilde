@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"time"
+	"log/slog"
 
 	compactengine "goodkind.io/clyde/internal/compact"
 	"goodkind.io/clyde/internal/session"
@@ -32,7 +32,7 @@ func runAutoCalibrate(ctx context.Context, out io.Writer, sess *session.Session,
 	layer := sessionctx.NewDefault(sess, model, "")
 	usage, err := layer.Usage(ctx, sessionctx.UsageOptions{Refresh: true})
 	if err != nil {
-		cliCompactLog.Logger().Error("cli.compact.auto_calibrate.probe_failed",
+		slog.ErrorContext(ctx, "cli.compact.auto_calibrate.probe_failed",
 			"session", sess.Name,
 			"session_id", sess.Metadata.ProviderSessionID(),
 			"err", err,
@@ -57,7 +57,7 @@ func runAutoCalibrate(ctx context.Context, out io.Writer, sess *session.Session,
 
 	cal := compactengine.Calibration{
 		StaticOverhead: overhead,
-		CapturedAt:     time.Now().UTC(),
+		CapturedAt:     cliCompactClock.Now().UTC(),
 		Model:          resolvedModel,
 	}
 	if err := compactengine.SaveCalibration(sess.Metadata.ProviderSessionID(), cal); err != nil {
@@ -92,7 +92,7 @@ func runCalibrate(out io.Writer, sess *session.Session, n int, model string) err
 	)
 	cal := compactengine.Calibration{
 		StaticOverhead: n,
-		CapturedAt:     time.Now().UTC(),
+		CapturedAt:     cliCompactClock.Now().UTC(),
 		Model:          model,
 	}
 	if err := compactengine.SaveCalibration(sess.Metadata.ProviderSessionID(), cal); err != nil {

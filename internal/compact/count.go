@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -62,16 +63,16 @@ const maxRateLimitRetries = 6
 func (c *TokenCounter) CountSyntheticUser(ctx context.Context, contentArray []OutputBlock) (int, error) {
 	log := gklog.LoggerFromContext(ctx).With("component", "compact", "subcomponent", "count_tokens")
 	if c.APIKey == "" {
-		log.ErrorContext(ctx, "compact.count_tokens.skipped",
-			"reason", "missing_api_key",
-			"err", "missing_api_key",
+		log.LogAttrs(ctx, slog.LevelError, "compact.count_tokens.skipped",
+			slog.String("reason", "missing_api_key"),
+			slog.String("err", "missing_api_key"),
 		)
 		return 0, fmt.Errorf("count_tokens: missing API key")
 	}
 	if c.Model == "" {
-		log.ErrorContext(ctx, "compact.count_tokens.skipped",
-			"reason", "missing_model",
-			"err", "missing_model",
+		log.LogAttrs(ctx, slog.LevelError, "compact.count_tokens.skipped",
+			slog.String("reason", "missing_model"),
+			slog.String("err", "missing_model"),
 		)
 		return 0, fmt.Errorf("count_tokens: missing model")
 	}
@@ -89,9 +90,9 @@ func (c *TokenCounter) CountSyntheticUser(ctx context.Context, contentArray []Ou
 	}
 	encoded, err := json.Marshal(body)
 	if err != nil {
-		log.ErrorContext(ctx, "compact.count_tokens.encode_failed",
-			"model", c.Model,
-			"err", err,
+		log.LogAttrs(ctx, slog.LevelError, "compact.count_tokens.encode_failed",
+			slog.String("model", c.Model),
+			slog.Any("err", err),
 		)
 		return 0, fmt.Errorf("count_tokens: encode body: %w", err)
 	}
@@ -99,12 +100,12 @@ func (c *TokenCounter) CountSyntheticUser(ctx context.Context, contentArray []Ou
 	var attempt int
 	for {
 		attempt++
-		started := time.Now()
+		started := compactClock.Now()
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint, bytes.NewReader(encoded))
 		if err != nil {
-			log.ErrorContext(ctx, "compact.count_tokens.request_build_failed",
-				"model", c.Model,
-				"err", err,
+			log.LogAttrs(ctx, slog.LevelError, "compact.count_tokens.request_build_failed",
+				slog.String("model", c.Model),
+				slog.Any("err", err),
 			)
 			return 0, fmt.Errorf("count_tokens: build request: %w", err)
 		}
@@ -114,24 +115,29 @@ func (c *TokenCounter) CountSyntheticUser(ctx context.Context, contentArray []Ou
 
 		resp, err := c.Client.Do(req)
 		if err != nil {
-			log.WarnContext(ctx, "compact.count_tokens.http_failed",
-				"model", c.Model,
-				"duration_ms", time.Since(started).Milliseconds(),
-				"attempt", attempt,
-				"err", err,
+			log.LogAttrs(ctx, slog.LevelWarn, "compact.count_tokens.http_failed",
+				slog.String("model", c.Model),
+				slog.Int64("duration_ms", time.Since(started).Milliseconds()),
+				slog.Int("attempt", attempt),
+				slog.Any("err", err),
 			)
 			return 0, fmt.Errorf("count_tokens: HTTP: %w", err)
 		}
 		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		if err := resp.Body.Close(); err != nil {
+			log.LogAttrs(ctx, slog.LevelWarn, "compact.count_tokens.response_close_failed",
+				slog.String("model", c.Model),
+				slog.Any("err", err),
+			)
+		}
 
 		if resp.StatusCode == http.StatusTooManyRequests {
 			if attempt >= maxRateLimitRetries {
-				log.ErrorContext(ctx, "compact.count_tokens.rate_limited_giving_up",
-					"model", c.Model,
-					"attempt", attempt,
-					"body_excerpt", truncateForError(respBody),
-					"err", "rate_limited",
+				log.LogAttrs(ctx, slog.LevelError, "compact.count_tokens.rate_limited_giving_up",
+					slog.String("model", c.Model),
+					slog.Int("attempt", attempt),
+					slog.String("body_excerpt", truncateForError(respBody)),
+					slog.String("err", "rate_limited"),
 				)
 				return 0, fmt.Errorf("count_tokens: status 429 after %d retries: %s", attempt, truncateForError(respBody))
 			}
@@ -139,11 +145,11 @@ func (c *TokenCounter) CountSyntheticUser(ctx context.Context, contentArray []Ou
 			if wait == 0 {
 				wait = backoffFor(attempt)
 			}
-			log.WarnContext(ctx, "compact.count_tokens.rate_limited",
-				"model", c.Model,
-				"attempt", attempt,
-				"wait_ms", wait.Milliseconds(),
-				"retry_after_header", resp.Header.Get("Retry-After"),
+			log.LogAttrs(ctx, slog.LevelWarn, "compact.count_tokens.rate_limited",
+				slog.String("model", c.Model),
+				slog.Int("attempt", attempt),
+				slog.Int64("wait_ms", wait.Milliseconds()),
+				slog.String("retry_after_header", resp.Header.Get("Retry-After")),
 			)
 			select {
 			case <-ctx.Done():
@@ -154,35 +160,35 @@ func (c *TokenCounter) CountSyntheticUser(ctx context.Context, contentArray []Ou
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			log.WarnContext(ctx, "compact.count_tokens.http_bad_status",
-				"model", c.Model,
-				"status_code", resp.StatusCode,
-				"duration_ms", time.Since(started).Milliseconds(),
-				"body_excerpt", truncateForError(respBody),
+			log.LogAttrs(ctx, slog.LevelWarn, "compact.count_tokens.http_bad_status",
+				slog.String("model", c.Model),
+				slog.Int("status_code", resp.StatusCode),
+				slog.Int64("duration_ms", time.Since(started).Milliseconds()),
+				slog.String("body_excerpt", truncateForError(respBody)),
 			)
 			return 0, fmt.Errorf("count_tokens: status %d: %s", resp.StatusCode, truncateForError(respBody))
 		}
 		var parsed CountResponse
 		if err := json.Unmarshal(respBody, &parsed); err != nil {
-			log.WarnContext(ctx, "compact.count_tokens.decode_failed",
-				"model", c.Model,
-				"duration_ms", time.Since(started).Milliseconds(),
-				"err", err,
+			log.LogAttrs(ctx, slog.LevelWarn, "compact.count_tokens.decode_failed",
+				slog.String("model", c.Model),
+				slog.Int64("duration_ms", time.Since(started).Milliseconds()),
+				slog.Any("err", err),
 			)
 			return 0, fmt.Errorf("count_tokens: decode response: %w", err)
 		}
 		if parsed.InputTokens <= 0 {
-			log.WarnContext(ctx, "compact.count_tokens.zero_tokens",
-				"model", c.Model,
-				"duration_ms", time.Since(started).Milliseconds(),
+			log.LogAttrs(ctx, slog.LevelWarn, "compact.count_tokens.zero_tokens",
+				slog.String("model", c.Model),
+				slog.Int64("duration_ms", time.Since(started).Milliseconds()),
 			)
 			return 0, fmt.Errorf("count_tokens: zero input_tokens in response")
 		}
-		log.DebugContext(ctx, "compact.count_tokens.completed",
-			"model", c.Model,
-			"tokens_in", parsed.InputTokens,
-			"duration_ms", time.Since(started).Milliseconds(),
-			"attempt", attempt,
+		log.LogAttrs(ctx, slog.LevelDebug, "compact.count_tokens.completed",
+			slog.String("model", c.Model),
+			slog.Int("input_token_count", parsed.InputTokens),
+			slog.Int64("duration_ms", time.Since(started).Milliseconds()),
+			slog.Int("attempt", attempt),
 		)
 		return parsed.InputTokens, nil
 	}

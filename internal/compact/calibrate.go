@@ -3,6 +3,7 @@ package compact
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -30,6 +31,7 @@ func SessionStateDir(sessionID string) (string, error) {
 	}
 	dir := filepath.Join(config.DefaultStateDir(), "sessions", sessionID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
+		slog.Error("compact.calibration.mkdir_failed", "component", "compact", "session_id", sessionID, "dir", dir, "err", err)
 		return "", fmt.Errorf("mkdir session state: %w", err)
 	}
 	return dir, nil
@@ -56,10 +58,12 @@ func LoadCalibration(sessionID string) (Calibration, bool, error) {
 		if os.IsNotExist(err) {
 			return Calibration{}, false, nil
 		}
+		slog.Error("compact.calibration.read_failed", "component", "compact", "session_id", sessionID, "path", path, "err", err)
 		return Calibration{}, false, fmt.Errorf("read calibration: %w", err)
 	}
 	var cal Calibration
 	if err := json.Unmarshal(data, &cal); err != nil {
+		slog.Error("compact.calibration.parse_failed", "component", "compact", "session_id", sessionID, "path", path, "err", err)
 		return Calibration{}, false, fmt.Errorf("parse calibration: %w", err)
 	}
 	return cal, true, nil
@@ -72,7 +76,7 @@ func SaveCalibration(sessionID string, cal Calibration) error {
 		return fmt.Errorf("static_overhead must be >= 0")
 	}
 	if cal.CapturedAt.IsZero() {
-		cal.CapturedAt = time.Now().UTC()
+		cal.CapturedAt = compactClock.Now().UTC()
 	}
 	path, err := calibrationPath(sessionID)
 	if err != nil {
@@ -80,14 +84,17 @@ func SaveCalibration(sessionID string, cal Calibration) error {
 	}
 	encoded, err := json.MarshalIndent(cal, "", "  ")
 	if err != nil {
+		slog.Error("compact.calibration.encode_failed", "component", "compact", "session_id", sessionID, "err", err)
 		return fmt.Errorf("encode calibration: %w", err)
 	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, encoded, 0o644); err != nil {
+		slog.Error("compact.calibration.write_failed", "component", "compact", "session_id", sessionID, "path", tmp, "err", err)
 		return fmt.Errorf("write calibration: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
+		slog.Error("compact.calibration.rename_failed", "component", "compact", "session_id", sessionID, "tmp", tmp, "path", path, "err", err)
 		return fmt.Errorf("rename calibration: %w", err)
 	}
 	return nil

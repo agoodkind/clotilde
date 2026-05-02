@@ -3,6 +3,7 @@ package mitm
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -33,7 +34,7 @@ func AppendDriftOutcome(path string, outcome DriftOutcome) error {
 		return fmt.Errorf("drift log path is empty")
 	}
 	if outcome.Timestamp.IsZero() {
-		outcome.Timestamp = time.Now().UTC()
+		outcome.Timestamp = currentTime().UTC()
 	}
 	switch outcome.SchemaVersion {
 	case "v2":
@@ -48,15 +49,30 @@ func AppendDriftOutcome(path string, outcome DriftOutcome) error {
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		slog.Warn("mitm.drift_log.mkdir_failed",
+			"component", "mitm",
+			"path", path,
+			"err", err,
+		)
 		return fmt.Errorf("drift log mkdir: %w", err)
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
+		slog.Warn("mitm.drift_log.open_failed",
+			"component", "mitm",
+			"path", path,
+			"err", err,
+		)
 		return fmt.Errorf("drift log open: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	enc := json.NewEncoder(f)
 	if err := enc.Encode(outcome); err != nil {
+		slog.Warn("mitm.drift_log.encode_failed",
+			"component", "mitm",
+			"path", path,
+			"err", err,
+		)
 		return fmt.Errorf("drift log encode: %w", err)
 	}
 	return nil

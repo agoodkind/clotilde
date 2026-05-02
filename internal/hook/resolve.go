@@ -27,7 +27,7 @@ func resolveSessionName(hookData SessionStartInput, store session.Store, fullFal
 func findSessionByUUID(store session.Store, uuid string) (string, error) {
 	sessions, err := store.List()
 	if err != nil {
-		hookResolveLog.Logger().Warn("hook.resolve_session.list_failed",
+		hookLog.Warn("hook.resolve_session.list_failed",
 			"component", "hook",
 			"subcomponent", "resolve",
 			"err", err,
@@ -47,7 +47,7 @@ func findSessionByUUID(store session.Store, uuid string) (string, error) {
 		}
 	}
 
-	hookResolveLog.Logger().Warn("hook.resolve_session.uuid_not_found",
+	hookLog.Warn("hook.resolve_session.uuid_not_found",
 		"component", "hook",
 		"subcomponent", "resolve",
 		"session_id", uuid,

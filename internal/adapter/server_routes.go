@@ -15,6 +15,11 @@ func (s *Server) Start(ctx context.Context) error {
 	addr := s.Addr()
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
+		s.log.WarnContext(ctx, "adapter.listen_failed",
+			"subcomponent", "adapter",
+			"addr", addr,
+			"err", err.Error(),
+		)
 		return fmt.Errorf("adapter listen %s: %w", addr, err)
 	}
 	return s.StartOnListener(ctx, lis)
@@ -38,7 +43,20 @@ func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
 		slog.Int("models", len(s.registry.List())),
 	)
 	errCh := make(chan error, 1)
-	go func() { errCh <- s.httpSrv.Serve(lis) }()
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				s.log.ErrorContext(ctx, "adapter.serve_panic",
+					"subcomponent", "adapter",
+					"addr", lis.Addr().String(),
+					"err", fmt.Sprintf("panic: %v", recovered),
+					"panic", recovered,
+				)
+				errCh <- fmt.Errorf("adapter serve panic: %v", recovered)
+			}
+		}()
+		errCh <- s.httpSrv.Serve(lis)
+	}()
 	select {
 	case <-ctx.Done():
 		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -120,7 +138,7 @@ func (s *Server) WaitForIdle(ctx context.Context) int {
 		return 0
 	}
 	t := time.NewTicker(50 * time.Millisecond)
-	defer t.Stop()
+	defer func() { t.Stop() }()
 	for {
 		select {
 		case <-ctx.Done():

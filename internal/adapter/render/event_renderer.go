@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
-	"time"
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
@@ -88,7 +87,7 @@ func NewEventRenderer(reqID, modelAlias, backend string, log *slog.Logger) *Even
 		log = slog.Default()
 	}
 	return &EventRenderer{
-		createdUnix: time.Now().Unix(),
+		createdUnix: renderClock.Now().Unix(),
 		modelAlias:  modelAlias,
 		reqID:       reqID,
 		backend:     backend,

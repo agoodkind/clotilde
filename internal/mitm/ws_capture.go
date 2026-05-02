@@ -2,6 +2,7 @@ package mitm
 
 import (
 	"crypto/tls"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -81,7 +82,7 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider
 		http.Error(w, "ws upstream dial failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	defer upstreamConn.Close()
+	defer func() { _ = upstreamConn.Close() }()
 
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:    32 * 1024,
@@ -94,13 +95,13 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider
 		p.log.Warn("mitm.ws.upgrade_failed", "err", err)
 		return
 	}
-	defer clientConn.Close()
+	defer func() { _ = clientConn.Close() }()
 	corr := correlation.FromHTTPHeader(r.Header, r.Header.Get(correlation.HeaderRequestID))
 
 	startEvent := map[string]any{
 		"provider":         provider,
 		"kind":             "ws_start",
-		"t":                time.Now().Unix(),
+		"t":                currentTime().Unix(),
 		"url":              upstreamURL,
 		"request_headers":  redactHeaders(r.Header),
 		"response_headers": redactHeaders(upstreamResp.Header),
@@ -146,7 +147,7 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider
 			ev := map[string]any{
 				"provider":    provider,
 				"kind":        "ws_msg",
-				"t":           time.Now().Unix(),
+				"t":           currentTime().Unix(),
 				"url":         upstreamURL,
 				"from_client": fromClient,
 				"len":         len(payload),
@@ -164,15 +165,37 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider
 		}
 	}
 
-	go relay(clientConn, upstreamConn, true)
-	go relay(upstreamConn, clientConn, false)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				p.log.Error("mitm.ws.client_relay_panic",
+					"url", upstreamURL,
+					"err", fmt.Errorf("panic: %v", recovered),
+				)
+				closeBoth(fmt.Errorf("client relay panic: %v", recovered))
+			}
+		}()
+		relay(clientConn, upstreamConn, true)
+	}()
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				p.log.Error("mitm.ws.upstream_relay_panic",
+					"url", upstreamURL,
+					"err", fmt.Errorf("panic: %v", recovered),
+				)
+				closeBoth(fmt.Errorf("upstream relay panic: %v", recovered))
+			}
+		}()
+		relay(upstreamConn, clientConn, false)
+	}()
 
 	<-closeChan
 
 	endEvent := map[string]any{
 		"provider": provider,
 		"kind":     "ws_end",
-		"t":        time.Now().Unix(),
+		"t":        currentTime().Unix(),
 		"url":      upstreamURL,
 		"messages": messageCount,
 	}

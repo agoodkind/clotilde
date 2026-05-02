@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -116,9 +117,19 @@ func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
 		ConnState:         s.trackConnState,
 	}
 	s.srv = srv
-	s.log.Info("webapp listening", "addr", lis.Addr().String())
+	s.log.InfoContext(ctx, "webapp listening", "addr", lis.Addr().String())
 	errCh := make(chan error, 1)
-	go func() { errCh <- srv.Serve(lis) }()
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				s.log.ErrorContext(ctx, "webapp.serve_panic",
+					"addr", lis.Addr().String(),
+					"err", fmt.Errorf("panic: %v", recovered),
+				)
+			}
+		}()
+		errCh <- srv.Serve(lis)
+	}()
 	select {
 	case <-ctx.Done():
 		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -249,7 +260,7 @@ func (s *Server) handleStartSession(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.starting = append(s.starting, startedSession{
 		Name:      sessionName,
-		StartedAt: time.Now(),
+		StartedAt: currentTime(),
 		Cmd:       "daemon StartRemoteSession",
 		Note:      "spawned, waiting for bridge URL to appear",
 	})

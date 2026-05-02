@@ -2,4 +2,7 @@ package sessionctx
 
 import "goodkind.io/clyde/internal/slogger"
 
-var sessionContextLog = slogger.Concern(slogger.ConcernSessionDomainCapabilities)
+var (
+	sessionContextLog = slogger.Concern(slogger.ConcernSessionDomainCapabilities)
+	contextLog        = sessionContextLog.Logger()
+)

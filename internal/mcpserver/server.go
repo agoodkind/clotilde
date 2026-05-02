@@ -316,7 +316,15 @@ func handleSearchConversation(ctx context.Context, req mcp.CallToolRequest) (*mc
 	}
 
 	// Store matched messages in cache so the caller can run follow-up analysis.
-	resultID := util.GenerateUUID()
+	resultID, err := util.GenerateUUIDE()
+	if err != nil {
+		mcpLog.WarnContext(ctx, "mcp.search.result_uuid_failed",
+			"component", "mcpserver",
+			"session", name,
+			"err", err,
+		)
+		return mcp.NewToolResultText(fmt.Sprintf("Failed to allocate search result id: %v", err)), nil
+	}
 	var flatMessages []transcript.Message
 	for _, r := range results {
 		flatMessages = append(flatMessages, r.Messages...)
@@ -325,7 +333,7 @@ func handleSearchConversation(ctx context.Context, req mcp.CallToolRequest) (*mc
 		SessionName: name,
 		Messages:    flatMessages,
 		Results:     results,
-		CreatedAt:   time.Now(),
+		CreatedAt:   currentTime(),
 	})
 
 	// Build a UUID-to-index map so we can show global message indices.
@@ -436,6 +444,11 @@ func loadMessages(name string) ([]transcript.Message, error) {
 	}
 	sess, err := store.Resolve(name)
 	if err != nil {
+		mcpLog.Warn("mcp.load_messages.resolve_failed",
+			"component", "mcpserver",
+			"session", name,
+			"err", err,
+		)
 		return nil, fmt.Errorf("session resolution error: %w", err)
 	}
 	if sess == nil {

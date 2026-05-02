@@ -35,7 +35,7 @@ func (s claudeDiscoveryScanner) Provider() ProviderID {
 }
 
 func (s claudeDiscoveryScanner) Scan() ([]DiscoveryResult, error) {
-	started := time.Now()
+	started := currentTime()
 	var out []DiscoveryResult
 	var withTitle int
 	err := filepath.WalkDir(s.projectsDir, func(path string, d os.DirEntry, err error) error {
@@ -96,7 +96,7 @@ func readClaudeTranscriptHeader(path string) (DiscoveryResult, bool) {
 	if err != nil {
 		return DiscoveryResult{}, false
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	dr := DiscoveryResult{
 		Provider: ProviderClaude,

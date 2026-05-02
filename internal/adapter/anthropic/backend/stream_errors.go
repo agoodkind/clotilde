@@ -3,7 +3,6 @@ package anthropicbackend
 import (
 	"net/http"
 	"strings"
-	"time"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
@@ -19,7 +18,7 @@ func EmitActionableStreamError(emit func(adapteropenai.StreamChunk) error, reqID
 	return emit(adapteropenai.StreamChunk{
 		ID:      reqID,
 		Object:  "chat.completion.chunk",
-		Created: time.Now().Unix(),
+		Created: backendClock.Now().Unix(),
 		Model:   modelAlias,
 		Choices: []adapteropenai.StreamChoice{{
 			Index: 0,

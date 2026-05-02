@@ -141,7 +141,18 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
 	var lockReleaseOnce sync.Once
 	lockAcquired := make(chan struct{})
 	if reloadChild {
-		go acquireReloadChildProcessLock(log, lockFile, lockPath, &lockHeld, lockAcquired)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Warn("daemon.reload_child.lock_goroutine_panicked",
+						"component", "daemon",
+						"lock_path", lockPath,
+						"panic", r,
+					)
+				}
+			}()
+			acquireReloadChildProcessLock(log, lockFile, lockPath, &lockHeld, lockAcquired)
+		}()
 	} else {
 		if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 			_ = lockFile.Close()
@@ -191,7 +202,7 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
 	if err != nil {
 		return fmt.Errorf("failed to create daemon server: %w", err)
 	}
-	defer srv.Close()
+	defer func() { srv.Close() }()
 
 	grpcServer := grpc.NewServer(
 		grpc.UnaryInterceptor(daemonUnaryCorrelationInterceptor(log)),
@@ -272,6 +283,14 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
 	}
 	if reloadChild {
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Warn("daemon.exclusive_subsystems.start_panicked",
+						"component", "daemon",
+						"panic", r,
+					)
+				}
+			}()
 			<-lockAcquired
 			startExclusiveLoops()
 		}()
@@ -289,7 +308,18 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
 	)
 	if inherited.ready != nil {
 		errCh := make(chan error, 1)
-		go func() { errCh <- grpcServer.Serve(listener) }()
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Warn("daemon.grpc.serve_panicked",
+						"component", "daemon",
+						"panic", r,
+					)
+					errCh <- fmt.Errorf("grpc serve panic: %v", r)
+				}
+			}()
+			errCh <- grpcServer.Serve(listener)
+		}()
 		_, _ = inherited.ready.WriteString("ready\n")
 		_ = inherited.ready.Close()
 		return <-errCh
@@ -331,10 +361,20 @@ func daemonListener(socketPath string, inherited net.Listener) (net.Listener, er
 		return inherited, nil
 	}
 	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		slog.WarnContext(context.Background(), "daemon.listener.remove_stale_failed",
+			"component", "daemon",
+			"socket_path", socketPath,
+			"err", err,
+		)
 		return nil, fmt.Errorf("failed to remove stale socket: %w", err)
 	}
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
+		slog.WarnContext(context.Background(), "daemon.listener.listen_failed",
+			"component", "daemon",
+			"socket_path", socketPath,
+			"err", err,
+		)
 		return nil, fmt.Errorf("failed to listen on %s: %w", socketPath, err)
 	}
 	if unixListener, ok := listener.(*net.UnixListener); ok {
@@ -351,6 +391,10 @@ func loadInheritedRuntime() (inheritedRuntime, error) {
 	}
 	var specs []inheritedListenerSpec
 	if err := json.Unmarshal([]byte(raw), &specs); err != nil {
+		slog.WarnContext(context.Background(), "daemon.reload.inherited_specs_decode_failed",
+			"component", "daemon",
+			"err", err,
+		)
 		return out, fmt.Errorf("decode listener specs: %w", err)
 	}
 	for _, spec := range specs {
@@ -361,6 +405,12 @@ func loadInheritedRuntime() (inheritedRuntime, error) {
 		lis, err := net.FileListener(file)
 		_ = file.Close()
 		if err != nil {
+			slog.WarnContext(context.Background(), "daemon.reload.inherited_listener_failed",
+				"component", "daemon",
+				"name", spec.Name,
+				"fd", spec.FD,
+				"err", err,
+			)
 			return out, fmt.Errorf("listener %s from fd %d: %w", spec.Name, spec.FD, err)
 		}
 		if lis.Addr().Network() != spec.Network || lis.Addr().String() != spec.Addr {
@@ -375,6 +425,11 @@ func loadInheritedRuntime() (inheritedRuntime, error) {
 	if rawFD := os.Getenv(envDaemonReadyFD); rawFD != "" {
 		fd, err := strconv.Atoi(rawFD)
 		if err != nil {
+			slog.WarnContext(context.Background(), "daemon.reload.ready_fd_parse_failed",
+				"component", "daemon",
+				"ready_fd", rawFD,
+				"err", err,
+			)
 			return out, fmt.Errorf("parse ready fd: %w", err)
 		}
 		out.ready = os.NewFile(uintptr(fd), "daemon-reload-ready")
@@ -411,8 +466,8 @@ func reloadDaemonBinary(ctx context.Context, log *slog.Logger, grpcServer *grpc.
 	if err != nil {
 		return reloadReport{}, fmt.Errorf("create reload readiness pipe: %w", err)
 	}
-	defer readyRead.Close()
-	defer readyWrite.Close()
+	defer func() { _ = readyRead.Close() }()
+	defer func() { _ = readyWrite.Close() }()
 	readyFD := 3 + len(files)
 
 	cmd := exec.Command(executablePath, "daemon")
@@ -434,7 +489,18 @@ func reloadDaemonBinary(ctx context.Context, log *slog.Logger, grpcServer *grpc.
 		return reloadReport{}, fmt.Errorf("start replacement daemon: %w", err)
 	}
 	_ = readyWrite.Close()
-	go func() { _ = cmd.Wait() }()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.WarnContext(ctx, "daemon.reload.replacement_wait_panicked",
+					"component", "daemon",
+					"new_pid", cmd.Process.Pid,
+					"panic", r,
+				)
+			}
+		}()
+		_ = cmd.Wait()
+	}()
 
 	if err := waitForReplacementDaemon(ctx, readyRead); err != nil {
 		_ = cmd.Process.Kill()
@@ -447,25 +513,43 @@ func reloadDaemonBinary(ctx context.Context, log *slog.Logger, grpcServer *grpc.
 	}
 	grpcDrainStarted := make(chan struct{})
 	go func() {
-		log.Info("daemon.reload.draining_old_process",
+		defer func() {
+			if r := recover(); r != nil {
+				log.WarnContext(ctx, "daemon.reload.grpc_drain_panicked",
+					"component", "daemon",
+					"new_pid", cmd.Process.Pid,
+					"panic", r,
+				)
+			}
+		}()
+		log.InfoContext(ctx, "daemon.reload.draining_old_process",
 			"component", "daemon",
 			"new_pid", cmd.Process.Pid,
 			"timeout", reloadGRPCDrainWait.String(),
 		)
 		done := make(chan struct{})
 		go func() {
+			defer close(done)
+			defer func() {
+				if r := recover(); r != nil {
+					log.WarnContext(ctx, "daemon.reload.grpc_graceful_stop_panicked",
+						"component", "daemon",
+						"new_pid", cmd.Process.Pid,
+						"panic", r,
+					)
+				}
+			}()
 			close(grpcDrainStarted)
 			grpcServer.GracefulStop()
-			close(done)
 		}()
 		select {
 		case <-done:
-			log.Info("daemon.reload.old_process_grpc_drain_complete",
+			log.InfoContext(ctx, "daemon.reload.old_process_grpc_drain_complete",
 				"component", "daemon",
 				"new_pid", cmd.Process.Pid,
 			)
 		case <-time.After(reloadGRPCDrainWait):
-			log.Warn("daemon.reload.old_process_grpc_drain_timeout",
+			log.WarnContext(ctx, "daemon.reload.old_process_grpc_drain_timeout",
 				"component", "daemon",
 				"new_pid", cmd.Process.Pid,
 				"timeout", reloadGRPCDrainWait.String(),
@@ -539,6 +623,15 @@ func waitForReplacementDaemon(ctx context.Context, ready io.Reader) error {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.WarnContext(ctx, "daemon.reload.readiness_wait_panicked",
+					"component", "daemon",
+					"panic", r,
+				)
+				done <- fmt.Errorf("replacement daemon readiness panic: %v", r)
+			}
+		}()
 		data, err := io.ReadAll(ready)
 		if err != nil {
 			done <- err
@@ -552,6 +645,10 @@ func waitForReplacementDaemon(ctx context.Context, ready io.Reader) error {
 	}()
 	select {
 	case <-deadlineCtx.Done():
+		slog.WarnContext(ctx, "daemon.reload.readiness_timeout",
+			"component", "daemon",
+			"err", deadlineCtx.Err(),
+		)
 		return fmt.Errorf("replacement daemon did not become ready: %w", deadlineCtx.Err())
 	case err := <-done:
 		return err
@@ -589,6 +686,11 @@ func inheritedListenerFiles(rt *daemonRuntime) ([]*os.File, []inheritedListenerS
 		file, err := listenerFile(named.lis)
 		if err != nil {
 			cleanup()
+			slog.WarnContext(context.Background(), "daemon.reload.inherit_listener_failed",
+				"component", "daemon",
+				"name", named.name,
+				"err", err,
+			)
 			return nil, nil, func() {}, fmt.Errorf("inherit listener %s: %w", named.name, err)
 		}
 		files = append(files, file)
@@ -728,6 +830,14 @@ func startWebApp(log *slog.Logger, srv *Server, inherited net.Listener) (*webApp
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Warn("webapp.run_panicked",
+					"component", "webapp",
+					"panic", r,
+				)
+			}
+		}()
 		defer close(done)
 		if err := srvW.StartOnListener(ctx, lis); err != nil {
 			log.Error("webapp.exited",
@@ -854,6 +964,14 @@ func watchAdapterConfig(log *slog.Logger, ctrl *adapterController) (func(), erro
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Warn("adapter.config_watch.panicked",
+					"component", "adapter",
+					"panic", r,
+				)
+			}
+		}()
 		defer close(done)
 		var timer *time.Timer
 		var timerCh <-chan time.Time
@@ -1096,6 +1214,14 @@ func startAdapterProcess(log *slog.Logger, srv *adapter.Server, lis net.Listener
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Warn("adapter.run_panicked",
+					"component", "adapter",
+					"panic", r,
+				)
+			}
+		}()
 		defer close(done)
 		if err := srv.StartOnListener(ctx, lis); err != nil {
 			log.Error("adapter.exited",

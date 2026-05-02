@@ -88,7 +88,7 @@ func encodeBodyB64(body []byte) string {
 // response field of the same name. It changes when the binary is
 // rebuilt so clients can detect a behavioral change. Kept stable
 // across requests within one daemon run.
-var systemFingerprint = "fp_clyde_" + time.Now().UTC().Format("20060102")
+var systemFingerprint = "fp_clyde_" + adapterClock.Now().UTC().Format("20060102")
 
 // Server is the HTTP facade. The daemon process creates one and
 // either calls Start in a goroutine (production) or hands the
@@ -246,13 +246,28 @@ type codexAuthFile struct {
 }
 
 func (s *Server) readCodexAuthFile() (codexAuthFile, error) {
+	log := s.log
+	if log == nil {
+		log = slog.Default()
+	}
 	p := resolveCodexAuthFile(s.cfg.Codex.AuthFile)
 	data, err := os.ReadFile(p)
 	if err != nil {
+		log.Warn("adapter.codex.auth_file.read_failed",
+			"subcomponent", "adapter",
+			"path", p,
+			"err", err.Error(),
+		)
 		return codexAuthFile{}, fmt.Errorf("read codex auth file: %w", err)
 	}
 	var doc codexAuthFile
 	if err := json.Unmarshal(data, &doc); err != nil {
+		log.Warn("adapter.codex.auth_file.parse_failed",
+			"subcomponent", "adapter",
+			"path", p,
+			"body_bytes", len(data),
+			"err", err.Error(),
+		)
 		return codexAuthFile{}, fmt.Errorf("parse codex auth file: %w", err)
 	}
 	return doc, nil

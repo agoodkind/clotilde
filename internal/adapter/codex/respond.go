@@ -3,7 +3,6 @@ package codex
 import (
 	"encoding/json"
 	"strconv"
-	"time"
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
@@ -27,7 +26,7 @@ func MergeEvents(reqID, modelAlias, systemFingerprint string, events []adapterre
 	return adapteropenai.ChatResponse{
 		ID:                reqID,
 		Object:            "chat.completion",
-		Created:           time.Now().Unix(),
+		Created:           codexClock.Now().Unix(),
 		Model:             modelAlias,
 		SystemFingerprint: systemFingerprint,
 		Choices: []adapteropenai.ChatChoice{{

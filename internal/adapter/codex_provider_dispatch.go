@@ -33,7 +33,7 @@ func (s *Server) dispatchCodexProvider(
 	cursorReq adaptercursor.Request,
 	resolvedReq adapterresolver.ResolvedRequest,
 ) {
-	started := time.Now()
+	started := adapterClock.Now()
 	_ = cursorReq // resolvedReq.Cursor carries the same value; keep parameter for future hooks.
 
 	s.emitRequestStarted(r.Context(), model, "direct", reqID, model.Alias, req.Stream)

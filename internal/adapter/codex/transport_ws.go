@@ -173,7 +173,19 @@ func websocketMessageToSyntheticSSE(message []byte) ([]byte, error) {
 func streamWebsocketAsSyntheticSSE(conn *websocket.Conn) io.Reader {
 	pr, pw := io.Pipe()
 	go func() {
-		defer pw.Close()
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				slog.Default().Error("adapter.codex.websocket_reader_panic",
+					"component", "adapter",
+					"subcomponent", "codex",
+					"err", fmt.Sprintf("panic: %v", recovered),
+					"panic", recovered,
+				)
+				_ = pw.CloseWithError(fmt.Errorf("codex websocket reader panic: %v", recovered))
+				return
+			}
+			_ = pw.Close()
+		}()
 		for {
 			messageType, message, err := conn.ReadMessage()
 			if err != nil {
@@ -353,7 +365,7 @@ func runWebsocketFreshDial(
 	if err != nil {
 		return NewRunResult("stop"), err
 	}
-	defer conn.Close()
+	defer func(c *websocket.Conn) { _ = c.Close() }(conn)
 
 	prewarmUsed := false
 	prewarmFailed := false
@@ -366,7 +378,7 @@ func runWebsocketFreshDial(
 		if prewarmTimeout <= 0 {
 			prewarmTimeout = defaultWebsocketPrewarmTimeout
 		}
-		_ = conn.SetReadDeadline(time.Now().Add(prewarmTimeout))
+		_ = conn.SetReadDeadline(codexClock.Now().Add(prewarmTimeout))
 		warmupResult, warmupErr := writeAndParseWebsocketRequest(ctx, conn, cfg, warmup, func(adapterrender.Event) error {
 			return nil
 		}, true)
@@ -389,7 +401,7 @@ func runWebsocketFreshDial(
 			if err != nil {
 				return NewRunResult("stop"), err
 			}
-			defer conn.Close()
+			defer func(c *websocket.Conn) { _ = c.Close() }(conn)
 		}
 	}
 
@@ -537,16 +549,30 @@ func openSessionAndWarmup(
 	if prewarmTimeout <= 0 {
 		prewarmTimeout = defaultWebsocketPrewarmTimeout
 	}
-	_ = conn.SetReadDeadline(time.Now().Add(prewarmTimeout))
+	_ = conn.SetReadDeadline(codexClock.Now().Add(prewarmTimeout))
 	warmupResult, warmupErr := writeAndParseWebsocketRequest(ctx, conn, cfg, warmup, func(adapterrender.Event) error {
 		return nil
 	}, true)
 	_ = conn.SetReadDeadline(time.Time{})
 	if warmupErr != nil || strings.TrimSpace(warmupResult.ResponseID) == "" {
 		_ = conn.Close()
-		return nil, fmt.Errorf("codex websocket warmup failed: %w", warmupErr)
+		if warmupErr != nil {
+			log.WarnContext(ctx, "adapter.codex.ws_session.warmup_failed",
+				"component", "adapter",
+				"subcomponent", "codex",
+				"conversation_id", conv,
+				"err", warmupErr.Error(),
+			)
+			return nil, fmt.Errorf("codex websocket warmup failed: %w", warmupErr)
+		}
+		log.WarnContext(ctx, "adapter.codex.ws_session.warmup_missing_response_id",
+			"component", "adapter",
+			"subcomponent", "codex",
+			"conversation_id", conv,
+		)
+		return nil, errors.New("codex websocket warmup failed: missing response_id")
 	}
-	now := time.Now()
+	now := codexClock.Now()
 	session := &WebsocketSession{
 		Conn:           conn,
 		ConversationID: conv,

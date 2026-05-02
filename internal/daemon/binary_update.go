@@ -31,13 +31,23 @@ func (s *Server) startBinaryUpdateWatcher(interval time.Duration) func() {
 		"mtime", base.info.ModTime().Format(time.RFC3339Nano),
 		"size", base.info.Size(),
 		"hash", base.content)
-	go s.runBinaryUpdateWatcher(ctx, interval, base)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				s.log.WarnContext(ctx, "daemon.binary_update.watcher_panicked",
+					"component", "daemon",
+					"panic", r,
+				)
+			}
+		}()
+		s.runBinaryUpdateWatcher(ctx, interval, base)
+	}()
 	return cancel
 }
 
 func (s *Server) runBinaryUpdateWatcher(ctx context.Context, interval time.Duration, base daemonExecutableSnapshot) {
 	t := time.NewTicker(interval)
-	defer t.Stop()
+	defer func() { t.Stop() }()
 	for {
 		select {
 		case <-ctx.Done():
@@ -45,7 +55,7 @@ func (s *Server) runBinaryUpdateWatcher(ctx context.Context, interval time.Durat
 		case <-t.C:
 			changed, reason, next, err := daemonExecutableChanged(base)
 			if err != nil {
-				s.log.Debug("daemon.binary_update.check_failed",
+				s.log.DebugContext(ctx, "daemon.binary_update.check_failed",
 					"component", "daemon",
 					"path", base.path,
 					"err", err)
@@ -54,7 +64,7 @@ func (s *Server) runBinaryUpdateWatcher(ctx context.Context, interval time.Durat
 			if !changed {
 				continue
 			}
-			s.log.LogAttrs(context.Background(), slog.LevelDebug, "daemon.binary_update.detected",
+			s.log.LogAttrs(ctx, slog.LevelDebug, "daemon.binary_update.detected",
 				slog.String("component", "daemon"),
 				slog.String("path", next.path),
 				slog.String("reason", reason),
@@ -68,14 +78,28 @@ func (s *Server) runBinaryUpdateWatcher(ctx context.Context, interval time.Durat
 func currentDaemonExecutableSnapshot() (daemonExecutableSnapshot, error) {
 	path, err := os.Executable()
 	if err != nil {
+		slog.WarnContext(context.Background(), "daemon.binary_update.executable_resolve_failed",
+			"component", "daemon",
+			"err", err,
+		)
 		return daemonExecutableSnapshot{}, fmt.Errorf("resolve executable: %w", err)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
+		slog.WarnContext(context.Background(), "daemon.binary_update.executable_stat_failed",
+			"component", "daemon",
+			"path", path,
+			"err", err,
+		)
 		return daemonExecutableSnapshot{}, fmt.Errorf("stat executable: %w", err)
 	}
 	hash, err := shortFileSHA256(path)
 	if err != nil {
+		slog.WarnContext(context.Background(), "daemon.binary_update.executable_hash_failed",
+			"component", "daemon",
+			"path", path,
+			"err", err,
+		)
 		return daemonExecutableSnapshot{}, fmt.Errorf("hash executable: %w", err)
 	}
 	return daemonExecutableSnapshot{path: path, info: info, content: hash}, nil

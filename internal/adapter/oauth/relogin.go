@@ -56,6 +56,7 @@ func isInvalidGrant(err error) bool {
 // with a hint when the breaker is open or the rate limit fires; the
 // caller should bubble that up unchanged.
 func (m *Manager) autoRelogin(ctx context.Context, originalErr error) error {
+	log := oauthLog.Logger()
 	if !isInvalidGrant(originalErr) {
 		return originalErr
 	}
@@ -70,7 +71,7 @@ func (m *Manager) autoRelogin(ctx context.Context, originalErr error) error {
 	// annoyance (clicking an osascript-posted notification opens Script
 	// Editor).
 	if !term.IsTerminal(int(os.Stderr.Fd())) {
-		oauthLog.Logger().Warn("oauth.relogin.skipped",
+		log.WarnContext(ctx, "oauth.relogin.skipped",
 			"subcomponent", "oauth",
 			"reason", "non_tty",
 		)
@@ -79,7 +80,7 @@ func (m *Manager) autoRelogin(ctx context.Context, originalErr error) error {
 	}
 
 	if m.relogin.consecutiveFail >= reloginBreakerThreshold {
-		oauthLog.Logger().Warn("oauth.relogin.skipped",
+		log.WarnContext(ctx, "oauth.relogin.skipped",
 			"subcomponent", "oauth",
 			"reason", "breaker_open",
 			"consecutive_fail", m.relogin.consecutiveFail,
@@ -89,7 +90,7 @@ func (m *Manager) autoRelogin(ctx context.Context, originalErr error) error {
 	}
 
 	if !m.relogin.lastAttempt.IsZero() && time.Since(m.relogin.lastAttempt) < reloginMinInterval {
-		oauthLog.Logger().Warn("oauth.relogin.skipped",
+		log.WarnContext(ctx, "oauth.relogin.skipped",
 			"subcomponent", "oauth",
 			"reason", "rate_limited",
 			"since_last_ms", time.Since(m.relogin.lastAttempt).Milliseconds(),
@@ -101,9 +102,17 @@ func (m *Manager) autoRelogin(ctx context.Context, originalErr error) error {
 	// Cross-process lock: another clyde instance may also be relogging.
 	// Wait briefly; whoever wins runs login, others re-read tokens.
 	if m.credentialsDir == "" {
+		log.WarnContext(ctx, "oauth.relogin.store_dir_missing",
+			"subcomponent", "oauth",
+		)
 		return fmt.Errorf("relogin: empty credentials dir (original: %w)", originalErr)
 	}
 	if err := os.MkdirAll(m.credentialsDir, 0o700); err != nil {
+		log.WarnContext(ctx, "oauth.relogin.mkdir_failed",
+			"subcomponent", "oauth",
+			"store_dir", m.credentialsDir,
+			"err", err.Error(),
+		)
 		return fmt.Errorf("relogin mkdir: %w", err)
 	}
 	lockPath := filepath.Join(m.credentialsDir, ".clyde-relogin.lock")
@@ -111,14 +120,26 @@ func (m *Manager) autoRelogin(ctx context.Context, originalErr error) error {
 	lockCtx, cancel := context.WithTimeout(ctx, reloginTimeout)
 	defer cancel()
 	got, err := lock.TryLockContext(lockCtx, 500*time.Millisecond)
-	if err != nil || !got {
+	if err != nil {
+		log.WarnContext(ctx, "oauth.relogin.lock_failed",
+			"subcomponent", "oauth",
+			"lock_path", lockPath,
+			"err", err.Error(),
+		)
 		return fmt.Errorf("acquire relogin lock: %w (original: %w)", err, originalErr)
+	}
+	if !got {
+		log.WarnContext(ctx, "oauth.relogin.lock_timeout",
+			"subcomponent", "oauth",
+			"lock_path", lockPath,
+		)
+		return fmt.Errorf("acquire relogin lock: timed out (original: %w)", originalErr)
 	}
 	defer func() { _ = lock.Unlock() }()
 
 	// Post-lock re-read: another process may have already relogged.
 	if disk, rerr := readCredentials(m.credentialsDir, m.oauthCfg.KeychainService); rerr == nil && disk != nil && !isExpired(disk) {
-		oauthLog.Logger().Info("oauth.relogin.raced",
+		log.InfoContext(ctx, "oauth.relogin.raced",
 			"subcomponent", "oauth",
 			"expires_at_ms", disk.ExpiresAt,
 		)
@@ -126,11 +147,11 @@ func (m *Manager) autoRelogin(ctx context.Context, originalErr error) error {
 		return nil
 	}
 
-	m.relogin.lastAttempt = time.Now()
-	started := time.Now()
+	m.relogin.lastAttempt = oauthClock.Now()
+	started := oauthClock.Now()
 
 	cmd := exec.CommandContext(lockCtx, "claude", "auth", "login")
-	oauthLog.Logger().Info("oauth.relogin.spawned",
+	log.InfoContext(ctx, "oauth.relogin.spawned",
 		"subcomponent", "oauth",
 		"binary", "claude",
 		"args", []string{"auth", "login"},
@@ -146,12 +167,12 @@ func (m *Manager) autoRelogin(ctx context.Context, originalErr error) error {
 
 	if runErr != nil {
 		m.relogin.consecutiveFail++
-		oauthLog.Logger().Error("oauth.relogin.failed",
+		log.ErrorContext(ctx, "oauth.relogin.failed",
 			"subcomponent", "oauth",
 			"exit_code", exitCode,
 			"duration_ms", durationMs,
 			"consecutive_fail", m.relogin.consecutiveFail,
-			"output_tail", tailString(string(out), 400),
+			"output_bytes", len(out),
 			slog.Any("err", runErr),
 		)
 		return fmt.Errorf("claude auth login failed (exit %d): %w (original: %w)",
@@ -159,7 +180,7 @@ func (m *Manager) autoRelogin(ctx context.Context, originalErr error) error {
 	}
 
 	m.relogin.consecutiveFail = 0
-	oauthLog.Logger().Info("oauth.relogin.completed",
+	log.InfoContext(ctx, "oauth.relogin.completed",
 		"subcomponent", "oauth",
 		"exit_code", exitCode,
 		"duration_ms", durationMs,
@@ -170,11 +191,4 @@ func (m *Manager) autoRelogin(ctx context.Context, originalErr error) error {
 	m.cached = nil
 	m.credsMtime = 0
 	return nil
-}
-
-func tailString(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return "..." + s[len(s)-n:]
 }

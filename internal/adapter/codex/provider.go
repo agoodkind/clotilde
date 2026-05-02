@@ -106,6 +106,11 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 
 	token, err := p.auth.Token(ctx)
 	if err != nil {
+		p.log.WarnContext(ctx, "adapter.codex.auth_lookup_failed",
+			"component", "adapter",
+			"subcomponent", "codex_provider",
+			"err", err.Error(),
+		)
 		return adapterprovider.Result{}, fmt.Errorf("codex provider: auth lookup: %w", err)
 	}
 	if strings.TrimSpace(token) == "" {

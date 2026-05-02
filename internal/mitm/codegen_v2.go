@@ -3,6 +3,7 @@ package mitm
 import (
 	"fmt"
 	"go/format"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -34,16 +35,33 @@ func GenerateWireFlavors(snap SnapshotV2, opts CodegenOptions) (string, error) {
 		dir = filepath.Join("internal", "adapter", opts.PackageName)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
+		slog.Warn("mitm.codegen_v2.mkdir_failed",
+			"component", "mitm",
+			"dir", dir,
+			"package", opts.PackageName,
+			"err", err,
+		)
 		return "", fmt.Errorf("codegen v2 mkdir: %w", err)
 	}
 
 	body := buildWireFlavorsSource(snap, opts)
 	formatted, err := format.Source([]byte(body))
 	if err != nil {
+		slog.Warn("mitm.codegen_v2.gofmt_failed",
+			"component", "mitm",
+			"package", opts.PackageName,
+			"err", err,
+		)
 		return "", fmt.Errorf("codegen v2 gofmt: %w\n%s", err, body)
 	}
 	out := filepath.Join(dir, "wire_flavors_gen.go")
 	if err := os.WriteFile(out, formatted, 0o644); err != nil {
+		slog.Warn("mitm.codegen_v2.write_failed",
+			"component", "mitm",
+			"path", out,
+			"package", opts.PackageName,
+			"err", err,
+		)
 		return "", fmt.Errorf("codegen v2 write: %w", err)
 	}
 	return out, nil
@@ -62,7 +80,7 @@ func buildWireFlavorsSource(snap SnapshotV2, opts CodegenOptions) string {
 	if snap.Upstream.CapturedAt != "" {
 		b.WriteString(snap.Upstream.CapturedAt)
 	} else {
-		b.WriteString(time.Now().UTC().Format(time.RFC3339))
+		b.WriteString(currentTime().UTC().Format(time.RFC3339))
 	}
 	b.WriteString("\n// Upstream: ")
 	b.WriteString(snap.Upstream.Name)

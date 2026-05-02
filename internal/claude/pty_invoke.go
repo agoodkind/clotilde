@@ -89,17 +89,33 @@ func invokePTY(args []string, env map[string]string, workDir, sessionID string, 
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
+		remoteLog.Warn("wrapper.pty.start_failed",
+			"component", "wrapper",
+			"session", sessionName,
+			"session_id", sessionID,
+			"err", err,
+		)
 		return fmt.Errorf("start pty: %w", err)
 	}
-	defer ptmx.Close()
+	defer func() { _ = ptmx.Close() }()
 
 	if interactive {
 		// Forward initial size and propagate window changes so claude's
 		// TUI matches the terminal dimensions.
 		winchCh := make(chan os.Signal, 1)
 		signal.Notify(winchCh, syscall.SIGWINCH)
-		defer signal.Stop(winchCh)
+		defer func() { signal.Stop(winchCh) }()
 		go func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					claudeRemoteLog.Logger().Error("wrapper.pty.resize_panic",
+						"component", "wrapper",
+						"session", sessionName,
+						"session_id", sessionID,
+						"err", fmt.Errorf("panic: %v", recovered),
+					)
+				}
+			}()
 			for range winchCh {
 				_ = pty.InheritSize(os.Stdin, ptmx)
 			}
@@ -127,7 +143,20 @@ func invokePTY(args []string, env map[string]string, workDir, sessionID string, 
 			_ = listener.Close()
 			_ = os.Remove(socketPath)
 		}()
-		go acceptInjectConns(listener, ptmx)
+		go func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					claudeRemoteLog.Logger().Error("wrapper.inject.accept_panic",
+						"component", "wrapper",
+						"session", sessionName,
+						"session_id", sessionID,
+						"socket", socketPath,
+						"err", fmt.Errorf("panic: %v", recovered),
+					)
+				}
+			}()
+			acceptInjectConns(listener, ptmx)
+		}()
 	}
 
 	// Copy goroutines for pty <-> terminal.
@@ -137,15 +166,45 @@ func invokePTY(args []string, env map[string]string, workDir, sessionID string, 
 
 	if interactive {
 		go func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					claudeRemoteLog.Logger().Error("wrapper.pty.stdin_copy_panic",
+						"component", "wrapper",
+						"session", sessionName,
+						"session_id", sessionID,
+						"err", fmt.Errorf("panic: %v", recovered),
+					)
+				}
+			}()
 			_, _ = io.Copy(ptmx, os.Stdin)
 			finish()
 		}()
 		go func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					claudeRemoteLog.Logger().Error("wrapper.pty.stdout_copy_panic",
+						"component", "wrapper",
+						"session", sessionName,
+						"session_id", sessionID,
+						"err", fmt.Errorf("panic: %v", recovered),
+					)
+				}
+			}()
 			_, _ = io.Copy(os.Stdout, ptmx)
 			finish()
 		}()
 	} else {
 		go func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					claudeRemoteLog.Logger().Error("wrapper.pty.discard_copy_panic",
+						"component", "wrapper",
+						"session", sessionName,
+						"session_id", sessionID,
+						"err", fmt.Errorf("panic: %v", recovered),
+					)
+				}
+			}()
 			_, _ = io.Copy(io.Discard, ptmx)
 			finish()
 		}()
@@ -156,7 +215,19 @@ func invokePTY(args []string, env map[string]string, workDir, sessionID string, 
 	monitorDone := make(chan struct{})
 	monitorStopped := make(chan struct{})
 	monitor := &monitorState{}
-	go monitorDaemon(ctx, wrapperID, sessionName, monitorDone, monitor, monitorStopped)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				claudeRemoteLog.Logger().Error("wrapper.pty.daemon_monitor_panic",
+					"component", "wrapper",
+					"session", sessionName,
+					"session_id", sessionID,
+					"err", fmt.Errorf("panic: %v", recovered),
+				)
+			}
+		}()
+		monitorDaemon(ctx, wrapperID, sessionName, monitorDone, monitor, monitorStopped)
+	}()
 
 	runErr := cmd.Wait()
 	close(monitorDone)
@@ -165,6 +236,12 @@ func invokePTY(args []string, env map[string]string, workDir, sessionID string, 
 	<-done
 	if interactive && shouldSelfReloadWrapper(env, runErr, monitor) {
 		if reloadErr := selfReloadCurrentProcess(); reloadErr != nil {
+			remoteLog.Warn("wrapper.pty.self_reload_failed",
+				"component", "wrapper",
+				"session", sessionName,
+				"session_id", sessionID,
+				"err", reloadErr,
+			)
 			return fmt.Errorf("self reload: %w", reloadErr)
 		}
 	}
@@ -216,8 +293,16 @@ func acceptInjectConns(l net.Listener, ptmx io.Writer) {
 			return
 		}
 		go func(c net.Conn) {
-			defer c.Close()
-			_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					claudeRemoteLog.Logger().Error("wrapper.inject.connection_panic",
+						"component", "wrapper",
+						"err", fmt.Errorf("panic: %v", recovered),
+					)
+				}
+			}()
+			defer func() { _ = c.Close() }()
+			_ = c.SetReadDeadline(currentTime().Add(5 * time.Second))
 			_, _ = io.Copy(ptmx, c)
 		}(conn)
 	}

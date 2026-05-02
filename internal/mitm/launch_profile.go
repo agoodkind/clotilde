@@ -2,6 +2,7 @@ package mitm
 
 import (
 	"fmt"
+	"log/slog"
 	"maps"
 	"os"
 	"os/exec"
@@ -137,6 +138,11 @@ func findOnPath(name string) func() (string, error) {
 	return func() (string, error) {
 		path, err := exec.LookPath(name)
 		if err != nil {
+			slog.Warn("mitm.launch_profile.path_lookup_failed",
+				"component", "mitm",
+				"binary", name,
+				"err", err,
+			)
 			return "", fmt.Errorf("%s not on PATH: %w", name, err)
 		}
 		return path, nil
@@ -154,6 +160,11 @@ func findApp(path string) func() (string, error) {
 		}
 		info, err := os.Stat(abs)
 		if err != nil {
+			slog.Warn("mitm.launch_profile.app_missing",
+				"component", "mitm",
+				"path", abs,
+				"err", err,
+			)
 			return "", fmt.Errorf("app bundle missing at %s: %w", abs, err)
 		}
 		if info.IsDir() {

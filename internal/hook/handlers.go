@@ -23,7 +23,6 @@ func handleStartupOrResume(
 	out io.Writer,
 	errOut io.Writer,
 ) {
-	_ = ctx
 	sessionName := os.Getenv("CLYDE_SESSION_NAME")
 
 	if sessionName != "" {
@@ -34,7 +33,7 @@ func handleStartupOrResume(
 		}
 
 		if err := writeSessionNameToEnv(sessionName); err != nil {
-			log.Warn("hook.sessionstart.env_write_failed",
+			log.WarnContext(ctx, "hook.sessionstart.env_write_failed",
 				"component", "hook",
 				"subject", "sessionstart",
 				"key", "CLYDE_SESSION",
@@ -45,7 +44,7 @@ func handleStartupOrResume(
 
 		if hookData.TranscriptPath != "" {
 			if err := saveTranscriptPath(store, sessionName, hookData.TranscriptPath); err != nil {
-				log.Warn("hook.sessionstart.transcript_save_failed",
+				log.WarnContext(ctx, "hook.sessionstart.transcript_save_failed",
 					"component", "hook",
 					"subject", "sessionstart",
 					"session", sessionName,
@@ -53,7 +52,7 @@ func handleStartupOrResume(
 				)
 				_, _ = fmt.Fprintf(errOut, "Warning: failed to save transcript path: %v\n", err)
 			} else {
-				log.Info("hook.sessionstart.transcript_saved",
+				log.InfoContext(ctx, "hook.sessionstart.transcript_saved",
 					"component", "hook",
 					"subject", "sessionstart",
 					"session", sessionName,
@@ -163,10 +162,9 @@ func handleCompact(
 	out io.Writer,
 	errOut io.Writer,
 ) error {
-	_ = ctx
 	sessionName, err := resolveSessionName(hookData, store, true)
 	if err != nil {
-		log.Warn("hook.sessionstart.resolve_name_failed",
+		log.WarnContext(ctx, "hook.sessionstart.resolve_name_failed",
 			"component", "hook",
 			"subject", "sessionstart",
 			"reason", "compact",
@@ -182,7 +180,7 @@ func handleCompact(
 
 	sess, err := store.Get(sessionName)
 	if err != nil {
-		log.Warn("hook.sessionstart.session_not_found",
+		log.WarnContext(ctx, "hook.sessionstart.session_not_found",
 			"component", "hook",
 			"subject", "sessionstart",
 			"reason", "compact",
@@ -198,7 +196,7 @@ func handleCompact(
 	sess.UpdateLastAccessed()
 
 	if err := store.Update(sess); err != nil {
-		log.Warn("hook.sessionstart.metadata_update_failed",
+		log.WarnContext(ctx, "hook.sessionstart.metadata_update_failed",
 			"component", "hook",
 			"subject", "sessionstart",
 			"session", sessionName,
@@ -208,7 +206,7 @@ func handleCompact(
 	}
 
 	if err := writeSessionNameToEnv(sessionName); err != nil {
-		log.Warn("hook.sessionstart.env_write_failed",
+		log.WarnContext(ctx, "hook.sessionstart.env_write_failed",
 			"component", "hook",
 			"subject", "sessionstart",
 			"key", "CLYDE_SESSION",
@@ -218,7 +216,7 @@ func handleCompact(
 		_, _ = fmt.Fprintf(errOut, "Warning: failed to write session name to env: %v\n", err)
 	}
 
-	log.Info("hook.sessionstart.compact_handled",
+	log.InfoContext(ctx, "hook.sessionstart.compact_handled",
 		"component", "hook",
 		"subject", "sessionstart",
 		"session", sessionName,
@@ -243,6 +241,13 @@ func handleClear(
 func saveTranscriptPath(store session.Store, sessionName, transcriptPath string) error {
 	sess, err := store.Get(sessionName)
 	if err != nil {
+		hookLog.Warn("hook.sessionstart.transcript_session_lookup_failed",
+			"component", "hook",
+			"subject", "sessionstart",
+			"session", sessionName,
+			"transcript", transcriptPath,
+			"err", err,
+		)
 		return fmt.Errorf("session '%s' not found: %w", sessionName, err)
 	}
 
@@ -250,6 +255,13 @@ func saveTranscriptPath(store session.Store, sessionName, transcriptPath string)
 	sess.UpdateLastAccessed()
 
 	if err := store.Update(sess); err != nil {
+		hookLog.Warn("hook.sessionstart.transcript_metadata_update_failed",
+			"component", "hook",
+			"subject", "sessionstart",
+			"session", sessionName,
+			"transcript", transcriptPath,
+			"err", err,
+		)
 		return fmt.Errorf("failed to update session metadata: %w", err)
 	}
 

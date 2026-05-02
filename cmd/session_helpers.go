@@ -17,6 +17,10 @@ import (
 func globalStore() (*session.FileStore, error) {
 	store, err := session.NewGlobalFileStore()
 	if err != nil {
+		cmdLog.Warn("cmd.session.global_store_failed",
+			"component", "cli",
+			"err", err,
+		)
 		return nil, fmt.Errorf("failed to open session store: %w", err)
 	}
 	return store, nil
@@ -34,7 +38,7 @@ func printResumeInstructions(sess *session.Session) {
 	_, _ = fmt.Fprintf(os.Stdout, "  clyde resume %s\n", sess.Name)
 	runtime, err := sessionlifecycle.ForSession(sess, nil)
 	if err != nil {
-		cmdResumeLog.Logger().Warn("cmd.session.resume_instructions_provider_failed",
+		cmdLog.Warn("cmd.session.resume_instructions_provider_failed",
 			"component", "cli",
 			"session", sess.Name,
 			"provider", sess.ProviderID(),
@@ -81,7 +85,7 @@ func autoUpdateContext(_ *session.FileStore, sess *session.Session) {
 	if err != nil {
 		return
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	_ = client.UpdateContext(sess.Name, sess.Metadata.WorkspaceRoot, messages)
 }

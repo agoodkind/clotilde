@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 )
@@ -100,11 +101,13 @@ type ToolPair struct {
 func LoadSlice(path string) (*Slice, error) {
 	f, err := os.Open(path)
 	if err != nil {
+		slog.Error("compact.slice.open_failed", "component", "compact", "path", path, "err", err)
 		return nil, fmt.Errorf("open transcript: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	stat, err := f.Stat()
 	if err != nil {
+		slog.Error("compact.slice.stat_failed", "component", "compact", "path", path, "err", err)
 		return nil, fmt.Errorf("stat transcript: %w", err)
 	}
 
@@ -131,6 +134,7 @@ func LoadSlice(path string) (*Slice, error) {
 		idx++
 	}
 	if err := scanner.Err(); err != nil {
+		slog.Error("compact.slice.scan_failed", "component", "compact", "path", path, "err", err)
 		return nil, fmt.Errorf("scan transcript: %w", err)
 	}
 

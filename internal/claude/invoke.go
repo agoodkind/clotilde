@@ -75,12 +75,20 @@ func NewLifecycle(settingsStore SessionSettingsStore) *Lifecycle {
 	return &Lifecycle{settingsStore: settingsStore}
 }
 
-func (l *Lifecycle) StartInteractive(_ context.Context, req session.StartRequest) error {
+func (l *Lifecycle) StartInteractive(ctx context.Context, req session.StartRequest) error {
 	if req.Launch.Intent != "" && req.Launch.Intent != session.LaunchIntentNewSession {
 		return fmt.Errorf("unsupported launch intent for claude lifecycle: %q", req.Launch.Intent)
 	}
 
-	sessionID := util.GenerateUUID()
+	sessionID, err := util.GenerateUUIDE()
+	if err != nil {
+		claudeLog.WarnContext(ctx, "claude.session.start.uuid_failed",
+			"component", "claude",
+			"session", req.SessionName,
+			"err", err,
+		)
+		return err
+	}
 	env := map[string]string{
 		"CLYDE_SESSION_NAME": req.SessionName,
 	}
@@ -95,7 +103,7 @@ func (l *Lifecycle) StartInteractive(_ context.Context, req session.StartRequest
 		return nil
 	}
 	if err := PersistRemoteControlSetting(l.settingsStore, req.SessionName); err != nil {
-		claudeLifecycleLog.Logger().Warn("claude.session.start.persist_remote_control_failed",
+		claudeLog.WarnContext(ctx, "claude.session.start.persist_remote_control_failed",
 			"component", "claude",
 			"session", req.SessionName,
 			"err", err,
@@ -286,7 +294,7 @@ func applyMITMEnv(env map[string]string) {
 	}
 	extra, err := mitm.ClaudeEnv(context.Background(), cfg.MITM, slog.Default())
 	if err != nil {
-		claudeLifecycleLog.Logger().Warn("wrapper.mitm.claude_env_failed", "component", "wrapper", "err", err)
+		claudeLog.Warn("wrapper.mitm.claude_env_failed", "component", "wrapper", "err", err)
 		return
 	}
 	maps.Copy(env, extra)
@@ -367,7 +375,19 @@ func invokeInteractive(args []string, env map[string]string, workDir string) err
 	done := make(chan struct{})
 	monitorStopped := make(chan struct{})
 	monitor := &monitorState{}
-	go monitorDaemon(ctx, wrapperID, sessionName, done, monitor, monitorStopped)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				claudeLifecycleLog.Logger().Error("wrapper.daemon_monitor.panic",
+					"component", "wrapper",
+					"session", sessionName,
+					"wrapper_id", wrapperID,
+					"err", fmt.Errorf("panic: %v", recovered),
+				)
+			}
+		}()
+		monitorDaemon(ctx, wrapperID, sessionName, done, monitor, monitorStopped)
+	}()
 
 	runErr := cmd.Run()
 
@@ -376,7 +396,7 @@ func invokeInteractive(args []string, env map[string]string, workDir string) err
 	<-monitorStopped
 	if shouldSelfReloadWrapper(env, runErr, monitor) {
 		if reloadErr := selfReloadCurrentProcess(); reloadErr != nil {
-			claudeLifecycleLog.Logger().Warn("wrapper.self_reload.failed",
+			claudeLog.Warn("wrapper.self_reload.failed",
 				"component", "wrapper",
 				"session", sessionName,
 				"error", reloadErr)
@@ -399,7 +419,7 @@ func monitorDaemon(
 ) {
 	const interval = 30 * time.Second
 	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	defer func() { ticker.Stop() }()
 	defer close(stopped)
 
 	for {
@@ -459,6 +479,10 @@ func shouldSelfReloadWrapper(env map[string]string, runErr error, state *monitor
 func selfReloadCurrentProcess() error {
 	executablePath, err := os.Executable()
 	if err != nil {
+		claudeLog.Warn("wrapper.self_reload.executable_failed",
+			"component", "wrapper",
+			"err", err,
+		)
 		return fmt.Errorf("resolve executable path: %w", err)
 	}
 	claudeLifecycleLog.Logger().Info("wrapper.self_reload.exec",
@@ -488,7 +512,7 @@ func invokeWithCleanup(clydeRoot string, sess *session.Session, args []string, e
 	defer func() {
 		deleted, err := cleanupIncognitoSession(clydeRoot, sess)
 		if err != nil {
-			claudeLifecycleLog.Logger().Warn("claude.incognito.cleanup.failed", "session", sess.Name, "err", err)
+			claudeLog.Warn("claude.incognito.cleanup.failed", "session", sess.Name, "err", err)
 		} else {
 			claudeLifecycleLog.Logger().Info("claude.incognito.deleted", "session", sess.Name, "transcript_count", len(deleted.Transcript), "agent_log_count", len(deleted.AgentLogs))
 

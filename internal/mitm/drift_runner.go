@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"os"
 	"strings"
-	"time"
 )
 
 // DriftCheckOptions configures one compare-only drift run against the
@@ -48,9 +47,14 @@ func RunDriftCheck(ctx context.Context, opts DriftCheckOptions) (DriftOutcome, e
 	}
 	transcriptPath, err := ResolveTranscriptPath(captureRoot, opts.Upstream)
 	if err != nil {
+		opts.Log.WarnContext(ctx, "mitm.drift.transcript_resolve_failed",
+			"upstream", opts.Upstream,
+			"capture_root", captureRoot,
+			"err", err,
+		)
 		return DriftOutcome{}, err
 	}
-	startedAt := time.Now().UTC()
+	startedAt := currentTime().UTC()
 
 	outcome := DriftOutcome{
 		Upstream:       opts.Upstream,
@@ -63,6 +67,10 @@ func RunDriftCheck(ctx context.Context, opts DriftCheckOptions) (DriftOutcome, e
 	if isV2SnapshotFile(opts.Reference) {
 		ref, err := LoadSnapshotV2TOML(opts.Reference)
 		if err != nil {
+			opts.Log.WarnContext(ctx, "mitm.drift.load_v2_reference_failed",
+				"reference", opts.Reference,
+				"err", err,
+			)
 			return outcome, fmt.Errorf("load v2 reference: %w", err)
 		}
 		cand, err := ExtractSnapshotV2(transcriptPath, SnapshotV2Options{
@@ -75,6 +83,11 @@ func RunDriftCheck(ctx context.Context, opts DriftCheckOptions) (DriftOutcome, e
 			ForbidBodyKeys:             opts.ForbidBodyKeys,
 		})
 		if err != nil {
+			opts.Log.WarnContext(ctx, "mitm.drift.extract_v2_failed",
+				"transcript", transcriptPath,
+				"upstream", opts.Upstream,
+				"err", err,
+			)
 			return outcome, fmt.Errorf("extract v2: %w", err)
 		}
 		report := DiffSnapshotsV2(ref, cand)
@@ -83,6 +96,10 @@ func RunDriftCheck(ctx context.Context, opts DriftCheckOptions) (DriftOutcome, e
 	} else {
 		ref, err := LoadSnapshotTOML(opts.Reference)
 		if err != nil {
+			opts.Log.WarnContext(ctx, "mitm.drift.load_reference_failed",
+				"reference", opts.Reference,
+				"err", err,
+			)
 			return outcome, fmt.Errorf("load reference: %w", err)
 		}
 		cand, err := ExtractSnapshot(transcriptPath, SnapshotOptions{
@@ -91,6 +108,11 @@ func RunDriftCheck(ctx context.Context, opts DriftCheckOptions) (DriftOutcome, e
 			ProviderFilter:  ProviderForUpstream(opts.Upstream),
 		})
 		if err != nil {
+			opts.Log.WarnContext(ctx, "mitm.drift.extract_failed",
+				"transcript", transcriptPath,
+				"upstream", opts.Upstream,
+				"err", err,
+			)
 			return outcome, fmt.Errorf("extract: %w", err)
 		}
 		report := DiffSnapshots(ref, cand)
@@ -99,7 +121,7 @@ func RunDriftCheck(ctx context.Context, opts DriftCheckOptions) (DriftOutcome, e
 	}
 
 	if err := AppendDriftOutcome(opts.DriftLogPath, outcome); err != nil {
-		opts.Log.Warn("mitm.drift.log_append_failed", "path", opts.DriftLogPath, "err", err)
+		opts.Log.WarnContext(ctx, "mitm.drift.log_append_failed", "path", opts.DriftLogPath, "err", err)
 	}
 	// AppendDriftOutcome populates Diverged + Summary on the in-place
 	// outcome. Re-derive here so callers that skip the log path still

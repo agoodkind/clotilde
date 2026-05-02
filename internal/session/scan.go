@@ -195,7 +195,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 		case !md.LastAccessed.IsZero():
 			md.Created = md.LastAccessed
 		default:
-			md.Created = time.Now()
+			md.Created = currentTime()
 		}
 		if md.LastAccessed.IsZero() {
 			md.LastAccessed = md.Created

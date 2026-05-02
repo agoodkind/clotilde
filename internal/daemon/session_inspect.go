@@ -146,7 +146,7 @@ func inspectAllMessages(transcriptPath string, maxLen int) []inspectMessage {
 	if err != nil {
 		return nil
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	parsed, err := itranscript.Parse(f)
 	if err != nil {
@@ -184,7 +184,7 @@ func inspectStatsFor(transcriptPath string) inspectStats {
 	if err != nil {
 		return inspectStats{}
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	parsed, err := itranscript.Parse(f)
 	if err != nil {
@@ -199,7 +199,7 @@ func inspectStatsFor(transcriptPath string) inspectStats {
 	if err != nil {
 		return inspectStats{}
 	}
-	defer f2.Close()
+	defer func() { _ = f2.Close() }()
 	scanner := bufio.NewScanner(f2)
 	scanner.Buffer(make([]byte, 1024*1024), 4*1024*1024)
 	var out inspectStats
@@ -264,7 +264,7 @@ func inspectExportStatsFor(transcriptPath string) inspectExportStats {
 	if err != nil {
 		return stats
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	messages, err := itranscript.Parse(f)
 	if err == nil {
@@ -288,7 +288,7 @@ func inspectExportStatsFor(transcriptPath string) inspectExportStats {
 
 	raw, err := os.Open(transcriptPath)
 	if err == nil {
-		defer raw.Close()
+		defer func() { _ = raw.Close() }()
 		scanner := bufio.NewScanner(raw)
 		scanner.Buffer(make([]byte, 1024*1024), 4*1024*1024)
 		for scanner.Scan() {
@@ -338,7 +338,7 @@ func inspectToolUseStats(transcriptPath string, topN int) []inspectToolUse {
 	if err != nil {
 		return nil
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 4*1024*1024)
 	counts := map[string]int{}
@@ -418,7 +418,7 @@ func inspectForEachTailLine(transcriptPath string, tailSize int, fn func(line []
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		return err

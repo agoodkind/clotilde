@@ -1,28 +1,30 @@
 package util
 
 import (
-	"crypto/rand"
 	"fmt"
+	"log/slog"
+
+	"github.com/google/uuid"
 )
 
-// GenerateUUID generates a new UUID v4 string.
-// Returns a UUID in the format: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-func GenerateUUID() string {
-	uuid := make([]byte, 16)
-	_, err := rand.Read(uuid)
+// GenerateUUIDE generates a new UUID v4 string.
+// Returns a UUID in the format: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx".
+func GenerateUUIDE() (string, error) {
+	id, err := uuid.NewRandom()
 	if err != nil {
-		// This should never happen with crypto/rand, but handle it gracefully
-		panic(fmt.Sprintf("failed to generate UUID: %v", err))
+		slog.Warn("util.uuid.generate_failed", "component", "util", "err", err)
+		return "", fmt.Errorf("generate uuid: %w", err)
 	}
+	return id.String(), nil
+}
 
-	// Set version (4) and variant bits according to RFC 4122
-	uuid[6] = (uuid[6] & 0x0f) | 0x40 // Version 4
-	uuid[8] = (uuid[8] & 0x3f) | 0x80 // Variant is 10
-
-	return fmt.Sprintf("%x-%x-%x-%x-%x",
-		uuid[0:4],
-		uuid[4:6],
-		uuid[6:8],
-		uuid[8:10],
-		uuid[10:16])
+// GenerateUUID generates a new UUID v4 string. Callers that can
+// surface errors should prefer GenerateUUIDE.
+func GenerateUUID() string {
+	id, err := GenerateUUIDE()
+	if err != nil {
+		slog.Error("util.uuid.generate_failed", "component", "util", "err", err)
+		return ""
+	}
+	return id
 }

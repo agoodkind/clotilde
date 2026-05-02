@@ -25,6 +25,8 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
@@ -133,6 +135,22 @@ type sessionContextState struct {
 	RetryAfter time.Time
 }
 
+func daemonPeerAddr(p *peer.Peer) string {
+	if p == nil || p.Addr == nil {
+		return ""
+	}
+	return p.Addr.String()
+}
+
+func daemonMetadataKeys(md metadata.MD) []string {
+	keys := make([]string, 0, len(md))
+	for key := range md {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
 func (s *Server) SetReloadFunc(fn func(context.Context) (reloadReport, error)) {
 	s.reloadMu.Lock()
 	defer s.reloadMu.Unlock()
@@ -193,14 +211,44 @@ func New(log *slog.Logger) (*Server, error) {
 		)
 	}
 
-	go s.watchGlobalSettings()
-	go s.runDiscoveryScanner()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				s.log.WarnContext(context.Background(), "daemon.global_settings.watch_panicked",
+					"component", "daemon",
+					"panic", r,
+				)
+			}
+		}()
+		s.watchGlobalSettings()
+	}()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				s.log.WarnContext(context.Background(), "daemon.discovery_scanner.panicked",
+					"component", "daemon",
+					"panic", r,
+				)
+			}
+		}()
+		s.runDiscoveryScanner()
+	}()
 
 	if home, err := os.UserHomeDir(); err == nil {
 		sessionsDir := filepath.Join(home, ".claude", "sessions")
 		if w, err := bridge.Start(sessionsDir); err == nil {
 			s.bridgeWatcher = w
-			go s.runBridgeWatcher(w)
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						s.log.WarnContext(context.Background(), "daemon.bridge_watcher.panicked",
+							"component", "daemon",
+							"panic", r,
+						)
+					}
+				}()
+				s.runBridgeWatcher(w)
+			}()
 			s.log.LogAttrs(context.Background(), slog.LevelInfo, "bridge watcher started",
 				slog.String("dir", sessionsDir),
 			)
@@ -367,6 +415,8 @@ func (s *Server) SubscribeRegistry(_ *clydev1.SubscribeRegistryRequest, stream c
 }
 
 func (s *Server) GetProviderStats(ctx context.Context, _ *clydev1.GetProviderStatsRequest) (*clydev1.GetProviderStatsResponse, error) {
+	peerInfo, _ := peer.FromContext(ctx)
+	incomingMD, _ := metadata.FromIncomingContext(ctx)
 	resp := &clydev1.GetProviderStatsResponse{
 		Providers:    s.providerStats.snapshot(),
 		LoadedAtUnix: s.providerStats.loadedAtUnix(),
@@ -374,6 +424,8 @@ func (s *Server) GetProviderStats(ctx context.Context, _ *clydev1.GetProviderSta
 	s.log.DebugContext(ctx, "provider_stats.snapshot_served",
 		"component", "daemon",
 		"providers", len(resp.Providers),
+		"peer_addr", daemonPeerAddr(peerInfo),
+		"metadata_keys", daemonMetadataKeys(incomingMD),
 	)
 	return resp, nil
 }
@@ -427,6 +479,8 @@ func (s *Server) RenameSession(ctx context.Context, req *clydev1.RenameSessionRe
 // Claude transcripts, agent logs, and per-session output style artifacts,
 // then broadcasts SESSION_DELETED so dashboards prune the row immediately.
 func (s *Server) DeleteSession(ctx context.Context, req *clydev1.DeleteSessionRequest) (*clydev1.DeleteSessionResponse, error) {
+	peerInfo, _ := peer.FromContext(ctx)
+	incomingMD, _ := metadata.FromIncomingContext(ctx)
 	if req.Name == "" {
 		return nil, status.Error(codes.InvalidArgument, "name is required")
 	}
@@ -445,20 +499,22 @@ func (s *Server) DeleteSession(ctx context.Context, req *clydev1.DeleteSessionRe
 		Session:   sess,
 		ClydeRoot: daemonProjectClydeRootForSession(sess),
 	}); err != nil {
-		s.log.Warn("daemon.session_delete.provider_artifacts_failed",
+		s.log.WarnContext(ctx, "daemon.session_delete.provider_artifacts_failed",
 			"component", "daemon",
 			"subcomponent", "sessions",
 			"session", sess.Name,
 			"provider", sess.ProviderID(),
+			"peer_addr", daemonPeerAddr(peerInfo),
 			"err", err,
 		)
 	}
 	if sess.Metadata.HasCustomOutputStyle {
 		if err := outputstyle.DeleteCustomStyleFile(config.GlobalOutputStyleRoot(), sess.Name); err != nil {
-			s.log.Warn("daemon.session_delete.output_style_failed",
+			s.log.WarnContext(ctx, "daemon.session_delete.output_style_failed",
 				"component", "daemon",
 				"subcomponent", "sessions",
 				"session", sess.Name,
+				"peer_addr", daemonPeerAddr(peerInfo),
 				"err", err)
 		}
 	}
@@ -472,6 +528,8 @@ func (s *Server) DeleteSession(ctx context.Context, req *clydev1.DeleteSessionRe
 	})
 	s.log.LogAttrs(ctx, slog.LevelInfo, "session deleted via RPC",
 		slog.String("name", req.Name),
+		slog.String("peer_addr", daemonPeerAddr(peerInfo)),
+		slog.Any("metadata_keys", daemonMetadataKeys(incomingMD)),
 	)
 	return &clydev1.DeleteSessionResponse{}, nil
 }
@@ -685,8 +743,14 @@ type hookEventPayload struct {
 
 // HookEvent processes a Claude Code hook event forwarded from a wrapper process.
 func (s *Server) HookEvent(ctx context.Context, req *clydev1.HookEventRequest) (*clydev1.HookEventResponse, error) {
+	_, _ = peer.FromContext(ctx)
+
 	var payload hookEventPayload
 	if err := json.Unmarshal(req.RawJson, &payload); err != nil {
+		s.log.WarnContext(ctx, "daemon.hook_event.decode_failed",
+			"component", "daemon",
+			"err", err,
+		)
 		return nil, fmt.Errorf("decode hook event payload: %w", err)
 	}
 
@@ -762,16 +826,33 @@ func (s *Server) writeSettingsJSON(wrapperID, model, effortLevel string) (string
 
 	data, err := json.MarshalIndent(globalCopy, "", "  ")
 	if err != nil {
+		s.log.Warn("daemon.settings.marshal_failed",
+			"component", "daemon",
+			"wrapper_id", wrapperID,
+			"err", err,
+		)
 		return "", fmt.Errorf("failed to marshal settings: %w", err)
 	}
 
 	sessionDir := config.SessionRuntimeDir(wrapperID)
 	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+		s.log.Warn("daemon.settings.session_dir_create_failed",
+			"component", "daemon",
+			"wrapper_id", wrapperID,
+			"path", sessionDir,
+			"err", err,
+		)
 		return "", fmt.Errorf("failed to create session dir: %w", err)
 	}
 
 	settingsPath := filepath.Join(sessionDir, "settings.json")
 	if err := os.WriteFile(settingsPath, data, 0o600); err != nil {
+		s.log.Warn("daemon.settings.write_failed",
+			"component", "daemon",
+			"wrapper_id", wrapperID,
+			"path", settingsPath,
+			"err", err,
+		)
 		return "", fmt.Errorf("failed to write settings.json: %w", err)
 	}
 
@@ -888,7 +969,7 @@ func (s *Server) activeSessionCount() int {
 // to this process until they finish; new clients connect to the
 // replacement once it has rebound the runtime socket.
 func (s *Server) ReloadDaemon(ctx context.Context, req *clydev1.ReloadDaemonRequest) (*clydev1.ReloadDaemonResponse, error) {
-	start := time.Now()
+	start := daemonNow()
 	s.reloadMu.Lock()
 	fn := s.reloadFn
 	s.reloadMu.Unlock()
@@ -931,11 +1012,21 @@ func (s *Server) loadGlobalSettings() error {
 			s.mu.Unlock()
 			return nil
 		}
+		s.log.WarnContext(context.Background(), "daemon.global_settings.read_failed",
+			"component", "daemon",
+			"path", path,
+			"err", err,
+		)
 		return fmt.Errorf("failed to read global settings: %w", err)
 	}
 
 	var settings map[string]json.RawMessage
 	if err := json.Unmarshal(data, &settings); err != nil {
+		s.log.Warn("daemon.global_settings.parse_failed",
+			"component", "daemon",
+			"path", path,
+			"err", err,
+		)
 		return fmt.Errorf("failed to parse global settings: %w", err)
 	}
 
@@ -1074,7 +1165,9 @@ func (s *Server) sessionIsActive(sessionName string) bool {
 }
 
 func (s *Server) ListSessions(ctx context.Context, _ *clydev1.ListSessionsRequest) (*clydev1.ListSessionsResponse, error) {
-	started := time.Now()
+	peerInfo, _ := peer.FromContext(ctx)
+	incomingMD, _ := metadata.FromIncomingContext(ctx)
+	started := daemonNow()
 	store, err := session.NewGlobalFileStore()
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "store init: %v", err)
@@ -1091,19 +1184,23 @@ func (s *Server) ListSessions(ctx context.Context, _ *clydev1.ListSessionsReques
 	if cfg, err := config.LoadGlobalOrDefault(); err == nil {
 		globalRC = cfg.Defaults.RemoteControl
 	}
-	s.log.Debug("daemon.sessions.list.completed",
+	s.log.DebugContext(ctx, "daemon.sessions.list.completed",
 		"component", "daemon",
 		"subcomponent", "sessions",
 		"duration_ms", time.Since(started).Milliseconds(),
-		"sessions_total", len(out))
+		"sessions_total", len(out),
+		"peer_addr", daemonPeerAddr(peerInfo),
+		"metadata_keys", daemonMetadataKeys(incomingMD))
 	return &clydev1.ListSessionsResponse{Sessions: out, GlobalRemoteControl: globalRC}, nil
 }
 
 func (s *Server) GetSessionDetail(ctx context.Context, req *clydev1.GetSessionDetailRequest) (*clydev1.GetSessionDetailResponse, error) {
+	peerInfo, _ := peer.FromContext(ctx)
+	incomingMD, _ := metadata.FromIncomingContext(ctx)
 	if req.GetSessionName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "session_name is required")
 	}
-	started := time.Now()
+	started := daemonNow()
 	store, err := session.NewGlobalFileStore()
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "store init: %v", err)
@@ -1116,20 +1213,24 @@ func (s *Server) GetSessionDetail(ctx context.Context, req *clydev1.GetSessionDe
 		return nil, status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
 	}
 	detail := s.sessionDetail(store, sess)
-	s.log.Debug("daemon.session_detail.completed",
+	s.log.DebugContext(ctx, "daemon.session_detail.completed",
 		"component", "daemon",
 		"subcomponent", "sessions",
 		"duration_ms", time.Since(started).Milliseconds(),
 		"session", sess.Name,
-		"messages_total", detail.GetTotalMessages())
+		"messages_total", detail.GetTotalMessages(),
+		"peer_addr", daemonPeerAddr(peerInfo),
+		"metadata_keys", daemonMetadataKeys(incomingMD))
 	return detail, nil
 }
 
 func (s *Server) GetSessionExportStats(ctx context.Context, req *clydev1.GetSessionExportStatsRequest) (*clydev1.GetSessionExportStatsResponse, error) {
+	peerInfo, _ := peer.FromContext(ctx)
+	incomingMD, _ := metadata.FromIncomingContext(ctx)
 	if req.GetSessionName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "session_name is required")
 	}
-	started := time.Now()
+	started := daemonNow()
 	store, err := session.NewGlobalFileStore()
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "store init: %v", err)
@@ -1157,21 +1258,25 @@ func (s *Server) GetSessionExportStats(ctx context.Context, req *clydev1.GetSess
 		Compactions:           int32(stats.Compactions),
 		TranscriptSizeBytes:   stats.TranscriptSizeBytes,
 	}
-	s.log.Debug("daemon.session_export_stats.completed",
+	s.log.DebugContext(ctx, "daemon.session_export_stats.completed",
 		"component", "daemon",
 		"subcomponent", "sessions",
 		"duration_ms", time.Since(started).Milliseconds(),
 		"session", sess.Name,
 		"visible_messages", resp.GetVisibleMessages(),
-		"compactions", resp.GetCompactions())
+		"compactions", resp.GetCompactions(),
+		"peer_addr", daemonPeerAddr(peerInfo),
+		"metadata_keys", daemonMetadataKeys(incomingMD))
 	return resp, nil
 }
 
 func (s *Server) ExportSession(ctx context.Context, req *clydev1.ExportSessionRequest) (*clydev1.ExportSessionResponse, error) {
+	peerInfo, _ := peer.FromContext(ctx)
+	incomingMD, _ := metadata.FromIncomingContext(ctx)
 	if req.GetSessionName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "session_name is required")
 	}
-	started := time.Now()
+	started := daemonNow()
 	store, err := session.NewGlobalFileStore()
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "store init: %v", err)
@@ -1190,14 +1295,16 @@ func (s *Server) ExportSession(ctx context.Context, req *clydev1.ExportSessionRe
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "build export: %v", err)
 	}
-	s.log.Info("daemon.session_export.completed",
+	s.log.InfoContext(ctx, "daemon.session_export.completed",
 		"component", "daemon",
 		"subcomponent", "sessions",
 		"duration_ms", time.Since(started).Milliseconds(),
 		"session", sess.Name,
 		"format", req.GetFormat().String(),
 		"history_start", req.GetHistoryStart(),
-		"bytes", len(body))
+		"bytes", len(body),
+		"peer_addr", daemonPeerAddr(peerInfo),
+		"metadata_keys", daemonMetadataKeys(incomingMD))
 	return &clydev1.ExportSessionResponse{Body: body}, nil
 }
 
@@ -1211,7 +1318,7 @@ func (s *Server) contextStateForSession(sess *session.Session) sessionContextSta
 	needsRefresh := false
 	switch {
 	case state.Refreshing:
-	case !state.RetryAfter.IsZero() && time.Now().Before(state.RetryAfter):
+	case !state.RetryAfter.IsZero() && daemonNow().Before(state.RetryAfter):
 	case !state.Loaded:
 		needsRefresh = true
 	case transcriptNewerThan(sess.Metadata.ProviderTranscriptPath(), state.Usage.CapturedAt):
@@ -1223,7 +1330,18 @@ func (s *Server) contextStateForSession(sess *session.Session) sessionContextSta
 			state.Status = "loading..."
 		}
 		s.contextStates[sess.Name] = state
-		go s.refreshContextUsage(sess)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					s.log.WarnContext(context.Background(), "daemon.context_usage.refresh_panicked",
+						"component", "daemon",
+						"session", sess.Name,
+						"panic", r,
+					)
+				}
+			}()
+			s.refreshContextUsage(sess)
+		}()
 	}
 	state = s.contextStates[sess.Name]
 	s.contextMu.Unlock()
@@ -1283,10 +1401,10 @@ func (s *Server) refreshContextUsage(sess *session.Session) {
 		if !state.Loaded {
 			state.Status = "failed; retrying"
 		}
-		state.RetryAfter = time.Now().Add(30 * time.Second)
+		state.RetryAfter = daemonNow().Add(30 * time.Second)
 		s.contextStates[sess.Name] = state
 		s.contextMu.Unlock()
-		s.log.Warn("daemon.context_usage.refresh.failed",
+		s.log.WarnContext(ctx, "daemon.context_usage.refresh.failed",
 			"component", "daemon",
 			"subcomponent", "context_usage",
 			"session", sess.Name,
@@ -1300,14 +1418,14 @@ func (s *Server) refreshContextUsage(sess *session.Session) {
 		state.RetryAfter = time.Time{}
 		s.contextStates[sess.Name] = state
 		s.contextMu.Unlock()
-		s.log.Info("daemon.context_usage.refresh.completed",
+		s.log.InfoContext(ctx, "daemon.context_usage.refresh.completed",
 			"component", "daemon",
 			"subcomponent", "context_usage",
 			"session", sess.Name,
 			"session_id", sess.Metadata.ProviderSessionID(),
 			"source", usage.Source,
-			"total_tokens", usage.TotalTokens,
-			"max_tokens", usage.MaxTokens)
+			"context_total", usage.TotalTokens,
+			"context_limit", usage.MaxTokens)
 	}
 
 	store, storeErr := session.NewGlobalFileStore()
@@ -1677,6 +1795,8 @@ func protoConfigControlType(kind config.ControlType) clydev1.ConfigControlType {
 // control settings, then launches a daemon-owned headless worker that runs
 // Claude with --remote-control against the pre-assigned session UUID.
 func (s *Server) StartRemoteSession(ctx context.Context, req *clydev1.StartRemoteSessionRequest) (*clydev1.StartRemoteSessionResponse, error) {
+	peerInfo, _ := peer.FromContext(ctx)
+	incomingMD, _ := metadata.FromIncomingContext(ctx)
 	store, err := session.NewGlobalFileStore()
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "store init: %v", err)
@@ -1732,14 +1852,28 @@ func (s *Server) StartRemoteSession(ctx context.Context, req *clydev1.StartRemot
 	s.remoteMu.Lock()
 	s.remoteWorkers[name] = worker
 	s.remoteMu.Unlock()
-	go s.waitRemoteWorker(worker)
-	s.log.Info("daemon.remote_session.started",
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				s.log.WarnContext(context.Background(), "daemon.remote_session.wait_panicked",
+					"component", "daemon",
+					"session", worker.sessionName,
+					"session_id", worker.sessionID,
+					"panic", r,
+				)
+			}
+		}()
+		s.waitRemoteWorker(worker)
+	}()
+	s.log.InfoContext(ctx, "daemon.remote_session.started",
 		"component", "daemon",
 		"session", name,
 		"session_id", sessionID,
 		"basedir", basedir,
 		"incognito", req.GetIncognito(),
 		"pid", cmd.Process.Pid,
+		"peer_addr", daemonPeerAddr(peerInfo),
+		"metadata_keys", daemonMetadataKeys(incomingMD),
 	)
 	return &clydev1.StartRemoteSessionResponse{
 		SessionName: name,
@@ -1929,7 +2063,7 @@ func (s *Server) SendToSession(_ context.Context, req *clydev1.SendToSessionRequ
 	if err != nil {
 		return &clydev1.SendToSessionResponse{Delivered: false}, nil
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	payload := req.Text
 	if !strings.HasSuffix(payload, "\n") {
 		payload += "\n"
@@ -1953,7 +2087,7 @@ func nextRemoteSessionName(store *session.FileStore) (string, error) {
 		}
 		taken[sess.Name] = true
 	}
-	base := "chat-" + time.Now().UTC().Format("20060102-150405")
+	base := "chat-" + daemonNow().UTC().Format("20060102-150405")
 	name := session.UniqueName(base, taken)
 	if name == "" {
 		return "", fmt.Errorf("could not allocate a unique session name")
@@ -2026,14 +2160,18 @@ func (s *Server) waitRemoteWorker(worker *remoteWorker) {
 }
 
 func (s *Server) ProbeContextUsage(ctx context.Context, req *clydev1.ProbeContextUsageRequest) (*clydev1.ProbeContextUsageResponse, error) {
+	peerInfo, _ := peer.FromContext(ctx)
+	incomingMD, _ := metadata.FromIncomingContext(ctx)
 	if req.GetSessionName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "session_name is required")
 	}
-	started := time.Now()
-	s.log.Info("daemon.context_usage.probe.started",
+	started := daemonNow()
+	s.log.InfoContext(ctx, "daemon.context_usage.probe.started",
 		"component", "daemon",
 		"subcomponent", "context_usage",
-		"session", req.GetSessionName())
+		"session", req.GetSessionName(),
+		"peer_addr", daemonPeerAddr(peerInfo),
+		"metadata_keys", daemonMetadataKeys(incomingMD))
 	store, err := session.NewGlobalFileStore()
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "store init: %v", err)
@@ -2052,7 +2190,7 @@ func (s *Server) ProbeContextUsage(ctx context.Context, req *clydev1.ProbeContex
 		ForkSession: true,
 	})
 	if err != nil {
-		s.log.Warn("daemon.context_usage.probe.failed",
+		s.log.WarnContext(ctx, "daemon.context_usage.probe.failed",
 			"component", "daemon",
 			"subcomponent", "context_usage",
 			"session", sess.Name,
@@ -2078,14 +2216,14 @@ func (s *Server) ProbeContextUsage(ctx context.Context, req *clydev1.ProbeContex
 			IsDeferred: cat.IsDeferred,
 		})
 	}
-	s.log.Info("daemon.context_usage.probe.completed",
+	s.log.InfoContext(ctx, "daemon.context_usage.probe.completed",
 		"component", "daemon",
 		"subcomponent", "context_usage",
 		"session", sess.Name,
 		"session_id", sess.Metadata.ProviderSessionID(),
 		"duration_ms", time.Since(started).Milliseconds(),
-		"total_tokens", usage.TotalTokens,
-		"max_tokens", usage.MaxTokens,
+		"context_total", usage.TotalTokens,
+		"context_limit", usage.MaxTokens,
 		"percentage", usage.Percentage)
 	return resp, nil
 }
@@ -2125,7 +2263,7 @@ func (s *Server) runCompact(
 	if req.GetSessionName() == "" {
 		return status.Error(codes.InvalidArgument, "session_name is required")
 	}
-	s.log.Debug("daemon.compact.run.begin",
+	s.log.DebugContext(ctx, "daemon.compact.run.begin",
 		"component", "daemon",
 		"subcomponent", "compact",
 		"session", req.GetSessionName(),
@@ -2256,7 +2394,7 @@ func (s *Server) runCompact(
 		PreparedSlice:          slice,
 	}, onIteration)
 	if runErr != nil {
-		s.log.Error("daemon.compact.run_failed",
+		s.log.ErrorContext(ctx, "daemon.compact.run_failed",
 			"component", "daemon",
 			"subcomponent", "compact",
 			"session", req.GetSessionName(),
@@ -2296,7 +2434,7 @@ func (s *Server) runCompact(
 			return err
 		}
 	}
-	s.log.Info("daemon.compact.run_completed",
+	s.log.InfoContext(ctx, "daemon.compact.run_completed",
 		"component", "daemon",
 		"subcomponent", "compact",
 		"session", req.GetSessionName(),
@@ -2309,13 +2447,17 @@ func (s *Server) runCompact(
 }
 
 func (s *Server) CompactUndo(ctx context.Context, req *clydev1.CompactUndoRequest) (*clydev1.CompactUndoResponse, error) {
+	peerInfo, _ := peer.FromContext(ctx)
+	incomingMD, _ := metadata.FromIncomingContext(ctx)
 	if req.GetSessionName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "session_name is required")
 	}
-	s.log.Info("daemon.compact.undo.started",
+	s.log.InfoContext(ctx, "daemon.compact.undo.started",
 		"component", "daemon",
 		"subcomponent", "compact",
 		"session", req.GetSessionName(),
+		"peer_addr", daemonPeerAddr(peerInfo),
+		"metadata_keys", daemonMetadataKeys(incomingMD),
 	)
 	store, err := session.NewGlobalFileStore()
 	if err != nil {
@@ -2334,7 +2476,7 @@ func (s *Server) CompactUndo(ctx context.Context, req *clydev1.CompactUndoReques
 	}
 	entry, undoErr := compactengine.Undo(sess.Metadata.ProviderSessionID(), path)
 	if undoErr != nil {
-		s.log.Error("daemon.compact.undo_failed",
+		s.log.ErrorContext(ctx, "daemon.compact.undo_failed",
 			"component", "daemon",
 			"subcomponent", "compact",
 			"session", req.GetSessionName(),
@@ -2361,7 +2503,7 @@ func (s *Server) CompactUndo(ctx context.Context, req *clydev1.CompactUndoReques
 		PreApplyOffset: entry.PreApplyOffset,
 		PostUndoBytes:  postBytes,
 	}
-	s.log.Info("daemon.compact.undo_completed",
+	s.log.InfoContext(ctx, "daemon.compact.undo_completed",
 		"component", "daemon",
 		"subcomponent", "compact",
 		"session", req.GetSessionName(),

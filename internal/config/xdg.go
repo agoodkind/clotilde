@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 )
@@ -54,6 +55,13 @@ func SessionRuntimeDir(wrapperID string) string {
 func EnsureRuntimeDir() error {
 	dir := RuntimeDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
+		log := slog.Default().With("concern", "process.daemon.config")
+		log.Warn("config.runtime_dir.create_failed",
+			"component", "config",
+			"subcomponent", "runtime_dir",
+			"path", dir,
+			"err", err,
+		)
 		return fmt.Errorf("failed to create runtime dir %s: %w", dir, err)
 	}
 	return nil

@@ -143,7 +143,7 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 	if targetRaw != "" {
 		n, perr := ParseTokenCount(targetRaw)
 		if perr != nil {
-			cliCompactLog.Logger().Warn("cli.compact.invalid_target", "session", name, "target_raw", targetRaw, slog.Any("err", perr))
+			slog.WarnContext(cmd.Context(), "cli.compact.invalid_target", "session", name, "target_raw", targetRaw, "err", perr)
 			return fmt.Errorf("invalid target %q: %w", targetRaw, perr)
 		}
 		target = n

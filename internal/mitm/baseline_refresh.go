@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 )
 
 type BaselineRefreshOptions struct {
@@ -32,7 +31,6 @@ type BaselineRefreshOutcome struct {
 }
 
 func RefreshBaseline(ctx context.Context, opts BaselineRefreshOptions) (BaselineRefreshOutcome, error) {
-	_ = ctx
 	log := opts.Log
 	if log == nil {
 		log = slog.Default()
@@ -47,20 +45,31 @@ func RefreshBaseline(ctx context.Context, opts BaselineRefreshOptions) (Baseline
 	}
 	transcriptPath, err := ResolveTranscriptPath(captureRoot, upstream)
 	if err != nil {
+		log.WarnContext(ctx, "mitm.baseline.transcript_resolve_failed",
+			"component", "mitm",
+			"upstream", upstream,
+			"capture_root", captureRoot,
+			"err", err,
+		)
 		return BaselineRefreshOutcome{}, err
 	}
 	baselinePath, useV2 := resolveBaselinePath(opts)
 	if err := os.MkdirAll(filepath.Dir(baselinePath), 0o755); err != nil {
+		log.WarnContext(ctx, "mitm.baseline.mkdir_failed",
+			"component", "mitm",
+			"path", filepath.Dir(baselinePath),
+			"err", err,
+		)
 		return BaselineRefreshOutcome{}, fmt.Errorf("baseline refresh mkdir: %w", err)
 	}
 
-	versionTag := "live-" + time.Now().UTC().Format("20060102T150405")
+	versionTag := "live-" + currentTime().UTC().Format("20060102T150405")
 	outcome := BaselineRefreshOutcome{
 		DriftOutcome: DriftOutcome{
 			Upstream:       upstream,
 			ReferencePath:  baselinePath,
 			TranscriptPath: transcriptPath,
-			StartedAt:      time.Now().UTC(),
+			StartedAt:      currentTime().UTC(),
 		},
 		BaselinePath: baselinePath,
 	}
@@ -233,6 +242,11 @@ func writeSnapshotV2Atomic(snap SnapshotV2, baselinePath string) error {
 	dir := filepath.Dir(baselinePath)
 	tmpDir, err := os.MkdirTemp(dir, "baseline-v2-")
 	if err != nil {
+		slog.Warn("mitm.baseline.v2_temp_dir_failed",
+			"component", "mitm",
+			"dir", dir,
+			"err", err,
+		)
 		return fmt.Errorf("baseline temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
@@ -247,6 +261,11 @@ func writeSnapshotV1Atomic(snap Snapshot, baselinePath string) error {
 	dir := filepath.Dir(baselinePath)
 	tmpDir, err := os.MkdirTemp(dir, "baseline-v1-")
 	if err != nil {
+		slog.Warn("mitm.baseline.v1_temp_dir_failed",
+			"component", "mitm",
+			"dir", dir,
+			"err", err,
+		)
 		return fmt.Errorf("baseline temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)

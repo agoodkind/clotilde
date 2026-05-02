@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -63,6 +64,13 @@ func EnsureStarted(cfg config.MITMConfig, log *slog.Logger) (*Proxy, error) {
 	}
 	p.server = &http.Server{Handler: http.HandlerFunc(p.handle)}
 	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				p.log.Error("mitm.proxy.serve_panic",
+					"err", fmt.Errorf("panic: %v", recovered),
+				)
+			}
+		}()
 		if err := p.server.Serve(ln); err != nil && err != http.ErrServerClosed {
 			p.log.Error("mitm.proxy.serve_failed", "err", err)
 		}
@@ -87,7 +95,7 @@ func (p *Proxy) config() config.MITMConfig {
 func (p *Proxy) ClaudeBaseURL() string { return p.base }
 
 func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
-	started := time.Now()
+	started := currentTime()
 	cfg := p.config()
 	if r.Method == http.MethodConnect {
 		p.handleConnect(w, r)
@@ -125,7 +133,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Forward upstream response headers, but drop hop-by-hop and
 	// length-related headers that the http.Server will recompute.
@@ -163,8 +171,8 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	upstreamURLForRecord := upstream + r.URL.RequestURI()
 	requestEvent := map[string]any{
 		"kind":            string(RecordHTTPRequest),
-		"t":               time.Now().Unix(),
-		"ts":              time.Now().UTC().Format(time.RFC3339Nano),
+		"t":               currentTime().Unix(),
+		"ts":              currentTime().UTC().Format(time.RFC3339Nano),
 		"provider":        provider,
 		"method":          r.Method,
 		"url":             upstreamURLForRecord,
@@ -181,8 +189,8 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	event := map[string]any{
 		"kind":             string(RecordHTTPResponse),
-		"t":                time.Now().Unix(),
-		"ts":               time.Now().UTC().Format(time.RFC3339Nano),
+		"t":                currentTime().Unix(),
+		"ts":               currentTime().UTC().Format(time.RFC3339Nano),
 		"provider":         provider,
 		"method":           r.Method,
 		"url":              upstreamURLForRecord,
@@ -318,7 +326,7 @@ func appendCapture(dir string, event map[string]any) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	raw, err := json.Marshal(event)
 	if err != nil {
 		return err

@@ -28,7 +28,7 @@ func decodeForCapture(raw []byte, contentEncoding string) ([]byte, bool) {
 		if err != nil {
 			return raw, false
 		}
-		defer gr.Close()
+		defer func() { _ = gr.Close() }()
 		out, err := io.ReadAll(gr)
 		if err != nil {
 			return raw, false
@@ -38,14 +38,14 @@ func decodeForCapture(raw []byte, contentEncoding string) ([]byte, bool) {
 		// Some servers send raw RFC 1951 deflate; others send RFC 1950 zlib.
 		zr, err := zlib.NewReader(bytes.NewReader(raw))
 		if err == nil {
-			defer zr.Close()
+			defer func() { _ = zr.Close() }()
 			out, rerr := io.ReadAll(zr)
 			if rerr == nil {
 				return out, true
 			}
 		}
 		fr := flate.NewReader(bytes.NewReader(raw))
-		defer fr.Close()
+		defer func() { _ = fr.Close() }()
 		out, err := io.ReadAll(fr)
 		if err != nil {
 			return raw, false
@@ -56,7 +56,7 @@ func decodeForCapture(raw []byte, contentEncoding string) ([]byte, bool) {
 		if err != nil {
 			return raw, false
 		}
-		defer dec.Close()
+		defer func() { dec.Close() }()
 		out, err := io.ReadAll(dec)
 		if err != nil {
 			return raw, false

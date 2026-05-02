@@ -2,6 +2,7 @@ package outputstyle
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 )
@@ -38,6 +39,11 @@ func DeleteCustomStyleFile(clydeRoot, sessionName string) error {
 
 	// Delete file
 	if err := os.Remove(stylePath); err != nil {
+		slog.Warn("outputstyle.delete_failed",
+			"component", "outputstyle",
+			"path", stylePath,
+			"err", err,
+		)
 		return fmt.Errorf("failed to delete output style file: %w", err)
 	}
 

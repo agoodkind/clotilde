@@ -1,7 +1,9 @@
 package mitm
 
 import (
+	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -29,7 +31,7 @@ import (
 // session because we deliberately do not MITM-decrypt at this
 // layer.
 func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
-	started := time.Now()
+	started := currentTime()
 	target := strings.TrimSpace(r.RequestURI)
 	if target == "" {
 		target = strings.TrimSpace(r.Host)
@@ -59,7 +61,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "upstream dial failed", http.StatusBadGateway)
 		return
 	}
-	defer upstream.Close()
+	defer func() { _ = upstream.Close() }()
 
 	clientConn, bufrw, err := hijacker.Hijack()
 	if err != nil {
@@ -67,7 +69,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		_ = upstream.Close()
 		return
 	}
-	defer clientConn.Close()
+	defer func() { _ = clientConn.Close() }()
 
 	// Tell the client the tunnel is established. The client will
 	// follow with TLS handshake + websocket frames.
@@ -102,6 +104,14 @@ func spliceConnections(client, upstream net.Conn) (bytesUp, bytesDown int64) {
 	wg.Add(2)
 	var upN, downN int64
 	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				slog.Error("mitm.connect.copy_up_panic",
+					"component", "mitm",
+					"err", fmt.Errorf("panic: %v", recovered),
+				)
+			}
+		}()
 		defer wg.Done()
 		n, _ := io.Copy(upstream, client)
 		upN = n
@@ -112,6 +122,14 @@ func spliceConnections(client, upstream net.Conn) (bytesUp, bytesDown int64) {
 		}
 	}()
 	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				slog.Error("mitm.connect.copy_down_panic",
+					"component", "mitm",
+					"err", fmt.Errorf("panic: %v", recovered),
+				)
+			}
+		}()
 		defer wg.Done()
 		n, _ := io.Copy(client, upstream)
 		downN = n
