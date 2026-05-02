@@ -76,15 +76,19 @@ func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
 // Cached upstream websocket sessions are closed so connections do not
 // leak across reload boundaries.
 func (s *Server) Shutdown(ctx context.Context) error {
-	if s.codexProvider != nil {
-		s.codexProvider.CloseAllSessions("shutdown")
-	}
 	if s.httpSrv == nil {
+		if s.codexProvider != nil {
+			s.codexProvider.CloseAllSessions("shutdown")
+		}
 		return nil
 	}
 	s.httpSrv.SetKeepAlivesEnabled(false)
 	s.closeTrackedConns(http.StateIdle)
-	return s.httpSrv.Shutdown(ctx)
+	err := s.httpSrv.Shutdown(ctx)
+	if s.codexProvider != nil {
+		s.codexProvider.CloseAllSessions("shutdown")
+	}
+	return err
 }
 
 // Close force-closes all adapter HTTP connections. It is used after a
