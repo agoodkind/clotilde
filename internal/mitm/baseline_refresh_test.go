@@ -1,6 +1,7 @@
 package mitm
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -62,7 +63,7 @@ func TestRefreshBaselineInitializesLocalV2Baseline(t *testing.T) {
 		},
 	})
 
-	outcome, err := RefreshBaseline(nil, BaselineRefreshOptions{
+	outcome, err := RefreshBaseline(context.TODO(), BaselineRefreshOptions{
 		Upstream:     "claude-code",
 		CaptureRoot:  root,
 		BaselineRoot: filepath.Join(root, "baselines"),

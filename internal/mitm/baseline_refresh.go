@@ -49,10 +49,7 @@ func RefreshBaseline(ctx context.Context, opts BaselineRefreshOptions) (Baseline
 	if err != nil {
 		return BaselineRefreshOutcome{}, err
 	}
-	baselinePath, useV2, err := resolveBaselinePath(opts)
-	if err != nil {
-		return BaselineRefreshOutcome{}, err
-	}
+	baselinePath, useV2 := resolveBaselinePath(opts)
 	if err := os.MkdirAll(filepath.Dir(baselinePath), 0o755); err != nil {
 		return BaselineRefreshOutcome{}, fmt.Errorf("baseline refresh mkdir: %w", err)
 	}
@@ -217,19 +214,19 @@ func DefaultCaptureRoot() string {
 	return filepath.Join(home, ".local", "state", "clyde", "mitm")
 }
 
-func resolveBaselinePath(opts BaselineRefreshOptions) (string, bool, error) {
+func resolveBaselinePath(opts BaselineRefreshOptions) (string, bool) {
 	if path := expandHome(strings.TrimSpace(opts.Reference)); path != "" {
-		return path, isV2SnapshotFile(path) || strings.HasSuffix(path, "reference-v2.toml"), nil
+		return path, isV2SnapshotFile(path) || strings.HasSuffix(path, "reference-v2.toml")
 	}
 	root := strings.TrimSpace(opts.BaselineRoot)
 	if root == "" {
 		root = DefaultBaselineRoot()
 	}
 	if existing, err := FindBaselineReference(root, opts.Upstream); err == nil {
-		return existing, isV2SnapshotFile(existing) || strings.HasSuffix(existing, "reference-v2.toml"), nil
+		return existing, isV2SnapshotFile(existing) || strings.HasSuffix(existing, "reference-v2.toml")
 	}
 	useV2 := DefaultUseV2Baseline(opts.Upstream)
-	return BaselineReferencePath(root, opts.Upstream, useV2), useV2, nil
+	return BaselineReferencePath(root, opts.Upstream, useV2), useV2
 }
 
 func writeSnapshotV2Atomic(snap SnapshotV2, baselinePath string) error {

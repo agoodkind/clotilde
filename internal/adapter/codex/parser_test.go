@@ -74,6 +74,28 @@ func TestParseSSEMapsContextWindowFailureToTypedError(t *testing.T) {
 	}
 }
 
+func TestParseSSEDoesNotEmitCleanupChunkForContextWindowFailure(t *testing.T) {
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.reasoning_summary_text.delta",
+		`data: {"delta":"thinking"}`,
+		"",
+		"event: response.failed",
+		`data: {"type":"response.failed","error":{"message":"Your input exceeds the context window of this model. Please adjust your input and try again."}}`,
+		"",
+	}, "\n") + "\n")
+	chunks, _, err := parseSSEChunksForTest(stream)
+	if err == nil {
+		t.Fatalf("ParseSSE error = nil, want context window error")
+	}
+	var contextErr *ContextWindowError
+	if !errors.As(err, &contextErr) {
+		t.Fatalf("ParseSSE error type = %T, want ContextWindowError", err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("chunks len=%d want 1 reasoning delta only", len(chunks))
+	}
+}
+
 func TestParseSSECapturesCompletedOutputItems(t *testing.T) {
 	stream := strings.NewReader(strings.Join([]string{
 		"event: response.output_item.done",

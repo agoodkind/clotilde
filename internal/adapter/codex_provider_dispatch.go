@@ -66,6 +66,15 @@ func (s *Server) dispatchCodexProviderStream(
 	result, runErr := s.codexProvider.Execute(ctx, resolvedReq, writer)
 	if runErr != nil {
 		status, errorBody := codexProviderErrorResponse(runErr)
+		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.codex.provider_error_mapped",
+			slog.String("request_id", reqID),
+			slog.String("alias", model.Alias),
+			slog.Int("status", status),
+			slog.String("error_type", errorBody.Type),
+			slog.String("error_code", errorBody.Code),
+			slog.String("error_param", errorBody.Param),
+			slog.Bool("stream_headers_written", writer.headersWritten),
+		)
 		adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
 			Stage:      adapterruntime.RequestStageFailed,
 			Provider:   "codex_direct",
@@ -162,6 +171,15 @@ func (s *Server) dispatchCodexProviderCollect(
 	result, runErr := s.codexProvider.Execute(ctx, resolvedReq, collector)
 	if runErr != nil {
 		status, errorBody := codexProviderErrorResponse(runErr)
+		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.codex.provider_error_mapped",
+			slog.String("request_id", reqID),
+			slog.String("alias", model.Alias),
+			slog.Int("status", status),
+			slog.String("error_type", errorBody.Type),
+			slog.String("error_code", errorBody.Code),
+			slog.String("error_param", errorBody.Param),
+			slog.Bool("stream_headers_written", false),
+		)
 		adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
 			Stage:      adapterruntime.RequestStageFailed,
 			Provider:   "codex_direct",
@@ -242,10 +260,10 @@ func codexProviderErrorResponse(err error) (int, ErrorBody) {
 	var contextErr *adaptercodex.ContextWindowError
 	if errors.As(err, &contextErr) {
 		return http.StatusBadRequest, ErrorBody{
-			Message: contextErr.Error(),
+			Message: "This model's maximum context length was exceeded. Please reduce the length of the messages.",
 			Type:    "invalid_request_error",
 			Code:    "context_length_exceeded",
-			Param:   "input",
+			Param:   "messages",
 		}
 	}
 	return http.StatusBadGateway, ErrorBody{

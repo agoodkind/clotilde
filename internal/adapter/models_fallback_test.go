@@ -270,8 +270,8 @@ func TestResolveRoutesClydeCodexAliases(t *testing.T) {
 	if m.ClaudeModel != "gpt-5.5" {
 		t.Fatalf("ClaudeModel = %q want gpt-5.5", m.ClaudeModel)
 	}
-	if m.Context != 1000000 {
-		t.Fatalf("Context = %d want 1000000", m.Context)
+	if m.Context != 272000 {
+		t.Fatalf("Context = %d want 272000", m.Context)
 	}
 	if effort != "high" {
 		t.Fatalf("effort = %q want high", effort)
@@ -438,7 +438,7 @@ func TestResolveModelRoutingMatrix(t *testing.T) {
 			reqEffort:   EffortMedium,
 			wantBackend: BackendCodex,
 			wantModel:   "gpt-5.5",
-			wantContext: 1000000,
+			wantContext: 272000,
 			wantEffort:  EffortMedium,
 		},
 		{
@@ -446,7 +446,7 @@ func TestResolveModelRoutingMatrix(t *testing.T) {
 			reqEffort:   EffortXHigh,
 			wantBackend: BackendCodex,
 			wantModel:   "gpt-5.5",
-			wantContext: 1000000,
+			wantContext: 272000,
 			wantEffort:  EffortXHigh,
 		},
 		{

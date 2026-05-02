@@ -448,7 +448,7 @@ func codexAliasContext(alias string) int {
 	key := normalizeCodexModelAlias(alias)
 	original := strings.ToLower(strings.TrimSpace(alias))
 	switch strings.ToLower(strings.TrimSpace(key)) {
-	case "gpt-5.4", "gpt-5.5":
+	case "gpt-5.4":
 		return 1000000
 	}
 	if strings.HasSuffix(original, "-1m") || strings.Contains(original, "-1m-") {
@@ -456,6 +456,9 @@ func codexAliasContext(alias string) int {
 		case "gpt-5.4", "gpt-5.5":
 			return 1000000
 		}
+	}
+	if strings.TrimSpace(key) == "gpt-5.5" {
+		return 272000
 	}
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(key)), "gpt-5.3") {
 		return 272000

@@ -16,7 +16,7 @@ func DefaultBaselineRoot() string {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join("mitm-baselines")
+		return "mitm-baselines"
 	}
 	return filepath.Join(home, ".local", "state", "clyde", "mitm-baselines")
 }

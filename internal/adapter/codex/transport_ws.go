@@ -162,7 +162,7 @@ func websocketMessageToSyntheticSSE(message []byte) ([]byte, error) {
 		if raw.Error != nil && strings.TrimSpace(raw.Error.Message) != "" {
 			msg = raw.Error.Message
 		}
-		return nil, fmt.Errorf("%s", msg)
+		return nil, codexResponseFailedError(msg)
 	}
 	var b bytes.Buffer
 	_, _ = fmt.Fprintf(&b, "event: %s\n", kind)

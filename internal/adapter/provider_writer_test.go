@@ -31,8 +31,11 @@ func TestCodexProviderErrorResponseMapsContextWindowError(t *testing.T) {
 	if status != http.StatusBadRequest {
 		t.Fatalf("status=%d want %d", status, http.StatusBadRequest)
 	}
-	if body.Type != "invalid_request_error" || body.Code != "context_length_exceeded" || body.Param != "input" {
+	if body.Type != "invalid_request_error" || body.Code != "context_length_exceeded" || body.Param != "messages" {
 		t.Fatalf("body=%+v", body)
+	}
+	if body.Message != "This model's maximum context length was exceeded. Please reduce the length of the messages." {
+		t.Fatalf("message=%q", body.Message)
 	}
 }
 

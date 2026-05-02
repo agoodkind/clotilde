@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -539,12 +540,15 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 				continue
 			}
 			if eventNameLocal == "response.failed" {
-				_ = emit(adapterrender.Event{Kind: adapterrender.EventReasoningFinished})
 				msg := "codex response failed"
 				if raw.Error != nil && raw.Error.Message != "" {
 					msg = raw.Error.Message
 				}
-				return out, codexResponseFailedError(msg)
+				err := codexResponseFailedError(msg)
+				if strings.TrimSpace(msg) != "" && !isContextWindowError(err) {
+					_ = emit(adapterrender.Event{Kind: adapterrender.EventReasoningFinished})
+				}
+				return out, err
 			}
 			continue
 		}
@@ -562,6 +566,14 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 	out.ReasoningSignaled = reasoningSignaled
 	out.ReasoningVisible = reasoningVisible
 	return out, nil
+}
+
+func isContextWindowError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var contextErr *ContextWindowError
+	return errors.As(err, &contextErr)
 }
 
 func codexResponseFailedError(message string) error {

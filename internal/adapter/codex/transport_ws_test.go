@@ -43,6 +43,17 @@ func mustMarshalTurnMetadataForTest(t *testing.T, metadata TurnMetadata) string 
 	return raw
 }
 
+func TestWebsocketMessageToSyntheticSSEMapsContextWindowError(t *testing.T) {
+	_, err := websocketMessageToSyntheticSSE([]byte(`{"type":"error","error":{"message":"Your input exceeds the context window of this model. Please adjust your input and try again."}}`))
+	if err == nil {
+		t.Fatalf("websocketMessageToSyntheticSSE error = nil, want context window error")
+	}
+	var contextErr *ContextWindowError
+	if !errors.As(err, &contextErr) {
+		t.Fatalf("websocketMessageToSyntheticSSE error type = %T, want ContextWindowError", err)
+	}
+}
+
 func TestResponseCreateRequestFromHTTPUsesResponseCreateShape(t *testing.T) {
 	req := HTTPTransportRequest{
 		Model:             "gpt-5.4",

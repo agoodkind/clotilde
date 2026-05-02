@@ -9,11 +9,6 @@ import (
 	"strings"
 )
 
-func readCaptureRecords(path string) ([]CaptureRecord, error) {
-	_, records, err := readCaptureRecordsRaw(path, "")
-	return records, err
-}
-
 func readCaptureRecordsRaw(path string, providerFilter string) ([][]byte, []CaptureRecord, error) {
 	f, err := os.Open(path)
 	if err != nil {
