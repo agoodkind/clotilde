@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             (unknown)
-// source: clyde/v1/daemon.proto
+// source: clyde/v1/daemon/service.proto
 
 package clydev1
 
@@ -1426,5 +1426,5 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 		},
 	},
-	Metadata: "clyde/v1/daemon.proto",
+	Metadata: "clyde/v1/daemon/service.proto",
 }

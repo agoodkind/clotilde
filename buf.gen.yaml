@@ -1,16 +1,11 @@
 version: v2
-managed:
-  enabled: true
-  override:
-    - file_option: go_package_prefix
-      value: goodkind.io/clyde/api
 plugins:
   - remote: buf.build/protocolbuffers/go:v1.36.11
     out: api
     opt:
-      - paths=source_relative
+      - module=goodkind.io/clyde/api
   - remote: buf.build/grpc/go:v1.6.1
     out: api
     opt:
-      - paths=source_relative
+      - module=goodkind.io/clyde/api
       - require_unimplemented_servers=false
