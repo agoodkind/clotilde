@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"runtime/debug"
 	"strconv"
 	"strings"
 
@@ -100,27 +99,17 @@ func modelEntryFromResolved(m ResolvedModel) ModelEntry {
 
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
+		s.respondAdapterError(w, r, newAdapterError(adapterErrorMethodNotAllowed, "POST required"))
 		return
 	}
 	corr := correlationForRequest(r)
 	reqID := corr.RequestID
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(r.Context(), slog.LevelError, "adapter.chat.panic",
-				slog.String("request_id", reqID),
-				slog.Any("err", recovered),
-				slog.String("stack", string(debug.Stack())),
-			)
-			writeError(w, http.StatusInternalServerError, "internal_error", "adapter panic while handling chat request")
-		}
-	}()
 	corr.SetHTTPHeaders(w.Header())
 	ctx := correlation.WithContext(r.Context(), corr)
 	r = r.WithContext(ctx)
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 8<<20))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", "failed to read body")
+		s.respondAdapterError(w, r, adapterErrInvalidRequest("failed to read body", err))
 		return
 	}
 
@@ -210,7 +199,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			slog.String("err", parseErr.Error()),
 			slog.Int("body_bytes", bodyBytes),
 		)
-		writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON: "+parseErr.Error())
+		s.respondAdapterError(w, r, adapterErrInvalidJSON("invalid JSON: "+parseErr.Error(), parseErr))
 		return
 	}
 	if n := CountNormalizedTools(req, body); n > 0 {
@@ -228,7 +217,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				slog.String("model", req.Model),
 				slog.String("err", nerr.Error()),
 			)
-			writeError(w, http.StatusBadRequest, "invalid_request", nerr.Error())
+			s.respondAdapterError(w, r, adapterErrInvalidRequest(nerr.Error(), nerr))
 			return
 		}
 		if count > 0 {
@@ -245,7 +234,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			slog.String("model", req.Model),
 			slog.String("reason", "messages_required"),
 		)
-		writeError(w, http.StatusBadRequest, "invalid_request", "messages is required")
+		s.respondAdapterError(w, r, adapterErrInvalidRequest("messages is required", nil))
 		return
 	}
 	if req.ReasoningEffort == "" && req.Reasoning != nil {
@@ -270,7 +259,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		attrs = append(attrs, adaptercursor.BoundaryLogAttrs(cursorReq, cursorReq.OpenAI.Model, nil)...)
 		attrs = append(attrs, corr.Attrs()...)
 		slogger.WithConcern(s.log, slogger.ConcernAdapterModelsResolve).LogAttrs(r.Context(), slog.LevelWarn, "adapter.model.resolve_failed", attrs...)
-		writeModelResolutionError(w, err.Error())
+		s.respondAdapterError(w, r, adapterErrModelNotFound(err.Error()))
 		return
 	}
 	resolveAttrs := []slog.Attr{
@@ -367,7 +356,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if perr := s.preflightChat(r.Context(), &req, model, reqID); perr != nil {
-		writeJSON(w, perr.code, ErrorResponse{Error: perr.body})
+		s.respondAdapterError(w, r, adapterErrFromOpenAI(perr.code, perr.body))
 		return
 	}
 
@@ -572,7 +561,7 @@ func parseInputParts(parts []map[string]any) (json.RawMessage, error) {
 
 func (s *Server) handleLegacy(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
+		s.respondAdapterError(w, r, newAdapterError(adapterErrorMethodNotAllowed, "POST required"))
 		return
 	}
 	var legacy struct {
@@ -582,7 +571,7 @@ func (s *Server) handleLegacy(w http.ResponseWriter, r *http.Request) {
 		ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&legacy); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		s.respondAdapterError(w, r, adapterErrInvalidJSON(err.Error(), err))
 		return
 	}
 	synthetic := ChatRequest{

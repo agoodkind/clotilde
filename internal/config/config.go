@@ -2,8 +2,6 @@ package config
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -173,11 +171,10 @@ type AdapterConfig struct {
 	// through so local tools keep working even when the user wants
 	// real OpenAI for a given alias.
 	Shunts map[string]AdapterShunt `json:"shunts,omitempty" toml:"shunts,omitempty"`
-	// FallbackShunt names an entry in Shunts that will receive any
-	// request whose model alias is not registered. The original model
-	// string is preserved on the way out so the upstream can route it
-	// itself. Empty disables fallback and unknown aliases 400.
-	FallbackShunt string `json:"fallbackShunt,omitempty" toml:"fallback_shunt,omitempty"`
+	// OpenAICompatPassthrough forwards otherwise-unknown model aliases
+	// to a directly configured OpenAI-compatible upstream. Empty
+	// BaseURL disables passthrough and unknown aliases 400.
+	OpenAICompatPassthrough AdapterOpenAICompatPassthrough `json:"openaiCompatPassthrough,omitzero" toml:"openai_compat_passthrough,omitempty"`
 	// DirectOAuth, when true, routes Claude backend requests straight
 	// at the configured messages URL using the user's OAuth token from
 	// the local keychain.
@@ -207,13 +204,6 @@ type AdapterConfig struct {
 	// by a stable family slug (e.g. "opus-4-7", "sonnet-4-6",
 	// "haiku-4-5"). Empty disables direct-OAuth model resolution.
 	Families map[string]AdapterFamily `json:"families,omitempty" toml:"families,omitempty"`
-	// Fallback configures an optional `claude -p` driven fallback
-	// layer the adapter can dispatch to either explicitly (alias
-	// has backend = "fallback") or on direct-OAuth failure. There
-	// are no compiled-in defaults: when Fallback.Enabled is true,
-	// NewRegistry validates every field and rejects partial
-	// configurations.
-	Fallback AdapterFallback `json:"fallback,omitzero" toml:"fallback,omitempty"`
 	// Codex configures routing for ChatGPT model names (gpt-*, o*)
 	// through the Codex backend-api surface. This keeps Cursor on the
 	// same adapter endpoint/port while letting model name choose
@@ -267,11 +257,24 @@ type AdapterCodexModelContext struct {
 
 // AdapterLogprobs picks the per-backend behavior. Each value is
 // one of "reject" (return 400 when caller sets logprobs) or
-// "drop" (silently strip the field before forwarding). Shunts
-// always pass through verbatim regardless of this stanza.
+// "drop" (silently strip the field before forwarding). OpenAI-compatible
+// passthrough routes pass through verbatim regardless of this stanza.
 type AdapterLogprobs struct {
 	Anthropic string `json:"anthropic,omitempty" toml:"anthropic,omitempty"`
-	Fallback  string `json:"fallback,omitempty" toml:"fallback,omitempty"`
+}
+
+// AdapterOpenAICompatPassthrough points unknown model aliases at one
+// OpenAI-compatible upstream. The caller's model string is preserved unless
+// Model is set.
+type AdapterOpenAICompatPassthrough struct {
+	BaseURL string `json:"baseUrl,omitempty" toml:"base_url,omitempty"`
+	APIKey  string `json:"apiKey,omitempty" toml:"api_key,omitempty"`
+	// APIKeyEnv lets the user keep the secret out of the config file.
+	// When set the adapter reads os.Getenv(APIKeyEnv) at request time.
+	APIKeyEnv string `json:"apiKeyEnv,omitempty" toml:"api_key_env,omitempty"`
+	// Model overrides the model name forwarded upstream. Empty means pass
+	// the caller's model string through unchanged.
+	Model string `json:"model,omitempty" toml:"model,omitempty"`
 }
 
 // AdapterNotices controls whether notice injection happens on direct
@@ -287,121 +290,6 @@ func (n AdapterNotices) EnabledOrDefault() bool {
 		return true
 	}
 	return *n.Enabled
-}
-
-// AdapterFallback configures the optional `claude -p` driven third
-// backend. Disabled by default. When enabled, every field is
-// required: the registry refuses to start the listener with a
-// partial configuration.
-type AdapterFallback struct {
-	// Enabled toggles the entire fallback subsystem. When false,
-	// NewRegistry skips all validation below.
-	Enabled bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
-	// Trigger picks when the fallback fires. One of:
-	//   "explicit"          - only when an alias resolves to
-	//                         backend = "fallback".
-	//   "on_oauth_failure"  - only when a direct-OAuth request
-	//                         errors.
-	//   "both"              - explicit aliases plus oauth-failure
-	//                         escalation.
-	Trigger string `json:"trigger,omitempty" toml:"trigger,omitempty"`
-	// Binary is an explicit path to the `claude` CLI. Empty falls
-	// back to the daemon's resolver (deps.ResolveClaude).
-	Binary string `json:"binary,omitempty" toml:"binary,omitempty"`
-	// Timeout is the per-request wall clock as a duration string
-	// ("120s", "2m"). Required when Enabled.
-	Timeout string `json:"timeout,omitempty" toml:"timeout,omitempty"`
-	// MaxConcurrent caps in-flight `claude -p` subprocesses with a
-	// pool separate from the OAuth semaphore. Required when Enabled.
-	MaxConcurrent int `json:"maxConcurrent,omitempty" toml:"max_concurrent,omitempty"`
-	// AllowedFamilies whitelists which family slugs the fallback
-	// will service. Required (non-empty) when Enabled. Slugs must
-	// exist in cfg.Families.
-	AllowedFamilies []string `json:"allowedFamilies,omitempty" toml:"allowed_families,omitempty"`
-	// ScratchSubdir is appended to deps.ScratchDir for the cwd of
-	// every spawned `claude -p`. Required (non-empty) when Enabled
-	// so transcripts land somewhere the discovery scanner skips.
-	ScratchSubdir string `json:"scratchSubdir,omitempty" toml:"scratch_subdir,omitempty"`
-	// StreamPassthrough, when true, parses `claude -p` stream-json
-	// stdout into OpenAI SSE chunks and honors req.Stream. When
-	// false, req.Stream = true returns 400.
-	StreamPassthrough bool `json:"streamPassthrough,omitempty" toml:"stream_passthrough,omitempty"`
-	// DropUnsupported silently ignores OpenAI request fields the
-	// CLI cannot honor (reasoning_effort, thinking) and emits a
-	// debug log instead of returning 400.
-	DropUnsupported bool `json:"dropUnsupported,omitempty" toml:"drop_unsupported,omitempty"`
-	// SuppressHookEnv, when true, sets CLYDE_DISABLE_DAEMON=1 and
-	// CLYDE_SUPPRESS_HOOKS=1 on the spawned subprocess so the
-	// SessionStart hook chain does not recurse back into the
-	// daemon. Recommended on.
-	SuppressHookEnv bool `json:"suppressHookEnv,omitempty" toml:"suppress_hook_env,omitempty"`
-	// FailureEscalation picks which error surface bubbles to the
-	// client when both the OAuth attempt and the fallback attempt
-	// fail. One of "fallback_error" or "oauth_error".
-	FailureEscalation string `json:"failureEscalation,omitempty" toml:"failure_escalation,omitempty"`
-	// ForwardToShunt opts the trigger path into a shunt instead of
-	// (or in addition to) `claude -p`. When ForwardToShunt.Enabled
-	// is true, the dispatcher forwards to the named shunt before
-	// trying `claude -p`.
-	ForwardToShunt AdapterFallbackShunt `json:"forwardToShunt,omitzero" toml:"forward_to_shunt,omitempty"`
-	// CLIAliases maps a family slug declared in cfg.Families to
-	// the short name `claude -p --model` accepts (e.g. "opus",
-	// "sonnet", "haiku"). Required (non-empty) when Enabled. Every
-	// key must exist in cfg.Families.
-	CLIAliases map[string]string `json:"cliAliases,omitempty" toml:"cli_aliases,omitempty"`
-
-	// TranscriptSynthesisEnabled toggles Phase 3 synthetic transcript
-	// writing. When true, the handler synthesizes a Claude Code JSONL
-	// transcript for every request, writes it to the path Claude will
-	// read, and spawns the CLI with --resume instead of --session-id.
-	// That lets Claude's own prompt-cache + microcompact pipeline fire
-	// on every turn after the first, cutting input-token bill on
-	// fallback sessions by ~50-70%. Default off until field-tested.
-	TranscriptSynthesisEnabled bool `json:"transcriptSynthesisEnabled,omitempty" toml:"transcript_synthesis_enabled,omitempty"`
-
-	// TranscriptWorkspaceDir is the cwd of spawned claude -p
-	// invocations when TranscriptSynthesisEnabled is true. Claude
-	// uses the sanitized form of this path as its projects subdir
-	// name, so the synthesized transcripts land somewhere clearly
-	// labeled and separated from real workspaces. Empty falls back
-	// to `$XDG_STATE_HOME/clyde/adapter-workspaces/<alias>`. The
-	// daemon creates the directory on first use.
-	TranscriptWorkspaceDir string `json:"transcriptWorkspaceDir,omitempty" toml:"transcript_workspace_dir,omitempty"`
-}
-
-// ResolveTranscriptWorkspaceDir returns the cwd to use for the Phase 3
-// synthesized-transcript workflow. When the config supplies an explicit
-// override, that wins. Otherwise it returns a per-alias directory under
-// the user's XDG state home, keeping each model alias's synthesized
-// transcripts in its own subdir under ~/.claude/projects/.
-func (f AdapterFallback) ResolveTranscriptWorkspaceDir(alias string) string {
-	base := f.TranscriptWorkspaceDir
-	if base != "" {
-		return base
-	}
-	state := os.Getenv("XDG_STATE_HOME")
-	if state == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return ""
-		}
-		state = filepath.Join(home, ".local", "state")
-	}
-	slug := alias
-	if slug == "" {
-		slug = "default"
-	}
-	return filepath.Join(state, "clyde", "adapter-workspaces", slug)
-}
-
-// AdapterFallbackShunt opts the fallback dispatcher into routing
-// trigger-fired requests at a configured shunt instead of (or before)
-// the `claude -p` subprocess.
-type AdapterFallbackShunt struct {
-	// Enabled toggles the shunt forwarding leg of the fallback.
-	Enabled bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
-	// Shunt names an entry in cfg.Shunts. Required when Enabled.
-	Shunt string `json:"shunt,omitempty" toml:"shunt,omitempty"`
 }
 
 // AdapterOAuth holds endpoints and OAuth client metadata supplied by

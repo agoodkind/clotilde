@@ -44,6 +44,15 @@ default_model = "clyde-opus-4-7"
 [adapter.notices]
 enabled = true
 
+# Optional: forward otherwise-unknown model aliases to one
+# OpenAI-compatible upstream. The caller's model value is preserved unless
+# model is set.
+[adapter.openai_compat_passthrough]
+base_url = "http://[::1]:1234/v1"
+api_key = ""
+api_key_env = ""
+model = ""
+
 [adapter.oauth]
 token_url = "https://REDACTED-OAUTH-HOST/v1/oauth/token"
 messages_url = "https://REDACTED-UPSTREAM/v1/messages"
@@ -74,11 +83,10 @@ cc_entrypoint = "sdk-cli"
 
 # Per-backend handling of the OpenAI logprobs / top_logprobs
 # request fields. "reject" returns 400 when the caller sets
-# logprobs; "drop" silently strips the field. Shunts always
-# pass through verbatim regardless of this stanza.
+# logprobs; "drop" silently strips the field. OpenAI-compatible
+# passthrough routes pass through verbatim regardless of this stanza.
 [adapter.logprobs]
 anthropic = "reject"
-fallback  = "reject"
 
 # opus-4-6: adaptive/default/enabled/disabled thinking, low/medium/high/max
 # effort, 200k context plus 1M beta. Claude Code upstream names this exact
@@ -91,7 +99,7 @@ efforts = ["low", "medium", "high", "max"]
 thinking_modes = ["default", "adaptive", "enabled", "disabled"]
 max_output_tokens = 128000
 contexts = [
-  { tokens = 200000,  alias_suffix = "",   wire_suffix = "" },
+  { tokens = 200000, alias_suffix = "", wire_suffix = "" },
   { tokens = 1000000, alias_suffix = "1m", wire_suffix = "[1m]" },
 ]
 
@@ -106,7 +114,7 @@ efforts = ["low", "medium", "high", "max"]
 thinking_modes = ["default", "adaptive", "enabled", "disabled"]
 max_output_tokens = 32000
 contexts = [
-  { tokens = 200000,  alias_suffix = "",   wire_suffix = "" },
+  { tokens = 200000, alias_suffix = "", wire_suffix = "" },
   { tokens = 1000000, alias_suffix = "1m", wire_suffix = "[1m]" },
 ]
 
@@ -119,9 +127,7 @@ supports_vision = true
 efforts = ["low", "medium", "high", "max"]
 thinking_modes = ["default", "adaptive", "enabled", "disabled"]
 max_output_tokens = 64000
-contexts = [
-  { tokens = 200000, alias_suffix = "", wire_suffix = "" },
-]
+contexts = [{ tokens = 200000, alias_suffix = "", wire_suffix = "" }]
 
 # haiku-4-5: server rejects effort
 # (`400 This model does not support the effort parameter`) and
@@ -134,54 +140,4 @@ supports_vision = true
 efforts = []
 thinking_modes = ["default", "enabled", "disabled"]
 max_output_tokens = 16000
-contexts = [
-  { tokens = 200000, alias_suffix = "", wire_suffix = "" },
-]
-
-# Optional fallback layer. The adapter can drive the local
-# `claude` CLI in `-p --output-format stream-json` mode either
-# explicitly (alias bound to backend = "fallback") or as an
-# escalation when the direct-OAuth path errors. Disabled in
-# this reference. Set enabled = true and pick a trigger to opt
-# in. There are no defaults: every field below is required when
-# enabled = true and NewRegistry refuses to start the listener
-# with a partial configuration.
-#
-# Drift notes:
-#   - cli_aliases: medium drift. The CLI's accepted short names
-#     ("opus", "sonnet", "haiku") are stable across point releases
-#     but new families need a new mapping.
-#   - timeout: low drift. 120s comfortably covers a long
-#     reasoning turn. Bump for max-effort opus runs.
-#   - suppress_hook_env: leave on. The two env vars short-circuit
-#     SessionStart -> daemon -> claude -p recursion.
-[adapter.fallback]
-enabled            = false
-trigger            = "on_oauth_failure"   # "explicit" | "on_oauth_failure" | "both"
-binary             = ""                   # empty -> use the daemon's resolver
-timeout            = "120s"
-max_concurrent     = 2
-allowed_families   = ["opus-4-6", "opus-4-7", "sonnet-4-6", "haiku-4-5"]
-scratch_subdir     = "fallback"
-stream_passthrough = true
-drop_unsupported   = true                 # silently ignore reasoning_effort / thinking
-suppress_hook_env  = true                 # avoid SessionStart -> daemon recursion
-failure_escalation = "fallback_error"     # which error to return when the fallback also fails
-
-# claude -p uses short family names that don't match the
-# Anthropic wire ids the OAuth path sends. Map every family
-# slug listed in allowed_families above.
-[adapter.fallback.cli_aliases]
-opus-4-6   = "opus"
-opus-4-7   = "opus"
-sonnet-4-6 = "sonnet"
-haiku-4-5  = "haiku"
-
-# Optional: forward Anthropic-bound requests to an OpenAI
-# shaped shunt instead of (or before) `claude -p`. Off here.
-# Useful for a "spillover to a paid OpenAI account when my
-# Claude.ai bucket is exhausted" pattern. Requires a matching
-# entry in [adapter.shunts.<name>].
-[adapter.fallback.forward_to_shunt]
-enabled = false
-shunt   = ""
+contexts = [{ tokens = 200000, alias_suffix = "", wire_suffix = "" }]

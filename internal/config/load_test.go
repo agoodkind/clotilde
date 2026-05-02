@@ -1,7 +1,6 @@
 package config_test
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 
@@ -54,22 +53,44 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 		Expect(cfg.Logging.Body.MaxKB).To(Equal(32))
 	})
 
-	It("loads profiles correctly when file is present", func() {
+	It("loads profiles correctly when config.toml is present", func() {
 		tmpDir := GinkgoT().TempDir()
 		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
 
 		globalDir := filepath.Join(tmpDir, "clyde")
 		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		data, _ := json.Marshal(map[string]any{
-			"profiles": map[string]any{
-				"quick": map[string]string{"model": "haiku"},
-			},
-		})
-		Expect(os.WriteFile(filepath.Join(globalDir, "config.json"), data, 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[profiles.quick]\nmodel = \"haiku\"\n"), 0o644)).To(Succeed())
 
 		cfg, err := config.LoadGlobalOrDefault()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(cfg.Profiles["quick"].Model).To(Equal("haiku"))
+	})
+
+	It("loads openai_compat_passthrough upstream", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[adapter.openai_compat_passthrough]\nbase_url = \"http://[::1]:1234/v1\"\napi_key_env = \"OPENAI_API_KEY\"\n"), 0o644)).To(Succeed())
+
+		cfg, err := config.LoadGlobalOrDefault()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.Adapter.OpenAICompatPassthrough.BaseURL).To(Equal("http://[::1]:1234/v1"))
+		Expect(cfg.Adapter.OpenAICompatPassthrough.APIKeyEnv).To(Equal("OPENAI_API_KEY"))
+	})
+
+	It("ignores legacy global config.json", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.json"), []byte(`{"profiles":{"quick":{"model":"haiku"}}}`), 0o644)).To(Succeed())
+
+		cfg, err := config.LoadGlobalOrDefault()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.Profiles).To(BeEmpty())
 	})
 
 	It("applies logging defaults when logging stanza is omitted", func() {
@@ -78,12 +99,7 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 
 		globalDir := filepath.Join(tmpDir, "clyde")
 		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		data, _ := json.Marshal(map[string]any{
-			"profiles": map[string]any{
-				"quick": map[string]string{"model": "haiku"},
-			},
-		})
-		Expect(os.WriteFile(filepath.Join(globalDir, "config.json"), data, 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[profiles.quick]\nmodel = \"haiku\"\n"), 0o644)).To(Succeed())
 
 		cfg, err := config.LoadGlobalOrDefault()
 		Expect(err).NotTo(HaveOccurred())
@@ -104,14 +120,7 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 
 		globalDir := filepath.Join(tmpDir, "clyde")
 		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		data, _ := json.Marshal(map[string]any{
-			"logging": map[string]any{
-				"body": map[string]any{
-					"mode": "bogus",
-				},
-			},
-		})
-		Expect(os.WriteFile(filepath.Join(globalDir, "config.json"), data, 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[logging.body]\nmode = \"bogus\"\n"), 0o644)).To(Succeed())
 
 		_, err := config.LoadGlobalOrDefault()
 		Expect(err).To(HaveOccurred())
@@ -124,14 +133,7 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 
 		globalDir := filepath.Join(tmpDir, "clyde")
 		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		data, _ := json.Marshal(map[string]any{
-			"logging": map[string]any{
-				"rotation": map[string]any{
-					"enabled": false,
-				},
-			},
-		})
-		Expect(os.WriteFile(filepath.Join(globalDir, "config.json"), data, 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[logging.rotation]\nenabled = false\n"), 0o644)).To(Succeed())
 
 		cfg, err := config.LoadGlobalOrDefault()
 		Expect(err).NotTo(HaveOccurred())
@@ -145,15 +147,7 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 
 		globalDir := filepath.Join(tmpDir, "clyde")
 		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		data, _ := json.Marshal(map[string]any{
-			"logging": map[string]any{
-				"paths": map[string]any{
-					"daemon": "/tmp/clyde-daemon.jsonl",
-					"tui":    "/tmp/clyde-tui.jsonl",
-				},
-			},
-		})
-		Expect(os.WriteFile(filepath.Join(globalDir, "config.json"), data, 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[logging.paths]\ndaemon = \"/tmp/clyde-daemon.jsonl\"\ntui = \"/tmp/clyde-tui.jsonl\"\n"), 0o644)).To(Succeed())
 
 		cfg, err := config.LoadGlobalOrDefault()
 		Expect(err).NotTo(HaveOccurred())
@@ -167,14 +161,7 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 
 		globalDir := filepath.Join(tmpDir, "clyde")
 		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		data, _ := json.Marshal(map[string]any{
-			"logging": map[string]any{
-				"rotation": map[string]any{
-					"max_backups": -1,
-				},
-			},
-		})
-		Expect(os.WriteFile(filepath.Join(globalDir, "config.json"), data, 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[logging.rotation]\nmax_backups = -1\n"), 0o644)).To(Succeed())
 
 		_, err := config.LoadGlobalOrDefault()
 		Expect(err).To(HaveOccurred())
@@ -187,14 +174,7 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 
 		globalDir := filepath.Join(tmpDir, "clyde")
 		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		data, _ := json.Marshal(map[string]any{
-			"logging": map[string]any{
-				"body": map[string]any{
-					"max_kb": 300,
-				},
-			},
-		})
-		Expect(os.WriteFile(filepath.Join(globalDir, "config.json"), data, 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[logging.body]\nmax_kb = 300\n"), 0o644)).To(Succeed())
 
 		_, err := config.LoadGlobalOrDefault()
 		Expect(err).To(HaveOccurred())

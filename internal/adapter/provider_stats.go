@@ -17,6 +17,9 @@ func providerName(model ResolvedModel, path string) string {
 		}
 		return "openai-codex"
 	case BackendShunt:
+		if strings.TrimSpace(model.OpenAICompatPassthrough.BaseURL) != "" {
+			return "openai-compat-passthrough"
+		}
 		name := strings.TrimSpace(model.Shunt)
 		if name == "" {
 			return "shunt-unknown"

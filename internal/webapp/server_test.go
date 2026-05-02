@@ -40,7 +40,7 @@ func TestHealthOK(t *testing.T) {
 }
 
 func TestShutdownClosesIdleKeepaliveConnection(t *testing.T) {
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	lis, err := net.Listen("tcp", "[::1]:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestShutdownClosesIdleKeepaliveConnection(t *testing.T) {
 }
 
 func TestCloseForceClosesActiveConnection(t *testing.T) {
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	lis, err := net.Listen("tcp", "[::1]:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestCloseForceClosesActiveConnection(t *testing.T) {
 }
 
 func TestStartOnListenerServesHealth(t *testing.T) {
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	lis, err := net.Listen("tcp", "[::1]:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}

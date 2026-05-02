@@ -88,8 +88,12 @@ type ResolvedModel struct {
 	// validation (nil disallowed at load time).
 	SupportsVision bool
 	// Shunt names an entry inside AdapterConfig.Shunts. Only set
-	// when Backend is BackendShunt.
+	// when Backend is BackendShunt and the alias uses a named shunt.
 	Shunt string
+	// OpenAICompatPassthrough carries a directly configured upstream
+	// endpoint for unknown-model passthrough. Only set when Backend is
+	// BackendShunt and Shunt is empty.
+	OpenAICompatPassthrough config.AdapterOpenAICompatPassthrough
 	// FamilySlug is the cfg.Families key this alias was generated
 	// from. Empty for user-supplied [adapter.models.<name>] entries
 	// (which carry their own backend/model directly).
@@ -105,7 +109,7 @@ type Registry struct {
 	models             map[string]ResolvedModel
 	shunts             map[string]config.AdapterShunt
 	def                string
-	fallbackShnt       string
+	openAICompat       config.AdapterOpenAICompatPassthrough
 	codexEnabled       bool
 	codexPrefix        []string
 	codexNativeRouting string
@@ -174,10 +178,6 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 	if len(cfg.Families) == 0 {
 		return nil, fmt.Errorf("adapter: no model families declared in [adapter.families]")
 	}
-	if cfg.Fallback.Enabled {
-		return nil, fmt.Errorf("adapter: [adapter.fallback] is no longer supported")
-	}
-
 	models := map[string]ResolvedModel{}
 	for slug, family := range cfg.Families {
 		if family.Model == "" {
@@ -203,7 +203,7 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 		models:             models,
 		shunts:             map[string]config.AdapterShunt{},
 		def:                cfg.DefaultModel,
-		fallbackShnt:       strings.ToLower(cfg.FallbackShunt),
+		openAICompat:       cfg.OpenAICompatPassthrough,
 		codexEnabled:       cfg.Codex.Enabled,
 		codexPrefix:        append([]string(nil), cfg.Codex.ModelPrefixes...),
 		codexNativeRouting: strings.ToLower(strings.TrimSpace(cfg.Codex.NativeModelRouting)),
@@ -268,9 +268,9 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 
 	if _, ok := r.models[strings.ToLower(r.def)]; !ok {
 		// The default model must resolve after expansion. Permit a
-		// shunt fallback to absorb it; otherwise hard fail because a
+		// passthrough upstream to absorb it; otherwise hard fail because a
 		// daemon that cannot serve its declared default is broken.
-		if r.fallbackShnt == "" {
+		if r.openAICompat.BaseURL == "" {
 			return nil, fmt.Errorf(
 				"adapter: default_model %q not found among %d expanded aliases",
 				r.def, len(r.models),
@@ -288,21 +288,12 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 	return r, nil
 }
 
-// validateAdapterLogprobs enforces the live Anthropic logprobs policy and
-// rejects the removed fallback knob so unsupported config does not go silent.
+// validateAdapterLogprobs enforces the live Anthropic logprobs policy.
 func validateAdapterLogprobs(lp config.AdapterLogprobs) error {
-	if lp.Anthropic == "" && lp.Fallback == "" {
+	if lp.Anthropic == "" {
 		return nil
 	}
-	if lp.Fallback != "" {
-		return fmt.Errorf("adapter: [adapter.logprobs].fallback is no longer supported")
-	}
 	allowed := map[string]bool{"reject": true, "drop": true}
-	if lp.Anthropic == "" {
-		return fmt.Errorf(
-			`adapter: [adapter.logprobs].anthropic must be set ("reject" or "drop")`,
-		)
-	}
 	if !allowed[lp.Anthropic] {
 		return fmt.Errorf("adapter: [adapter.logprobs].anthropic %q invalid", lp.Anthropic)
 	}
@@ -584,7 +575,7 @@ func codexAliasContext(alias string) int {
 // chosen effort tier. reqEffort may be empty; the registry uses the
 // alias-bound effort first, then the family default. Unknown aliases
 // fall through to the registry default alias (or the configured
-// fallback shunt).
+// OpenAI-compatible passthrough upstream).
 //
 // Returns an error when the caller asks for an effort value the
 // alias's family doesn't support server-side. This surfaces as a
@@ -593,6 +584,10 @@ func codexAliasContext(alias string) int {
 func (r *Registry) Resolve(alias, reqEffort string) (ResolvedModel, string, error) {
 	if alias == "" {
 		alias = r.def
+	}
+	key := strings.ToLower(alias)
+	if m, ok := r.models[key]; ok {
+		return resolveConfiguredModel(m, reqEffort)
 	}
 	if r.looksLikeNativeCodexModel(alias) {
 		switch r.codexNativeRouting {
@@ -624,7 +619,6 @@ func (r *Registry) Resolve(alias, reqEffort string) (ResolvedModel, string, erro
 			)
 		}
 	}
-	key := strings.ToLower(alias)
 	if m, ok := r.codexModels[key]; ok {
 		effort := strings.ToLower(strings.TrimSpace(reqEffort))
 		switch {
@@ -667,24 +661,21 @@ func (r *Registry) Resolve(alias, reqEffort string) (ResolvedModel, string, erro
 			Context:     codexAliasContext(alias),
 		}, effort, nil
 	}
-	m, ok := r.models[key]
-	if !ok {
-		if r.fallbackShnt != "" {
-			if _, sok := r.shunts[r.fallbackShnt]; sok {
-				return ResolvedModel{
-					Alias:   alias,
-					Backend: BackendShunt,
-					Shunt:   r.fallbackShnt,
-				}, "", nil
-			}
-		}
-		def, dok := r.models[strings.ToLower(r.def)]
-		if !dok {
-			return ResolvedModel{}, "", fmt.Errorf("unknown model %q and no usable default", alias)
-		}
-		m = def
+	if r.openAICompat.BaseURL != "" {
+		return ResolvedModel{
+			Alias:                   alias,
+			Backend:                 BackendShunt,
+			OpenAICompatPassthrough: r.openAICompat,
+		}, "", nil
 	}
+	def, dok := r.models[strings.ToLower(r.def)]
+	if !dok {
+		return ResolvedModel{}, "", fmt.Errorf("unknown model %q and no usable default", alias)
+	}
+	return resolveConfiguredModel(def, reqEffort)
+}
 
+func resolveConfiguredModel(m ResolvedModel, reqEffort string) (ResolvedModel, string, error) {
 	effort := strings.ToLower(reqEffort)
 	if effort == "" {
 		if m.Effort != "" {
@@ -746,7 +737,7 @@ func (r *Registry) List() []ResolvedModel {
 }
 
 func codexAdvertisedAliases() []string {
-	return []string{"gpt-5.4", "gpt-5.5", "gpt-5.3-codex", "gpt-5.3-codex-spark", "o3"}
+	return []string{"gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark", "o3"}
 }
 
 func (r *Registry) Models() map[string]ResolvedModel {

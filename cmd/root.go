@@ -220,19 +220,28 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			return startNewSessionInDir(basedir, store, dashboardLaunchCWD, enableRC)
 		},
 		StartLiveSession: func(req ui.LiveSessionStartRequest) (ui.LiveSession, error) {
-			resp, err := daemon.StartRemoteSessionViaDaemon(context.Background(), req.Name, req.Basedir, req.Incognito)
+			resp, err := daemon.StartLiveSessionViaDaemon(context.Background(), &clydev1.StartLiveSessionRequest{
+				Provider:  req.Provider,
+				Name:      req.Name,
+				Basedir:   req.Basedir,
+				Model:     req.Model,
+				Effort:    req.Effort,
+				Incognito: req.Incognito,
+			})
 			if err != nil {
 				return ui.LiveSession{}, err
 			}
+			live := resp.GetSession()
 			return ui.LiveSession{
-				Provider:       string(session.ProviderClaude),
-				SessionName:    resp.GetSessionName(),
-				SessionID:      resp.GetSessionId(),
-				Status:         resp.GetLaunchState().String(),
-				Basedir:        req.Basedir,
-				SupportsSend:   true,
-				SupportsStream: true,
-				SupportsStop:   false,
+				Provider:       live.GetProvider(),
+				SessionName:    live.GetSessionName(),
+				SessionID:      live.GetSessionId(),
+				Status:         live.GetStatus(),
+				Basedir:        live.GetBasedir(),
+				URL:            live.GetUrl(),
+				SupportsSend:   live.GetSupportsSend(),
+				SupportsStream: live.GetSupportsStream(),
+				SupportsStop:   live.GetSupportsStop(),
 			}, nil
 		},
 		ResumeSession: func(sess *session.Session) error {
@@ -433,9 +442,7 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			return out, nil
 		},
 		SendLiveSession: func(sessionID, text string) error {
-			ok, err := daemon.SendToLiveSessionViaDaemon(context.Background(), daemon.SessionRuntimeTarget{
-				Identity: session.ProviderSessionID{ID: sessionID},
-			}, text)
+			ok, err := daemon.SendLiveSessionViaDaemon(context.Background(), sessionID, text)
 			if err != nil {
 				return err
 			}
@@ -445,9 +452,7 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			return nil
 		},
 		StreamLiveSession: func(sessionID string) (<-chan ui.LiveSessionEvent, func(), error) {
-			raw, cancel, err := daemon.TailSessionHistoryViaDaemon(context.Background(), daemon.SessionRuntimeTarget{
-				Identity: session.ProviderSessionID{ID: sessionID},
-			}, -1)
+			raw, cancel, err := daemon.StreamLiveSessionViaDaemon(context.Background(), sessionID)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -463,16 +468,16 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 					}
 				}()
 				defer close(out)
-				for ln := range raw {
+				for event := range raw {
 					ts := time.Time{}
-					if ln.GetTimestampNanos() > 0 {
-						ts = time.Unix(0, ln.GetTimestampNanos())
+					if event.GetTimestampNanos() > 0 {
+						ts = time.Unix(0, event.GetTimestampNanos())
 					}
 					out <- ui.LiveSessionEvent{
-						SessionID: sessionID,
-						Kind:      "message",
-						Role:      ln.GetRole(),
-						Text:      ln.GetText(),
+						SessionID: event.GetSessionId(),
+						Kind:      event.GetKind(),
+						Role:      event.GetRole(),
+						Text:      event.GetText(),
 						Timestamp: ts,
 					}
 				}
@@ -1114,6 +1119,37 @@ func resumeSession(sess *session.Session, store session.Store, allowSelfReload b
 	if err != nil {
 		return err
 	}
+	leaseToken := ""
+	if lease, leaseErr := daemon.AcquireForegroundSessionViaDaemon(context.Background(), &clydev1.AcquireForegroundSessionRequest{
+		SessionName: sess.Name,
+		SessionId:   sess.Metadata.ProviderSessionID(),
+		Provider:    string(sess.ProviderID()),
+	}); leaseErr != nil {
+		cmdUILog.Logger().Warn("session.foreground.acquire_failed",
+			"component", "cli",
+			"session", sess.Name,
+			"session_id", sess.Metadata.ProviderSessionID(),
+			"provider", sess.ProviderID(),
+			"err", leaseErr,
+		)
+	} else if lease != nil {
+		leaseToken = lease.GetLeaseToken()
+	}
+	exitState := "ok"
+	defer func() {
+		if leaseToken == "" {
+			return
+		}
+		if _, releaseErr := daemon.ReleaseForegroundSessionViaDaemon(context.Background(), leaseToken, exitState); releaseErr != nil {
+			cmdUILog.Logger().Warn("session.foreground.release_failed",
+				"component", "cli",
+				"session", sess.Name,
+				"session_id", sess.Metadata.ProviderSessionID(),
+				"provider", sess.ProviderID(),
+				"err", releaseErr,
+			)
+		}
+	}()
 	err = runtime.ResumeInteractive(context.Background(), session.ResumeRequest{
 		Session: sess,
 		Options: session.ResumeOptions{
@@ -1121,6 +1157,9 @@ func resumeSession(sess *session.Session, store session.Store, allowSelfReload b
 			EnableSelfReload: allowSelfReload,
 		},
 	})
+	if err != nil {
+		exitState = "error"
+	}
 	if fs, ok := store.(*session.FileStore); ok {
 		autoUpdateContext(fs, sess)
 	}

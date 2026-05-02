@@ -119,7 +119,7 @@ type echoServer struct {
 
 func startEchoServer(t *testing.T) *echoServer {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := net.Listen("tcp", "[::1]:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -164,7 +164,7 @@ func (t *testProxy) shutdown() {
 
 func startTestProxy(t *testing.T) *testProxy {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := net.Listen("tcp", "[::1]:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}

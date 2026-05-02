@@ -139,7 +139,7 @@ Each session is a folder in `.claude/clyde/sessions/<name>/`:
 }
 ```
 
-**Global config** (`internal/config/load.go`, `LoadGlobalOrDefault`): read from `$XDG_CONFIG_HOME/clyde/` (default `~/.config/clyde/`). `**config.toml` is preferred; `config.json` is used if TOML is absent.\*\* `SaveGlobal` writes TOML only.
+**Global config** (`internal/config/load.go`, `LoadGlobalOrDefault`): read from `$XDG_CONFIG_HOME/clyde/config.toml` (default `~/.config/clyde/config.toml`). `config.json` is not a supported global config file. `SaveGlobal` writes TOML only.
 
 The `Config` struct in `internal/config/config.go` includes `defaults`, `profiles`, `logging`, `adapter`, `search`, and other sections. `**profiles` exists in the on-disk schema. No production code path reads `cfg.Profiles` outside config tests today\*\*, so do not document a `clyde` CLI that applies a profile by name until that wiring lands.
 
@@ -312,8 +312,10 @@ Important Cursor/Codex facts agents should not rediscover:
   even when Clyde advertises different `/v1/models` metadata. In particular,
   `gpt-5.5` has been observed as large-context in Cursor while Clyde and Codex
   upstream treat it as about `272000` input tokens.
-- Clyde-specific GPT/Codex aliases are effort-qualified and config-driven, for
-  example `clyde-gpt-5.5-high` and `clyde-gpt-5.4-1m-medium`. Do not expose
+- Clyde-specific GPT/Codex aliases are effort-qualified and config-driven. Use
+  `clyde-codex-5.5-high` for GPT 5.5 because Cursor has been observed to
+  mangle `gpt-5.5` / `gpt-5-5`-looking model ids; `clyde-gpt-5.4-1m-medium`
+  remains fine for GPT 5.4. Do not expose
   bare non-effort `clyde-gpt-*` aliases. `/v1/models` is necessary for
   ergonomics but is not a sufficient safety boundary.
 - Adapter-side preflight is required for known context-window overflows. Do not
@@ -515,6 +517,7 @@ foot-gun the agent must not arm.
 - **Single binary**: No runtime dependencies (Go only)
 - **Settings scope**: `settings.json` should only contain session-specific settings (model, permissions), not global config (hooks, MCP, UI)
 - **Native integration**: Use `--settings` flag to pass settings, let Claude Code handle merging with global/project configs
+- **Loopback-only networking**: For local adapter, webapp, MITM, test server, and example upstream addresses, use `localhost` wherever the consumer accepts hostnames. When a literal bind or URL host is required, use IPv6 loopback (`[::1]`). Do not introduce `127.0.0.1`, `0.0.0.0`, wildcard binds, LAN addresses, or public listener defaults unless the user explicitly asks for an externally reachable service and the security implications are handled in the same change.
 
 ## Structured logging and observability
 

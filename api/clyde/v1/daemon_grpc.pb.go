@@ -19,34 +19,41 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ClydeService_AcquireSession_FullMethodName         = "/clyde.v1.ClydeService/AcquireSession"
-	ClydeService_ReleaseSession_FullMethodName         = "/clyde.v1.ClydeService/ReleaseSession"
-	ClydeService_HookEvent_FullMethodName              = "/clyde.v1.ClydeService/HookEvent"
-	ClydeService_ListActiveSessions_FullMethodName     = "/clyde.v1.ClydeService/ListActiveSessions"
-	ClydeService_ListSessions_FullMethodName           = "/clyde.v1.ClydeService/ListSessions"
-	ClydeService_GetSessionDetail_FullMethodName       = "/clyde.v1.ClydeService/GetSessionDetail"
-	ClydeService_GetSessionExportStats_FullMethodName  = "/clyde.v1.ClydeService/GetSessionExportStats"
-	ClydeService_ExportSession_FullMethodName          = "/clyde.v1.ClydeService/ExportSession"
-	ClydeService_TriggerScan_FullMethodName            = "/clyde.v1.ClydeService/TriggerScan"
-	ClydeService_ReloadDaemon_FullMethodName           = "/clyde.v1.ClydeService/ReloadDaemon"
-	ClydeService_SubscribeRegistry_FullMethodName      = "/clyde.v1.ClydeService/SubscribeRegistry"
-	ClydeService_GetProviderStats_FullMethodName       = "/clyde.v1.ClydeService/GetProviderStats"
-	ClydeService_SubscribeProviderStats_FullMethodName = "/clyde.v1.ClydeService/SubscribeProviderStats"
-	ClydeService_RenameSession_FullMethodName          = "/clyde.v1.ClydeService/RenameSession"
-	ClydeService_DeleteSession_FullMethodName          = "/clyde.v1.ClydeService/DeleteSession"
-	ClydeService_UpdateSessionMetadata_FullMethodName  = "/clyde.v1.ClydeService/UpdateSessionMetadata"
-	ClydeService_UpdateSessionSettings_FullMethodName  = "/clyde.v1.ClydeService/UpdateSessionSettings"
-	ClydeService_UpdateGlobalSettings_FullMethodName   = "/clyde.v1.ClydeService/UpdateGlobalSettings"
-	ClydeService_ListConfigControls_FullMethodName     = "/clyde.v1.ClydeService/ListConfigControls"
-	ClydeService_UpdateConfigControl_FullMethodName    = "/clyde.v1.ClydeService/UpdateConfigControl"
-	ClydeService_StartRemoteSession_FullMethodName     = "/clyde.v1.ClydeService/StartRemoteSession"
-	ClydeService_ListBridges_FullMethodName            = "/clyde.v1.ClydeService/ListBridges"
-	ClydeService_TailTranscript_FullMethodName         = "/clyde.v1.ClydeService/TailTranscript"
-	ClydeService_SendToSession_FullMethodName          = "/clyde.v1.ClydeService/SendToSession"
-	ClydeService_CompactPreview_FullMethodName         = "/clyde.v1.ClydeService/CompactPreview"
-	ClydeService_CompactApply_FullMethodName           = "/clyde.v1.ClydeService/CompactApply"
-	ClydeService_CompactUndo_FullMethodName            = "/clyde.v1.ClydeService/CompactUndo"
-	ClydeService_ProbeContextUsage_FullMethodName      = "/clyde.v1.ClydeService/ProbeContextUsage"
+	ClydeService_AcquireSession_FullMethodName           = "/clyde.v1.ClydeService/AcquireSession"
+	ClydeService_ReleaseSession_FullMethodName           = "/clyde.v1.ClydeService/ReleaseSession"
+	ClydeService_HookEvent_FullMethodName                = "/clyde.v1.ClydeService/HookEvent"
+	ClydeService_ListActiveSessions_FullMethodName       = "/clyde.v1.ClydeService/ListActiveSessions"
+	ClydeService_ListSessions_FullMethodName             = "/clyde.v1.ClydeService/ListSessions"
+	ClydeService_GetSessionDetail_FullMethodName         = "/clyde.v1.ClydeService/GetSessionDetail"
+	ClydeService_GetSessionExportStats_FullMethodName    = "/clyde.v1.ClydeService/GetSessionExportStats"
+	ClydeService_ExportSession_FullMethodName            = "/clyde.v1.ClydeService/ExportSession"
+	ClydeService_TriggerScan_FullMethodName              = "/clyde.v1.ClydeService/TriggerScan"
+	ClydeService_ReloadDaemon_FullMethodName             = "/clyde.v1.ClydeService/ReloadDaemon"
+	ClydeService_SubscribeRegistry_FullMethodName        = "/clyde.v1.ClydeService/SubscribeRegistry"
+	ClydeService_GetProviderStats_FullMethodName         = "/clyde.v1.ClydeService/GetProviderStats"
+	ClydeService_SubscribeProviderStats_FullMethodName   = "/clyde.v1.ClydeService/SubscribeProviderStats"
+	ClydeService_RenameSession_FullMethodName            = "/clyde.v1.ClydeService/RenameSession"
+	ClydeService_DeleteSession_FullMethodName            = "/clyde.v1.ClydeService/DeleteSession"
+	ClydeService_UpdateSessionMetadata_FullMethodName    = "/clyde.v1.ClydeService/UpdateSessionMetadata"
+	ClydeService_UpdateSessionSettings_FullMethodName    = "/clyde.v1.ClydeService/UpdateSessionSettings"
+	ClydeService_UpdateGlobalSettings_FullMethodName     = "/clyde.v1.ClydeService/UpdateGlobalSettings"
+	ClydeService_ListConfigControls_FullMethodName       = "/clyde.v1.ClydeService/ListConfigControls"
+	ClydeService_UpdateConfigControl_FullMethodName      = "/clyde.v1.ClydeService/UpdateConfigControl"
+	ClydeService_StartRemoteSession_FullMethodName       = "/clyde.v1.ClydeService/StartRemoteSession"
+	ClydeService_ListLiveSessions_FullMethodName         = "/clyde.v1.ClydeService/ListLiveSessions"
+	ClydeService_StartLiveSession_FullMethodName         = "/clyde.v1.ClydeService/StartLiveSession"
+	ClydeService_SendLiveSession_FullMethodName          = "/clyde.v1.ClydeService/SendLiveSession"
+	ClydeService_StreamLiveSession_FullMethodName        = "/clyde.v1.ClydeService/StreamLiveSession"
+	ClydeService_StopLiveSession_FullMethodName          = "/clyde.v1.ClydeService/StopLiveSession"
+	ClydeService_AcquireForegroundSession_FullMethodName = "/clyde.v1.ClydeService/AcquireForegroundSession"
+	ClydeService_ReleaseForegroundSession_FullMethodName = "/clyde.v1.ClydeService/ReleaseForegroundSession"
+	ClydeService_ListBridges_FullMethodName              = "/clyde.v1.ClydeService/ListBridges"
+	ClydeService_TailTranscript_FullMethodName           = "/clyde.v1.ClydeService/TailTranscript"
+	ClydeService_SendToSession_FullMethodName            = "/clyde.v1.ClydeService/SendToSession"
+	ClydeService_CompactPreview_FullMethodName           = "/clyde.v1.ClydeService/CompactPreview"
+	ClydeService_CompactApply_FullMethodName             = "/clyde.v1.ClydeService/CompactApply"
+	ClydeService_CompactUndo_FullMethodName              = "/clyde.v1.ClydeService/CompactUndo"
+	ClydeService_ProbeContextUsage_FullMethodName        = "/clyde.v1.ClydeService/ProbeContextUsage"
 )
 
 // ClydeServiceClient is the client API for ClydeService service.
@@ -74,6 +81,13 @@ type ClydeServiceClient interface {
 	ListConfigControls(ctx context.Context, in *ListConfigControlsRequest, opts ...grpc.CallOption) (*ListConfigControlsResponse, error)
 	UpdateConfigControl(ctx context.Context, in *UpdateConfigControlRequest, opts ...grpc.CallOption) (*UpdateConfigControlResponse, error)
 	StartRemoteSession(ctx context.Context, in *StartRemoteSessionRequest, opts ...grpc.CallOption) (*StartRemoteSessionResponse, error)
+	ListLiveSessions(ctx context.Context, in *ListLiveSessionsRequest, opts ...grpc.CallOption) (*ListLiveSessionsResponse, error)
+	StartLiveSession(ctx context.Context, in *StartLiveSessionRequest, opts ...grpc.CallOption) (*StartLiveSessionResponse, error)
+	SendLiveSession(ctx context.Context, in *SendLiveSessionRequest, opts ...grpc.CallOption) (*SendLiveSessionResponse, error)
+	StreamLiveSession(ctx context.Context, in *StreamLiveSessionRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[StreamLiveSessionResponse], error)
+	StopLiveSession(ctx context.Context, in *StopLiveSessionRequest, opts ...grpc.CallOption) (*StopLiveSessionResponse, error)
+	AcquireForegroundSession(ctx context.Context, in *AcquireForegroundSessionRequest, opts ...grpc.CallOption) (*AcquireForegroundSessionResponse, error)
+	ReleaseForegroundSession(ctx context.Context, in *ReleaseForegroundSessionRequest, opts ...grpc.CallOption) (*ReleaseForegroundSessionResponse, error)
 	ListBridges(ctx context.Context, in *ListBridgesRequest, opts ...grpc.CallOption) (*ListBridgesResponse, error)
 	TailTranscript(ctx context.Context, in *TailTranscriptRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TailTranscriptResponse], error)
 	SendToSession(ctx context.Context, in *SendToSessionRequest, opts ...grpc.CallOption) (*SendToSessionResponse, error)
@@ -319,6 +333,85 @@ func (c *clydeServiceClient) StartRemoteSession(ctx context.Context, in *StartRe
 	return out, nil
 }
 
+func (c *clydeServiceClient) ListLiveSessions(ctx context.Context, in *ListLiveSessionsRequest, opts ...grpc.CallOption) (*ListLiveSessionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListLiveSessionsResponse)
+	err := c.cc.Invoke(ctx, ClydeService_ListLiveSessions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clydeServiceClient) StartLiveSession(ctx context.Context, in *StartLiveSessionRequest, opts ...grpc.CallOption) (*StartLiveSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StartLiveSessionResponse)
+	err := c.cc.Invoke(ctx, ClydeService_StartLiveSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clydeServiceClient) SendLiveSession(ctx context.Context, in *SendLiveSessionRequest, opts ...grpc.CallOption) (*SendLiveSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SendLiveSessionResponse)
+	err := c.cc.Invoke(ctx, ClydeService_SendLiveSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clydeServiceClient) StreamLiveSession(ctx context.Context, in *StreamLiveSessionRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[StreamLiveSessionResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ClydeService_ServiceDesc.Streams[2], ClydeService_StreamLiveSession_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[StreamLiveSessionRequest, StreamLiveSessionResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ClydeService_StreamLiveSessionClient = grpc.ServerStreamingClient[StreamLiveSessionResponse]
+
+func (c *clydeServiceClient) StopLiveSession(ctx context.Context, in *StopLiveSessionRequest, opts ...grpc.CallOption) (*StopLiveSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StopLiveSessionResponse)
+	err := c.cc.Invoke(ctx, ClydeService_StopLiveSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clydeServiceClient) AcquireForegroundSession(ctx context.Context, in *AcquireForegroundSessionRequest, opts ...grpc.CallOption) (*AcquireForegroundSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AcquireForegroundSessionResponse)
+	err := c.cc.Invoke(ctx, ClydeService_AcquireForegroundSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clydeServiceClient) ReleaseForegroundSession(ctx context.Context, in *ReleaseForegroundSessionRequest, opts ...grpc.CallOption) (*ReleaseForegroundSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReleaseForegroundSessionResponse)
+	err := c.cc.Invoke(ctx, ClydeService_ReleaseForegroundSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *clydeServiceClient) ListBridges(ctx context.Context, in *ListBridgesRequest, opts ...grpc.CallOption) (*ListBridgesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListBridgesResponse)
@@ -331,7 +424,7 @@ func (c *clydeServiceClient) ListBridges(ctx context.Context, in *ListBridgesReq
 
 func (c *clydeServiceClient) TailTranscript(ctx context.Context, in *TailTranscriptRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TailTranscriptResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &ClydeService_ServiceDesc.Streams[2], ClydeService_TailTranscript_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &ClydeService_ServiceDesc.Streams[3], ClydeService_TailTranscript_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -360,7 +453,7 @@ func (c *clydeServiceClient) SendToSession(ctx context.Context, in *SendToSessio
 
 func (c *clydeServiceClient) CompactPreview(ctx context.Context, in *CompactRunRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CompactEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &ClydeService_ServiceDesc.Streams[3], ClydeService_CompactPreview_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &ClydeService_ServiceDesc.Streams[4], ClydeService_CompactPreview_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -379,7 +472,7 @@ type ClydeService_CompactPreviewClient = grpc.ServerStreamingClient[CompactEvent
 
 func (c *clydeServiceClient) CompactApply(ctx context.Context, in *CompactRunRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CompactEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &ClydeService_ServiceDesc.Streams[4], ClydeService_CompactApply_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &ClydeService_ServiceDesc.Streams[5], ClydeService_CompactApply_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -441,6 +534,13 @@ type ClydeServiceServer interface {
 	ListConfigControls(context.Context, *ListConfigControlsRequest) (*ListConfigControlsResponse, error)
 	UpdateConfigControl(context.Context, *UpdateConfigControlRequest) (*UpdateConfigControlResponse, error)
 	StartRemoteSession(context.Context, *StartRemoteSessionRequest) (*StartRemoteSessionResponse, error)
+	ListLiveSessions(context.Context, *ListLiveSessionsRequest) (*ListLiveSessionsResponse, error)
+	StartLiveSession(context.Context, *StartLiveSessionRequest) (*StartLiveSessionResponse, error)
+	SendLiveSession(context.Context, *SendLiveSessionRequest) (*SendLiveSessionResponse, error)
+	StreamLiveSession(*StreamLiveSessionRequest, grpc.ServerStreamingServer[StreamLiveSessionResponse]) error
+	StopLiveSession(context.Context, *StopLiveSessionRequest) (*StopLiveSessionResponse, error)
+	AcquireForegroundSession(context.Context, *AcquireForegroundSessionRequest) (*AcquireForegroundSessionResponse, error)
+	ReleaseForegroundSession(context.Context, *ReleaseForegroundSessionRequest) (*ReleaseForegroundSessionResponse, error)
 	ListBridges(context.Context, *ListBridgesRequest) (*ListBridgesResponse, error)
 	TailTranscript(*TailTranscriptRequest, grpc.ServerStreamingServer[TailTranscriptResponse]) error
 	SendToSession(context.Context, *SendToSessionRequest) (*SendToSessionResponse, error)
@@ -519,6 +619,27 @@ func (UnimplementedClydeServiceServer) UpdateConfigControl(context.Context, *Upd
 }
 func (UnimplementedClydeServiceServer) StartRemoteSession(context.Context, *StartRemoteSessionRequest) (*StartRemoteSessionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StartRemoteSession not implemented")
+}
+func (UnimplementedClydeServiceServer) ListLiveSessions(context.Context, *ListLiveSessionsRequest) (*ListLiveSessionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListLiveSessions not implemented")
+}
+func (UnimplementedClydeServiceServer) StartLiveSession(context.Context, *StartLiveSessionRequest) (*StartLiveSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method StartLiveSession not implemented")
+}
+func (UnimplementedClydeServiceServer) SendLiveSession(context.Context, *SendLiveSessionRequest) (*SendLiveSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SendLiveSession not implemented")
+}
+func (UnimplementedClydeServiceServer) StreamLiveSession(*StreamLiveSessionRequest, grpc.ServerStreamingServer[StreamLiveSessionResponse]) error {
+	return status.Error(codes.Unimplemented, "method StreamLiveSession not implemented")
+}
+func (UnimplementedClydeServiceServer) StopLiveSession(context.Context, *StopLiveSessionRequest) (*StopLiveSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method StopLiveSession not implemented")
+}
+func (UnimplementedClydeServiceServer) AcquireForegroundSession(context.Context, *AcquireForegroundSessionRequest) (*AcquireForegroundSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AcquireForegroundSession not implemented")
+}
+func (UnimplementedClydeServiceServer) ReleaseForegroundSession(context.Context, *ReleaseForegroundSessionRequest) (*ReleaseForegroundSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReleaseForegroundSession not implemented")
 }
 func (UnimplementedClydeServiceServer) ListBridges(context.Context, *ListBridgesRequest) (*ListBridgesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListBridges not implemented")
@@ -925,6 +1046,125 @@ func _ClydeService_StartRemoteSession_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ClydeService_ListLiveSessions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListLiveSessionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).ListLiveSessions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_ListLiveSessions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).ListLiveSessions(ctx, req.(*ListLiveSessionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClydeService_StartLiveSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StartLiveSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).StartLiveSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_StartLiveSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).StartLiveSession(ctx, req.(*StartLiveSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClydeService_SendLiveSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SendLiveSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).SendLiveSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_SendLiveSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).SendLiveSession(ctx, req.(*SendLiveSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClydeService_StreamLiveSession_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(StreamLiveSessionRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ClydeServiceServer).StreamLiveSession(m, &grpc.GenericServerStream[StreamLiveSessionRequest, StreamLiveSessionResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ClydeService_StreamLiveSessionServer = grpc.ServerStreamingServer[StreamLiveSessionResponse]
+
+func _ClydeService_StopLiveSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StopLiveSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).StopLiveSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_StopLiveSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).StopLiveSession(ctx, req.(*StopLiveSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClydeService_AcquireForegroundSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AcquireForegroundSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).AcquireForegroundSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_AcquireForegroundSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).AcquireForegroundSession(ctx, req.(*AcquireForegroundSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClydeService_ReleaseForegroundSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReleaseForegroundSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).ReleaseForegroundSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_ReleaseForegroundSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).ReleaseForegroundSession(ctx, req.(*ReleaseForegroundSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ClydeService_ListBridges_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListBridgesRequest)
 	if err := dec(in); err != nil {
@@ -1114,6 +1354,30 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ClydeService_StartRemoteSession_Handler,
 		},
 		{
+			MethodName: "ListLiveSessions",
+			Handler:    _ClydeService_ListLiveSessions_Handler,
+		},
+		{
+			MethodName: "StartLiveSession",
+			Handler:    _ClydeService_StartLiveSession_Handler,
+		},
+		{
+			MethodName: "SendLiveSession",
+			Handler:    _ClydeService_SendLiveSession_Handler,
+		},
+		{
+			MethodName: "StopLiveSession",
+			Handler:    _ClydeService_StopLiveSession_Handler,
+		},
+		{
+			MethodName: "AcquireForegroundSession",
+			Handler:    _ClydeService_AcquireForegroundSession_Handler,
+		},
+		{
+			MethodName: "ReleaseForegroundSession",
+			Handler:    _ClydeService_ReleaseForegroundSession_Handler,
+		},
+		{
 			MethodName: "ListBridges",
 			Handler:    _ClydeService_ListBridges_Handler,
 		},
@@ -1139,6 +1403,11 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "SubscribeProviderStats",
 			Handler:       _ClydeService_SubscribeProviderStats_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "StreamLiveSession",
+			Handler:       _ClydeService_StreamLiveSession_Handler,
 			ServerStreams: true,
 		},
 		{

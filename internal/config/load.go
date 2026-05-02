@@ -12,13 +12,12 @@ import (
 	"goodkind.io/clyde/internal/util"
 )
 
-// loadConfig tries to load config from a directory, preferring .toml over .json.
+// loadConfig tries to load config.toml from a directory.
 // Uses pelletier/go-toml/v2; the older BurntSushi/toml dep is now unmaintained
 // and was removed. Pelletier mirrors the same Marshal / Unmarshal API surface
 // so the migration is a one-line import swap on each call.
 func loadConfig(dir string) (*Config, error) {
 	log := slog.Default().With("concern", "process.daemon.config")
-	// Prefer TOML
 	tomlPath := filepath.Join(dir, "config.toml")
 	if util.FileExists(tomlPath) {
 		var cfg Config
@@ -62,30 +61,11 @@ func loadConfig(dir string) (*Config, error) {
 		return &cfg, nil
 	}
 
-	// Fall back to JSON
-	jsonPath := filepath.Join(dir, "config.json")
-	if util.FileExists(jsonPath) {
-		var cfg Config
-		if err := util.ReadJSON(jsonPath, &cfg); err != nil {
-			return nil, err
-		}
-		if err := applyLoggingDefaultsAndValidate(&cfg); err != nil {
-			return nil, err
-		}
-		log.Debug("config.load.loaded",
-			"component", "config",
-			"subcomponent", "load",
-			"format", "json",
-			"path", jsonPath,
-		)
-		return &cfg, nil
-	}
-
 	return nil, os.ErrNotExist
 }
 
 // LoadGlobalOrDefault loads the global ~/.config/clyde/ config.
-// Prefers config.toml over config.json. Returns empty config if neither exists.
+// Returns empty config if config.toml does not exist.
 func LoadGlobalOrDefault() (*Config, error) {
 	globalDir := filepath.Dir(GlobalConfigPath()) // ~/.config/clyde/
 	cfg, err := loadConfig(globalDir)
@@ -102,8 +82,7 @@ func LoadGlobalOrDefault() (*Config, error) {
 }
 
 // SaveGlobal writes the config back to the global location as TOML.
-// The directory is created if missing. Existing JSON files are not
-// migrated; callers can delete the JSON manually after the TOML lands.
+// The directory is created if missing.
 func SaveGlobal(cfg *Config) error {
 	if cfg == nil {
 		return fmt.Errorf("nil config")

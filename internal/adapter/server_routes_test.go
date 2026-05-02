@@ -20,7 +20,7 @@ import (
 )
 
 func TestStartOnListenerServesHealth(t *testing.T) {
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	lis, err := net.Listen("tcp", "[::1]:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestStartOnListenerServesHealth(t *testing.T) {
 }
 
 func TestShutdownClosesIdleKeepaliveConnection(t *testing.T) {
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	lis, err := net.Listen("tcp", "[::1]:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestShutdownClosesIdleKeepaliveConnection(t *testing.T) {
 }
 
 func TestCloseForceClosesActiveConnection(t *testing.T) {
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	lis, err := net.Listen("tcp", "[::1]:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -233,12 +233,9 @@ func TestAnthropicMessagesRouteUsesNativeIngress(t *testing.T) {
 func TestAnthropicMessagesRoutePreservesNativeClaudeModelID(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Enabled = true
-	cfg.FallbackShunt = "local"
-	cfg.Shunts = map[string]config.AdapterShunt{
-		"local": {
-			BaseURL: "http://localhost:1234",
-			Model:   "local-model",
-		},
+	cfg.OpenAICompatPassthrough = config.AdapterOpenAICompatPassthrough{
+		BaseURL: "http://localhost:1234",
+		Model:   "local-model",
 	}
 	srv, err := New(cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {

@@ -95,15 +95,18 @@ implementation. Avoid adding session transcripts or dated progress logs here.
 - `gpt-5.4` is currently treated as the 1m-capable GPT alias in Clyde. `gpt-5.5`
   should be treated as about `272000` input context unless fresh upstream
   evidence proves otherwise.
-- Clyde-specific GPT aliases are now declared under `[adapter.codex.models]`
-  and must include an effort segment. For example, `clyde-gpt-5.5-high`
+- Clyde-specific GPT/Codex aliases are now declared under `[adapter.codex.models]`
+  and must include an effort segment. For example, `clyde-codex-5.5-high`
   advertises `272000` context and normalizes upstream to `gpt-5.5`, while
   `clyde-gpt-5.4-1m-medium` advertises `1000000` context and normalizes
   upstream to `gpt-5.4`.
 - Cursor still sent oversized `clyde-gpt-5.5` requests before bare non-effort
-  aliases were removed. Recent failing turns had about `1697776` request-body
-  bytes, `1169` input items, and `previous_response_id` present; Clyde resolved
-  the request to `272000` before forwarding upstream to `gpt-5.5`.
+  aliases were removed, and Cursor later mangled `gpt-5.5` / `gpt-5-5`-looking
+  model ids. Current GPT 5.5 aliases use the `clyde-codex-5.5-*` prefix to avoid
+  that native-catalog path. Recent failing turns had about `1697776`
+  request-body bytes, `1169` input items, and `previous_response_id` present;
+  Clyde resolved the request to `272000` before forwarding upstream to
+  `gpt-5.5`.
 - Therefore `/v1/models` metadata is necessary but not sufficient for reliable
   protection. Clyde needs adapter-side preflight for known context-window
   overflows so it can reject before opening an upstream Codex turn, and the

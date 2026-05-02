@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,7 +30,7 @@ const DefaultPort = 11435
 
 // DefaultHost is the loopback bind. The dashboard never binds a
 // public interface unless the user explicitly sets WebAppConfig.Host.
-const DefaultHost = "[::1]"
+const DefaultHost = "::1"
 
 // Bridge is the daemon side view of one active remote control
 // session. The webapp does not import the daemon protobuf, so the
@@ -144,7 +145,18 @@ func (s *Server) Addr() string {
 	if port <= 0 {
 		port = DefaultPort
 	}
-	return net.JoinHostPort(host, strconv.Itoa(port))
+	return net.JoinHostPort(normalizeListenHost(host), strconv.Itoa(port))
+}
+
+func normalizeListenHost(host string) string {
+	trimmed := strings.TrimSpace(host)
+	if len(trimmed) >= 2 && strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+		inner := strings.TrimSpace(trimmed[1 : len(trimmed)-1])
+		if strings.Contains(inner, ":") {
+			return inner
+		}
+	}
+	return trimmed
 }
 
 // StartOnListener serves the dashboard on an already-bound listener.

@@ -25,12 +25,17 @@ func (s *Server) dispatchAnthropicProvider(
 	effort string,
 	reqID string,
 	resolvedReq adapterresolver.ResolvedRequest,
-) error {
+) {
 	ctx := anthropic.WithRequestID(r.Context(), reqID)
+	var err error
 	if resolvedReq.OpenAI.Stream {
-		return s.dispatchAnthropicProviderStream(ctx, w, reqID, resolvedReq)
+		err = s.dispatchAnthropicProviderStream(ctx, w, reqID, resolvedReq)
+	} else {
+		err = s.dispatchAnthropicProviderCollect(ctx, w, effort, resolvedReq)
 	}
-	return s.dispatchAnthropicProviderCollect(ctx, w, effort, resolvedReq)
+	if err != nil {
+		s.respondAdapterError(w, r, err)
+	}
 }
 
 func (s *Server) dispatchAnthropicProviderCollect(
@@ -42,12 +47,10 @@ func (s *Server) dispatchAnthropicProviderCollect(
 	collector := newProviderCollectorWriter()
 	result, runErr := s.anthropicProvider.Execute(ctx, resolvedReq, collector)
 	if runErr != nil {
-		writeAnthropicProviderError(w, runErr)
-		return nil
+		return anthropicProviderAdapterError(runErr)
 	}
 	if result.FinalResponse == nil {
-		writeError(w, http.StatusBadGateway, "upstream_error", "anthropic provider collect path produced no final response")
-		return nil
+		return adapterErrUpstreamFailed("anthropic", "anthropic provider collect path produced no final response", nil)
 	}
 	writeJSON(w, http.StatusOK, *result.FinalResponse)
 	return nil
@@ -62,13 +65,13 @@ func (s *Server) dispatchAnthropicProviderStream(
 	model := anthropicResolvedModelFromRequest(resolvedReq)
 	streamWriter, err := newProviderStreamWriter(s, w, reqID, model.Alias, "anthropic")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
-		return nil
+		return adapterErrInternal(err.Error(), err)
 	}
 	_, runErr := s.anthropicProvider.Execute(ctx, resolvedReq, streamWriter)
 	if runErr != nil {
+		aerr := anthropicProviderAdapterError(runErr)
 		if streamWriter.headersWritten {
-			if err := streamWriter.writeStreamError("upstream_error", runErr.Error()); err != nil {
+			if err := streamWriter.writeStreamErrorBody(aerr.openAIErrorBody()); err != nil {
 				s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_write_failed",
 					slog.String("backend", "anthropic"),
 					slog.String("request_id", reqID),
@@ -77,8 +80,7 @@ func (s *Server) dispatchAnthropicProviderStream(
 			}
 			return nil
 		}
-		writeAnthropicProviderError(w, runErr)
-		return nil
+		return aerr
 	}
 	return nil
 }
@@ -275,13 +277,41 @@ func (s *Server) executeAnthropicPreparedStreamNative(
 	return adapterprovider.Result{}, nil
 }
 
-func writeAnthropicProviderError(w http.ResponseWriter, err error) {
+func anthropicProviderAdapterError(err error) *adapterError {
 	var execErr *anthropic.ExecuteError
 	if errors.As(err, &execErr) {
-		writeError(w, execErr.Status, execErr.Code, execErr.Message)
-		return
+		aerr := adapterErrUpstreamFailed("anthropic", execErr.Message, execErr)
+		aerr.HTTPStatus = execErr.Status
+		aerr.OpenAIType = execErr.Code
+		aerr.OpenAICode = execErr.Code
+		aerr.AnthropicType = anthropicErrorType(execErr.Status, execErr.Code)
+		return aerr
 	}
-	writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
+	if upstreamErr, ok := anthropic.AsUpstreamError(err); ok {
+		status := upstreamErr.Status
+		if status == 0 {
+			status = http.StatusBadGateway
+		}
+		var aerr *adapterError
+		message := upstreamErr.Message
+		if message == "" {
+			message = upstreamErr.Error()
+		}
+		switch {
+		case upstreamErr.Class() == anthropic.ResponseClassRetryableError && upstreamErr.Status == http.StatusTooManyRequests:
+			aerr = newAdapterError(adapterErrorRateLimited, message)
+		case upstreamErr.Class() == anthropic.ResponseClassRetryableError:
+			aerr = newAdapterError(adapterErrorUpstreamUnavailable, message)
+		default:
+			aerr = newAdapterError(adapterErrorUpstreamFailed, message)
+		}
+		aerr.HTTPStatus = status
+		aerr.Provider = "anthropic"
+		aerr.UpstreamStatus = upstreamErr.Status
+		aerr.Cause = err
+		return aerr
+	}
+	return adapterErrUpstreamFailed("anthropic", err.Error(), err)
 }
 
 func anthropicResolvedModelFromRequest(req adapterresolver.ResolvedRequest) adaptermodel.ResolvedModel {

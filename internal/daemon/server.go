@@ -86,6 +86,7 @@ type Server struct {
 	remoteMu      sync.Mutex
 	remoteWorkers map[string]*remoteWorker
 	liveSessions  map[string]*liveRuntimeSession
+	liveLeases    map[string]*foregroundLease
 
 	contextMu         sync.Mutex
 	contextStates     map[string]sessionContextState
@@ -110,6 +111,8 @@ type remoteWorker struct {
 	sessionID   string
 	incognito   bool
 	cmd         *exec.Cmd
+	done        chan struct{}
+	skipCleanup atomic.Bool
 }
 
 type liveRuntimeSession struct {
@@ -122,6 +125,20 @@ type liveRuntimeSession struct {
 	startedAt    time.Time
 	lastTurnID   string
 	codexRuntime codex.LiveRuntime
+}
+
+type foregroundLease struct {
+	token         string
+	provider      session.ProviderID
+	sessionName   string
+	sessionID     string
+	basedir       string
+	model         string
+	status        string
+	incognito     bool
+	shouldRestore bool
+	restoreReason string
+	acquiredAt    time.Time
 }
 
 var remoteWorkerExecutable = os.Executable
@@ -196,6 +213,7 @@ func New(log *slog.Logger) (*Server, error) {
 		providerStats:     newProviderStatsHub(log),
 		remoteWorkers:     make(map[string]*remoteWorker),
 		liveSessions:      make(map[string]*liveRuntimeSession),
+		liveLeases:        make(map[string]*foregroundLease),
 		contextStates:     make(map[string]sessionContextState),
 		contextRefreshSem: make(chan contextRefreshPermit, 2),
 	}
@@ -1970,6 +1988,7 @@ func (s *Server) StartRemoteSession(ctx context.Context, req *clydev1.StartRemot
 		sessionID:   sessionID,
 		incognito:   req.GetIncognito(),
 		cmd:         cmd,
+		done:        make(chan struct{}),
 	}
 	s.remoteMu.Lock()
 	s.remoteWorkers[name] = worker
@@ -2288,8 +2307,13 @@ func (s *Server) waitRemoteWorker(worker *remoteWorker) {
 		return
 	}
 	err := worker.cmd.Wait()
+	if worker.done != nil {
+		close(worker.done)
+	}
 	s.remoteMu.Lock()
-	delete(s.remoteWorkers, worker.sessionName)
+	if current := s.remoteWorkers[worker.sessionName]; current == worker {
+		delete(s.remoteWorkers, worker.sessionName)
+	}
 	s.remoteMu.Unlock()
 	level := slog.LevelInfo
 	if err != nil {
@@ -2302,7 +2326,7 @@ func (s *Server) waitRemoteWorker(worker *remoteWorker) {
 		slog.Bool("incognito", worker.incognito),
 		slog.Any("err", err),
 	)
-	if !worker.incognito {
+	if !worker.incognito || worker.skipCleanup.Load() {
 		return
 	}
 	if _, delErr := s.DeleteSession(context.Background(), &clydev1.DeleteSessionRequest{Name: worker.sessionName}); delErr != nil {

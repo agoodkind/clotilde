@@ -203,7 +203,7 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		want := "Bearer " + s.token
 		if r.Header.Get("Authorization") != want {
-			writeError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid bearer token")
+			s.respondAdapterError(w, r, newAdapterError(adapterErrorAuthFailed, "missing or invalid bearer token"))
 			return
 		}
 		next(w, r)
@@ -218,7 +218,7 @@ func (s *Server) authAnthropic(next http.HandlerFunc) http.HandlerFunc {
 		}
 		want := "Bearer " + s.token
 		if r.Header.Get("Authorization") != want {
-			writeAnthropicError(w, http.StatusUnauthorized, "authentication_error", "missing or invalid bearer token")
+			s.respondAdapterError(w, r, newAdapterError(adapterErrorAuthFailed, "missing or invalid bearer token"))
 			return
 		}
 		next(w, r)

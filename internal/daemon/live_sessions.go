@@ -1,0 +1,711 @@
+package daemon
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
+
+	clydev1 "goodkind.io/clyde/api/clyde/v1"
+	"goodkind.io/clyde/internal/codex"
+	"goodkind.io/clyde/internal/session"
+	"goodkind.io/clyde/internal/util"
+	"goodkind.io/clyde/internal/webapp"
+)
+
+var newCodexLiveRuntime = codex.NewLiveRuntime
+
+func (s *Server) ListLiveSessions(context.Context, *clydev1.ListLiveSessionsRequest) (*clydev1.ListLiveSessionsResponse, error) {
+	s.remoteMu.Lock()
+	defer s.remoteMu.Unlock()
+	out := make([]*clydev1.LiveSession, 0, len(s.liveSessions))
+	for _, live := range s.liveSessions {
+		out = append(out, protoLiveSessionFromRecord(live))
+	}
+	return &clydev1.ListLiveSessionsResponse{Sessions: out}, nil
+}
+
+func (s *Server) StartLiveSession(ctx context.Context, req *clydev1.StartLiveSessionRequest) (*clydev1.StartLiveSessionResponse, error) {
+	peerInfo, _ := peer.FromContext(ctx)
+	provider := session.NormalizeProviderID(session.ProviderID(strings.TrimSpace(req.GetProvider())))
+	if provider == session.ProviderUnknown {
+		provider = session.ProviderCodex
+	}
+	switch provider {
+	case session.ProviderClaude:
+		return s.startClaudeLiveSession(ctx, req, daemonPeerAddr(peerInfo))
+	case session.ProviderCodex:
+		return s.startCodexLiveSession(ctx, req, daemonPeerAddr(peerInfo))
+	default:
+		return nil, status.Errorf(codes.InvalidArgument, "live provider %q is not supported", provider)
+	}
+}
+
+func (s *Server) SendLiveSession(ctx context.Context, req *clydev1.SendLiveSessionRequest) (*clydev1.SendLiveSessionResponse, error) {
+	sessionID := strings.TrimSpace(req.GetSessionId())
+	if sessionID == "" {
+		return nil, status.Error(codes.InvalidArgument, "session_id is required")
+	}
+	if live := s.liveSessionByID(sessionID); live != nil {
+		if live.provider == session.ProviderCodex {
+			return s.sendCodexLiveSession(ctx, live, req.GetText())
+		}
+	}
+	target, err := resolveSessionRuntime("", "", sessionID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "resolve session runtime: %v", err)
+	}
+	if target.Provider == session.ProviderClaude {
+		resp, err := s.SendToSession(ctx, &clydev1.SendToSessionRequest{
+			SessionId: sessionID,
+			Text:      req.GetText(),
+			Provider:  string(session.ProviderClaude),
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &clydev1.SendLiveSessionResponse{Accepted: resp.GetDelivered()}, nil
+	}
+	live, err := s.liveSessionRecord(ctx, sessionID)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "live session %q: %v", sessionID, err)
+	}
+	return s.sendCodexLiveSession(ctx, live, req.GetText())
+}
+
+func (s *Server) StreamLiveSession(req *clydev1.StreamLiveSessionRequest, stream clydev1.ClydeService_StreamLiveSessionServer) error {
+	_, _ = peer.FromContext(stream.Context())
+	sessionID := strings.TrimSpace(req.GetSessionId())
+	if sessionID == "" {
+		return status.Error(codes.InvalidArgument, "session_id is required")
+	}
+	events, err := s.streamLiveSessionEvents(stream.Context(), sessionID)
+	if err != nil {
+		return err
+	}
+	for {
+		select {
+		case event, ok := <-events:
+			if !ok {
+				return nil
+			}
+			if err := stream.Send(protoStreamLiveSessionEvent(event)); err != nil {
+				return err
+			}
+		case <-stream.Context().Done():
+			return nil
+		}
+	}
+}
+
+func (s *Server) StopLiveSession(ctx context.Context, req *clydev1.StopLiveSessionRequest) (*clydev1.StopLiveSessionResponse, error) {
+	sessionID := strings.TrimSpace(req.GetSessionId())
+	if sessionID == "" {
+		return nil, status.Error(codes.InvalidArgument, "session_id is required")
+	}
+	live := s.liveSessionByID(sessionID)
+	if live == nil {
+		target, err := resolveSessionRuntime("", "", sessionID)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "resolve session runtime: %v", err)
+		}
+		if target.Provider == session.ProviderClaude {
+			return nil, status.Error(codes.FailedPrecondition, "claude live sessions are stopped from their owning terminal")
+		}
+		return nil, status.Errorf(codes.NotFound, "live session %q not found", sessionID)
+	}
+	if live.provider != session.ProviderCodex {
+		return nil, status.Errorf(codes.FailedPrecondition, "live provider %q does not support daemon stop", live.provider)
+	}
+	if live.lastTurnID != "" {
+		if err := live.codexRuntime.Stop(ctx, codex.LiveStopRequest{ThreadID: live.id, TurnID: live.lastTurnID}); err != nil {
+			return nil, status.Errorf(codes.Internal, "stop live turn: %v", err)
+		}
+	}
+	if err := live.codexRuntime.Close(); err != nil {
+		return nil, status.Errorf(codes.Internal, "close live runtime: %v", err)
+	}
+	s.remoteMu.Lock()
+	delete(s.liveSessions, live.id)
+	s.remoteMu.Unlock()
+	return &clydev1.StopLiveSessionResponse{Stopped: true}, nil
+}
+
+func (s *Server) AcquireForegroundSession(ctx context.Context, req *clydev1.AcquireForegroundSessionRequest) (*clydev1.AcquireForegroundSessionResponse, error) {
+	_, _ = peer.FromContext(ctx)
+	if strings.TrimSpace(req.GetSessionName()) == "" && strings.TrimSpace(req.GetSessionId()) == "" {
+		return nil, status.Error(codes.InvalidArgument, "session_name or session_id is required")
+	}
+	target, err := resolveSessionRuntime(req.GetSessionName(), req.GetProvider(), req.GetSessionId())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "resolve session runtime: %v", err)
+	}
+	if target.Session == nil {
+		return nil, status.Errorf(codes.NotFound, "no session runtime for %q", req.GetSessionId())
+	}
+	token, err := util.GenerateUUIDE()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "generate lease token: %v", err)
+	}
+	lease := &foregroundLease{
+		token:       token,
+		provider:    target.Provider,
+		sessionName: target.Session.Name,
+		sessionID:   target.SessionID,
+		basedir:     liveSessionStoredBasedir(target.Session),
+		acquiredAt:  daemonNow(),
+	}
+	if lease.basedir == "" {
+		lease.basedir = strings.TrimSpace(target.Session.Metadata.WorkDir)
+	}
+	switch target.Provider {
+	case session.ProviderCodex:
+		if err := s.suspendCodexLiveForForeground(ctx, lease); err != nil {
+			return nil, err
+		}
+	case session.ProviderClaude:
+		if err := s.suspendClaudeRemoteForForeground(lease); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support foreground handoff", target.Provider)
+	}
+	s.remoteMu.Lock()
+	s.liveLeases[token] = lease
+	s.remoteMu.Unlock()
+	s.log.InfoContext(ctx, "daemon.foreground_session.acquired",
+		"component", "daemon",
+		"provider", lease.provider,
+		"session", lease.sessionName,
+		"session_id", lease.sessionID,
+		"restore", lease.shouldRestore,
+		"restore_reason", lease.restoreReason,
+	)
+	return &clydev1.AcquireForegroundSessionResponse{
+		LeaseToken:    lease.token,
+		Provider:      string(lease.provider),
+		SessionName:   lease.sessionName,
+		SessionId:     lease.sessionID,
+		ShouldRestore: lease.shouldRestore,
+		RestoreReason: lease.restoreReason,
+	}, nil
+}
+
+func (s *Server) ReleaseForegroundSession(ctx context.Context, req *clydev1.ReleaseForegroundSessionRequest) (*clydev1.ReleaseForegroundSessionResponse, error) {
+	_, _ = peer.FromContext(ctx)
+	token := strings.TrimSpace(req.GetLeaseToken())
+	if token == "" {
+		return nil, status.Error(codes.InvalidArgument, "lease_token is required")
+	}
+	s.remoteMu.Lock()
+	lease := s.liveLeases[token]
+	delete(s.liveLeases, token)
+	s.remoteMu.Unlock()
+	if lease == nil {
+		return &clydev1.ReleaseForegroundSessionResponse{}, nil
+	}
+	if !lease.shouldRestore {
+		s.log.InfoContext(ctx, "daemon.foreground_session.released",
+			"component", "daemon",
+			"provider", lease.provider,
+			"session", lease.sessionName,
+			"session_id", lease.sessionID,
+			"exit_state", strings.TrimSpace(req.GetExitState()),
+			"restored", false,
+		)
+		return &clydev1.ReleaseForegroundSessionResponse{}, nil
+	}
+	var live *clydev1.LiveSession
+	var err error
+	switch lease.provider {
+	case session.ProviderCodex:
+		live, err = s.restoreCodexLiveAfterForeground(ctx, lease)
+	case session.ProviderClaude:
+		live, err = s.restoreClaudeRemoteAfterForeground(lease)
+	default:
+		err = fmt.Errorf("unsupported provider %q", lease.provider)
+	}
+	if err != nil {
+		s.log.WarnContext(ctx, "daemon.foreground_session.restore_failed",
+			"component", "daemon",
+			"provider", lease.provider,
+			"session", lease.sessionName,
+			"session_id", lease.sessionID,
+			"exit_state", strings.TrimSpace(req.GetExitState()),
+			"err", err,
+		)
+		return &clydev1.ReleaseForegroundSessionResponse{Restored: false}, nil
+	}
+	s.log.InfoContext(ctx, "daemon.foreground_session.released",
+		"component", "daemon",
+		"provider", lease.provider,
+		"session", lease.sessionName,
+		"session_id", lease.sessionID,
+		"exit_state", strings.TrimSpace(req.GetExitState()),
+		"restored", true,
+	)
+	return &clydev1.ReleaseForegroundSessionResponse{Restored: true, LiveSession: live}, nil
+}
+
+func (s *Server) startClaudeLiveSession(ctx context.Context, req *clydev1.StartLiveSessionRequest, peerAddr string) (*clydev1.StartLiveSessionResponse, error) {
+	_, _ = peer.FromContext(ctx)
+	basedir, err := liveSessionLaunchBasedir(req.GetName(), req.GetBasedir())
+	if err != nil {
+		return nil, err
+	}
+	resp, err := s.StartRemoteSession(ctx, &clydev1.StartRemoteSessionRequest{
+		SessionName: req.GetName(),
+		Basedir:     basedir,
+		Incognito:   req.GetIncognito(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.log.InfoContext(ctx, "daemon.live_session.started",
+		"component", "daemon",
+		"provider", session.ProviderClaude,
+		"session", resp.GetSessionName(),
+		"session_id", resp.GetSessionId(),
+		"peer_addr", peerAddr,
+	)
+	return &clydev1.StartLiveSessionResponse{Session: &clydev1.LiveSession{
+		Provider:       string(session.ProviderClaude),
+		SessionName:    resp.GetSessionName(),
+		SessionId:      resp.GetSessionId(),
+		Status:         resp.GetLaunchState().String(),
+		Basedir:        basedir,
+		SupportsSend:   true,
+		SupportsStream: true,
+		SupportsStop:   false,
+	}}, nil
+}
+
+func (s *Server) startCodexLiveSession(ctx context.Context, req *clydev1.StartLiveSessionRequest, peerAddr string) (*clydev1.StartLiveSessionResponse, error) {
+	_, _ = peer.FromContext(ctx)
+	basedir, err := liveSessionLaunchBasedir(req.GetName(), req.GetBasedir())
+	if err != nil {
+		return nil, err
+	}
+	runtime := newCodexLiveRuntime(codex.LiveRuntimeOptions{WorkDir: basedir})
+	live, err := runtime.Start(ctx, codex.LiveStartRequest{
+		WorkDir:     basedir,
+		Model:       strings.TrimSpace(req.GetModel()),
+		SessionName: strings.TrimSpace(req.GetName()),
+		Ephemeral:   req.GetIncognito(),
+	})
+	if err != nil {
+		_ = runtime.Close()
+		return nil, status.Errorf(codes.Internal, "start codex live session: %v", err)
+	}
+	name := strings.TrimSpace(req.GetName())
+	if name == "" {
+		name = live.ThreadID
+	}
+	record := &liveRuntimeSession{
+		provider:     session.ProviderCodex,
+		name:         name,
+		id:           live.ThreadID,
+		basedir:      live.WorkDir,
+		model:        live.Model,
+		status:       "idle",
+		startedAt:    daemonNow(),
+		codexRuntime: runtime,
+	}
+	if record.basedir == "" {
+		record.basedir = basedir
+	}
+	if record.model == "" {
+		record.model = strings.TrimSpace(req.GetModel())
+	}
+	s.remoteMu.Lock()
+	s.liveSessions[record.id] = record
+	s.remoteMu.Unlock()
+	s.log.InfoContext(ctx, "daemon.live_session.started",
+		"component", "daemon",
+		"provider", session.ProviderCodex,
+		"session", record.name,
+		"session_id", record.id,
+		"basedir", record.basedir,
+		"peer_addr", peerAddr,
+	)
+	return &clydev1.StartLiveSessionResponse{Session: protoLiveSessionFromRecord(record)}, nil
+}
+
+func liveSessionLaunchBasedir(sessionName, requestedBasedir string) (string, error) {
+	basedir := strings.TrimSpace(requestedBasedir)
+	if basedir != "" {
+		return basedir, nil
+	}
+	name := strings.TrimSpace(sessionName)
+	if name == "" {
+		return "", status.Error(codes.InvalidArgument, "basedir is required when no stored session name is provided")
+	}
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		return "", status.Errorf(codes.Internal, "store init: %v", err)
+	}
+	sess, err := store.Resolve(name)
+	if err != nil {
+		return "", status.Errorf(codes.NotFound, "resolve session %q: %v", name, err)
+	}
+	if sess == nil {
+		return "", status.Errorf(codes.NotFound, "session %q not found", name)
+	}
+	if basedir = strings.TrimSpace(sess.Metadata.WorkDir); basedir != "" {
+		return basedir, nil
+	}
+	if basedir = strings.TrimSpace(sess.Metadata.WorkspaceRoot); basedir != "" {
+		return basedir, nil
+	}
+	return "", status.Errorf(codes.FailedPrecondition, "stored session %q has no basedir; choose a folder explicitly", name)
+}
+
+func liveSessionStoredBasedir(sess *session.Session) string {
+	if sess == nil {
+		return ""
+	}
+	if basedir := strings.TrimSpace(sess.Metadata.WorkDir); basedir != "" {
+		return basedir
+	}
+	return strings.TrimSpace(sess.Metadata.WorkspaceRoot)
+}
+
+func (s *Server) suspendCodexLiveForForeground(ctx context.Context, lease *foregroundLease) error {
+	if lease == nil {
+		return nil
+	}
+	s.remoteMu.Lock()
+	live := s.liveSessions[lease.sessionID]
+	if live != nil {
+		delete(s.liveSessions, lease.sessionID)
+		lease.shouldRestore = true
+		lease.restoreReason = "codex_live_runtime"
+		lease.basedir = firstNonEmpty(live.basedir, lease.basedir)
+		lease.model = live.model
+		lease.status = live.status
+	}
+	s.remoteMu.Unlock()
+	if live == nil {
+		return nil
+	}
+	if live.lastTurnID != "" {
+		if err := live.codexRuntime.Stop(ctx, codex.LiveStopRequest{ThreadID: live.id, TurnID: live.lastTurnID}); err != nil {
+			s.log.WarnContext(ctx, "daemon.foreground_session.codex_stop_failed",
+				"component", "daemon",
+				"session", lease.sessionName,
+				"session_id", lease.sessionID,
+				"err", err,
+			)
+		}
+	}
+	if err := live.codexRuntime.Close(); err != nil {
+		return status.Errorf(codes.Internal, "close codex live runtime: %v", err)
+	}
+	return nil
+}
+
+func (s *Server) restoreCodexLiveAfterForeground(ctx context.Context, lease *foregroundLease) (*clydev1.LiveSession, error) {
+	_, _ = peer.FromContext(ctx)
+	runtime := newCodexLiveRuntime(codex.LiveRuntimeOptions{WorkDir: lease.basedir})
+	attached, err := runtime.Attach(ctx, codex.LiveAttachRequest{ThreadID: lease.sessionID})
+	if err != nil {
+		_ = runtime.Close()
+		s.log.WarnContext(ctx, "daemon.foreground_session.codex_restore_attach_failed",
+			"component", "daemon",
+			"session", lease.sessionName,
+			"session_id", lease.sessionID,
+			"err", err,
+		)
+		return nil, fmt.Errorf("attach codex live runtime: %w", err)
+	}
+	record := &liveRuntimeSession{
+		provider:     session.ProviderCodex,
+		name:         firstNonEmpty(lease.sessionName, attached.ThreadID),
+		id:           attached.ThreadID,
+		basedir:      firstNonEmpty(attached.WorkDir, lease.basedir),
+		model:        firstNonEmpty(attached.Model, lease.model),
+		status:       firstNonEmpty(lease.status, "attached"),
+		startedAt:    daemonNow(),
+		codexRuntime: runtime,
+	}
+	s.remoteMu.Lock()
+	s.liveSessions[record.id] = record
+	s.remoteMu.Unlock()
+	return protoLiveSessionFromRecord(record), nil
+}
+
+func (s *Server) suspendClaudeRemoteForForeground(lease *foregroundLease) error {
+	if lease == nil {
+		return nil
+	}
+	s.remoteMu.Lock()
+	worker := s.remoteWorkers[lease.sessionName]
+	if worker == nil {
+		for _, candidate := range s.remoteWorkers {
+			if candidate != nil && candidate.sessionID == lease.sessionID {
+				worker = candidate
+				break
+			}
+		}
+	}
+	if worker != nil {
+		worker.skipCleanup.Store(true)
+		delete(s.remoteWorkers, worker.sessionName)
+		lease.shouldRestore = true
+		lease.restoreReason = "claude_remote_worker"
+		lease.incognito = worker.incognito
+	}
+	s.remoteMu.Unlock()
+	if worker == nil || worker.cmd == nil || worker.cmd.Process == nil {
+		return nil
+	}
+	if err := worker.cmd.Process.Signal(os.Interrupt); err != nil {
+		if killErr := worker.cmd.Process.Kill(); killErr != nil {
+			return status.Errorf(codes.Internal, "stop claude remote worker: %v", killErr)
+		}
+		return nil
+	}
+	if worker.done == nil {
+		return nil
+	}
+	select {
+	case <-worker.done:
+		return nil
+	case <-time.After(2 * time.Second):
+		if err := worker.cmd.Process.Kill(); err != nil {
+			return status.Errorf(codes.Internal, "kill claude remote worker after interrupt timeout: %v", err)
+		}
+		select {
+		case <-worker.done:
+		case <-time.After(1 * time.Second):
+		}
+	}
+	return nil
+}
+
+func (s *Server) restoreClaudeRemoteAfterForeground(lease *foregroundLease) (*clydev1.LiveSession, error) {
+	basedir := strings.TrimSpace(lease.basedir)
+	if basedir == "" {
+		return nil, fmt.Errorf("missing basedir for claude remote restore")
+	}
+	cmd, err := s.startRemoteWorkerProcess(lease.sessionName, lease.sessionID, basedir, lease.incognito)
+	if err != nil {
+		return nil, fmt.Errorf("launch claude remote worker: %w", err)
+	}
+	worker := &remoteWorker{
+		sessionName: lease.sessionName,
+		sessionID:   lease.sessionID,
+		incognito:   lease.incognito,
+		cmd:         cmd,
+		done:        make(chan struct{}),
+	}
+	s.remoteMu.Lock()
+	s.remoteWorkers[worker.sessionName] = worker
+	s.remoteMu.Unlock()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				s.log.WarnContext(context.Background(), "daemon.remote_session.wait_panicked",
+					"component", "daemon",
+					"session", worker.sessionName,
+					"session_id", worker.sessionID,
+					"panic", r,
+				)
+			}
+		}()
+		s.waitRemoteWorker(worker)
+	}()
+	return &clydev1.LiveSession{
+		Provider:       string(session.ProviderClaude),
+		SessionName:    lease.sessionName,
+		SessionId:      lease.sessionID,
+		Status:         "launching",
+		Basedir:        basedir,
+		SupportsSend:   true,
+		SupportsStream: true,
+		SupportsStop:   false,
+	}, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func (s *Server) sendCodexLiveSession(ctx context.Context, live *liveRuntimeSession, text string) (*clydev1.SendLiveSessionResponse, error) {
+	turn, err := live.codexRuntime.Send(ctx, codex.LiveSendRequest{
+		ThreadID: live.id,
+		Text:     text,
+		WorkDir:  live.basedir,
+		Model:    live.model,
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "send codex live turn: %v", err)
+	}
+	s.remoteMu.Lock()
+	live.lastTurnID = turn.TurnID
+	live.status = string(turn.Status)
+	s.remoteMu.Unlock()
+	return &clydev1.SendLiveSessionResponse{Accepted: true}, nil
+}
+
+func (s *Server) streamLiveSessionEvents(ctx context.Context, sessionID string) (<-chan webapp.LiveSessionEvent, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil, status.Error(codes.InvalidArgument, "session_id is required")
+	}
+	if live := s.liveSessionByID(sessionID); live != nil {
+		if live.provider != session.ProviderCodex {
+			return nil, status.Errorf(codes.FailedPrecondition, "live provider %q does not support daemon stream", live.provider)
+		}
+		return s.streamCodexLiveSessionEvents(ctx, live)
+	}
+	target, err := resolveSessionRuntime("", "", sessionID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "resolve session runtime: %v", err)
+	}
+	if target.Provider == session.ProviderClaude {
+		return s.streamClaudeLiveSessionEvents(ctx, target)
+	}
+	live, err := s.liveSessionRecord(ctx, sessionID)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "live session %q: %v", sessionID, err)
+	}
+	return s.streamCodexLiveSessionEvents(ctx, live)
+}
+
+func (s *Server) streamCodexLiveSessionEvents(ctx context.Context, live *liveRuntimeSession) (<-chan webapp.LiveSessionEvent, error) {
+	_, _ = peer.FromContext(ctx)
+	if live.lastTurnID == "" {
+		return nil, status.Errorf(codes.FailedPrecondition, "live session %q has no active turn", live.id)
+	}
+	events, err := live.codexRuntime.Stream(ctx, codex.LiveStreamRequest{
+		ThreadID: live.id,
+		TurnID:   live.lastTurnID,
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "stream codex live turn: %v", err)
+	}
+	out := make(chan webapp.LiveSessionEvent, 32)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				s.log.WarnContext(ctx, "daemon.live_session.stream_panicked",
+					"component", "daemon",
+					"session_id", live.id,
+					"panic", r,
+				)
+			}
+		}()
+		defer close(out)
+		for event := range events {
+			if event.Err != nil {
+				out <- webapp.LiveSessionEvent{SessionID: live.id, Kind: "error", Text: event.Err.Error(), Timestamp: daemonNow()}
+				return
+			}
+			role := "assistant"
+			text := event.Delta
+			if event.Kind == codex.LiveEventCompleted {
+				role = ""
+				text = string(event.Status)
+			}
+			out <- webapp.LiveSessionEvent{SessionID: live.id, Kind: string(event.Kind), Role: role, Text: text, Timestamp: daemonNow()}
+		}
+	}()
+	return out, nil
+}
+
+func (s *Server) streamClaudeLiveSessionEvents(ctx context.Context, target resolvedSessionRuntime) (<-chan webapp.LiveSessionEvent, error) {
+	_, _ = peer.FromContext(ctx)
+	if target.Session == nil {
+		return nil, status.Errorf(codes.NotFound, "no session runtime for %q", target.SessionID)
+	}
+	if target.HistoryArtifact == "" {
+		return nil, status.Errorf(codes.NotFound, "no history artifact for session %q", target.SessionID)
+	}
+	ch, cleanup, err := s.transcripts.Subscribe(target.SessionID, target.HistoryArtifact, -1)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "open tailer: %v", err)
+	}
+	out := make(chan webapp.LiveSessionEvent, 32)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				s.log.WarnContext(ctx, "daemon.live_session.claude_stream_panicked",
+					"component", "daemon",
+					"session_id", target.SessionID,
+					"panic", r,
+				)
+			}
+		}()
+		defer cleanup()
+		defer close(out)
+		for {
+			select {
+			case line, ok := <-ch:
+				if !ok {
+					return
+				}
+				out <- webapp.LiveSessionEvent{
+					SessionID: target.SessionID,
+					Kind:      "message",
+					Role:      line.GetRole(),
+					Text:      line.GetText(),
+					Timestamp: daemonTimeFromNanos(line.GetTimestampNanos()),
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, nil
+}
+
+func (s *Server) liveSessionByID(sessionID string) *liveRuntimeSession {
+	s.remoteMu.Lock()
+	defer s.remoteMu.Unlock()
+	return s.liveSessions[sessionID]
+}
+
+func protoLiveSessionFromRecord(live *liveRuntimeSession) *clydev1.LiveSession {
+	if live == nil {
+		return nil
+	}
+	return &clydev1.LiveSession{
+		Provider:       string(live.provider),
+		SessionName:    live.name,
+		SessionId:      live.id,
+		Status:         live.status,
+		Basedir:        live.basedir,
+		StartedAtNanos: live.startedAt.UnixNano(),
+		SupportsSend:   true,
+		SupportsStream: true,
+		SupportsStop:   live.provider == session.ProviderCodex,
+	}
+}
+
+func protoStreamLiveSessionEvent(event webapp.LiveSessionEvent) *clydev1.StreamLiveSessionResponse {
+	return &clydev1.StreamLiveSessionResponse{
+		SessionId:      event.SessionID,
+		Kind:           event.Kind,
+		Role:           event.Role,
+		Text:           event.Text,
+		TimestampNanos: event.Timestamp.UnixNano(),
+	}
+}
+
+func daemonTimeFromNanos(nanos int64) time.Time {
+	if nanos <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, nanos)
+}

@@ -22,7 +22,7 @@ type CaptureSessionOptions struct {
 	Profile     LaunchProfile
 	CaptureRoot string // base dir; the session writes to <root>/<upstream>/<timestamp>/
 	CACertPath  string // mitmproxy CA cert path (e.g. ~/.mitmproxy/mitmproxy-ca-cert.pem)
-	ProxyHost   string // host:port for the proxy listener (e.g. 127.0.0.1:8888)
+	ProxyHost   string // host:port for the proxy listener (e.g. [::1]:8888)
 	ExtraArgs   []string
 	Log         *slog.Logger
 }

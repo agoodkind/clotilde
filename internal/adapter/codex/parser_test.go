@@ -74,6 +74,25 @@ func TestParseSSEMapsContextWindowFailureToTypedError(t *testing.T) {
 	}
 }
 
+func TestParseSSEMapsUnsupportedModelFailureToTypedError(t *testing.T) {
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.failed",
+		`data: {"type":"response.failed","error":{"message":"The '5.5' model is not supported when using Codex with a ChatGPT account."}}`,
+		"",
+	}, "\n") + "\n")
+	_, _, err := collectSSE(stream)
+	if err == nil {
+		t.Fatalf("ParseSSE error = nil, want unsupported model error")
+	}
+	var unsupportedErr *UnsupportedModelError
+	if !errors.As(err, &unsupportedErr) {
+		t.Fatalf("ParseSSE error type = %T, want UnsupportedModelError", err)
+	}
+	if unsupportedErr.Error() != "The '5.5' model is not supported when using Codex with a ChatGPT account." {
+		t.Fatalf("unsupported model error = %q", unsupportedErr.Error())
+	}
+}
+
 func TestParseSSEDoesNotEmitCleanupChunkForContextWindowFailure(t *testing.T) {
 	stream := strings.NewReader(strings.Join([]string{
 		"event: response.reasoning_summary_text.delta",

@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
@@ -39,7 +40,7 @@ func (s *Server) withAdapterErrorBoundary(next http.HandlerFunc) http.HandlerFun
 				if rw.wroteHeader {
 					return
 				}
-				writeAdapterRecoveredError(w, r, corr)
+				s.respondAdapterError(w, r, adapterErrInternal("adapter panic while handling request", fmt.Errorf("panic: %v", recovered)))
 			}
 		}()
 		next(rw, r)
@@ -74,22 +75,6 @@ func (w *adapterRecoveryWriter) Flush() {
 
 func (w *adapterRecoveryWriter) Unwrap() http.ResponseWriter {
 	return w.ResponseWriter
-}
-
-func writeAdapterRecoveredError(w http.ResponseWriter, r *http.Request, corr correlation.Context) {
-	message := "adapter internal error"
-	if corr.RequestID != "" {
-		message += "; see Clyde logs with request_id " + corr.RequestID
-	}
-	if strings.HasPrefix(r.URL.Path, "/v1/messages") {
-		writeAnthropicError(w, http.StatusInternalServerError, "api_error", message)
-		return
-	}
-	writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: ErrorBody{
-		Message: message,
-		Type:    "internal_error",
-		Code:    "internal_error",
-	}})
 }
 
 func correlationForRequest(r *http.Request) correlation.Context {

@@ -55,26 +55,6 @@ func TestNewRegistryDirectOAuthRequiresOAuthBlock(t *testing.T) {
 	}
 }
 
-func TestNewRegistryRejectsEnabledFallbackConfig(t *testing.T) {
-	cfg := baseConfig()
-	cfg.Fallback = config.AdapterFallback{Enabled: true}
-	if _, err := NewRegistry(cfg); err == nil {
-		t.Fatal("expected enabled fallback config to be rejected")
-	} else if !strings.Contains(err.Error(), "no longer supported") {
-		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestNewRegistryRejectsFallbackLogprobsConfig(t *testing.T) {
-	cfg := baseConfig()
-	cfg.Logprobs.Fallback = "reject"
-	if _, err := NewRegistry(cfg); err == nil {
-		t.Fatal("expected fallback logprobs config to be rejected")
-	} else if !strings.Contains(err.Error(), "no longer supported") {
-		t.Fatalf("err = %v", err)
-	}
-}
-
 func TestNewRegistryRejectsFallbackModelBackend(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Models = map[string]config.AdapterModel{
@@ -138,7 +118,7 @@ func testCodexModels() []config.AdapterCodexModel {
 			},
 		},
 		{
-			AliasPrefix:     "gpt-5.5",
+			AliasPrefix:     "codex-5.5",
 			Model:           "gpt-5.5",
 			Efforts:         []string{EffortLow, EffortMedium, EffortHigh, EffortXHigh},
 			MaxOutputTokens: 128000,
@@ -262,10 +242,10 @@ func TestListIncludesClydeGPTCodexEffortAliasesWhenRoutable(t *testing.T) {
 		{alias: "clyde-gpt-5.4-1m-medium", wantModel: "gpt-5.4", wantContext: 1000000},
 		{alias: "clyde-gpt-5.4-1m-high", wantModel: "gpt-5.4", wantContext: 1000000},
 		{alias: "clyde-gpt-5.4-1m-xhigh", wantModel: "gpt-5.4", wantContext: 1000000},
-		{alias: "clyde-gpt-5.5-low", wantModel: "gpt-5.5", wantContext: 272000},
-		{alias: "clyde-gpt-5.5-medium", wantModel: "gpt-5.5", wantContext: 272000},
-		{alias: "clyde-gpt-5.5-high", wantModel: "gpt-5.5", wantContext: 272000},
-		{alias: "clyde-gpt-5.5-xhigh", wantModel: "gpt-5.5", wantContext: 272000},
+		{alias: "clyde-codex-5.5-low", wantModel: "gpt-5.5", wantContext: 272000},
+		{alias: "clyde-codex-5.5-medium", wantModel: "gpt-5.5", wantContext: 272000},
+		{alias: "clyde-codex-5.5-high", wantModel: "gpt-5.5", wantContext: 272000},
+		{alias: "clyde-codex-5.5-xhigh", wantModel: "gpt-5.5", wantContext: 272000},
 	}
 	for _, tc := range cases {
 		model, ok := models[tc.alias]
@@ -282,18 +262,24 @@ func TestListIncludesClydeGPTCodexEffortAliasesWhenRoutable(t *testing.T) {
 			t.Fatalf("%s Context = %d want %d", tc.alias, model.Context, tc.wantContext)
 		}
 	}
-	if _, ok := models["clyde-gpt-5.5-1m-high"]; ok {
-		t.Fatalf("clyde-gpt-5.5-1m-high should not be advertised")
+	if _, ok := models["clyde-codex-5.5-1m-high"]; ok {
+		t.Fatalf("clyde-codex-5.5-1m-high should not be advertised")
 	}
-	if _, ok := models["clyde-gpt-5.5"]; !ok {
-		t.Fatalf("clyde-gpt-5.5 bare compatibility alias missing")
+	if _, ok := models["clyde-gpt-5.5-high"]; ok {
+		t.Fatalf("clyde-gpt-5.5-high should not be advertised; Cursor mangles gpt-5.5-looking aliases")
 	}
-	if _, _, err := r.Resolve("clyde-gpt-5.5", ""); err == nil {
-		t.Fatalf("clyde-gpt-5.5 should not resolve without explicit effort")
+	if _, ok := models["gpt-5.5"]; ok {
+		t.Fatalf("native gpt-5.5 should not be advertised; Cursor mangles native-looking 5.5 aliases")
 	}
-	m, effort, err := r.Resolve("clyde-gpt-5.5", EffortHigh)
+	if _, ok := models["clyde-codex-5.5"]; !ok {
+		t.Fatalf("clyde-codex-5.5 bare compatibility alias missing")
+	}
+	if _, _, err := r.Resolve("clyde-codex-5.5", ""); err == nil {
+		t.Fatalf("clyde-codex-5.5 should not resolve without explicit effort")
+	}
+	m, effort, err := r.Resolve("clyde-codex-5.5", EffortHigh)
 	if err != nil {
-		t.Fatalf("clyde-gpt-5.5 should resolve when Cursor supplies effort: %v", err)
+		t.Fatalf("clyde-codex-5.5 should resolve when Cursor supplies effort: %v", err)
 	}
 	if m.Effort != "" {
 		t.Fatalf("bare compatibility alias Effort = %q, want empty", m.Effort)
@@ -324,9 +310,9 @@ func TestResolveRoutesClydeCodexAliases(t *testing.T) {
 		t.Fatalf("ClaudeModel = %q want gpt-5.4", m.ClaudeModel)
 	}
 
-	m, effort, err := r.Resolve("clyde-gpt-5.5-high", "")
+	m, effort, err := r.Resolve("clyde-codex-5.5-high", "")
 	if err != nil {
-		t.Fatalf("Resolve clyde-gpt-5.5-high: %v", err)
+		t.Fatalf("Resolve clyde-codex-5.5-high: %v", err)
 	}
 	if m.Backend != BackendCodex {
 		t.Fatalf("backend = %q want %q", m.Backend, BackendCodex)
@@ -418,6 +404,41 @@ func TestResolveRoutesClydeCodexAliases(t *testing.T) {
 	}
 }
 
+func TestResolveExplicitConfiguredClydeCodexAliasWinsOverDynamicPrefix(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Codex.Enabled = true
+	cfg.Codex.NativeModelRouting = "codex"
+	cfg.Models = map[string]config.AdapterModel{
+		"clyde-codex-5.5": {
+			Backend: "codex",
+			Model:   "gpt-5.5",
+			Context: 272000,
+			Efforts: []string{EffortLow, EffortMedium, EffortHigh, EffortXHigh},
+		},
+	}
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	m, effort, err := r.Resolve("clyde-codex-5.5", EffortHigh)
+	if err != nil {
+		t.Fatalf("Resolve clyde-codex-5.5: %v", err)
+	}
+	if m.Backend != BackendCodex {
+		t.Fatalf("backend = %q want %q", m.Backend, BackendCodex)
+	}
+	if m.ClaudeModel != "gpt-5.5" {
+		t.Fatalf("ClaudeModel = %q want gpt-5.5", m.ClaudeModel)
+	}
+	if m.Context != 272000 {
+		t.Fatalf("Context = %d want 272000", m.Context)
+	}
+	if effort != EffortHigh {
+		t.Fatalf("effort = %q want %q", effort, EffortHigh)
+	}
+}
+
 func TestResolveDoesNotRouteCodexWhenDisabled(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Codex.Enabled = false
@@ -431,6 +452,34 @@ func TestResolveDoesNotRouteCodexWhenDisabled(t *testing.T) {
 	}
 	if m.Backend == BackendCodex {
 		t.Fatalf("backend = %q want non-codex fallback/default", m.Backend)
+	}
+}
+
+func TestResolveUnknownModelUsesOpenAICompatPassthrough(t *testing.T) {
+	cfg := baseConfig()
+	cfg.OpenAICompatPassthrough = config.AdapterOpenAICompatPassthrough{
+		BaseURL:   "http://[::1]:1234/v1",
+		APIKeyEnv: "OPENAI_API_KEY",
+	}
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	m, effort, err := r.Resolve("gpt-custom", "")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if m.Backend != BackendShunt {
+		t.Fatalf("backend = %q want %q", m.Backend, BackendShunt)
+	}
+	if m.Shunt != "" {
+		t.Fatalf("Shunt = %q want empty for direct passthrough", m.Shunt)
+	}
+	if m.OpenAICompatPassthrough.BaseURL != "http://[::1]:1234/v1" {
+		t.Fatalf("passthrough base_url = %q", m.OpenAICompatPassthrough.BaseURL)
+	}
+	if effort != "" {
+		t.Fatalf("effort = %q want empty", effort)
 	}
 }
 

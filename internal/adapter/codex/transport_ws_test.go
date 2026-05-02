@@ -54,6 +54,35 @@ func TestWebsocketMessageToSyntheticSSEMapsContextWindowError(t *testing.T) {
 	}
 }
 
+func TestWebsocketMessageToSyntheticSSEMapsUnsupportedModelError(t *testing.T) {
+	_, err := websocketMessageToSyntheticSSE([]byte(`{"type":"error","error":{"message":"unsupported model: gpt-5.5"}}`))
+	if err == nil {
+		t.Fatalf("websocketMessageToSyntheticSSE error = nil, want unsupported model error")
+	}
+	var unsupportedErr *UnsupportedModelError
+	if !errors.As(err, &unsupportedErr) {
+		t.Fatalf("websocketMessageToSyntheticSSE error type = %T, want UnsupportedModelError", err)
+	}
+}
+
+func TestWebsocketMessageToSyntheticSSEPreservesGenericError(t *testing.T) {
+	_, err := websocketMessageToSyntheticSSE([]byte(`{"type":"error","error":{"message":"codex websocket read failed"}}`))
+	if err == nil {
+		t.Fatalf("websocketMessageToSyntheticSSE error = nil, want generic error")
+	}
+	var contextErr *ContextWindowError
+	if errors.As(err, &contextErr) {
+		t.Fatalf("websocketMessageToSyntheticSSE error = %T, want generic error", err)
+	}
+	var unsupportedErr *UnsupportedModelError
+	if errors.As(err, &unsupportedErr) {
+		t.Fatalf("websocketMessageToSyntheticSSE error = %T, want generic error", err)
+	}
+	if err.Error() != "codex websocket read failed" {
+		t.Fatalf("generic error = %q", err.Error())
+	}
+}
+
 func TestResponseCreateRequestFromHTTPUsesResponseCreateShape(t *testing.T) {
 	req := HTTPTransportRequest{
 		Model:             "gpt-5.4",

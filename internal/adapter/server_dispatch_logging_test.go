@@ -347,8 +347,8 @@ func TestHandleChatRejectsUnsupportedBackendWithoutLegacyRunner(t *testing.T) {
 	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal error response: %v body=%s", err, resp.Body.String())
 	}
-	if out.Error.Type != "unsupported_backend" {
-		t.Fatalf("error type = %q body=%s", out.Error.Type, resp.Body.String())
+	if out.Error.Type != "invalid_request_error" || out.Error.Code != "unsupported_backend" {
+		t.Fatalf("error = %+v body=%s", out.Error, resp.Body.String())
 	}
 }
 
@@ -523,7 +523,6 @@ func TestServerAddrUsesIPv6LoopbackDefault(t *testing.T) {
 func newLoggingServer(t *testing.T, logging config.LoggingConfig, opts ...func(*config.AdapterConfig)) (*Server, *bytes.Buffer) {
 	t.Helper()
 	cfg := baseConfig()
-	cfg.Fallback = config.AdapterFallback{Enabled: false}
 	for _, opt := range opts {
 		opt(&cfg)
 	}

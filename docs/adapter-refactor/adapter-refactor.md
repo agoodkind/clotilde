@@ -36,7 +36,7 @@ evidence shows a regression.
 
 1. Continue `CLYDE-163`: add Clyde-side context preflight for Cursor/Codex
    requests because `/v1/models` context metadata alone did not make Cursor
-   auto-summarize oversized `clyde-gpt-5.5` turns.
+   auto-summarize oversized `clyde-codex-5.5` turns.
 2. Do `CLYDE-171`: finish removing the remaining hard-coded native
    Codex/GPT alias catalog, context helpers, and routing defaults now that
    Clyde-specific GPT aliases can be declared in config. `CLYDE-169` is the

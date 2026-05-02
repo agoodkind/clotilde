@@ -14,8 +14,8 @@ const (
 	// SessionsDir is the subdirectory for sessions
 	SessionsDir = "sessions"
 
-	// ConfigFile is the config file name
-	ConfigFile = "config.json"
+	// ConfigFile is the global config file name.
+	ConfigFile = "config.toml"
 )
 
 // GetSessionsDir returns the path to the sessions directory within the clyde root.
@@ -29,7 +29,7 @@ func GetSessionDir(clydeRoot, sessionName string) string {
 }
 
 // GlobalConfigPath returns the path to the global config file.
-// Respects $XDG_CONFIG_HOME if set, otherwise uses ~/.config/clyde/config.json.
+// Respects $XDG_CONFIG_HOME if set, otherwise uses ~/.config/clyde/config.toml.
 func GlobalConfigPath() string {
 	configHome := os.Getenv("XDG_CONFIG_HOME")
 	if configHome == "" {

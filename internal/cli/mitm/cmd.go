@@ -298,7 +298,7 @@ func newCaptureCmd(f *cli.Factory) *cobra.Command {
 	cmd.Flags().StringVar(&upstream, "upstream", "", "upstream name (claude-code|claude-desktop|codex-cli|codex-desktop)")
 	cmd.Flags().StringVar(&captureDir, "capture-dir", "", "root directory for transcripts (default ~/.local/state/clyde/mitm)")
 	cmd.Flags().StringVar(&caCert, "ca-cert", "", "path to mitmproxy CA cert (default ~/.mitmproxy/mitmproxy-ca-cert.pem)")
-	cmd.Flags().StringVar(&proxyAddr, "proxy-addr", "127.0.0.1:0", "host:port the proxy listens on")
+	cmd.Flags().StringVar(&proxyAddr, "proxy-addr", "[::1]:0", "host:port the proxy listens on")
 	cmd.Flags().StringArrayVar(&extraArgs, "args", nil, "extra args appended to the upstream command (e.g. --args=exec --args='hello' for codex)")
 	_ = cmd.MarkFlagRequired("upstream")
 	return cmd

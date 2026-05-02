@@ -24,8 +24,8 @@ func (s *Server) applyBackendOverride(w http.ResponseWriter, r *http.Request, re
 	case BackendAnthropic, BackendShunt, BackendCodex:
 		model.Backend = override
 	default:
-		writeError(w, http.StatusBadRequest, "invalid_backend_override",
-			"X-Clyde-Backend must be one of: anthropic, shunt, codex")
+		s.respondAdapterError(w, r, newAdapterError(adapterErrorUnsupportedBackend,
+			"X-Clyde-Backend must be one of: anthropic, shunt, codex"))
 		return model, false
 	}
 
@@ -71,35 +71,48 @@ func (s *Server) dispatchResolvedChat(
 		return
 	case BackendAnthropic:
 		if s.anthropicProvider == nil {
-			writeError(w, http.StatusServiceUnavailable, "anthropic_disabled",
-				"anthropic backend is not enabled in [adapter]")
+			err := newAdapterError(adapterErrorUpstreamUnavailable, "anthropic backend is not enabled in [adapter]")
+			err.Provider = "anthropic"
+			err.Backend = model.Backend
+			err.ModelAlias = req.Model
+			s.respondAdapterError(w, r, err)
 			return
 		}
 		if resolverErr != nil || resolvedReq.Provider != adapterresolver.ProviderAnthropic {
-			writeError(w, http.StatusBadRequest, "unresolved_anthropic",
-				"resolver did not map this request to the anthropic provider")
+			err := newAdapterError(adapterErrorInvalidRequest, "resolver did not map this request to the anthropic provider")
+			err.Provider = "anthropic"
+			err.Backend = model.Backend
+			err.ModelAlias = req.Model
+			s.respondAdapterError(w, r, err)
 			return
 		}
-		if err := s.dispatchAnthropicProvider(w, r, effort, reqID, resolvedReq); err != nil {
-			writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
-		}
+		s.dispatchAnthropicProvider(w, r, effort, reqID, resolvedReq)
 		return
 	case BackendCodex:
 		if s.codexProvider == nil {
-			writeError(w, http.StatusServiceUnavailable, "codex_disabled",
-				"codex backend is not enabled in [adapter.codex]")
+			err := newAdapterError(adapterErrorUpstreamUnavailable, "codex backend is not enabled in [adapter.codex]")
+			err.Provider = "codex"
+			err.Backend = model.Backend
+			err.ModelAlias = req.Model
+			s.respondAdapterError(w, r, err)
 			return
 		}
 		if resolverErr != nil || resolvedReq.Provider != adapterresolver.ProviderCodex {
-			writeError(w, http.StatusBadRequest, "unresolved_codex",
-				"resolver did not map this request to the codex provider")
+			err := newAdapterError(adapterErrorInvalidRequest, "resolver did not map this request to the codex provider")
+			err.Provider = "codex"
+			err.Backend = model.Backend
+			err.ModelAlias = req.Model
+			s.respondAdapterError(w, r, err)
 			return
 		}
 		s.dispatchCodexProvider(w, r, req, model, reqID, cursorReq, resolvedReq)
 		return
 	default:
-		writeError(w, http.StatusBadRequest, "unsupported_backend",
+		err := newAdapterError(adapterErrorUnsupportedBackend,
 			"model resolved to unsupported backend "+model.Backend+"; configure anthropic, codex, or shunt explicitly")
+		err.Backend = model.Backend
+		err.ModelAlias = req.Model
+		s.respondAdapterError(w, r, err)
 		return
 	}
 }

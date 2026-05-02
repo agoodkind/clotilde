@@ -42,7 +42,7 @@ func (s *Server) dispatchCodexProvider(
 		s.dispatchCodexProviderStream(r.Context(), w, r, req, model, reqID, started, resolvedReq)
 		return
 	}
-	s.dispatchCodexProviderCollect(r.Context(), w, req, model, reqID, started, resolvedReq)
+	s.dispatchCodexProviderCollect(r.Context(), w, r, req, model, reqID, started, resolvedReq)
 }
 
 func (s *Server) dispatchCodexProviderStream(
@@ -57,7 +57,7 @@ func (s *Server) dispatchCodexProviderStream(
 ) {
 	writer, err := newProviderStreamWriter(s, w, reqID, model.Alias, "codex")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		s.respondAdapterError(w, r, adapterErrInternal(err.Error(), err))
 		return
 	}
 
@@ -96,7 +96,13 @@ func (s *Server) dispatchCodexProviderStream(
 			}
 			return
 		}
-		writeJSON(w, status, ErrorResponse{Error: errorBody})
+		mapped := adapterErrFromOpenAI(status, errorBody)
+		mapped.Provider = "codex"
+		mapped.Backend = model.Backend
+		mapped.ModelAlias = model.Alias
+		mapped.ResolvedModel = model.ClaudeModel
+		mapped.Cause = runErr
+		s.respondAdapterError(w, r, mapped)
 		return
 	}
 	corr := correlation.FromContext(ctx).WithUpstreamResponseID(result.UpstreamResponseID)
@@ -161,6 +167,7 @@ func (s *Server) dispatchCodexProviderStream(
 func (s *Server) dispatchCodexProviderCollect(
 	ctx context.Context,
 	w http.ResponseWriter,
+	r *http.Request,
 	_ ChatRequest,
 	model ResolvedModel,
 	reqID string,
@@ -191,7 +198,13 @@ func (s *Server) dispatchCodexProviderCollect(
 			DurationMs: time.Since(started).Milliseconds(),
 			Err:        runErr.Error(),
 		})
-		writeJSON(w, status, ErrorResponse{Error: errorBody})
+		mapped := adapterErrFromOpenAI(status, errorBody)
+		mapped.Provider = "codex"
+		mapped.Backend = model.Backend
+		mapped.ModelAlias = model.Alias
+		mapped.ResolvedModel = model.ClaudeModel
+		mapped.Cause = runErr
+		s.respondAdapterError(w, r, mapped)
 		return
 	}
 	corr := correlation.FromContext(ctx).WithUpstreamResponseID(result.UpstreamResponseID)
@@ -266,9 +279,18 @@ func codexProviderErrorResponse(err error) (int, ErrorBody) {
 			Param:   "messages",
 		}
 	}
+	var unsupportedModelErr *adaptercodex.UnsupportedModelError
+	if errors.As(err, &unsupportedModelErr) {
+		return http.StatusBadRequest, ErrorBody{
+			Message: unsupportedModelErr.Error(),
+			Type:    "invalid_request_error",
+			Code:    "model_not_supported",
+			Param:   "model",
+		}
+	}
 	return http.StatusBadGateway, ErrorBody{
 		Message: err.Error(),
 		Type:    "upstream_error",
-		Code:    "upstream_error",
+		Code:    "upstream_failed",
 	}
 }

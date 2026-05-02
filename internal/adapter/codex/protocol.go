@@ -46,6 +46,19 @@ func (e *ContextWindowError) Error() string {
 	return e.Message
 }
 
+// UnsupportedModelError reports an upstream Codex rejection for a model that
+// the authenticated account or Codex surface does not support.
+type UnsupportedModelError struct {
+	Message string
+}
+
+func (e *UnsupportedModelError) Error() string {
+	if e == nil || strings.TrimSpace(e.Message) == "" {
+		return "codex model is not supported"
+	}
+	return e.Message
+}
+
 func NewRunResult(finishReason string) RunResult {
 	return RunResult{FinishReason: finishreason.FromCodex(finishReason)}
 }
@@ -580,6 +593,9 @@ func codexResponseFailedError(message string) error {
 	if isCodexContextWindowMessage(message) {
 		return &ContextWindowError{Message: strings.TrimSpace(message)}
 	}
+	if isCodexUnsupportedModelMessage(message) {
+		return &UnsupportedModelError{Message: strings.TrimSpace(message)}
+	}
 	return fmt.Errorf("%s", message)
 }
 
@@ -591,6 +607,18 @@ func isCodexContextWindowMessage(message string) bool {
 	case strings.Contains(normalized, "context_length_exceeded"):
 		return true
 	case strings.Contains(normalized, "maximum context length"):
+		return true
+	default:
+		return false
+	}
+}
+
+func isCodexUnsupportedModelMessage(message string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	switch {
+	case strings.Contains(normalized, "model is not supported"):
+		return true
+	case strings.Contains(normalized, "unsupported model"):
 		return true
 	default:
 		return false

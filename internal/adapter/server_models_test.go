@@ -96,7 +96,7 @@ func TestCodexCapabilityOverlayAppliesTransportAwareContextTruth(t *testing.T) {
 func TestModelCatalogFingerprintIsStableAcrossModelAndCapabilityOrder(t *testing.T) {
 	models := []ResolvedModel{
 		{
-			Alias:           "clyde-gpt-5.5-high",
+			Alias:           "clyde-codex-5.5-high",
 			Backend:         BackendCodex,
 			ClaudeModel:     "gpt-5.5",
 			Context:         200_000,
@@ -104,7 +104,7 @@ func TestModelCatalogFingerprintIsStableAcrossModelAndCapabilityOrder(t *testing
 			Efforts:         []string{EffortHigh, EffortMedium},
 			Effort:          EffortHigh,
 			SupportsTools:   true,
-			FamilySlug:      "gpt-5.5",
+			FamilySlug:      "codex-5.5",
 		},
 		{
 			Alias:           "clyde-sonnet-4.6-medium-thinking",
@@ -137,7 +137,7 @@ func TestModelCatalogFingerprintIsStableAcrossModelAndCapabilityOrder(t *testing
 			FamilySlug:      "sonnet-4.6",
 		},
 		{
-			Alias:           "clyde-gpt-5.5-high",
+			Alias:           "clyde-codex-5.5-high",
 			Backend:         BackendCodex,
 			ClaudeModel:     "gpt-5.5",
 			Context:         200_000,
@@ -145,7 +145,7 @@ func TestModelCatalogFingerprintIsStableAcrossModelAndCapabilityOrder(t *testing
 			Efforts:         []string{EffortMedium, EffortHigh},
 			Effort:          EffortHigh,
 			SupportsTools:   true,
-			FamilySlug:      "gpt-5.5",
+			FamilySlug:      "codex-5.5",
 		},
 	}
 
@@ -157,7 +157,7 @@ func TestModelCatalogFingerprintIsStableAcrossModelAndCapabilityOrder(t *testing
 func TestModelCatalogFingerprintChangesWhenCatalogSemanticsChange(t *testing.T) {
 	models := []ResolvedModel{
 		{
-			Alias:           "clyde-gpt-5.5-high",
+			Alias:           "clyde-codex-5.5-high",
 			Backend:         BackendCodex,
 			ClaudeModel:     "gpt-5.5",
 			Context:         200_000,

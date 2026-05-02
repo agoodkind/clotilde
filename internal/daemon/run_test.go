@@ -23,18 +23,17 @@ import (
 func TestIsAdapterConfigEvent(t *testing.T) {
 	cfgDir := t.TempDir()
 	tomlPath := filepath.Join(cfgDir, "config.toml")
-	jsonPath := filepath.Join(cfgDir, "config.json")
 
-	if !isAdapterConfigEvent(fsnotify.Event{Name: tomlPath, Op: fsnotify.Write}, tomlPath, jsonPath) {
+	if !isAdapterConfigEvent(fsnotify.Event{Name: tomlPath, Op: fsnotify.Write}, tomlPath) {
 		t.Fatalf("toml write should trigger reload")
 	}
-	if !isAdapterConfigEvent(fsnotify.Event{Name: jsonPath, Op: fsnotify.Create}, tomlPath, jsonPath) {
-		t.Fatalf("json create should trigger reload")
+	if isAdapterConfigEvent(fsnotify.Event{Name: filepath.Join(cfgDir, "config.json"), Op: fsnotify.Create}, tomlPath) {
+		t.Fatalf("json create should not trigger reload")
 	}
-	if isAdapterConfigEvent(fsnotify.Event{Name: filepath.Join(cfgDir, "notes.txt"), Op: fsnotify.Write}, tomlPath, jsonPath) {
+	if isAdapterConfigEvent(fsnotify.Event{Name: filepath.Join(cfgDir, "notes.txt"), Op: fsnotify.Write}, tomlPath) {
 		t.Fatalf("unrelated file should not trigger reload")
 	}
-	if isAdapterConfigEvent(fsnotify.Event{Name: tomlPath, Op: fsnotify.Op(0)}, tomlPath, jsonPath) {
+	if isAdapterConfigEvent(fsnotify.Event{Name: tomlPath, Op: fsnotify.Op(0)}, tomlPath) {
 		t.Fatalf("non-mutating event should not trigger reload")
 	}
 }
@@ -191,12 +190,12 @@ func TestInheritedListenerFilesIncludesDaemonAdapterAndWebapp(t *testing.T) {
 		t.Fatalf("listen daemon: %v", err)
 	}
 	defer daemonLis.Close()
-	adapterLis, err := net.Listen("tcp", "127.0.0.1:0")
+	adapterLis, err := net.Listen("tcp", "[::1]:0")
 	if err != nil {
 		t.Fatalf("listen adapter: %v", err)
 	}
 	defer adapterLis.Close()
-	webLis, err := net.Listen("tcp", "127.0.0.1:0")
+	webLis, err := net.Listen("tcp", "[::1]:0")
 	if err != nil {
 		t.Fatalf("listen webapp: %v", err)
 	}
@@ -218,11 +217,11 @@ func TestInheritedListenerFilesIncludesDaemonAdapterAndWebapp(t *testing.T) {
 	}
 	toml := "[adapter]\n" +
 		"enabled = true\n" +
-		"host = \"127.0.0.1\"\n" +
+		"host = \"[::1]\"\n" +
 		"port = " + adapterPort + "\n" +
 		"[web_app]\n" +
 		"enabled = true\n" +
-		"host = \"127.0.0.1\"\n" +
+		"host = \"[::1]\"\n" +
 		"port = " + webPort + "\n"
 	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(toml), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)

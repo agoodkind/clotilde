@@ -21,11 +21,13 @@ const maxAnthropicMessagesBodyBytes = 8 << 20
 
 func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeAnthropicError(w, http.StatusMethodNotAllowed, "invalid_request_error", "POST required")
+		s.respondAdapterError(w, r, newAdapterError(adapterErrorMethodNotAllowed, "POST required"))
 		return
 	}
 	if s.anthropicProvider == nil {
-		writeAnthropicError(w, http.StatusServiceUnavailable, "api_error", "anthropic backend is not enabled in [adapter]")
+		err := newAdapterError(adapterErrorUpstreamUnavailable, "anthropic backend is not enabled in [adapter]")
+		err.Provider = "anthropic"
+		s.respondAdapterError(w, r, err)
 		return
 	}
 
@@ -36,28 +38,28 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 	r = r.WithContext(ctx)
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxAnthropicMessagesBodyBytes))
 	if err != nil {
-		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "failed to read body")
+		s.respondAdapterError(w, r, adapterErrInvalidRequest("failed to read body", err))
 		return
 	}
 
 	var req anthropic.Request
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "invalid JSON: "+err.Error())
+		s.respondAdapterError(w, r, adapterErrInvalidJSON("invalid JSON: "+err.Error(), err))
 		return
 	}
 	if len(req.Messages) == 0 {
-		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "messages is required")
+		s.respondAdapterError(w, r, adapterErrInvalidRequest("messages is required", nil))
 		return
 	}
 
 	model, _, err := s.registry.Resolve(req.Model, "")
 	if err != nil {
-		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		s.respondAdapterError(w, r, adapterErrModelNotFound(err.Error()))
 		return
 	}
 	nativeClaudeModel := isNativeClaudeModelID(req.Model)
 	if !nativeClaudeModel && model.Backend != BackendAnthropic && model.Backend != BackendClaude {
-		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "model does not resolve to the anthropic backend")
+		s.respondAdapterError(w, r, adapterErrInvalidRequest("model does not resolve to the anthropic backend", nil))
 		return
 	}
 	if nativeClaudeModel && model.Backend != BackendAnthropic && model.Backend != BackendClaude {
@@ -90,18 +92,18 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 	if req.Stream {
 		streamWriter, streamErr := newNativeAnthropicStreamWriter(w)
 		if streamErr != nil {
-			writeAnthropicError(w, http.StatusInternalServerError, "api_error", streamErr.Error())
+			s.respondAdapterError(w, r, adapterErrInternal(streamErr.Error(), streamErr))
 			return
 		}
 		if _, err := s.anthropicProvider.ExecutePrepared(ctx, prepared, streamWriter); err != nil {
-			writeAnthropicIngressProviderError(w, err)
+			s.writeAnthropicIngressProviderError(w, r, err)
 		}
 		return
 	}
 
 	collector := newNativeAnthropicJSONWriter()
 	if _, err := s.anthropicProvider.ExecutePrepared(ctx, prepared, collector); err != nil {
-		writeAnthropicIngressProviderError(w, err)
+		s.writeAnthropicIngressProviderError(w, r, err)
 		return
 	}
 	collector.writeTo(w)
@@ -109,10 +111,13 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) handleAnthropicCountTokens(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeAnthropicError(w, http.StatusMethodNotAllowed, "invalid_request_error", "POST required")
+		s.respondAdapterError(w, r, newAdapterError(adapterErrorMethodNotAllowed, "POST required"))
 		return
 	}
-	writeAnthropicError(w, http.StatusNotImplemented, "not_supported_error", "/v1/messages/count_tokens is not implemented yet on the adapter Anthropic ingress")
+	err := newAdapterError(adapterErrorModelNotSupported, "/v1/messages/count_tokens is not implemented yet on the adapter Anthropic ingress")
+	err.HTTPStatus = http.StatusNotImplemented
+	err.AnthropicType = "not_supported_error"
+	s.respondAdapterError(w, r, err)
 }
 
 func isNativeClaudeModelID(model string) bool {
@@ -138,6 +143,10 @@ func anthropicIngressResolvedModel(model ResolvedModel) adaptermodel.ResolvedMod
 }
 
 func writeAnthropicError(w http.ResponseWriter, code int, errType, message string) {
+	writeAnthropicErrorBody(w, code, errType, message)
+}
+
+func writeAnthropicErrorBody(w http.ResponseWriter, code int, errType, message string) {
 	payload, err := json.Marshal(anthropic.ErrorEnvelope{
 		Type: "error",
 		Error: anthropic.ErrorDetail{
@@ -154,10 +163,18 @@ func writeAnthropicError(w http.ResponseWriter, code int, errType, message strin
 	_, _ = w.Write(payload)
 }
 
-func writeAnthropicIngressProviderError(w http.ResponseWriter, err error) {
+func (s *Server) writeAnthropicIngressProviderError(w http.ResponseWriter, r *http.Request, err error) {
 	var execErr *anthropic.ExecuteError
 	if errors.As(err, &execErr) {
-		writeAnthropicError(w, execErr.Status, anthropicErrorType(execErr.Status, execErr.Code), execErr.Message)
+		aerr := adapterErrFromOpenAI(execErr.Status, ErrorBody{
+			Message: execErr.Message,
+			Type:    execErr.Code,
+			Code:    execErr.Code,
+		})
+		aerr.AnthropicType = anthropicErrorType(execErr.Status, execErr.Code)
+		aerr.Provider = "anthropic"
+		aerr.Cause = err
+		s.respondAdapterError(w, r, aerr)
 		return
 	}
 	if upstreamErr, ok := anthropic.AsUpstreamError(err); ok {
@@ -165,10 +182,13 @@ func writeAnthropicIngressProviderError(w http.ResponseWriter, err error) {
 		if status == 0 {
 			status = http.StatusBadGateway
 		}
-		writeAnthropicError(w, status, anthropicErrorType(status, ""), upstreamErr.Message)
+		aerr := anthropicProviderAdapterError(err)
+		aerr.HTTPStatus = status
+		aerr.AnthropicType = anthropicErrorType(status, "")
+		s.respondAdapterError(w, r, aerr)
 		return
 	}
-	writeAnthropicError(w, http.StatusBadGateway, "api_error", err.Error())
+	s.respondAdapterError(w, r, adapterErrUpstreamFailed("anthropic", err.Error(), err))
 }
 
 func anthropicErrorType(status int, code string) string {

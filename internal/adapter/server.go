@@ -309,7 +309,18 @@ func (s *Server) Addr() string {
 	if port <= 0 {
 		port = DefaultPort
 	}
-	return net.JoinHostPort(host, strconv.Itoa(port))
+	return net.JoinHostPort(normalizeListenHost(host), strconv.Itoa(port))
+}
+
+func normalizeListenHost(host string) string {
+	trimmed := strings.TrimSpace(host)
+	if len(trimmed) >= 2 && strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+		inner := strings.TrimSpace(trimmed[1 : len(trimmed)-1])
+		if strings.Contains(inner, ":") {
+			return inner
+		}
+	}
+	return trimmed
 }
 
 func (s *Server) acquire(ctx context.Context) error {
@@ -344,17 +355,4 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, code int, kind, msg string) {
-	writeJSON(w, code, ErrorResponse{Error: ErrorBody{Message: msg, Type: kind}})
-}
-
-func writeModelResolutionError(w http.ResponseWriter, msg string) {
-	writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: ErrorBody{
-		Message: msg,
-		Type:    "invalid_request_error",
-		Code:    "model_not_found",
-		Param:   "model",
-	}})
 }

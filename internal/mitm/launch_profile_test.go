@@ -28,14 +28,14 @@ func TestComposeEnvOverridesParent(t *testing.T) {
 	p := LaunchProfile{Name: "codex-cli"}
 	parent := []string{"PATH=/usr/bin", "HTTPS_PROXY=http://stale:1234", "OTHER=keep"}
 	got := p.ComposeEnv(parent, map[string]string{
-		"HTTPS_PROXY": "http://127.0.0.1:8888",
+		"HTTPS_PROXY": "http://[::1]:8888",
 	})
 	hasNew := false
 	hasOther := false
 	hasStale := false
 	for _, kv := range got {
 		switch kv {
-		case "HTTPS_PROXY=http://127.0.0.1:8888":
+		case "HTTPS_PROXY=http://[::1]:8888":
 			hasNew = true
 		case "OTHER=keep":
 			hasOther = true
@@ -56,19 +56,19 @@ func TestComposeEnvOverridesParent(t *testing.T) {
 
 func TestChromiumFlagsOnlyForElectron(t *testing.T) {
 	codex := LaunchProfile{Name: "codex-cli"}
-	if got := codex.ChromiumFlags("http://127.0.0.1:8888"); len(got) != 0 {
+	if got := codex.ChromiumFlags("http://[::1]:8888"); len(got) != 0 {
 		t.Errorf("non-electron should have no chromium flags, got %v", got)
 	}
 
 	desktop := LaunchProfile{Name: "codex-desktop", IsElectron: true}
-	flags := desktop.ChromiumFlags("http://127.0.0.1:8888")
+	flags := desktop.ChromiumFlags("http://[::1]:8888")
 	if len(flags) == 0 {
 		t.Fatal("electron should have chromium flags")
 	}
 	hasProxy := false
 	hasIgnoreCert := false
 	for _, f := range flags {
-		if f == "--proxy-server=http://127.0.0.1:8888" {
+		if f == "--proxy-server=http://[::1]:8888" {
 			hasProxy = true
 		}
 		if f == "--ignore-certificate-errors" {

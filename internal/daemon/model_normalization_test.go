@@ -69,7 +69,7 @@ func TestReadSessionSettingsNormalizesRuntimeModel(t *testing.T) {
 		t.Fatalf("mkdir session runtime: %v", err)
 	}
 	settingsPath := filepath.Join(sessionDir, "settings.json")
-	if err := os.WriteFile(settingsPath, []byte(`{"model":"clyde-gpt-5.5-xhigh","effortLevel":"xhigh"}`), 0o600); err != nil {
+	if err := os.WriteFile(settingsPath, []byte(`{"model":"clyde-codex-5.5-xhigh","effortLevel":"xhigh"}`), 0o600); err != nil {
 		t.Fatalf("write settings: %v", err)
 	}
 
@@ -79,8 +79,8 @@ func TestReadSessionSettingsNormalizesRuntimeModel(t *testing.T) {
 	}
 
 	model, effort := srv.readSessionSettings(wrapperID)
-	if model != "clyde-gpt-5.5-xhigh" {
-		t.Fatalf("model=%q want %q", model, "clyde-gpt-5.5-xhigh")
+	if model != "clyde-codex-5.5-xhigh" {
+		t.Fatalf("model=%q want %q", model, "clyde-codex-5.5-xhigh")
 	}
 	if effort != "xhigh" {
 		t.Fatalf("effort=%q want %q", effort, "xhigh")
@@ -168,7 +168,7 @@ func TestWriteSettingsJSONPersistsNormalizedModel(t *testing.T) {
 		globalSettings: map[string]json.RawMessage{},
 	}
 
-	settingsPath, err := srv.writeSettingsJSON("wrapper-2", "clyde-gpt-5.5-xhigh", "xhigh")
+	settingsPath, err := srv.writeSettingsJSON("wrapper-2", "clyde-codex-5.5-xhigh", "xhigh")
 	if err != nil {
 		t.Fatalf("writeSettingsJSON: %v", err)
 	}
@@ -181,8 +181,8 @@ func TestWriteSettingsJSONPersistsNormalizedModel(t *testing.T) {
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		t.Fatalf("unmarshal settings.json: %v", err)
 	}
-	if payload["model"] != "clyde-gpt-5.5-xhigh" {
-		t.Fatalf("persisted model=%v want %q", payload["model"], "clyde-gpt-5.5-xhigh")
+	if payload["model"] != "clyde-codex-5.5-xhigh" {
+		t.Fatalf("persisted model=%v want %q", payload["model"], "clyde-codex-5.5-xhigh")
 	}
 }
 
@@ -237,7 +237,7 @@ func TestSessionDetailNormalizesSettingsModelFallback(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 	if err := store.SaveSettings("chat-4", &session.Settings{
-		Model: "clyde-gpt-5.5-xhigh",
+		Model: "clyde-codex-5.5-xhigh",
 	}); err != nil {
 		t.Fatalf("save settings: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestSessionDetailNormalizesSettingsModelFallback(t *testing.T) {
 	}
 
 	detail := srv.sessionDetail(store, sess)
-	if detail.GetModel() != "clyde-gpt-5.5-xhigh" {
-		t.Fatalf("detail.Model=%q want %q", detail.GetModel(), "clyde-gpt-5.5-xhigh")
+	if detail.GetModel() != "clyde-codex-5.5-xhigh" {
+		t.Fatalf("detail.Model=%q want %q", detail.GetModel(), "clyde-codex-5.5-xhigh")
 	}
 }

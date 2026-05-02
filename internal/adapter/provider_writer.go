@@ -115,10 +115,6 @@ func (p *providerStreamWriter) finalizeStream(result adapterprovider.Result, inc
 	return p.sse.WriteStreamDone()
 }
 
-func (p *providerStreamWriter) writeStreamError(kind, message string) error {
-	return p.writeStreamErrorBody(adapteropenai.ErrorBody{Message: message, Type: kind, Code: kind})
-}
-
 func (p *providerStreamWriter) writeStreamErrorBody(body adapteropenai.ErrorBody) error {
 	if p == nil || p.sse == nil {
 		return nil

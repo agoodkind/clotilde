@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	adaptercontent "goodkind.io/clyde/internal/adapter/content"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
@@ -57,14 +58,75 @@ func EnvironmentContextText(workspacePath string) (string, bool) {
 }
 
 func MessageContent(role, textType, text string) map[string]any {
+	return MessageContentItems(role, []map[string]any{{
+		"type": textType,
+		"text": text,
+	}})
+}
+
+func MessageContentItems(role string, content []map[string]any) map[string]any {
 	return map[string]any{
-		"type": "message",
-		"role": role,
-		"content": []map[string]any{{
-			"type": textType,
-			"text": text,
-		}},
+		"type":    "message",
+		"role":    role,
+		"content": content,
 	}
+}
+
+func codexContentFromRaw(raw json.RawMessage, textType string) []map[string]any {
+	parts, _ := adaptercontent.NormalizeRaw(raw)
+	return codexContentFromParts(parts, textType)
+}
+
+func codexContentFromAny(raw any, textType string) []map[string]any {
+	if raw == nil {
+		return nil
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	return codexContentFromRaw(json.RawMessage(b), textType)
+}
+
+func codexContentFromParts(parts []adaptercontent.Part, textType string) []map[string]any {
+	content := make([]map[string]any, 0, len(parts))
+	for _, part := range parts {
+		switch part.Kind {
+		case adaptercontent.PartText:
+			text := strings.TrimSpace(SanitizeForUpstreamCache(part.Text))
+			if text == "" {
+				continue
+			}
+			content = append(content, map[string]any{
+				"type": textType,
+				"text": text,
+			})
+		case adaptercontent.PartImage:
+			if part.Image == nil || strings.TrimSpace(part.Image.URL) == "" {
+				continue
+			}
+			// Codex app-server ContentItem uses a string `image_url` for
+			// input_image parts; see research/codex/.../ContentItem.ts.
+			item := map[string]any{
+				"type":      "input_image",
+				"image_url": strings.TrimSpace(part.Image.URL),
+			}
+			if detail := strings.TrimSpace(part.Image.Detail); detail != "" {
+				item["detail"] = detail
+			}
+			content = append(content, item)
+		case adaptercontent.PartRefusal:
+			text := strings.TrimSpace(SanitizeForUpstreamCache(part.Refusal))
+			if text == "" {
+				continue
+			}
+			content = append(content, map[string]any{
+				"type": textType,
+				"text": text,
+			})
+		}
+	}
+	return content
 }
 
 func BuildRequest(req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort string) HTTPTransportRequest {
@@ -106,7 +168,7 @@ func BuildRequest(req adapteropenai.ChatRequest, model adaptermodel.ResolvedMode
 	} else {
 		insertedContext := false
 		for idx, msg := range req.Messages {
-			text := strings.TrimSpace(SanitizeForUpstreamCache(adapteropenai.FlattenContent(msg.Content)))
+			text := strings.TrimSpace(SanitizeForUpstreamCache(adaptercontent.FlattenRaw(msg.Content)))
 			switch strings.ToLower(msg.Role) {
 			case "system", "developer":
 				if text != "" {
@@ -125,8 +187,8 @@ func BuildRequest(req adapteropenai.ChatRequest, model adaptermodel.ResolvedMode
 					toolCallNames[callID] = ToolCallName(tc)
 					input = append(input, FunctionCallItem(tc, shellMode))
 				}
-				if text != "" {
-					input = append(input, MessageContent("assistant", "output_text", text))
+				if content := codexContentFromRaw(msg.Content, "output_text"); len(content) > 0 {
+					input = append(input, MessageContentItems("assistant", content))
 				}
 			case "tool", "function":
 				if text != "" && strings.TrimSpace(msg.ToolCallID) != "" {
@@ -145,8 +207,8 @@ func BuildRequest(req adapteropenai.ChatRequest, model adaptermodel.ResolvedMode
 					}
 					insertedContext = true
 				}
-				if text != "" {
-					input = append(input, MessageContent("user", "input_text", text))
+				if content := codexContentFromRaw(msg.Content, "input_text"); len(content) > 0 {
+					input = append(input, MessageContentItems("user", content))
 				}
 			}
 		}
@@ -521,12 +583,12 @@ func inputFromResponsesInput(
 				}
 				insertedContext = true
 			}
-			if text := strings.TrimSpace(responsesContentText(item["content"])); text != "" {
-				input = append(input, MessageContent("user", "input_text", text))
+			if content := codexContentFromAny(item["content"], "input_text"); len(content) > 0 {
+				input = append(input, MessageContentItems("user", content))
 			}
 		case role == "assistant":
-			if text := strings.TrimSpace(responsesContentText(item["content"])); text != "" {
-				input = append(input, MessageContent("assistant", "output_text", text))
+			if content := codexContentFromAny(item["content"], "output_text"); len(content) > 0 {
+				input = append(input, MessageContentItems("assistant", content))
 			}
 		case itemType == "function_call":
 			call, toolName := functionCallFromResponsesItem(item, shellMode, workspacePath)

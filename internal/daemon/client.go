@@ -23,7 +23,6 @@ import (
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
-	"goodkind.io/clyde/internal/session"
 	"goodkind.io/gklog"
 )
 
@@ -854,119 +853,93 @@ func ListBridgesViaDaemon(ctx context.Context) ([]*clydev1.Bridge, error) {
 	return resp.Bridges, nil
 }
 
-// StartRemoteSessionViaDaemon asks the daemon to create and launch a
-// daemon-owned remote-control session. The returned response includes the
-// canonical session name and pre-assigned Claude session UUID.
-func StartRemoteSessionViaDaemon(ctx context.Context, sessionName, basedir string, incognito bool) (*clydev1.StartRemoteSessionResponse, error) {
+// StartLiveSessionViaDaemon asks the daemon to start a provider-neutral live
+// session. The daemon owns provider compatibility and launch policy.
+func StartLiveSessionViaDaemon(ctx context.Context, req *clydev1.StartLiveSessionRequest) (*clydev1.StartLiveSessionResponse, error) {
 	log := daemonClientLog(ctx)
-	log.DebugContext(ctx, "daemon.client.start_remote_session.begin",
-		"session", sessionName,
-		"basedir", basedir,
-		"incognito", incognito,
+	log.DebugContext(ctx, "daemon.client.start_live_session.begin",
+		"provider", req.GetProvider(),
+		"session", req.GetName(),
+		"basedir", req.GetBasedir(),
+		"incognito", req.GetIncognito(),
 	)
 	c, err := ConnectOrStart(ctx)
 	if err != nil {
-		log.DebugContext(ctx, "daemon.client.start_remote_session.connect_failed", "err", err)
+		log.DebugContext(ctx, "daemon.client.start_live_session.connect_failed", "err", err)
 		return nil, err
 	}
 	defer func() { _ = c.conn.Close() }()
 	rpcCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	resp, err := c.rpc.StartRemoteSession(rpcCtx, &clydev1.StartRemoteSessionRequest{
-		SessionName: sessionName,
-		Basedir:     basedir,
-		Incognito:   incognito,
-	})
+	resp, err := c.rpc.StartLiveSession(rpcCtx, req)
 	if err != nil {
-		log.DebugContext(rpcCtx, "daemon.client.start_remote_session.rpc_failed", "err", err)
+		log.DebugContext(rpcCtx, "daemon.client.start_live_session.rpc_failed", "err", err)
 		return nil, err
 	}
-	log.DebugContext(rpcCtx, "daemon.client.start_remote_session.ok",
-		"session", resp.GetSessionName(),
-		"session_id", resp.GetSessionId(),
-		"launch_state", resp.GetLaunchState().String(),
+	log.DebugContext(rpcCtx, "daemon.client.start_live_session.ok",
+		"provider", resp.GetSession().GetProvider(),
+		"session", resp.GetSession().GetSessionName(),
+		"session_id", resp.GetSession().GetSessionId(),
 	)
 	return resp, nil
 }
 
-// SessionRuntimeTarget identifies a provider-neutral live session. SessionName
-// is preferred for logical clyde sessions; Identity preserves compatibility for
-// callers that only have a provider-scoped session id.
-type SessionRuntimeTarget struct {
-	SessionName string
-	Identity    session.ProviderSessionID
-}
-
-// SendToLiveSessionViaDaemon delivers text into a running provider session.
-// Returns false when no live input endpoint exists.
-func SendToLiveSessionViaDaemon(ctx context.Context, target SessionRuntimeTarget, text string) (bool, error) {
+// SendLiveSessionViaDaemon delivers text through the daemon's live-session
+// backend. Returns false when the backend rejects the input.
+func SendLiveSessionViaDaemon(ctx context.Context, sessionID, text string) (bool, error) {
 	log := daemonClientLog(ctx)
-	log.DebugContext(ctx, "daemon.client.send_to_session.begin",
-		"session", target.SessionName,
-		"provider", target.Identity.Provider,
-		"session_id", target.Identity.ID,
+	log.DebugContext(ctx, "daemon.client.send_live_session.begin",
+		"session_id", sessionID,
 		"text_len", len(text),
 	)
 	c, err := ConnectOrStart(ctx)
 	if err != nil {
-		log.DebugContext(ctx, "daemon.client.send_to_session.connect_failed", "err", err)
+		log.DebugContext(ctx, "daemon.client.send_live_session.connect_failed", "err", err)
 		return false, err
 	}
 	defer func() { _ = c.conn.Close() }()
 	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	resp, err := c.rpc.SendToSession(rpcCtx, &clydev1.SendToSessionRequest{
-		SessionId:   target.Identity.ID,
-		Text:        text,
-		Provider:    string(target.Identity.Provider),
-		SessionName: target.SessionName,
+	resp, err := c.rpc.SendLiveSession(rpcCtx, &clydev1.SendLiveSessionRequest{
+		SessionId: sessionID,
+		Text:      text,
 	})
 	if err != nil {
-		log.DebugContext(rpcCtx, "daemon.client.send_to_session.rpc_failed", "err", err)
+		log.DebugContext(rpcCtx, "daemon.client.send_live_session.rpc_failed", "err", err)
 		return false, err
 	}
-	delivered := resp.GetDelivered()
-	log.DebugContext(rpcCtx, "daemon.client.send_to_session.ok", "delivered", delivered)
-	return delivered, nil
+	accepted := resp.GetAccepted()
+	log.DebugContext(rpcCtx, "daemon.client.send_live_session.ok", "accepted", accepted)
+	return accepted, nil
 }
 
-// TailSessionHistoryViaDaemon opens the daemon's provider-neutral history
-// stream for a live session. The returned channel closes when the stream
-// terminates. Calling cancel stops the subscription.
-func TailSessionHistoryViaDaemon(parent context.Context, target SessionRuntimeTarget, startOffset int64) (<-chan *clydev1.TailTranscriptResponse, context.CancelFunc, error) {
+// StreamLiveSessionViaDaemon opens the daemon live-session stream.
+// Calling cancel stops the subscription.
+func StreamLiveSessionViaDaemon(parent context.Context, sessionID string) (<-chan *clydev1.StreamLiveSessionResponse, context.CancelFunc, error) {
 	log := daemonClientLog(parent)
-	log.DebugContext(parent, "daemon.client.tail_transcript.begin",
-		"session", target.SessionName,
-		"provider", target.Identity.Provider,
-		"session_id", target.Identity.ID,
-		"start_offset", startOffset,
+	log.DebugContext(parent, "daemon.client.stream_live_session.begin",
+		"session_id", sessionID,
 	)
 	c, err := ConnectOrStart(parent)
 	if err != nil {
-		log.DebugContext(parent, "daemon.client.tail_transcript.connect_failed", "err", err)
+		log.DebugContext(parent, "daemon.client.stream_live_session.connect_failed", "err", err)
 		return nil, nil, err
 	}
 	ctx, cancel := context.WithCancel(parent)
-	stream, err := c.rpc.TailTranscript(ctx, &clydev1.TailTranscriptRequest{
-		SessionId:     target.Identity.ID,
-		StartAtOffset: startOffset,
-		Provider:      string(target.Identity.Provider),
-		SessionName:   target.SessionName,
-	})
+	stream, err := c.rpc.StreamLiveSession(ctx, &clydev1.StreamLiveSessionRequest{SessionId: sessionID})
 	if err != nil {
-		log.DebugContext(ctx, "daemon.client.tail_transcript.stream_open_failed", "err", err)
+		log.DebugContext(ctx, "daemon.client.stream_live_session.stream_open_failed", "err", err)
 		cancel()
 		c.conn.Close()
 		return nil, nil, err
 	}
-	log.DebugContext(ctx, "daemon.client.tail_transcript.stream_open")
-	out := make(chan *clydev1.TailTranscriptResponse, 64)
+	log.DebugContext(ctx, "daemon.client.stream_live_session.stream_open")
+	out := make(chan *clydev1.StreamLiveSessionResponse, 64)
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				daemonClientLog(ctx).WarnContext(ctx, "daemon.client.tail_transcript.panicked",
-					"session", target.SessionName,
-					"session_id", target.Identity.ID,
+				daemonClientLog(ctx).WarnContext(ctx, "daemon.client.stream_live_session.panicked",
+					"session_id", sessionID,
 					"panic", r,
 				)
 			}
@@ -975,20 +948,78 @@ func TailSessionHistoryViaDaemon(parent context.Context, target SessionRuntimeTa
 		defer func() { _ = c.conn.Close() }()
 		loopLog := daemonClientLog(ctx)
 		for {
-			line, err := stream.Recv()
+			event, err := stream.Recv()
 			if err != nil {
-				loopLog.DebugContext(ctx, "daemon.client.tail_transcript.recv_done", "err", err)
+				loopLog.DebugContext(ctx, "daemon.client.stream_live_session.recv_done", "err", err)
 				return
 			}
 			select {
-			case out <- line:
+			case out <- event:
 			case <-ctx.Done():
-				loopLog.DebugContext(ctx, "daemon.client.tail_transcript.consumer_cancelled")
+				loopLog.DebugContext(ctx, "daemon.client.stream_live_session.consumer_cancelled")
 				return
 			}
 		}
 	}()
 	return out, cancel, nil
+}
+
+// AcquireForegroundSessionViaDaemon asks the daemon to suspend any daemon-owned
+// live backend before an interactive foreground provider process starts.
+func AcquireForegroundSessionViaDaemon(ctx context.Context, req *clydev1.AcquireForegroundSessionRequest) (*clydev1.AcquireForegroundSessionResponse, error) {
+	log := daemonClientLog(ctx)
+	log.DebugContext(ctx, "daemon.client.acquire_foreground_session.begin",
+		"provider", req.GetProvider(),
+		"session", req.GetSessionName(),
+		"session_id", req.GetSessionId(),
+	)
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.acquire_foreground_session.connect_failed", "err", err)
+		return nil, err
+	}
+	defer func() { _ = c.conn.Close() }()
+	rpcCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	resp, err := c.rpc.AcquireForegroundSession(rpcCtx, req)
+	if err != nil {
+		log.DebugContext(rpcCtx, "daemon.client.acquire_foreground_session.rpc_failed", "err", err)
+		return nil, err
+	}
+	log.DebugContext(rpcCtx, "daemon.client.acquire_foreground_session.ok",
+		"provider", resp.GetProvider(),
+		"session", resp.GetSessionName(),
+		"session_id", resp.GetSessionId(),
+		"restore", resp.GetShouldRestore(),
+	)
+	return resp, nil
+}
+
+// ReleaseForegroundSessionViaDaemon releases a foreground lease and asks the
+// daemon to restore the prior live backend when one existed.
+func ReleaseForegroundSessionViaDaemon(ctx context.Context, leaseToken, exitState string) (*clydev1.ReleaseForegroundSessionResponse, error) {
+	log := daemonClientLog(ctx)
+	log.DebugContext(ctx, "daemon.client.release_foreground_session.begin",
+		"exit_state", exitState,
+	)
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.release_foreground_session.connect_failed", "err", err)
+		return nil, err
+	}
+	defer func() { _ = c.conn.Close() }()
+	rpcCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	resp, err := c.rpc.ReleaseForegroundSession(rpcCtx, &clydev1.ReleaseForegroundSessionRequest{
+		LeaseToken: leaseToken,
+		ExitState:  exitState,
+	})
+	if err != nil {
+		log.DebugContext(rpcCtx, "daemon.client.release_foreground_session.rpc_failed", "err", err)
+		return nil, err
+	}
+	log.DebugContext(rpcCtx, "daemon.client.release_foreground_session.ok", "restored", resp.GetRestored())
+	return resp, nil
 }
 
 type CompactRunOptions struct {

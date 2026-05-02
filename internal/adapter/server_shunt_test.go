@@ -1,8 +1,16 @@
 package adapter
 
 import (
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
+
+	"goodkind.io/clyde/internal/config"
 )
 
 func TestRedactedHeader(t *testing.T) {
@@ -58,4 +66,74 @@ func TestRedactedHeaders(t *testing.T) {
 	if !reflect.DeepEqual(out, expected) {
 		t.Fatalf("redactedHeaders = %#v want %#v", out, expected)
 	}
+}
+
+func TestShuntPassthroughWrapsMalformedUpstreamError(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("upstream path = %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = io.WriteString(w, "local backend failed")
+	}))
+	defer upstream.Close()
+
+	srv := newShuntPassthroughTestServer(t, upstream.URL+"/v1")
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"local-model","messages":[{"role":"user","content":"hello"}]}`))
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadGateway)
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
+		t.Fatalf("content-type = %q", got)
+	}
+	var out ErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal response: %v; body=%s", err, rec.Body.String())
+	}
+	if out.Error.Type != "upstream_error" || out.Error.Code != "upstream_failed" {
+		t.Fatalf("error = %+v", out.Error)
+	}
+	if !strings.Contains(out.Error.Message, "local backend failed") {
+		t.Fatalf("message = %q, want upstream body included", out.Error.Message)
+	}
+}
+
+func TestShuntPassthroughPreservesOpenAIErrorEnvelope(t *testing.T) {
+	const upstreamBody = `{"error":{"message":"rate limit from upstream","type":"rate_limit_error","code":"rate_limit_exceeded","param":"model"}}`
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, upstreamBody)
+	}))
+	defer upstream.Close()
+
+	srv := newShuntPassthroughTestServer(t, upstream.URL+"/v1")
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"local-model","messages":[{"role":"user","content":"hello"}]}`))
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusTooManyRequests)
+	}
+	if got := strings.TrimSpace(rec.Body.String()); got != upstreamBody {
+		t.Fatalf("body = %s, want passthrough %s", got, upstreamBody)
+	}
+}
+
+func newShuntPassthroughTestServer(t *testing.T, baseURL string) *Server {
+	t.Helper()
+	cfg := baseConfig()
+	cfg.Enabled = true
+	cfg.OpenAICompatPassthrough = config.AdapterOpenAICompatPassthrough{
+		BaseURL: baseURL,
+	}
+	srv, err := New(cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	return srv
 }

@@ -28,15 +28,30 @@ func (s *Server) forwardShunt(w http.ResponseWriter, r *http.Request, model Reso
 	ctx := correlation.WithContext(r.Context(), corr)
 	r = r.WithContext(ctx)
 	streamRequested := false
-	shunt, ok := s.registry.Shunt(model.Shunt)
-	if !ok || shunt.BaseURL == "" {
-		writeError(w, http.StatusNotImplemented, "shunt_unconfigured",
-			"alias routes to shunt "+model.Shunt+" but no base URL is configured")
-		return
+	baseURL := strings.TrimSpace(model.OpenAICompatPassthrough.BaseURL)
+	apiKey := model.OpenAICompatPassthrough.APIKey
+	apiKeyEnv := model.OpenAICompatPassthrough.APIKeyEnv
+	modelOverride := model.OpenAICompatPassthrough.Model
+	upstreamLabel := "openai_compat_passthrough"
+	if baseURL == "" {
+		shunt, ok := s.registry.Shunt(model.Shunt)
+		if !ok || shunt.BaseURL == "" {
+			err := newAdapterError(adapterErrorUpstreamUnavailable,
+				"alias routes to shunt "+model.Shunt+" but no base URL is configured")
+			err.Provider = providerName(model, "")
+			err.Backend = model.Backend
+			err.ModelAlias = model.Alias
+			s.respondAdapterError(w, r, err)
+			return
+		}
+		baseURL = shunt.BaseURL
+		apiKey = shunt.APIKey
+		apiKeyEnv = shunt.APIKeyEnv
+		modelOverride = shunt.Model
+		upstreamLabel = "shunt:" + model.Shunt
 	}
-	apiKey := shunt.APIKey
-	if apiKey == "" && shunt.APIKeyEnv != "" {
-		apiKey = os.Getenv(shunt.APIKeyEnv)
+	if apiKey == "" && apiKeyEnv != "" {
+		apiKey = os.Getenv(apiKeyEnv)
 	}
 
 	// Mutate the request body if we need to. Two reasons:
@@ -52,8 +67,8 @@ func (s *Server) forwardShunt(w http.ResponseWriter, r *http.Request, model Reso
 		if v, ok := rawReq["stream"].(bool); ok {
 			streamRequested = v
 		}
-		if shunt.Model != "" {
-			rawReq["model"] = shunt.Model
+		if modelOverride != "" {
+			rawReq["model"] = modelOverride
 		}
 		if rf, ok := rawReq["response_format"]; ok {
 			rfBytes, _ := json.Marshal(rf)
@@ -67,7 +82,7 @@ func (s *Server) forwardShunt(w http.ResponseWriter, r *http.Request, model Reso
 	}
 	s.emitRequestStarted(ctx, model, "", reqID, model.Alias, streamRequested)
 
-	respBody, status, hdr, err := shuntCall(ctx, shunt.BaseURL, apiKey, body)
+	respBody, status, hdr, err := shuntCall(ctx, baseURL, apiKey, body)
 	if err != nil {
 		adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
 			Stage:      adapterruntime.RequestStageFailed,
@@ -80,7 +95,12 @@ func (s *Server) forwardShunt(w http.ResponseWriter, r *http.Request, model Reso
 			DurationMs: time.Since(started).Milliseconds(),
 			Err:        err.Error(),
 		})
-		writeError(w, http.StatusBadGateway, "shunt_dial_failed", err.Error())
+		aerr := newAdapterError(adapterErrorUpstreamUnavailable, err.Error())
+		aerr.Provider = providerName(model, "")
+		aerr.Backend = model.Backend
+		aerr.ModelAlias = model.Alias
+		aerr.Cause = err
+		s.respondAdapterError(w, r, aerr)
 		return
 	}
 	contentType := strings.ToLower(strings.TrimSpace(hdr.Get("Content-Type")))
@@ -93,14 +113,14 @@ func (s *Server) forwardShunt(w http.ResponseWriter, r *http.Request, model Reso
 		if !ok {
 			attrs := []slog.Attr{
 				slog.String("model", model.Alias),
-				slog.String("shunt", model.Shunt),
+				slog.String("upstream", upstreamLabel),
 				slog.Int("first_attempt_bytes", len(respBody)),
 			}
 			attrs = append(attrs, corr.Attrs()...)
 			s.log.LogAttrs(ctx, slog.LevelWarn, structuredOutputShuntParseFailedEvent, attrs...)
 			injectJSONSystemMessage(rawReq, jsonSpec.SystemPrompt(true))
 			body2, _ := json.Marshal(rawReq)
-			rb2, st2, h2, err2 := shuntCall(r.Context(), shunt.BaseURL, apiKey, body2)
+			rb2, st2, h2, err2 := shuntCall(r.Context(), baseURL, apiKey, body2)
 			if err2 == nil && st2 == http.StatusOK {
 				if c2, ok2 := coerceShuntJSON(rb2); ok2 {
 					respBody, status, hdr = c2, st2, h2
@@ -111,6 +131,9 @@ func (s *Server) forwardShunt(w http.ResponseWriter, r *http.Request, model Reso
 		} else {
 			respBody = coerced
 		}
+	}
+	if status >= http.StatusBadRequest {
+		respBody, hdr = normalizeShuntErrorResponse(status, respBody, hdr)
 	}
 
 	for k, v := range hdr {
@@ -199,6 +222,47 @@ func shuntCall(ctx context.Context, baseURL, apiKey string, body []byte) ([]byte
 		return nil, resp.StatusCode, resp.Header, err
 	}
 	return rb, resp.StatusCode, resp.Header, nil
+}
+
+func normalizeShuntErrorResponse(status int, body []byte, hdr http.Header) ([]byte, http.Header) {
+	if validOpenAIErrorEnvelope(body) {
+		return body, hdr
+	}
+	envelope := ErrorResponse{Error: ErrorBody{
+		Message: shuntUpstreamErrorMessage(status, body),
+		Type:    "upstream_error",
+		Code:    "upstream_failed",
+	}}
+	out, err := json.Marshal(envelope)
+	if err != nil {
+		return body, hdr
+	}
+	next := hdr.Clone()
+	if next == nil {
+		next = http.Header{}
+	}
+	next.Set("Content-Type", "application/json")
+	return out, next
+}
+
+func validOpenAIErrorEnvelope(body []byte) bool {
+	var envelope ErrorResponse
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return false
+	}
+	return strings.TrimSpace(envelope.Error.Message) != "" && strings.TrimSpace(envelope.Error.Type) != ""
+}
+
+func shuntUpstreamErrorMessage(status int, body []byte) string {
+	text := strings.TrimSpace(strings.ToValidUTF8(string(body), ""))
+	if text == "" {
+		return "shunt upstream returned HTTP " + strconv.Itoa(status) + " with an empty error body"
+	}
+	const maxLen = 1000
+	if len(text) > maxLen {
+		text = text[:maxLen] + "..."
+	}
+	return "shunt upstream returned HTTP " + strconv.Itoa(status) + ": " + text
 }
 
 // coerceShuntJSON walks the OpenAI-shaped response, runs CoerceJSON

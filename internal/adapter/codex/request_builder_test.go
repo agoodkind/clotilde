@@ -495,6 +495,82 @@ func TestBuildCodexRequestInjectsContextBeforeFinalUserTurn(t *testing.T) {
 	}
 }
 
+func TestBuildCodexRequestPreservesChatImageParts(t *testing.T) {
+	req := ChatRequest{
+		Messages: []ChatMessage{{
+			Role: "user",
+			Content: mustRaw(`[
+				{"type":"text","text":"what is in this image?"},
+				{"type":"image_url","image_url":{"url":"data:image/png;base64,abc123","detail":"high"}}
+			]`),
+		}},
+	}
+
+	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	var sawText, sawImage bool
+	for _, item := range out.Input {
+		if item["role"] != "user" {
+			continue
+		}
+		for _, part := range codexInputContentParts(item) {
+			switch part["type"] {
+			case "input_text":
+				if part["text"] == "what is in this image?" {
+					sawText = true
+				}
+				if strings.Contains(part["text"].(string), "[image]") {
+					t.Fatalf("image collapsed into text part: %#v", part)
+				}
+			case "input_image":
+				if part["image_url"] == "data:image/png;base64,abc123" && part["detail"] == "high" {
+					sawImage = true
+				}
+			}
+		}
+	}
+	if !sawText || !sawImage {
+		t.Fatalf("sawText=%v sawImage=%v input=%#v", sawText, sawImage, out.Input)
+	}
+}
+
+func TestBuildCodexRequestPreservesResponsesInputImageParts(t *testing.T) {
+	req := ChatRequest{
+		Input: mustRaw(`[
+			{
+				"type":"message",
+				"role":"user",
+				"content":[
+					{"type":"input_text","text":"describe this"},
+					{"type":"input_image","image_url":"https://example.test/image.png","detail":"low"}
+				]
+			}
+		]`),
+	}
+
+	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	var sawText, sawImage bool
+	for _, item := range out.Input {
+		if item["role"] != "user" {
+			continue
+		}
+		for _, part := range codexInputContentParts(item) {
+			switch part["type"] {
+			case "input_text":
+				if part["text"] == "describe this" {
+					sawText = true
+				}
+			case "input_image":
+				if part["image_url"] == "https://example.test/image.png" && part["detail"] == "low" {
+					sawImage = true
+				}
+			}
+		}
+	}
+	if !sawText || !sawImage {
+		t.Fatalf("sawText=%v sawImage=%v input=%#v", sawText, sawImage, out.Input)
+	}
+}
+
 func TestBuildCodexRequestUsesCatalogBaseInstructions(t *testing.T) {
 	req := ChatRequest{
 		Messages: []ChatMessage{{Role: "user", Content: mustRaw(`"hello"`)}},
@@ -1467,6 +1543,11 @@ func codexInputContentText(item codexInputItem) string {
 	}
 	v, _ := content[0]["text"].(string)
 	return v
+}
+
+func codexInputContentParts(item codexInputItem) []map[string]any {
+	content, _ := item["content"].([]map[string]any)
+	return content
 }
 
 func codexItemTypeString(item codexInputItem) string {

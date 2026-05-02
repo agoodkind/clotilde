@@ -49,15 +49,6 @@ func TestNewRegistryCapabilitiesValidation(t *testing.T) {
 			wantSub: "supports_vision",
 		},
 		{
-			name: "fallback_logprobs_rejected",
-			mutate: func(cfg *config.AdapterConfig) {
-				cfg.Logprobs = config.AdapterLogprobs{
-					Fallback: "reject",
-				}
-			},
-			wantSub: "no longer supported",
-		},
-		{
 			name: "invalid_logprobs_value_rejected",
 			mutate: func(cfg *config.AdapterConfig) {
 				cfg.Logprobs = config.AdapterLogprobs{

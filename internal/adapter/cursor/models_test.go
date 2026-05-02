@@ -9,7 +9,7 @@ import (
 func TestNormalizeModelAliasPreservesForegroundAliasParity(t *testing.T) {
 	testCases := map[string]string{
 		"clyde-gpt-5.4-1m-medium":  "clyde-gpt-5.4-1m-medium",
-		"clyde-gpt-5.5-1m-xhigh":   "clyde-gpt-5.5-1m-xhigh",
+		"clyde-codex-5.5-xhigh":    "clyde-codex-5.5-xhigh",
 		"clyde-codex-gpt-5.4-high": "clyde-codex-gpt-5.4-high",
 		"clyde-gpt-5.4":            "clyde-gpt-5.4",
 		"gpt-5.4":                  "gpt-5.4",
@@ -28,7 +28,7 @@ func TestNormalizeModelAliasPreservesForegroundAliasParity(t *testing.T) {
 func TestNormalizeSessionSettingsModelPreservesDeclarativeAliases(t *testing.T) {
 	testCases := map[string]string{
 		"clyde-gpt-5.4-1m-medium": "clyde-gpt-5.4-1m-medium",
-		"clyde-gpt-5.5-xhigh":     "clyde-gpt-5.5-xhigh",
+		"clyde-codex-5.5-xhigh":   "clyde-codex-5.5-xhigh",
 		"clyde-gpt-5.4":           "clyde-gpt-5.4",
 	}
 

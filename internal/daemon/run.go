@@ -761,7 +761,7 @@ func adapterListenAddr(cfg config.AdapterConfig) string {
 	if port <= 0 {
 		port = adapter.DefaultPort
 	}
-	return net.JoinHostPort(host, strconv.Itoa(port))
+	return net.JoinHostPort(normalizeListenHost(host), strconv.Itoa(port))
 }
 
 func webAppListenAddr(cfg config.WebAppConfig) string {
@@ -773,7 +773,18 @@ func webAppListenAddr(cfg config.WebAppConfig) string {
 	if port <= 0 {
 		port = webapp.DefaultPort
 	}
-	return net.JoinHostPort(host, strconv.Itoa(port))
+	return net.JoinHostPort(normalizeListenHost(host), strconv.Itoa(port))
+}
+
+func normalizeListenHost(host string) string {
+	trimmed := strings.TrimSpace(host)
+	if len(trimmed) >= 2 && strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+		inner := strings.TrimSpace(trimmed[1 : len(trimmed)-1])
+		if strings.Contains(inner, ":") {
+			return inner
+		}
+	}
+	return trimmed
 }
 
 // startWebApp boots the optional remote dashboard. The webapp shares
@@ -867,171 +878,76 @@ func startWebApp(log *slog.Logger, srv *Server, inherited net.Listener) (*webApp
 }
 
 func (s *Server) listLiveSessionsForWebApp(context.Context) ([]webapp.LiveSession, error) {
-	s.remoteMu.Lock()
-	defer s.remoteMu.Unlock()
-	out := make([]webapp.LiveSession, 0, len(s.liveSessions))
-	for _, live := range s.liveSessions {
-		out = append(out, webapp.LiveSession{
-			Provider:       string(live.provider),
-			SessionName:    live.name,
-			SessionID:      live.id,
-			Status:         live.status,
-			Basedir:        live.basedir,
-			StartedAt:      live.startedAt,
-			SupportsSend:   true,
-			SupportsStream: true,
-			SupportsStop:   true,
-		})
+	resp, err := s.ListLiveSessions(context.Background(), &clydev1.ListLiveSessionsRequest{})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]webapp.LiveSession, 0, len(resp.GetSessions()))
+	for _, live := range resp.GetSessions() {
+		out = append(out, webLiveSessionFromProto(live))
 	}
 	return out, nil
 }
 
 func (s *Server) startLiveSessionForWebApp(ctx context.Context, req webapp.StartLiveSessionRequest) (webapp.LiveSession, error) {
-	provider := strings.TrimSpace(req.Provider)
-	if provider == "" {
-		provider = string(session.ProviderCodex)
-	}
-	if provider != string(session.ProviderCodex) {
-		return webapp.LiveSession{}, fmt.Errorf("live provider %q is not supported yet", provider)
-	}
-	basedir := strings.TrimSpace(req.Basedir)
-	if basedir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return webapp.LiveSession{}, err
-		}
-		basedir = home
-	}
-	runtime := codex.NewLiveRuntime(codex.LiveRuntimeOptions{WorkDir: basedir})
-	live, err := runtime.Start(ctx, codex.LiveStartRequest{
-		WorkDir:     basedir,
-		Model:       strings.TrimSpace(req.Model),
-		SessionName: strings.TrimSpace(req.Name),
-		Ephemeral:   req.Incognito,
+	resp, err := s.StartLiveSession(ctx, &clydev1.StartLiveSessionRequest{
+		Provider:  req.Provider,
+		Name:      req.Name,
+		Basedir:   req.Basedir,
+		Model:     req.Model,
+		Effort:    req.Effort,
+		Incognito: req.Incognito,
 	})
 	if err != nil {
-		_ = runtime.Close()
 		return webapp.LiveSession{}, err
 	}
-	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		name = live.ThreadID
-	}
-	record := &liveRuntimeSession{
-		provider:     session.ProviderCodex,
-		name:         name,
-		id:           live.ThreadID,
-		basedir:      live.WorkDir,
-		model:        live.Model,
-		status:       "idle",
-		startedAt:    daemonNow(),
-		codexRuntime: runtime,
-	}
-	if record.basedir == "" {
-		record.basedir = basedir
-	}
-	if record.model == "" {
-		record.model = strings.TrimSpace(req.Model)
-	}
-	s.remoteMu.Lock()
-	s.liveSessions[record.id] = record
-	s.remoteMu.Unlock()
-	return webapp.LiveSession{
-		Provider:       string(record.provider),
-		SessionName:    record.name,
-		SessionID:      record.id,
-		Status:         record.status,
-		Basedir:        record.basedir,
-		StartedAt:      record.startedAt,
-		SupportsSend:   true,
-		SupportsStream: true,
-		SupportsStop:   true,
-	}, nil
+	return webLiveSessionFromProto(resp.GetSession()), nil
 }
 
 func (s *Server) sendLiveSessionForWebApp(ctx context.Context, sessionID, text string) error {
-	live, err := s.liveSessionRecord(ctx, sessionID)
-	if err != nil {
-		return err
-	}
-	turn, err := live.codexRuntime.Send(ctx, codex.LiveSendRequest{
-		ThreadID: live.id,
-		Text:     text,
-		WorkDir:  live.basedir,
-		Model:    live.model,
+	resp, err := s.SendLiveSession(ctx, &clydev1.SendLiveSessionRequest{
+		SessionId: sessionID,
+		Text:      text,
 	})
 	if err != nil {
 		return err
 	}
-	s.remoteMu.Lock()
-	live.lastTurnID = turn.TurnID
-	live.status = string(turn.Status)
-	s.remoteMu.Unlock()
+	if !resp.GetAccepted() {
+		return fmt.Errorf("live session %q did not accept input", sessionID)
+	}
 	return nil
 }
 
 func (s *Server) streamLiveSessionForWebApp(ctx context.Context, sessionID string) (<-chan webapp.LiveSessionEvent, error) {
 	_, _ = peer.FromContext(ctx)
-	live, err := s.liveSessionRecord(ctx, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	if live.lastTurnID == "" {
-		return nil, fmt.Errorf("live session %q has no active turn", sessionID)
-	}
-	events, err := live.codexRuntime.Stream(ctx, codex.LiveStreamRequest{
-		ThreadID: live.id,
-		TurnID:   live.lastTurnID,
-	})
-	if err != nil {
-		return nil, err
-	}
-	out := make(chan webapp.LiveSessionEvent, 32)
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				s.log.WarnContext(ctx, "daemon.live_session.stream_panicked",
-					"component", "daemon",
-					"session_id", live.id,
-					"panic", r,
-				)
-			}
-		}()
-		defer close(out)
-		for event := range events {
-			if event.Err != nil {
-				out <- webapp.LiveSessionEvent{SessionID: live.id, Kind: "error", Text: event.Err.Error(), Timestamp: daemonNow()}
-				return
-			}
-			role := "assistant"
-			text := event.Delta
-			if event.Kind == codex.LiveEventCompleted {
-				role = ""
-				text = string(event.Status)
-			}
-			out <- webapp.LiveSessionEvent{SessionID: live.id, Kind: string(event.Kind), Role: role, Text: text, Timestamp: daemonNow()}
-		}
-	}()
-	return out, nil
+	return s.streamLiveSessionEvents(ctx, sessionID)
 }
 
 func (s *Server) stopLiveSessionForWebApp(ctx context.Context, sessionID string) error {
-	live, err := s.liveSessionRecord(ctx, sessionID)
-	if err != nil {
-		return err
+	_, err := s.StopLiveSession(ctx, &clydev1.StopLiveSessionRequest{SessionId: sessionID})
+	return err
+}
+
+func webLiveSessionFromProto(live *clydev1.LiveSession) webapp.LiveSession {
+	if live == nil {
+		return webapp.LiveSession{}
 	}
-	if live.lastTurnID != "" {
-		if err := live.codexRuntime.Stop(ctx, codex.LiveStopRequest{ThreadID: live.id, TurnID: live.lastTurnID}); err != nil {
-			return err
-		}
+	startedAt := time.Time{}
+	if live.GetStartedAtNanos() > 0 {
+		startedAt = time.Unix(0, live.GetStartedAtNanos())
 	}
-	if err := live.codexRuntime.Close(); err != nil {
-		return err
+	return webapp.LiveSession{
+		Provider:       live.GetProvider(),
+		SessionName:    live.GetSessionName(),
+		SessionID:      live.GetSessionId(),
+		Status:         live.GetStatus(),
+		Basedir:        live.GetBasedir(),
+		URL:            live.GetUrl(),
+		StartedAt:      startedAt,
+		SupportsSend:   live.GetSupportsSend(),
+		SupportsStream: live.GetSupportsStream(),
+		SupportsStop:   live.GetSupportsStop(),
 	}
-	s.remoteMu.Lock()
-	delete(s.liveSessions, live.id)
-	s.remoteMu.Unlock()
-	return nil
 }
 
 func (s *Server) liveSessionRecord(ctx context.Context, sessionID string) (*liveRuntimeSession, error) {
@@ -1045,7 +961,7 @@ func (s *Server) liveSessionRecord(ctx context.Context, sessionID string) (*live
 		s.remoteMu.Unlock()
 		return live, nil
 	}
-	runtime := codex.NewLiveRuntime(codex.LiveRuntimeOptions{})
+	runtime := newCodexLiveRuntime(codex.LiveRuntimeOptions{})
 	attached, err := runtime.Attach(ctx, codex.LiveAttachRequest{ThreadID: sessionID})
 	if err != nil {
 		s.remoteMu.Unlock()
@@ -1163,12 +1079,10 @@ func watchAdapterConfig(log *slog.Logger, ctrl *adapterController) (func(), erro
 		return nil, fmt.Errorf("watch config dir: %w", err)
 	}
 	tomlPath := filepath.Clean(filepath.Join(configDir, "config.toml"))
-	jsonPath := filepath.Clean(filepath.Join(configDir, "config.json"))
 	log.Info("adapter.config_watch.started",
 		"component", "adapter",
 		"dir", configDir,
 		"toml_path", tomlPath,
-		"json_path", jsonPath,
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1213,7 +1127,7 @@ func watchAdapterConfig(log *slog.Logger, ctrl *adapterController) (func(), erro
 				if !ok {
 					return
 				}
-				if !isAdapterConfigEvent(event, tomlPath, jsonPath) {
+				if !isAdapterConfigEvent(event, tomlPath) {
 					continue
 				}
 				log.Debug("adapter.config_watch.event",
@@ -1256,9 +1170,9 @@ func watchAdapterConfig(log *slog.Logger, ctrl *adapterController) (func(), erro
 	}, nil
 }
 
-func isAdapterConfigEvent(event fsnotify.Event, tomlPath, jsonPath string) bool {
+func isAdapterConfigEvent(event fsnotify.Event, tomlPath string) bool {
 	name := filepath.Clean(event.Name)
-	if name != tomlPath && name != jsonPath {
+	if name != tomlPath {
 		return false
 	}
 	return event.Has(fsnotify.Write) ||
