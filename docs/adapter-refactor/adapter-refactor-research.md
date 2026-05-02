@@ -14,6 +14,17 @@ implementation. Avoid adding session transcripts or dated progress logs here.
   `ApplyPatch`, `CallMcpTool`, and `FetchMcpResource`.
 - Mode and request-path semantics should be derived once in `cursor/`, not
   inferred later from prompt text.
+- Cursor appears to preflight available models via `/v1/models`, build a local
+  capability entry, decide whether to summarize/compact locally, and only then
+  send `/v1/chat/completions` with the selected context payload.
+- Cursor does not forward the MAX Mode / 1m-context toggle state in the
+  `/v1/chat/completions` body. Live request comparisons only showed the model
+  id plus metadata such as `cursorConversationId`; the selected context length
+  must be inferred from Cursor behavior and `/v1/models` traffic.
+- The visible Cursor "API usage limit" and "User API key rate limit exceeded"
+  messages are fallback UI messages. Treat them as "Clyde or the upstream
+  provider did not produce a Cursor-acceptable response" until Clyde logs prove
+  a real 429 or quota event.
 
 ## Codex Provider
 
@@ -78,9 +89,28 @@ implementation. Avoid adding session transcripts or dated progress logs here.
   `200000` for non-1m Opus aliases. Current long-turn logs are still below the
   advertised 1m budget, so they do not prove whether Cursor auto-summarization
   should already have triggered for 1m aliases.
-- The older Codex HTTP characterization found about `272000` observed input
-  context for `gpt-5.4` and `gpt-5.5`. Websocket context behavior still needs
-  independent validation.
+- GPT/Codex aliases must avoid Cursor's native catalog assumptions where
+  possible. Native-looking `gpt-5.5` was observed in Cursor as a large-context
+  model even when Clyde advertised `272000` through `/v1/models`.
+- `gpt-5.4` is currently treated as the 1m-capable GPT alias in Clyde. `gpt-5.5`
+  should be treated as about `272000` input context unless fresh upstream
+  evidence proves otherwise.
+- Clyde-specific GPT aliases are now declared under `[adapter.codex.models]`
+  and must include an effort segment. For example, `clyde-gpt-5.5-high`
+  advertises `272000` context and normalizes upstream to `gpt-5.5`, while
+  `clyde-gpt-5.4-1m-medium` advertises `1000000` context and normalizes
+  upstream to `gpt-5.4`.
+- Cursor still sent oversized `clyde-gpt-5.5` requests before bare non-effort
+  aliases were removed. Recent failing turns had about `1697776` request-body
+  bytes, `1169` input items, and `previous_response_id` present; Clyde resolved
+  the request to `272000` before forwarding upstream to `gpt-5.5`.
+- Therefore `/v1/models` metadata is necessary but not sufficient for reliable
+  protection. Clyde needs adapter-side preflight for known context-window
+  overflows so it can reject before opening an upstream Codex turn, and the
+  rejection shape should be Cursor-compatible enough to trigger retry,
+  compaction, or a clear user-visible error.
 - `CLYDE-158` tracks context-window mismatch handling.
 - `CLYDE-163` tracks Cursor auto-summarization not engaging for Clyde adapter
   models.
+- `CLYDE-169` tracks making model mappings, alias exposure, effort tiers, and
+  context budgets fully config-driven with no GPT/Codex hard-coded details.

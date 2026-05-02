@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/slogger"
 	"goodkind.io/gklog"
 )
 
@@ -31,7 +32,7 @@ func daemonUnaryCorrelationInterceptor(log *slog.Logger) grpc.UnaryServerInterce
 			slog.String("method", info.FullMethod),
 		}
 		attrs = append(attrs, corr.Attrs()...)
-		gklog.LoggerFromContext(ctx).LogAttrs(ctx, slog.LevelInfo, "daemon.rpc.started", attrs...)
+		slogger.WithConcern(gklog.LoggerFromContext(ctx), slogger.ConcernDaemonRPCRequests).LogAttrs(ctx, slog.LevelInfo, "daemon.rpc.started", attrs...)
 		resp, err := handler(ctx, req)
 		logDaemonRPCCompleted(ctx, info.FullMethod, started, err)
 		return resp, err
@@ -48,7 +49,7 @@ func daemonStreamCorrelationInterceptor(log *slog.Logger) grpc.StreamServerInter
 			slog.String("method", info.FullMethod),
 		}
 		attrs = append(attrs, corr.Attrs()...)
-		gklog.LoggerFromContext(ctx).LogAttrs(ctx, slog.LevelInfo, "daemon.rpc.stream_started", attrs...)
+		slogger.WithConcern(gklog.LoggerFromContext(ctx), slogger.ConcernDaemonRPCStreams).LogAttrs(ctx, slog.LevelInfo, "daemon.rpc.stream_started", attrs...)
 		err := handler(srv, correlationServerStream{ServerStream: stream, ctx: ctx})
 		logDaemonRPCCompleted(ctx, info.FullMethod, started, err)
 		return err
@@ -76,7 +77,7 @@ func logDaemonRPCCompleted(ctx context.Context, method string, started time.Time
 		slog.Int64("duration_ms", time.Since(started).Milliseconds()),
 	}
 	attrs = append(attrs, correlation.AttrsFromContext(ctx)...)
-	gklog.LoggerFromContext(ctx).LogAttrs(ctx, level, "daemon.rpc.completed", attrs...)
+	slogger.WithConcern(gklog.LoggerFromContext(ctx), slogger.ConcernDaemonRPCRequests).LogAttrs(ctx, level, "daemon.rpc.completed", attrs...)
 }
 
 func daemonUnaryClientCorrelationInterceptor() grpc.UnaryClientInterceptor {

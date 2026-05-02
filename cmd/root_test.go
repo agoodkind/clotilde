@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
@@ -47,8 +49,8 @@ func TestConsumeTUIReturnSessionRestoresAndClearsEnv(t *testing.T) {
 	if got == nil {
 		t.Fatalf("consumeTUIReturnSession returned nil")
 	}
-	if got.Name != "chat-one" || got.Metadata.SessionID != "session-uuid" {
-		t.Fatalf("restored session = %s/%s, want chat-one/session-uuid", got.Name, got.Metadata.SessionID)
+	if got.Name != "chat-one" || got.Metadata.ProviderSessionID() != "session-uuid" {
+		t.Fatalf("restored session = %s/%s, want chat-one/session-uuid", got.Name, got.Metadata.ProviderSessionID())
 	}
 	if value := os.Getenv(ui.EnvTUIReturnSessionID); value != "" {
 		t.Fatalf("%s still set to %q", ui.EnvTUIReturnSessionID, value)
@@ -56,4 +58,45 @@ func TestConsumeTUIReturnSessionRestoresAndClearsEnv(t *testing.T) {
 	if value := os.Getenv(ui.EnvTUIReturnSessionName); value != "" {
 		t.Fatalf("%s still set to %q", ui.EnvTUIReturnSessionName, value)
 	}
+}
+
+func TestApplyClaudeMITMEnvAddsAnthropicBaseURLForPassthrough(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	cfgDir := filepath.Join(configHome, "clyde")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	cfg := []byte("[mitm]\nenabled_default = true\nproviders = \"claude\"\nbody_mode = \"summary\"\ncapture_dir = \"" + t.TempDir() + "\"\n")
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), cfg, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	got := applyClaudeMITMEnv([]string{"ANTHROPIC_BASE_URL=https://old.example", "KEEP=1"})
+
+	if !envContains(got, "KEEP", "1") {
+		t.Fatalf("KEEP env missing: %v", got)
+	}
+	baseURL, ok := envValue(got, "ANTHROPIC_BASE_URL")
+	if !ok {
+		t.Fatalf("ANTHROPIC_BASE_URL missing: %v", got)
+	}
+	if !strings.HasPrefix(baseURL, "http://[::1]:") {
+		t.Fatalf("ANTHROPIC_BASE_URL=%q, want local MITM proxy", baseURL)
+	}
+}
+
+func envContains(env []string, key, want string) bool {
+	got, ok := envValue(env, key)
+	return ok && got == want
+}
+
+func envValue(env []string, key string) (string, bool) {
+	prefix := key + "="
+	for _, item := range env {
+		if value, ok := strings.CutPrefix(item, prefix); ok {
+			return value, true
+		}
+	}
+	return "", false
 }

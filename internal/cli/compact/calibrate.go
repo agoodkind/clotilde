@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log/slog"
 	"time"
 
 	compactengine "goodkind.io/clyde/internal/compact"
@@ -22,9 +21,9 @@ func runAutoCalibrate(ctx context.Context, out io.Writer, sess *session.Session,
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	slog.Info("cli.compact.auto_calibrate.started",
+	cliCompactLog.Logger().Info("cli.compact.auto_calibrate.started",
 		"session", sess.Name,
-		"session_id", sess.Metadata.SessionID,
+		"session_id", sess.Metadata.ProviderSessionID(),
 		"work_dir", sess.Metadata.WorkDir,
 		"model", model,
 	)
@@ -33,9 +32,9 @@ func runAutoCalibrate(ctx context.Context, out io.Writer, sess *session.Session,
 	layer := sessionctx.NewDefault(sess, model, "")
 	usage, err := layer.Usage(ctx, sessionctx.UsageOptions{Refresh: true})
 	if err != nil {
-		slog.Error("cli.compact.auto_calibrate.probe_failed",
+		cliCompactLog.Logger().Error("cli.compact.auto_calibrate.probe_failed",
 			"session", sess.Name,
-			"session_id", sess.Metadata.SessionID,
+			"session_id", sess.Metadata.ProviderSessionID(),
 			"err", err,
 		)
 		return fmt.Errorf("auto-calibrate probe: %w", err)
@@ -43,9 +42,9 @@ func runAutoCalibrate(ctx context.Context, out io.Writer, sess *session.Session,
 
 	overhead := usage.StaticOverhead()
 	if overhead <= 0 {
-		slog.Warn("cli.compact.auto_calibrate.empty_overhead",
+		cliCompactLog.Logger().Warn("cli.compact.auto_calibrate.empty_overhead",
 			"session", sess.Name,
-			"session_id", sess.Metadata.SessionID,
+			"session_id", sess.Metadata.ProviderSessionID(),
 			"total_tokens", usage.TotalTokens,
 			"categories", len(usage.Categories),
 		)
@@ -61,18 +60,18 @@ func runAutoCalibrate(ctx context.Context, out io.Writer, sess *session.Session,
 		CapturedAt:     time.Now().UTC(),
 		Model:          resolvedModel,
 	}
-	if err := compactengine.SaveCalibration(sess.Metadata.SessionID, cal); err != nil {
-		slog.Error("cli.compact.auto_calibrate.save_failed",
+	if err := compactengine.SaveCalibration(sess.Metadata.ProviderSessionID(), cal); err != nil {
+		cliCompactLog.Logger().Error("cli.compact.auto_calibrate.save_failed",
 			"session", sess.Name,
-			"session_id", sess.Metadata.SessionID,
+			"session_id", sess.Metadata.ProviderSessionID(),
 			"err", err,
 		)
 		return err
 	}
 
-	slog.Info("cli.compact.auto_calibrate.completed",
+	cliCompactLog.Logger().Info("cli.compact.auto_calibrate.completed",
 		"session", sess.Name,
-		"session_id", sess.Metadata.SessionID,
+		"session_id", sess.Metadata.ProviderSessionID(),
 		"static_overhead", overhead,
 		"total_tokens", usage.TotalTokens,
 		"messages_tokens", usage.TailTokens(),
@@ -85,9 +84,9 @@ func runAutoCalibrate(ctx context.Context, out io.Writer, sess *session.Session,
 }
 
 func runCalibrate(out io.Writer, sess *session.Session, n int, model string) error {
-	slog.Info("cli.compact.calibrate.started",
+	cliCompactLog.Logger().Info("cli.compact.calibrate.started",
 		"session", sess.Name,
-		"session_id", sess.Metadata.SessionID,
+		"session_id", sess.Metadata.ProviderSessionID(),
 		"static_overhead", n,
 		"model", model,
 	)
@@ -96,18 +95,18 @@ func runCalibrate(out io.Writer, sess *session.Session, n int, model string) err
 		CapturedAt:     time.Now().UTC(),
 		Model:          model,
 	}
-	if err := compactengine.SaveCalibration(sess.Metadata.SessionID, cal); err != nil {
-		slog.Error("cli.compact.calibrate.failed",
+	if err := compactengine.SaveCalibration(sess.Metadata.ProviderSessionID(), cal); err != nil {
+		cliCompactLog.Logger().Error("cli.compact.calibrate.failed",
 			"session", sess.Name,
-			"session_id", sess.Metadata.SessionID,
+			"session_id", sess.Metadata.ProviderSessionID(),
 			"err", err,
 		)
 		return err
 	}
 	_, _ = fmt.Fprintf(out, "calibrated session %s: static_overhead = %s\n", sess.Name, humanInt(n))
-	slog.Info("cli.compact.calibrate.completed",
+	cliCompactLog.Logger().Info("cli.compact.calibrate.completed",
 		"session", sess.Name,
-		"session_id", sess.Metadata.SessionID,
+		"session_id", sess.Metadata.ProviderSessionID(),
 		"static_overhead", n,
 	)
 	return nil

@@ -2,7 +2,6 @@ package hook
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 	"slices"
 
@@ -28,7 +27,7 @@ func resolveSessionName(hookData SessionStartInput, store session.Store, fullFal
 func findSessionByUUID(store session.Store, uuid string) (string, error) {
 	sessions, err := store.List()
 	if err != nil {
-		slog.Warn("hook.resolve_session.list_failed",
+		hookResolveLog.Logger().Warn("hook.resolve_session.list_failed",
 			"component", "hook",
 			"subcomponent", "resolve",
 			"err", err,
@@ -37,18 +36,18 @@ func findSessionByUUID(store session.Store, uuid string) (string, error) {
 	}
 
 	for _, sess := range sessions {
-		if sess.Metadata.SessionID == uuid {
+		if sess.Metadata.ProviderSessionID() == uuid {
 			return sess.Name, nil
 		}
 	}
 
 	for _, sess := range sessions {
-		if slices.Contains(sess.Metadata.PreviousSessionIDs, uuid) {
+		if slices.Contains(sess.Metadata.PreviousProviderSessionIDStrings(), uuid) {
 			return sess.Name, nil
 		}
 	}
 
-	slog.Warn("hook.resolve_session.uuid_not_found",
+	hookResolveLog.Logger().Warn("hook.resolve_session.uuid_not_found",
 		"component", "hook",
 		"subcomponent", "resolve",
 		"session_id", uuid,

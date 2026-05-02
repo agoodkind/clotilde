@@ -3,7 +3,6 @@ package sessionctx
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"goodkind.io/clyde/internal/compact"
@@ -53,7 +52,7 @@ func (c *countBackend) Count(ctx context.Context, content []compact.OutputBlock,
 
 	counter := c.builder(c.apiKey, effectiveModel)
 	started := time.Now()
-	slog.Debug("session.context.count.started",
+	sessionContextLog.Logger().Debug("session.context.count.started",
 		"component", "sessionctx",
 		"subcomponent", "count",
 		"session_id", c.sessionID,
@@ -63,7 +62,7 @@ func (c *countBackend) Count(ctx context.Context, content []compact.OutputBlock,
 	tokens, err := counter.CountSyntheticUser(ctx, content)
 	duration := time.Since(started)
 	if err != nil {
-		slog.Warn("session.context.count.failed",
+		sessionContextLog.Logger().Warn("session.context.count.failed",
 			"component", "sessionctx",
 			"subcomponent", "count",
 			"session_id", c.sessionID,
@@ -73,7 +72,7 @@ func (c *countBackend) Count(ctx context.Context, content []compact.OutputBlock,
 		)
 		return 0, err
 	}
-	slog.Info("session.context.count.completed",
+	sessionContextLog.Logger().Info("session.context.count.completed",
 		"component", "sessionctx",
 		"subcomponent", "count",
 		"session_id", c.sessionID,

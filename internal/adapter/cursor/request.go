@@ -66,7 +66,7 @@ func TranslateRequest(req adapteropenai.ChatRequest) Request {
 	translated.RawToolNames = rawToolNames(req)
 	translated.Mode = requestMode(translated.RawToolNames)
 	translated.CanSwitchMode = hasRawToolName(translated.RawToolNames, "SwitchMode")
-	translated.CanSpawnAgent = hasRawToolName(translated.RawToolNames, "Subagent")
+	translated.CanSpawnAgent = hasRawToolName(translated.RawToolNames, "Subagent") || hasRawToolName(translated.RawToolNames, "Task")
 	translated.HasSubagentTool = translated.CanSpawnAgent
 	translated.HasSwitchModeTool = translated.CanSwitchMode
 	translated.HasAskQuestionTool = hasRawToolName(translated.RawToolNames, "AskQuestion")

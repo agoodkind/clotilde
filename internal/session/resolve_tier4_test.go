@@ -49,7 +49,7 @@ var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(sess).ToNot(BeNil())
 		Expect(sess.Name).To(Equal("2026-04-12-merry-swan"))
-		Expect(sess.Metadata.SessionID).To(Equal(uuid))
+		Expect(sess.Metadata.ProviderSessionID()).To(Equal(uuid))
 		Expect(sess.Metadata.DisplayTitle).To(Equal("2026-04-12-merry-swan"))
 
 		metaPath := filepath.Join(clydeRoot, "sessions", "2026-04-12-merry-swan", "metadata.json")
@@ -64,7 +64,7 @@ var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(sess).ToNot(BeNil())
 		Expect(sess.Name).To(Equal("2026-04-12-merry-swan"))
-		Expect(sess.Metadata.SessionID).To(Equal(uuid))
+		Expect(sess.Metadata.ProviderSessionID()).To(Equal(uuid))
 	})
 
 	It("falls back to workspace-plus-UUID when customTitle is absent", func() {
@@ -105,7 +105,7 @@ var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(second).ToNot(BeNil())
 		Expect(second.Name).To(Equal(first.Name))
-		Expect(second.Metadata.SessionID).To(Equal(first.Metadata.SessionID))
+		Expect(second.Metadata.ProviderSessionID()).To(Equal(first.Metadata.ProviderSessionID()))
 	})
 
 	It("skips tier 4 when the store is constructed read-only", func() {

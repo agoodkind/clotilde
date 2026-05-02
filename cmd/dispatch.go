@@ -165,7 +165,7 @@ func ClassifyArgs(args []string) (mode InvocationMode, rewritten []string) {
 
 	// ── Known clyde subcommand ─────────────────────────────────────────────
 	if clydeSubcommands[first] {
-		slog.Info("cli.args.classify.decided",
+		cmdDispatchLog.Logger().Info("cli.args.classify.decided",
 			"component", "cli",
 			"subcomponent", "dispatch",
 			"argc", len(args),
@@ -180,7 +180,7 @@ func ClassifyArgs(args []string) (mode InvocationMode, rewritten []string) {
 
 	if len(args) == 1 && isExistingDirectoryArg(first) {
 		canonical := session.CanonicalWorkspaceRoot(first)
-		slog.Info("cli.args.classify.decided",
+		cmdDispatchLog.Logger().Info("cli.args.classify.decided",
 			"component", "cli",
 			"subcomponent", "dispatch",
 			"argc", len(args),
@@ -197,7 +197,7 @@ func ClassifyArgs(args []string) (mode InvocationMode, rewritten []string) {
 	// Includes unknown flags (--debug, --model used at top level, etc.) and
 	// unknown subcommands. Hand to cobra; Execute()'s unknown-command handler
 	// will forward anything cobra can't parse.
-	slog.Info("cli.args.classify.decided",
+	cmdDispatchLog.Logger().Info("cli.args.classify.decided",
 		"component", "cli",
 		"subcomponent", "dispatch",
 		"argc", len(args),

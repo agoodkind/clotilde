@@ -1,8 +1,6 @@
 package mcp
 
 import (
-	"log/slog"
-
 	"github.com/spf13/cobra"
 
 	"goodkind.io/clyde/internal/cli"
@@ -17,7 +15,7 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_ = f
-			slog.Info("cli.mcp.invoked")
+			cliMCPLog.Logger().Info("cli.mcp.invoked")
 			return mcpserver.Serve(cmd.Context())
 		},
 	}

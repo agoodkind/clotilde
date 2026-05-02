@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"log/slog"
 	"time"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
@@ -44,7 +43,7 @@ func providerStatsFromProto(list []*clydev1.ProviderStats) []ui.ProviderStats {
 			Error:                      item.GetError(),
 		})
 	}
-	slog.Debug("dashboard.stats.loaded",
+	cmdUILog.Logger().Debug("dashboard.stats.loaded",
 		"component", "tui",
 		"providers", len(out),
 	)

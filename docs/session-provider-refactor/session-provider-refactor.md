@@ -453,13 +453,35 @@ These need to be answered deliberately as we work through the slices:
 The first concrete cleanup, moving Claude-only post-launch remote-control
 persistence out of `cmd/root.go`, has landed.
 
+The provider-neutral identity cleanup has advanced: `CLYDE-172` moved
+discovery/adoption onto provider-scoped identities, and `CLYDE-173` added the
+provider-owned persisted metadata compatibility layer. `CLYDE-137` moved
+provider artifact cleanup and generic settings access behind provider
+dispatchers.
+
 The next concrete cleanup should keep the same direction:
 
-1. finish the provider-neutral identity and persisted-session model in
-   `internal/session`
-2. make discovery and adoption consume that same identity vocabulary
-3. move provider-specific settings and artifact cleanup behind provider-owned
-   contracts
+1. add Codex discovery/adoption once there is a known Codex session source to
+   scan
+2. widen provider-owned transcript/history support only when Codex exposes a
+   stable local history contract
+3. remove remaining legacy Claude field access from tests and compatibility
+   shims after the persisted metadata migration has soaked
+
+Completed latest slice:
+
+- `CLYDE-136`: added explicit provider capabilities for remote control,
+  transcript tailing, transcript export, compaction, provider artifact cleanup,
+  and context usage inspection. The daemon now rejects unsupported provider
+  operations instead of falling through to Claude transcript/settings paths, and
+  the TUI disables unsupported session actions for providers such as Codex.
+- `CLYDE-142`: added regression coverage for Claude vs Codex capabilities,
+  provider runtime resolution, provider artifact cleanup, Codex lifecycle
+  command shape, and TUI option gating.
+- `CLYDE-139`: added the initial Codex CLI lifecycle provider. It registers
+  `ProviderCodex`, supports `codex` launch and `codex resume <id>` through the
+  generic lifecycle boundary, exposes conservative capabilities, and keeps
+  unsupported Claude-only features gated off.
 
 ## Related References
 

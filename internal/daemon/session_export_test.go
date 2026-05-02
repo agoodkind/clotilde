@@ -51,7 +51,7 @@ func TestBuildSessionExportAppliesContentToggles(t *testing.T) {
 		t.Fatalf("write transcript: %v", err)
 	}
 	sess := session.NewSession("demo", "session-id")
-	sess.Metadata.TranscriptPath = transcriptPath
+	sess.Metadata.SetProviderTranscriptPath(transcriptPath)
 
 	exported, err := buildSessionExport(sess, &clydev1.ExportSessionRequest{
 		SessionName:            "demo",
@@ -87,7 +87,7 @@ func TestBuildSessionExportCanIncludeSystemPrompts(t *testing.T) {
 		t.Fatalf("write transcript: %v", err)
 	}
 	sess := session.NewSession("demo", "session-id")
-	sess.Metadata.TranscriptPath = transcriptPath
+	sess.Metadata.SetProviderTranscriptPath(transcriptPath)
 
 	without, err := buildSessionExport(sess, &clydev1.ExportSessionRequest{
 		SessionName:      "demo",

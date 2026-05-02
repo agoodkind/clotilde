@@ -22,7 +22,9 @@ func TestNewRegistryCapabilitiesValidation(t *testing.T) {
 			name: "missing_supports_tools_rejected",
 			mutate: func(cfg *config.AdapterConfig) {
 				cfg.Families["haiku-4-5"] = config.AdapterFamily{
+					AliasPrefix:     "haiku-4.5",
 					Model:           "claude-haiku-4-5-20251001",
+					Efforts:         []string{EffortMedium},
 					ThinkingModes:   []string{"default"},
 					MaxOutputTokens: 16000,
 					SupportsVision:  &testBoolTrue,
@@ -35,7 +37,9 @@ func TestNewRegistryCapabilitiesValidation(t *testing.T) {
 			name: "missing_supports_vision_rejected",
 			mutate: func(cfg *config.AdapterConfig) {
 				cfg.Families["haiku-4-5"] = config.AdapterFamily{
+					AliasPrefix:     "haiku-4.5",
 					Model:           "claude-haiku-4-5-20251001",
+					Efforts:         []string{EffortMedium},
 					ThinkingModes:   []string{"default"},
 					MaxOutputTokens: 16000,
 					SupportsTools:   &testBoolTrue,
@@ -81,7 +85,9 @@ func TestNewRegistryCapabilitiesValidation(t *testing.T) {
 func TestNewRegistryHappyPathCapabilitiesPropagated(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Families["haiku-4-5"] = config.AdapterFamily{
+		AliasPrefix:     "haiku-4.5",
 		Model:           "claude-haiku-4-5-20251001",
+		Efforts:         []string{EffortMedium},
 		ThinkingModes:   []string{"default"},
 		MaxOutputTokens: 16000,
 		SupportsTools:   &testBoolTrue,

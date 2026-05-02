@@ -29,8 +29,8 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	reqID := newRequestID()
-	corr := correlation.FromHTTPHeader(r.Header, reqID)
+	corr := correlationForRequest(r)
+	reqID := corr.RequestID
 	corr.SetHTTPHeaders(w.Header())
 	ctx := correlation.WithContext(r.Context(), corr)
 	r = r.WithContext(ctx)
@@ -83,6 +83,7 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		Request:       req,
 		Model:         anthropicIngressResolvedModel(model),
 		RequestID:     reqID,
+		Stream:        req.Stream,
 		NativeIngress: true,
 	}
 	ctx = anthropic.WithRequestID(ctx, reqID)

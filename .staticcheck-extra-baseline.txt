@@ -1,0 +1,681 @@
+cmd/clyde-staticcheck/main.go:9:1: boundary function must emit at least one structured slog event
+cmd/root.go:1065:2: function daemonLifecycleError returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+cmd/root.go:181:4: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+cmd/root.go:260:4: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+cmd/root.go:302:5: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+cmd/root.go:348:4: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+cmd/root.go:416:4: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+cmd/root.go:452:4: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+cmd/root.go:46:3: os.Exit called outside main()/init(); return error to caller instead
+cmd/root.go:478:4: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+cmd/root.go:74:3: os.Exit called outside main()/init(); return error to caller instead
+cmd/root.go:963:20: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+cmd/root.go:982:4: function startNewSessionInDir returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+cmd/session_helpers.go:20:3: function globalStore returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+cmd/session_helpers.go:84:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/adapter/anthropic/backend/mapper_impl.go:230:4: function openAIMessageToUserBlocks returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/anthropic/backend/mapper_impl.go:348:4: function openAIMessageToAssistantBlocks returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/anthropic/backend/response_merge.go:87:22: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/anthropic/backend/response_runtime.go:447:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/anthropic/backend/response_runtime.go:464:12: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/anthropic/backend/response_runtime.go:489:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/anthropic/backend/stream_errors.go:22:12: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/anthropic/client.go:119:3: function StreamEvents returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/anthropic/client.go:140:3: function do returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/anthropic/client.go:145:3: function do returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/anthropic/client.go:150:3: function do returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/anthropic/client.go:239:17: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/anthropic/client.go:470:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/adapter/anthropic/client.go:93:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/adapter/anthropic/identity.go:61:4: function readOrGenerateDeviceID returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/anthropic/identity.go:67:3: function readOrGenerateDeviceID returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/anthropic/identity.go:79:3: function readOrGenerateDeviceID returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/anthropic/ratelimit_message.go:33:55: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/anthropic/ratelimit_message.go:40:55: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/anthropic_native.go:306:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/adapter/anthropic_provider_dispatch.go:168:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/anthropic_provider_dispatch.go:223:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/codex/installation.go:117:3: function generateInstallationID returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/codex/installation.go:127:3: function persistInstallationID returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/codex/provider.go:109:3: function Execute returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/codex/respond.go:30:22: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/codex/transport_ws.go:175:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/adapter/codex/transport_ws.go:176:3: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/adapter/codex/transport_ws.go:356:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/adapter/codex/transport_ws.go:369:28: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/codex/transport_ws.go:392:4: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/adapter/codex/transport_ws.go:540:27: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/codex/transport_ws.go:547:3: function openSessionAndWarmup returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/codex/transport_ws.go:549:9: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/codex_provider_dispatch.go:36:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/notice_state.go:103:3: function readNoticeStateLocked returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/notice_state.go:111:3: function writeNoticeStateLocked returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/notice_state.go:116:4: function writeNoticeStateLocked returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/notice_state.go:120:4: function writeNoticeStateLocked returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/notice_state.go:123:4: function writeNoticeStateLocked returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/notice_state.go:130:3: function writeNoticeStateLocked returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/notice_state.go:134:3: function writeNoticeStateLocked returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/notice_state.go:137:3: function writeNoticeStateLocked returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/notice_state.go:147:9: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/notice_state.go:83:9: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/notice_state.go:99:3: function readNoticeStateLocked returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/oauth/manager.go:112:5: function Token returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/oauth/manager.go:169:9: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/oauth/manager.go:62:4: function Token returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/oauth/manager.go:79:20: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/oauth/manager.go:96:5: function Token returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/oauth/refresh.go:29:3: function refreshLocked returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/oauth/refresh.go:38:3: function refreshLocked returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/oauth/refresh.go:57:3: function refreshLocked returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/oauth/refresh.go:62:3: function refreshLocked returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/oauth/refresh.go:69:3: function refreshLocked returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/oauth/refresh.go:71:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/adapter/oauth/refresh.go:85:3: function refreshLocked returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/oauth/refresh.go:94:21: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/oauth/relogin.go:104:3: function autoRelogin returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/oauth/relogin.go:107:3: function autoRelogin returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/oauth/relogin.go:115:3: function autoRelogin returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/oauth/relogin.go:129:26: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/oauth/relogin.go:130:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/oauth/relogin.go:157:3: function autoRelogin returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/oauth/relogin.go:77:3: function autoRelogin returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/oauth/relogin.go:87:3: function autoRelogin returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/oauth/relogin.go:97:3: function autoRelogin returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/oauth/storage.go:35:3: function readKeychain returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/oauth/storage.go:47:3: function readCredentialsFile returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/oauth/storage.go:76:3: function writeCredentials returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/oauth/storage.go:82:3: function writeCredentials returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/oauth/storage.go:86:3: function writeCredentials returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/oauth/storage.go:90:3: function writeCredentials returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/oauth/storage.go:93:3: function writeCredentials returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/openai/body_summary.go:60:3: function SummarizeChatBody returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/render/event_renderer.go:91:16: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/runtime/notice.go:25:40: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/runtime/notice.go:57:12: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/server.go:252:3: function readCodexAuthFile returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/server.go:256:3: function readCodexAuthFile returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/server.go:91:39: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/adapter/server_dispatch.go:475:3: function normalizeMessagesFromInput returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/server_dispatch.go:516:4: function normalizeInputContent returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/server_dispatch.go:522:4: function normalizeInputContent returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/server_dispatch.go:568:3: function normalizeInputParts returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/server_routes.go:123:2: bare `defer .Stop()` drops the error; wrap in `defer func() { _ = ...Stop() }()` for intentional silence or check err with slog.Warn
+internal/adapter/server_routes.go:18:3: function Start returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/adapter/server_routes.go:41:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/adapter/server_shunt.go:196:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/adapter/server_shunt.go:21:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/bridge/watch.go:71:3: function Start returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/bridge/watch.go:75:3: function Start returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/bridge/watch.go:79:3: function Start returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/bridge/watch.go:95:2: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/claude/artifacts/cleanup.go:110:3: function deleteAgentLogs returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/claude/artifacts/cleanup.go:120:5: function deleteAgentLogs returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/claude/artifacts/cleanup.go:64:5: function DeleteSessionData returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/claude/artifacts/cleanup.go:73:4: function DeleteSessionData returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/claude/artifacts/cleanup.go:79:5: function DeleteSessionData returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/claude/invoke.go:370:2: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/claude/invoke.go:402:2: bare `defer .Stop()` drops the error; wrap in `defer func() { _ = ...Stop() }()` for intentional silence or check err with slog.Warn
+internal/claude/invoke.go:462:3: function selfReloadCurrentProcess returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/claude/pty_invoke.go:101:3: bare `defer .Stop()` drops the error; wrap in `defer func() { _ = ...Stop() }()` for intentional silence or check err with slog.Warn
+internal/claude/pty_invoke.go:102:3: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/claude/pty_invoke.go:130:3: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/claude/pty_invoke.go:139:3: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/claude/pty_invoke.go:143:3: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/claude/pty_invoke.go:148:3: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/claude/pty_invoke.go:159:2: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/claude/pty_invoke.go:168:4: function invokePTY returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/claude/pty_invoke.go:218:3: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/claude/pty_invoke.go:219:4: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/claude/pty_invoke.go:220:26: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/claude/pty_invoke.go:92:3: function invokePTY returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/claude/pty_invoke.go:94:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/claude/transcript.go:143:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/cli/compact/calibrate.go:40:3: function runAutoCalibrate returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/cli/compact/calibrate.go:60:19: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/cli/compact/calibrate.go:95:19: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/cli/compact/run.go:147:4: function runCompact returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/cli/compact/style.go:239:14: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/cli/compact/style.go:245:3: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/cli/compact/style.go:260:2: bare `defer .Stop()` drops the error; wrap in `defer func() { _ = ...Stop() }()` for intentional silence or check err with slog.Warn
+internal/cli/daemon/loops.go:121:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/cli/daemon/loops.go:178:3: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/cli/daemon/loops.go:180:4: bare `defer .Stop()` drops the error; wrap in `defer func() { _ = ...Stop() }()` for intentional silence or check err with slog.Warn
+internal/cli/daemon/loops.go:230:3: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/cli/daemon/loops.go:232:4: bare `defer .Stop()` drops the error; wrap in `defer func() { _ = ...Stop() }()` for intentional silence or check err with slog.Warn
+internal/cli/daemon/loops.go:270:17: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/cli/daemon/loops.go:345:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/cli/daemon/loops.go:65:3: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/cli/daemon/loops.go:67:4: bare `defer .Stop()` drops the error; wrap in `defer func() { _ = ...Stop() }()` for intentional silence or check err with slog.Warn
+internal/cli/mitm/cmd.go:394:6: function newDiffCmd returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/cli/mitm/cmd.go:398:6: function newDiffCmd returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/cli/mitm/cmd.go:409:5: function newDiffCmd returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/cli/mitm/cmd.go:413:5: function newDiffCmd returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/cli/mitm/cmd.go:72:6: function newCodegenCmd returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/cli/mitm/cmd.go:87:5: function newCodegenCmd returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/apply.go:101:3: function Apply returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/apply.go:104:3: function Apply returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/apply.go:107:3: function Apply returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/apply.go:112:3: function Apply returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/apply.go:115:3: function Apply returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/apply.go:138:3: function Apply returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/apply.go:149:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/compact/apply.go:347:3: panic() called in production code; return error up the stack
+internal/compact/apply.go:56:3: function Apply returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/apply.go:62:3: function Apply returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/apply.go:66:9: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/compact/apply.go:80:3: function Apply returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/apply.go:92:3: function Apply returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/apply.go:97:3: function Apply returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/apply.go:99:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/compact/backup.go:113:3: function appendLedger returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/backup.go:117:3: function appendLedger returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/backup.go:119:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/compact/backup.go:121:3: function appendLedger returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/backup.go:138:3: function ReadLedger returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/backup.go:140:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/compact/backup.go:152:3: function ReadLedger returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/backup.go:177:3: function Undo returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/backup.go:186:4: function Undo returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/backup.go:189:3: function Undo returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/backup.go:197:5: function Undo returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/backup.go:203:3: function Undo returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/backup.go:213:3: function restoreFromSnapshot returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/backup.go:215:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/compact/backup.go:218:3: function restoreFromSnapshot returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/backup.go:220:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/compact/backup.go:224:3: function restoreFromSnapshot returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/backup.go:229:3: function restoreFromSnapshot returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/backup.go:234:3: function restoreFromSnapshot returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/backup.go:238:3: function restoreFromSnapshot returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/backup.go:261:3: function rewriteLedgerWithoutLast returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/backup.go:40:3: function backupsDir returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/backup.go:55:3: function snapshotGzip returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/backup.go:57:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/compact/backup.go:59:8: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/compact/backup.go:65:3: function snapshotGzip returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/backup.go:72:3: function snapshotGzip returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/backup.go:77:3: function snapshotGzip returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/backup.go:82:3: function snapshotGzip returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/backup.go:86:3: function snapshotGzip returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/backup.go:90:3: function snapshotGzip returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/calibrate.go:33:3: function SessionStateDir returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/calibrate.go:59:3: function LoadCalibration returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/calibrate.go:63:3: function LoadCalibration returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/calibrate.go:75:20: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/compact/calibrate.go:83:3: function SaveCalibration returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/calibrate.go:87:3: function SaveCalibration returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/calibrate.go:91:3: function SaveCalibration returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/config.go:41:3: function AnthropicAPIKey returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/config.go:48:3: function AnthropicAPIKey returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/config.go:56:3: function AnthropicAPIKey returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/count.go:102:14: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/compact/count.go:105:26: slog key "compact.count_tokens.request_build_failed" looks sensitive; redact, log a summary, or //nolint:sensitive_field_in_log
+internal/compact/count.go:117:25: slog key "compact.count_tokens.http_failed" looks sensitive; redact, log a summary, or //nolint:sensitive_field_in_log
+internal/compact/count.go:130:27: slog key "compact.count_tokens.rate_limited_giving_up" looks sensitive; redact, log a summary, or //nolint:sensitive_field_in_log
+internal/compact/count.go:142:25: slog key "compact.count_tokens.rate_limited" looks sensitive; redact, log a summary, or //nolint:sensitive_field_in_log
+internal/compact/count.go:157:25: slog key "compact.count_tokens.http_bad_status" looks sensitive; redact, log a summary, or //nolint:sensitive_field_in_log
+internal/compact/count.go:167:25: slog key "compact.count_tokens.decode_failed" looks sensitive; redact, log a summary, or //nolint:sensitive_field_in_log
+internal/compact/count.go:175:25: slog key "compact.count_tokens.zero_tokens" looks sensitive; redact, log a summary, or //nolint:sensitive_field_in_log
+internal/compact/count.go:181:25: slog key "compact.count_tokens.completed" looks sensitive; redact, log a summary, or //nolint:sensitive_field_in_log
+internal/compact/count.go:183:4: slog key "tokens_in" looks sensitive; redact, log a summary, or //nolint:sensitive_field_in_log
+internal/compact/count.go:65:25: slog key "compact.count_tokens.skipped" looks sensitive; redact, log a summary, or //nolint:sensitive_field_in_log
+internal/compact/count.go:66:14: slog key "missing_api_key" looks sensitive; redact, log a summary, or //nolint:sensitive_field_in_log
+internal/compact/count.go:67:11: slog key "missing_api_key" looks sensitive; redact, log a summary, or //nolint:sensitive_field_in_log
+internal/compact/count.go:72:25: slog key "compact.count_tokens.skipped" looks sensitive; redact, log a summary, or //nolint:sensitive_field_in_log
+internal/compact/count.go:92:25: slog key "compact.count_tokens.encode_failed" looks sensitive; redact, log a summary, or //nolint:sensitive_field_in_log
+internal/compact/plan.go:170:4: function RunPlan returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/probe.go:141:3: function ProbeContextUsage returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/probe.go:154:3: function ProbeContextUsage returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/probe.go:158:3: function ProbeContextUsage returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/probe.go:162:3: function ProbeContextUsage returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/probe.go:165:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/compact/probe.go:176:3: function ProbeContextUsage returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/probe.go:207:3: function ProbeContextUsage returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/probe.go:315:4: function scanForUsage returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/probe.go:326:3: function scanForUsage returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/runtime.go:280:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/compact/slice.go:103:3: function LoadSlice returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/slice.go:105:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/compact/slice.go:108:3: function LoadSlice returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/slice.go:134:3: function LoadSlice returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/summarize.go:100:3: function SummarizeDropped returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/compact/summarize.go:75:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/config/load.go:100:3: function SaveGlobal returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/config/load.go:104:3: function SaveGlobal returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/config/load.go:26:4: function loadConfig returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/config/load.go:29:4: function loadConfig returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/config/load.go:32:4: function loadConfig returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/config/load.go:91:3: function SaveGlobal returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/config/load.go:97:3: function SaveGlobal returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/config/xdg.go:57:3: function EnsureRuntimeDir returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/binary_update.go:34:2: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/daemon/binary_update.go:40:2: bare `defer .Stop()` drops the error; wrap in `defer func() { _ = ...Stop() }()` for intentional silence or check err with slog.Warn
+internal/daemon/binary_update.go:48:5: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/daemon/binary_update.go:71:3: function currentDaemonExecutableSnapshot returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/binary_update.go:75:3: function currentDaemonExecutableSnapshot returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/binary_update.go:79:3: function currentDaemonExecutableSnapshot returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/client.go:1025:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/client.go:1045:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/client.go:1065:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/client.go:1087:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/client.go:1110:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/client.go:1148:3: function RestartManagedDaemon returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/client.go:1155:3: function RestartManagedDaemon returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/client.go:1204:3: function spawnDaemonDirect returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/client.go:1217:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/daemon/client.go:135:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/client.go:171:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/daemon/client.go:173:3: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/client.go:200:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/client.go:228:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/daemon/client.go:230:3: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/client.go:306:3: function lockDaemonReload returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/client.go:309:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/daemon/client.go:319:4: function lockDaemonReload returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/client.go:415:3: function connect returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/client.go:432:4: function connect returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/client.go:446:4: function connect returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/client.go:451:4: function connect returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/client.go:531:3: function ConnectOrStart returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/client.go:533:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/client.go:537:3: function ConnectOrStart returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/client.go:554:3: function ConnectOrStart returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/client.go:647:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/client.go:676:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/client.go:701:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/client.go:724:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/client.go:744:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/client.go:801:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/client.go:828:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/client.go:863:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/client.go:906:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/daemon/client.go:908:3: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/client.go:992:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/daemon/client.go:995:3: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/client.go:99:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/correlation.go:29:14: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/daemon/correlation.go:46:14: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/daemon/provider_stats.go:103:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/provider_stats.go:125:15: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/daemon/provider_stats.go:247:22: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/daemon/provider_stats.go:296:21: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/daemon/provider_stats.go:368:18: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/daemon/provider_stats.go:88:17: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/daemon/run.go:1098:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/daemon/run.go:144:3: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/daemon/run.go:194:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/run.go:274:3: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/daemon/run.go:292:3: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/daemon/run.go:334:3: function daemonListener returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/run.go:338:3: function daemonListener returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/run.go:354:3: function loadInheritedRuntime returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/run.go:364:4: function loadInheritedRuntime returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/run.go:378:4: function loadInheritedRuntime returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/run.go:414:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/run.go:415:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/run.go:437:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/daemon/run.go:449:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/daemon/run.go:450:3: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/daemon/run.go:456:3: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/daemon/run.go:463:4: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/daemon/run.go:468:4: slog call inside func taking context.Context does not pass the ctx; use slog.WarnContext or include ctx for trace correlation
+internal/daemon/run.go:541:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/daemon/run.go:555:3: function waitForReplacementDaemon returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/run.go:592:4: function inheritedListenerFiles returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/run.go:730:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/daemon/run.go:856:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/daemon/server.go:1076:1: gRPC handler ListSessions logs without enriching context with peer info; call peer.FromContext or metadata.FromIncomingContext
+internal/daemon/server.go:1077:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/daemon/server.go:1094:2: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/daemon/server.go:1102:1: gRPC handler GetSessionDetail logs without enriching context with peer info; call peer.FromContext or metadata.FromIncomingContext
+internal/daemon/server.go:1106:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/daemon/server.go:1119:2: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/daemon/server.go:1128:1: gRPC handler GetSessionExportStats logs without enriching context with peer info; call peer.FromContext or metadata.FromIncomingContext
+internal/daemon/server.go:1132:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/daemon/server.go:1160:2: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/daemon/server.go:1170:1: gRPC handler ExportSession logs without enriching context with peer info; call peer.FromContext or metadata.FromIncomingContext
+internal/daemon/server.go:1174:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/daemon/server.go:1193:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/daemon/server.go:1214:37: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/daemon/server.go:1226:3: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/daemon/server.go:1286:22: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/daemon/server.go:1309:4: slog key "total_tokens" looks sensitive; redact, log a summary, or //nolint:sensitive_field_in_log
+internal/daemon/server.go:1310:4: slog key "max_tokens" looks sensitive; redact, log a summary, or //nolint:sensitive_field_in_log
+internal/daemon/server.go:1679:1: gRPC handler StartRemoteSession logs without enriching context with peer info; call peer.FromContext or metadata.FromIncomingContext
+internal/daemon/server.go:1735:2: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/daemon/server.go:1736:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/daemon/server.go:1932:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/server.go:1956:20: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/daemon/server.go:196:2: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/daemon/server.go:197:2: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/daemon/server.go:2028:1: gRPC handler ProbeContextUsage logs without enriching context with peer info; call peer.FromContext or metadata.FromIncomingContext
+internal/daemon/server.go:2032:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/daemon/server.go:2033:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/daemon/server.go:203:4: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/daemon/server.go:2055:3: slog call inside func taking context.Context does not pass the ctx; use slog.WarnContext or include ctx for trace correlation
+internal/daemon/server.go:2081:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/daemon/server.go:2087:3: slog key "total_tokens" looks sensitive; redact, log a summary, or //nolint:sensitive_field_in_log
+internal/daemon/server.go:2088:3: slog key "max_tokens" looks sensitive; redact, log a summary, or //nolint:sensitive_field_in_log
+internal/daemon/server.go:2128:2: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/daemon/server.go:2259:3: slog call inside func taking context.Context does not pass the ctx; use slog.ErrorContext or include ctx for trace correlation
+internal/daemon/server.go:2299:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/daemon/server.go:2311:1: gRPC handler CompactUndo logs without enriching context with peer info; call peer.FromContext or metadata.FromIncomingContext
+internal/daemon/server.go:2315:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/daemon/server.go:2337:3: slog call inside func taking context.Context does not pass the ctx; use slog.ErrorContext or include ctx for trace correlation
+internal/daemon/server.go:2364:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/daemon/server.go:369:1: gRPC handler GetProviderStats logs without enriching context with peer info; call peer.FromContext or metadata.FromIncomingContext
+internal/daemon/server.go:429:1: gRPC handler DeleteSession logs without enriching context with peer info; call peer.FromContext or metadata.FromIncomingContext
+internal/daemon/server.go:448:3: slog call inside func taking context.Context does not pass the ctx; use slog.WarnContext or include ctx for trace correlation
+internal/daemon/server.go:458:4: slog call inside func taking context.Context does not pass the ctx; use slog.WarnContext or include ctx for trace correlation
+internal/daemon/server.go:690:3: function HookEvent returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/server.go:765:3: function writeSettingsJSON returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/server.go:770:3: function writeSettingsJSON returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/server.go:775:3: function writeSettingsJSON returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/server.go:891:11: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/daemon/server.go:934:3: function loadGlobalSettings returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/server.go:939:3: function loadGlobalSettings returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/daemon/session_export.go:115:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/session_export.go:120:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/session_export.go:75:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/session_inspect.go:149:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/session_inspect.go:187:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/session_inspect.go:202:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/session_inspect.go:267:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/session_inspect.go:291:3: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/session_inspect.go:341:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/session_inspect.go:421:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/daemon/transcripts.go:61:3: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/hook/env_file.go:16:3: function appendToEnvFile returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/hook/env_file.go:21:3: function appendToEnvFile returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/hook/handlers.go:169:3: slog call inside func taking context.Context does not pass the ctx; use slog.WarnContext or include ctx for trace correlation
+internal/hook/handlers.go:185:3: slog call inside func taking context.Context does not pass the ctx; use slog.WarnContext or include ctx for trace correlation
+internal/hook/handlers.go:201:3: slog call inside func taking context.Context does not pass the ctx; use slog.WarnContext or include ctx for trace correlation
+internal/hook/handlers.go:211:3: slog call inside func taking context.Context does not pass the ctx; use slog.WarnContext or include ctx for trace correlation
+internal/hook/handlers.go:221:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/hook/handlers.go:246:3: function saveTranscriptPath returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/hook/handlers.go:253:3: function saveTranscriptPath returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/hook/handlers.go:37:4: slog call inside func taking context.Context does not pass the ctx; use slog.WarnContext or include ctx for trace correlation
+internal/hook/handlers.go:48:5: slog call inside func taking context.Context does not pass the ctx; use slog.WarnContext or include ctx for trace correlation
+internal/hook/handlers.go:56:5: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/hook/resolve.go:35:3: function findSessionByUUID returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/hook/sessionstart.go:109:3: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/hook/sessionstart.go:124:2: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/hook/sessionstart.go:137:4: slog call inside func taking context.Context does not pass the ctx; use slog.ErrorContext or include ctx for trace correlation
+internal/hook/sessionstart.go:146:4: slog call inside func taking context.Context does not pass the ctx; use slog.ErrorContext or include ctx for trace correlation
+internal/hook/sessionstart.go:159:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/hook/sessionstart.go:35:3: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/hook/sessionstart.go:43:3: slog call inside func taking context.Context does not pass the ctx; use slog.ErrorContext or include ctx for trace correlation
+internal/hook/sessionstart.go:53:3: slog call inside func taking context.Context does not pass the ctx; use slog.ErrorContext or include ctx for trace correlation
+internal/hook/sessionstart.go:63:3: slog call inside func taking context.Context does not pass the ctx; use slog.ErrorContext or include ctx for trace correlation
+internal/hook/sessionstart.go:71:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/hook/sessionstart.go:80:3: slog call inside func taking context.Context does not pass the ctx; use slog.WarnContext or include ctx for trace correlation
+internal/hook/sessionstart.go:94:3: slog call inside func taking context.Context does not pass the ctx; use slog.WarnContext or include ctx for trace correlation
+internal/mcpserver/server.go:328:16: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/mcpserver/server.go:439:3: function loadMessages returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/mitm/baseline_refresh.go:236:3: function writeSnapshotV2Atomic returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/mitm/baseline_refresh.go:250:3: function writeSnapshotV1Atomic returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/mitm/baseline_refresh.go:54:3: function RefreshBaseline returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/mitm/baseline_refresh.go:57:26: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/mitm/baseline_refresh.go:63:20: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/mitm/capture_read.go:17:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/mitm/capture_session.go:103:15: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/mitm/capture_session.go:104:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/mitm/capture_session.go:123:2: bare `defer .Stop()` drops the error; wrap in `defer func() { _ = ...Stop() }()` for intentional silence or check err with slog.Warn
+internal/mitm/capture_session.go:130:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/mitm/capture_session.go:141:4: slog call inside func taking context.Context does not pass the ctx; use slog.WarnContext or include ctx for trace correlation
+internal/mitm/capture_session.go:145:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/mitm/capture_session.go:147:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/mitm/capture_session.go:205:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/mitm/capture_session.go:62:15: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/mitm/capture_session.go:78:2: bare `defer .Shutdown()` drops the error; wrap in `defer func() { _ = ...Shutdown() }()` for intentional silence or check err with slog.Warn
+internal/mitm/codegen.go:39:3: function GenerateWireConstants returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/mitm/codegen.go:45:3: function GenerateWireConstants returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/mitm/codegen.go:49:3: function GenerateWireConstants returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/mitm/codegen.go:67:17: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/mitm/codegen_v2.go:37:3: function GenerateWireFlavors returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/mitm/codegen_v2.go:43:3: function GenerateWireFlavors returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/mitm/codegen_v2.go:47:3: function GenerateWireFlavors returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/mitm/codegen_v2.go:65:17: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/mitm/connect_tunnel.go:104:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/mitm/connect_tunnel.go:114:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/mitm/connect_tunnel.go:32:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/mitm/connect_tunnel.go:62:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/mitm/connect_tunnel.go:70:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/mitm/decompress.go:31:3: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/mitm/decompress.go:41:4: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/mitm/decompress.go:48:3: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/mitm/decompress.go:59:3: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/mitm/drift_log.go:36:23: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/mitm/drift_log.go:51:3: function AppendDriftOutcome returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/mitm/drift_log.go:55:3: function AppendDriftOutcome returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/mitm/drift_log.go:57:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/mitm/drift_log.go:60:3: function AppendDriftOutcome returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/mitm/drift_runner.go:102:3: slog call inside func taking context.Context does not pass the ctx; use slog.WarnContext or include ctx for trace correlation
+internal/mitm/drift_runner.go:53:15: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/mitm/launch_profile.go:140:4: function findOnPath returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/mitm/launch_profile.go:157:4: function findApp returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/mitm/launcher.go:102:3: slog call inside func taking context.Context does not pass the ctx; use slog.WarnContext or include ctx for trace correlation
+internal/mitm/launcher.go:104:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/mitm/launcher.go:83:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/mitm/proxy.go:128:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/mitm/proxy.go:166:22: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/mitm/proxy.go:167:22: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/mitm/proxy.go:184:23: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/mitm/proxy.go:185:23: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/mitm/proxy.go:321:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/mitm/proxy.go:65:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/mitm/proxy.go:90:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/mitm/ws_capture.go:103:23: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/mitm/ws_capture.go:149:20: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/mitm/ws_capture.go:167:2: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/mitm/ws_capture.go:168:2: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/mitm/ws_capture.go:175:15: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/mitm/ws_capture.go:84:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/mitm/ws_capture.go:97:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/notify/log.go:21:3: function LogEvent returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/notify/log.go:27:3: function LogEvent returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/notify/log.go:32:3: function LogEvent returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/notify/log.go:35:3: function LogEvent returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/outputstyle/outputstyle.go:41:3: function DeleteCustomStyleFile returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/prune/autoname.go:104:3: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/prune/autoname.go:115:3: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/prune/autoname.go:122:3: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/prune/autoname.go:125:4: slog call inside func taking context.Context does not pass the ctx; use slog.ErrorContext or include ctx for trace correlation
+internal/prune/autoname.go:130:3: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/prune/autoname.go:134:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/prune/autoname.go:54:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/prune/autoname.go:63:3: slog call inside func taking context.Context does not pass the ctx; use slog.ErrorContext or include ctx for trace correlation
+internal/prune/autoname.go:69:3: slog call inside func taking context.Context does not pass the ctx; use slog.ErrorContext or include ctx for trace correlation
+internal/prune/autoname.go:75:3: slog call inside func taking context.Context does not pass the ctx; use slog.ErrorContext or include ctx for trace correlation
+internal/prune/autoname.go:79:12: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/prune/autoname.go:96:3: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/prune/empty.go:102:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/prune/empty.go:114:3: slog call inside func taking context.Context does not pass the ctx; use slog.ErrorContext or include ctx for trace correlation
+internal/prune/empty.go:120:3: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/prune/empty.go:125:3: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/prune/empty.go:139:3: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/prune/empty.go:152:4: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/prune/empty.go:160:3: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/prune/empty.go:163:4: slog call inside func taking context.Context does not pass the ctx; use slog.ErrorContext or include ctx for trace correlation
+internal/prune/empty.go:168:3: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/prune/empty.go:172:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/prune/empty.go:30:12: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/prune/empty.go:70:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/prune/ephemeral.go:101:4: slog call inside func taking context.Context does not pass the ctx; use slog.ErrorContext or include ctx for trace correlation
+internal/prune/ephemeral.go:106:3: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/prune/ephemeral.go:110:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/prune/ephemeral.go:43:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/prune/ephemeral.go:47:3: slog call inside func taking context.Context does not pass the ctx; use slog.ErrorContext or include ctx for trace correlation
+internal/prune/ephemeral.go:55:4: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/prune/ephemeral.go:65:3: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/prune/ephemeral.go:76:3: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/prune/ephemeral.go:90:4: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/prune/ephemeral.go:98:3: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/prune/prune.go:128:3: slog call inside func taking context.Context does not pass the ctx; use slog.ErrorContext or include ctx for trace correlation
+internal/prune/prune.go:139:3: slog call inside func taking context.Context does not pass the ctx; use slog.ErrorContext or include ctx for trace correlation
+internal/prune/prune.go:146:4: slog call inside func taking context.Context does not pass the ctx; use slog.ErrorContext or include ctx for trace correlation
+internal/prune/prune.go:158:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/search/client.go:100:3: slog call inside func taking context.Context does not pass the ctx; use slog.ErrorContext or include ctx for trace correlation
+internal/search/client.go:108:3: slog call inside func taking context.Context does not pass the ctx; use slog.WarnContext or include ctx for trace correlation
+internal/search/client.go:113:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/search/client.go:150:3: function Complete returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/search/client.go:79:11: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/search/client.go:81:2: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/search/embed_load.go:39:11: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/search/embed_load.go:78:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/search/embed_load.go:88:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/search/embedding.go:110:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/search/embedding.go:123:3: slog call inside func taking context.Context does not pass the ctx; use slog.WarnContext or include ctx for trace correlation
+internal/search/embedding.go:62:11: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/search/embedding.go:79:19: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/search/embedding.go:82:3: slog call inside func taking context.Context does not pass the ctx; use slog.WarnContext or include ctx for trace correlation
+internal/search/embedding.go:85:2: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/search/embedding.go:88:20: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/search/embedding.go:91:3: slog call inside func taking context.Context does not pass the ctx; use slog.WarnContext or include ctx for trace correlation
+internal/search/embedding.go:94:2: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/search/search.go:101:4: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/search/search.go:108:4: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/search/search.go:114:4: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/search/search.go:120:5: slog call inside func taking context.Context does not pass the ctx; use slog.WarnContext or include ctx for trace correlation
+internal/search/search.go:126:17: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/search/search.go:136:3: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/search/search.go:145:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/search/search.go:160:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/search/search.go:167:3: function embeddingOnlySearch returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/search/search.go:187:19: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/search/search.go:190:3: function embeddingOnlySearch returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/search/search.go:192:2: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/search/search.go:195:20: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/search/search.go:198:3: function embeddingOnlySearch returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/search/search.go:200:2: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/search/search.go:229:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/search/search.go:254:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/search/search.go:285:3: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/search/search.go:290:18: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/search/search.go:294:4: slog call inside func taking context.Context does not pass the ctx; use slog.DebugContext or include ctx for trace correlation
+internal/search/search.go:41:3: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/search/search.go:46:12: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/search/search.go:48:3: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/search/search.go:57:3: slog call inside func taking context.Context does not pass the ctx; use slog.WarnContext or include ctx for trace correlation
+internal/search/search.go:65:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/search/search.go:71:17: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/search/search.go:79:3: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/search/search.go:89:16: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/search/search.go:92:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/session/cache.go:69:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/session/cache.go:85:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/session/scan.go:198:17: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/session/scan_claude.go:38:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/session/scan_claude.go:99:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/session/session.go:100:28: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/session/session.go:82:9: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/session/store.go:104:3: function NewGlobalFileStore returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/session/store.go:124:3: function NewGlobalFileStoreReadOnly returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/session/store.go:260:3: function Get returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/session/store.go:421:3: function adoptFromDiscovery returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/session/store.go:474:3: function adoptFromDiscovery returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/session/store.go:677:3: function Rename returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/session/store.go:680:3: function Rename returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/session/store.go:692:3: function Rename returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/session/store.go:698:3: function Rename returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/session/store.go:703:3: function Rename returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/session/store.go:731:3: function Create returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/session/store.go:737:3: function Create returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/session/store.go:757:3: function Update returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/session/store.go:798:3: function LoadSettings returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/sessionctx/cache.go:117:3: function read returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/sessionctx/cache.go:121:3: function read returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/sessionctx/cache.go:78:15: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/sessionctx/count_backend.go:54:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/sessionctx/default.go:121:14: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/sessionctx/probe_backend.go:43:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/slogger/slogger.go:66:3: function Setup returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/slogger/slogger.go:76:4: function Setup returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/transcript/tail.go:145:2: bare `defer .Close()` drops the error; wrap in `defer func() { _ = ...Close() }()` for intentional silence or check err with slog.Warn
+internal/transcript/tail.go:59:3: function OpenTailer returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/transcript/tail.go:63:3: function OpenTailer returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/transcript/tail.go:83:2: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/ui/app.go:1005:5: time.Sleep in production library code; use time.NewTimer + select for cancellation
+internal/ui/app.go:1045:19: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:1057:22: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:1075:21: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:1117:2: bare `defer .Stop()` drops the error; wrap in `defer func() { _ = ...Stop() }()` for intentional silence or check err with slog.Warn
+internal/ui/app.go:1132:2: bare `defer .Stop()` drops the error; wrap in `defer func() { _ = ...Stop() }()` for intentional silence or check err with slog.Warn
+internal/ui/app.go:1157:2: bare `defer .Stop()` drops the error; wrap in `defer func() { _ = ...Stop() }()` for intentional silence or check err with slog.Warn
+internal/ui/app.go:1231:3: function currentExecutableSnapshot returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/ui/app.go:1235:3: function currentExecutableSnapshot returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/ui/app.go:1613:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/app.go:1614:14: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:1630:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/app.go:1862:22: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:1903:25: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:1931:3: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/app.go:1994:3: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/app.go:2043:21: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:2049:2: bare `defer .Stop()` drops the error; wrap in `defer func() { _ = ...Stop() }()` for intentional silence or check err with slog.Warn
+internal/ui/app.go:2073:21: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:2170:9: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:2259:2: bare `defer .Stop()` drops the error; wrap in `defer func() { _ = ...Stop() }()` for intentional silence or check err with slog.Warn
+internal/ui/app.go:2339:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/app.go:2401:3: function initScreen returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/ui/app.go:2404:3: function initScreen returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/ui/app.go:2442:15: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:2617:24: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:2682:5: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/ui/app.go:2713:5: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/ui/app.go:2740:5: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/app.go:3325:19: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:3337:20: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:3416:19: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:3445:19: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:3452:17: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:3576:15: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:4122:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/app.go:4419:3: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/app.go:4533:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/app.go:4560:4: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/app.go:4651:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/app.go:4683:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/app.go:4800:3: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/app.go:4815:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/app.go:4846:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/app.go:5035:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/app.go:5286:5: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/app.go:5581:4: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/app.go:5612:4: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/app.go:5669:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/app.go:5860:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/app.go:5888:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/app.go:5917:20: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:5932:23: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:5938:23: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:5940:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/app.go:5943:3: bare `defer .Stop()` drops the error; wrap in `defer func() { _ = ...Stop() }()` for intentional silence or check err with slog.Warn
+internal/ui/app.go:5976:21: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:5992:19: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:609:23: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:610:23: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:611:23: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:614:73: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/app.go:913:4: panic() called in production code; return error up the stack
+internal/ui/app.go:941:2: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/ui/app.go:948:2: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/ui/app.go:952:2: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/ui/app.go:956:2: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/ui/app.go:963:2: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/ui/app.go:967:2: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/ui/app.go:974:2: goroutine launched against a named func; wrap in a func literal that defers recover() or use //nolint:goroutine_without_recover
+internal/ui/app.go:984:20: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/clipboard.go:38:3: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/sigquit_unix.go:23:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/ui/sigquit_unix.go:55:3: function writeSIGQUITDump returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/ui/sigquit_unix.go:60:3: function writeSIGQUITDump returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/ui/sigquit_unix.go:63:75: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/sigquit_unix.go:65:3: function writeSIGQUITDump returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog
+internal/ui/tcell_export_panel.go:710:10: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/ui/tcell_loading.go:58:13: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/util/format.go:39:9: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock
+internal/util/uuid.go:15:3: panic() called in production code; return error up the stack
+internal/webapp/server.go:119:2: slog call inside func taking context.Context does not pass the ctx; use slog.InfoContext or include ctx for trace correlation
+internal/webapp/server.go:121:2: goroutine launched without a deferred recover(); add `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` or //nolint:goroutine_without_recover
+internal/webapp/server.go:252:14: time.Now() outside clock helper; inject a clock.Clock for testability or //nolint:time_now_outside_clock

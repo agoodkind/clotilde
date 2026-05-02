@@ -38,7 +38,7 @@ func TestTranslateRequestPopulatesToolPresenceFlags(t *testing.T) {
 		Model: "gpt-5.3-codex",
 		Tools: []adapteropenai.Tool{
 			toolWithName("ReadFile"),
-			toolWithName("Subagent"),
+			toolWithName("Task"),
 			toolWithName("SwitchMode"),
 			toolWithName("AskQuestion"),
 			toolWithName("CreatePlan"),

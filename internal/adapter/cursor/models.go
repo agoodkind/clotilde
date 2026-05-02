@@ -27,19 +27,10 @@ func NormalizeModelAlias(rawModel string) string {
 	return strings.TrimSpace(rawModel)
 }
 
-// NormalizeSessionSettingsModel removes effort suffixes from Cursor-style
-// 1m aliases so model and effort can be stored independently.
+// NormalizeSessionSettingsModel trims the selected model while preserving the
+// full declarative alias. Effort is part of the canonical clyde-* model name.
 func NormalizeSessionSettingsModel(rawModel string) string {
-	normalized := NormalizeModelAlias(rawModel)
-	if !strings.Contains(normalized, "-1m-") {
-		return normalized
-	}
-	for _, suffix := range []string{"-low", "-medium", "-high", "-xhigh"} {
-		if trimmed, ok := strings.CutSuffix(normalized, suffix); ok {
-			return trimmed
-		}
-	}
-	return normalized
+	return NormalizeModelAlias(rawModel)
 }
 
 func RequestPath(req Request) RequestPathKind {

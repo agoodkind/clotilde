@@ -220,13 +220,13 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		for k := range dropped {
 			keys = append(keys, k)
 		}
-		slog.Warn("anthropic.probe.headers_dropped",
+		anthropicRequestLog.Logger().Warn("anthropic.probe.headers_dropped",
 			"subcomponent", "anthropic",
 			"dropped", keys,
 		)
 	}
 
-	slog.Debug("anthropic.messages.request",
+	anthropicRequestLog.Logger().Debug("anthropic.messages.request",
 		"subcomponent", "anthropic",
 		"model", req.Model,
 		"url", c.cfg.MessagesURL,
@@ -427,7 +427,7 @@ func decodeResponseBody(resp *http.Response) {
 	case "gzip":
 		zr, err := gzip.NewReader(resp.Body)
 		if err != nil {
-			slog.Warn("anthropic.response.gzip_decode_failed",
+			anthropicRequestLog.Logger().Warn("anthropic.response.gzip_decode_failed",
 				"subcomponent", "anthropic", "err", err.Error())
 			return
 		}
@@ -440,7 +440,7 @@ func decodeResponseBody(resp *http.Response) {
 	default:
 		// br, zstd, etc. Keep raw bytes; callers will see binary in
 		// the slog body field if the server actually picks one of these.
-		slog.Warn("anthropic.response.unsupported_encoding",
+		anthropicRequestLog.Logger().Warn("anthropic.response.unsupported_encoding",
 			"subcomponent", "anthropic", "encoding", enc)
 	}
 }

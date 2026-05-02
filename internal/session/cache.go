@@ -1,7 +1,6 @@
 package session
 
 import (
-	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -56,7 +55,7 @@ func (c *discoveryCache) Get() ([]DiscoveryResult, error) {
 	defer c.mu.Unlock()
 
 	if !c.loaded.IsZero() && time.Since(c.loaded) < c.ttl {
-		slog.Debug("session.resolve.cache_hit",
+		sessionResolveLog.Logger().Debug("session.resolve.cache_hit",
 			"component", "session",
 			"subcomponent", "resolve_cache",
 			"providers", c.providerNames(),
@@ -71,7 +70,7 @@ func (c *discoveryCache) Get() ([]DiscoveryResult, error) {
 	results, err := c.scanAll()
 	elapsedMs := time.Since(started).Milliseconds()
 	if err != nil {
-		slog.Warn("session.resolve.cache_refresh_failed",
+		sessionResolveLog.Logger().Warn("session.resolve.cache_refresh_failed",
 			"component", "session",
 			"subcomponent", "resolve_cache",
 			"providers", c.providerNames(),
@@ -84,7 +83,7 @@ func (c *discoveryCache) Get() ([]DiscoveryResult, error) {
 	}
 	c.results = results
 	c.loaded = time.Now()
-	slog.Debug("session.resolve.cache_refresh",
+	sessionResolveLog.Logger().Debug("session.resolve.cache_refresh",
 		"component", "session",
 		"subcomponent", "resolve_cache",
 		"providers", c.providerNames(),
@@ -105,7 +104,7 @@ func (c *discoveryCache) Invalidate() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.loaded = time.Time{}
-	slog.Debug("session.resolve.cache_invalidated",
+	sessionResolveLog.Logger().Debug("session.resolve.cache_invalidated",
 		"component", "session",
 		"subcomponent", "resolve_cache",
 		"providers", c.providerNames(),

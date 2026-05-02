@@ -4,7 +4,6 @@ package artifacts
 import (
 	"bufio"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,13 +28,13 @@ func DeleteSessionArtifacts(clydeRoot string, sess *session.Session) (*DeletedFi
 	if sess == nil {
 		return deleted, fmt.Errorf("nil session")
 	}
-	current, err := DeleteSessionData(clydeRoot, sess.Metadata.SessionID, sess.Metadata.TranscriptPath)
+	current, err := DeleteSessionData(clydeRoot, sess.Metadata.ProviderSessionID(), sess.Metadata.ProviderTranscriptPath())
 	if err != nil {
 		return deleted, err
 	}
 	deleted.Transcript = append(deleted.Transcript, current.Transcript...)
 	deleted.AgentLogs = append(deleted.AgentLogs, current.AgentLogs...)
-	currentID := strings.TrimSpace(sess.Metadata.SessionID)
+	currentID := strings.TrimSpace(sess.Metadata.ProviderSessionID())
 	for _, identity := range session.HistoricalIdentities(sess) {
 		if identity.ID == currentID {
 			continue
@@ -89,7 +88,7 @@ func DeleteSessionData(clydeRoot, sessionID, transcriptPath string) (*DeletedFil
 	}
 	deleted.AgentLogs = agentLogs
 
-	slog.Info("claude.cleanup.session_data.completed",
+	claudeCleanupLog.Logger().Info("claude.cleanup.session_data.completed",
 		"component", "claude",
 		"subcomponent", "cleanup",
 		"session_id", sessionID,

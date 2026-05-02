@@ -39,7 +39,7 @@ var _ = Describe("ScanProjects", func() {
 		Expect(out).To(HaveLen(1))
 
 		r := out[0]
-		Expect(r.SessionID).To(Equal("aaaaaaaa-1111-2222-3333-444444444444"))
+		Expect(r.ProviderSessionID()).To(Equal("aaaaaaaa-1111-2222-3333-444444444444"))
 		Expect(r.WorkspaceRoot).To(Equal("/Users/agoodkind/Sites/foo"))
 		Expect(r.Entrypoint).To(Equal("cli"))
 		Expect(r.IsAutoName).To(BeFalse())
@@ -57,7 +57,7 @@ var _ = Describe("ScanProjects", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(out).To(HaveLen(1))
 		Expect(out[0].IsForked).To(BeTrue())
-		Expect(out[0].ForkParentID).To(Equal("aaaaaaaa-1111-2222-3333-444444444444"))
+		Expect(out[0].ForkParent.ID).To(Equal("aaaaaaaa-1111-2222-3333-444444444444"))
 	})
 
 	It("flags sdk-cli entrypoints as auto-name", func() {
@@ -123,7 +123,7 @@ var _ = Describe("AdoptUnknown", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(adopted).To(HaveLen(1))
 		Expect(adopted[0].Name).To(HavePrefix("foo-"))
-		Expect(adopted[0].Metadata.SessionID).To(Equal("aaaaaaaa-1111-2222-3333-444444444444"))
+		Expect(adopted[0].Metadata.ProviderSessionID()).To(Equal("aaaaaaaa-1111-2222-3333-444444444444"))
 	})
 
 	It("does not re-adopt a known UUID", func() {

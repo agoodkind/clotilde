@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"fmt"
-	"log/slog"
 
 	"github.com/spf13/cobra"
 
@@ -27,7 +26,7 @@ func newLaunchRemoteWorkerCmd(_ *cli.Factory) *cobra.Command {
 			env := map[string]string{
 				"CLYDE_SESSION_NAME": sessionName,
 			}
-			slog.Info("cli.daemon.launch_remote_worker.invoked",
+			cliDaemonLog.Logger().Info("cli.daemon.launch_remote_worker.invoked",
 				"component", "cli",
 				"session", sessionName,
 				"session_id", sessionID,

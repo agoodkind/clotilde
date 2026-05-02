@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,13 +25,13 @@ func findRealClaude() (string, error) {
 	cachedRealClaudeOnce.Do(func() {
 		cachedRealClaudePath = locateRealClaude()
 		if cachedRealClaudePath != "" {
-			slog.Info("daemon.claude.resolve_binary.found",
+			daemonLifecycleLog.Logger().Info("daemon.claude.resolve_binary.found",
 				"component", "daemon",
 				"subcomponent", "claude_path",
 				"path", cachedRealClaudePath,
 			)
 		} else {
-			slog.Error("daemon.claude.resolve_binary.not_found",
+			daemonLifecycleLog.Logger().Error("daemon.claude.resolve_binary.not_found",
 				"component", "daemon",
 				"subcomponent", "claude_path",
 				"err", "not_found",

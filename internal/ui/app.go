@@ -665,7 +665,7 @@ func (a *App) isCurrentReturnPathSession(sess *session.Session) bool {
 	if a.returnPathSession == nil || sess == nil {
 		return false
 	}
-	return a.returnPathSession.Metadata.SessionID == sess.Metadata.SessionID
+	return a.returnPathSession.Metadata.ProviderSessionID() == sess.Metadata.ProviderSessionID()
 }
 
 // resolveSession deterministically maps a session reference onto the current
@@ -674,9 +674,9 @@ func (a *App) resolveSession(sess *session.Session) *session.Session {
 	if sess == nil {
 		return nil
 	}
-	if sess.Metadata.SessionID != "" {
+	if sess.Metadata.ProviderSessionID() != "" {
 		for _, candidate := range a.sessions {
-			if candidate.Metadata.SessionID == sess.Metadata.SessionID {
+			if candidate.Metadata.ProviderSessionID() == sess.Metadata.ProviderSessionID() {
 				return candidate
 			}
 		}
@@ -706,10 +706,10 @@ func (a *App) trackReturnPathState(state returnPathState, source string, sess *s
 	if sess != nil {
 		fields = append(fields,
 			"session", sess.Name,
-			"session_id", sess.Metadata.SessionID,
+			"session_id", sess.Metadata.ProviderSessionID(),
 		)
 	}
-	slog.Info("tui.return_path.transition", fields...)
+	tuiLog.Logger().Info("tui.return_path.transition", fields...)
 }
 
 func (a *App) closeReturnPrompt(sess *session.Session, source string) {
@@ -723,7 +723,7 @@ func (a *App) closeReturnPrompt(sess *session.Session, source string) {
 // actions as the normal options popup, plus return-path actions.
 func (a *App) openReturnPrompt(sess *session.Session) {
 	if sess == nil {
-		slog.Warn("returnprompt.open skipped", "reason", "nil_session")
+		tuiLog.Logger().Warn("returnprompt.open skipped", "reason", "nil_session")
 		return
 	}
 	close := func() {
@@ -766,7 +766,7 @@ func (a *App) openReturnPrompt(sess *session.Session) {
 	if a.isCurrentReturnPathSession(sess) {
 		a.trackReturnPathState(returnPathStateReturnPromptVisible, "returnprompt.visible", sess)
 	}
-	slog.Info("returnprompt.opened",
+	tuiLog.Logger().Info("returnprompt.opened",
 		"session", sess.Name,
 		"overlay", fmt.Sprintf("%T", a.overlay),
 		"screen", fmt.Sprintf("%p", a.screen))
@@ -774,7 +774,7 @@ func (a *App) openReturnPrompt(sess *session.Session) {
 
 func (a *App) ensureReturnPrompt(sess *session.Session, source string) {
 	if sess == nil {
-		slog.Warn("returnprompt.ensure skipped", "source", source, "reason", "nil_session")
+		tuiLog.Logger().Warn("returnprompt.ensure skipped", "source", source, "reason", "nil_session")
 		return
 	}
 	if modal, ok := a.overlay.(*OptionsModal); ok {
@@ -783,10 +783,10 @@ func (a *App) ensureReturnPrompt(sess *session.Session, source string) {
 				a.trackReturnPathState(returnPathStateReturnPromptVisible, "ensureReturnPrompt.while_visible", sess)
 				return
 			}
-			slog.Warn("returnprompt.ensure_reopen_mismatched_session",
+			tuiLog.Logger().Warn("returnprompt.ensure_reopen_mismatched_session",
 				"source", source,
 				"requested_session", sess.Name,
-				"requested_session_id", sess.Metadata.SessionID,
+				"requested_session_id", sess.Metadata.ProviderSessionID(),
 				"return_path_session", func() string {
 					if a.returnPathSession == nil {
 						return ""
@@ -797,12 +797,12 @@ func (a *App) ensureReturnPrompt(sess *session.Session, source string) {
 					if a.returnPathSession == nil {
 						return ""
 					}
-					return a.returnPathSession.Metadata.SessionID
+					return a.returnPathSession.Metadata.ProviderSessionID()
 				}(),
 				"overlay", fmt.Sprintf("%T", a.overlay))
 		}
 	}
-	slog.Warn("returnprompt.ensure_reopen", "source", source, "session", sess.Name, "overlay", fmt.Sprintf("%T", a.overlay))
+	tuiLog.Logger().Warn("returnprompt.ensure_reopen", "source", source, "session", sess.Name, "overlay", fmt.Sprintf("%T", a.overlay))
 	a.trackReturnPathState(returnPathStateReturnPromptPending, "ensureReturnPrompt.reopen", sess)
 	a.openReturnPrompt(sess)
 }
@@ -815,14 +815,14 @@ func (a *App) runResumeLifecycle(sess *session.Session, source string) {
 	if resolved == nil {
 		return
 	}
-	slog.Info("resume.start", "session", resolved.Name, "uuid", resolved.Metadata.SessionID, "path", source)
+	tuiLog.Logger().Info("resume.start", "session", resolved.Name, "uuid", resolved.Metadata.ProviderSessionID(), "path", source)
 	a.returnPathSession = resolved
 	a.trackReturnPathState(returnPathStateSuspendedForResume, source+".before_suspend", resolved)
 	a.suspendImpl(func() {
 		a.trackReturnPathState(returnPathStateResumingTerminal, source+".callback", resolved)
 		_ = a.cb.ResumeSession(resolved)
 	})
-	slog.Info("resume.exit", "session", resolved.Name, "path", source)
+	tuiLog.Logger().Info("resume.exit", "session", resolved.Name, "path", source)
 	a.trackReturnPathState(returnPathStateReturnPromptPending, source+".after_suspend", resolved)
 	sessionForPrompt := a.resolveSession(resolved)
 	if sessionForPrompt == nil {
@@ -847,6 +847,13 @@ func (a *App) resumeSession(sess *session.Session) {
 func (a *App) cachedDetailForSession(sess *session.Session) (SessionDetail, bool) {
 	if sess == nil {
 		return SessionDetail{}, false
+	}
+	if !sessionCapabilities(sess).TranscriptExport {
+		return SessionDetail{
+			Model:                 valueOr(a.modelCache[sess.Name], "-"),
+			ContextUsageStatus:    "unsupported",
+			TranscriptStatsStatus: "unsupported",
+		}, false
 	}
 	a.detailMu.Lock()
 	cached, ok := a.detailCache[sess.Name]
@@ -888,7 +895,7 @@ func (a *App) Run() error {
 	if err := a.initScreen(); err != nil {
 		return err
 	}
-	slog.Info("tui.run.started", "screen", fmt.Sprintf("%p", a.screen))
+	tuiLog.Logger().Info("tui.run.started", "screen", fmt.Sprintf("%p", a.screen))
 	stopSIGQUITDump := installSIGQUITDumpHandler()
 	defer stopSIGQUITDump()
 	// Defer a sequenced teardown that always disables the alt-screen
@@ -908,7 +915,7 @@ func (a *App) Run() error {
 		a.teardownScreen()
 		if a.reloadExecPath != "" {
 			if err := execCurrentProcess(a.reloadExecPath); err != nil {
-				slog.Error("tui.self_reload.exec_failed",
+				tuiLog.Logger().Error("tui.self_reload.exec_failed",
 					"component", "tui",
 					"path", a.reloadExecPath,
 					"err", err)
@@ -922,7 +929,7 @@ func (a *App) Run() error {
 	a.requestSessionsAsync("startup")
 
 	if err := a.refreshExecutableBaseline(); err != nil {
-		slog.Warn("tui.self_reload.snapshot_failed",
+		tuiLog.Logger().Warn("tui.self_reload.snapshot_failed",
 			"component", "tui",
 			"err", err)
 	}
@@ -971,7 +978,7 @@ func (a *App) Run() error {
 	reinitAttemptedAfterNil := false
 	for a.running {
 		if a.screen == nil {
-			slog.Error("tui.loop screen is nil, exiting", "err", "screen_nil")
+			tuiLog.Logger().Error("tui.loop screen is nil, exiting", "err", "screen_nil")
 			return nil
 		}
 		pollStartedAt := time.Now()
@@ -989,32 +996,32 @@ func (a *App) Run() error {
 				return nil
 			}
 			nilEventStreak++
-			slog.Warn("tui.loop nil event with running=true",
+			tuiLog.Logger().Warn("tui.loop nil event with running=true",
 				"nil_event_streak", nilEventStreak,
 				"screen", fmt.Sprintf("%p", a.screen),
 				"reinit_attempted", reinitAttemptedAfterNil)
 			if nilEventStreak < 2 {
-				slog.Debug("tui.loop nil event temporary; sleeping briefly")
+				tuiLog.Logger().Debug("tui.loop nil event temporary; sleeping briefly")
 				time.Sleep(20 * time.Millisecond)
 				continue
 			}
 
 			if !reinitAttemptedAfterNil {
 				reinitAttemptedAfterNil = true
-				slog.Warn("tui.loop attempting screen reinit after repeated nil events")
+				tuiLog.Logger().Warn("tui.loop attempting screen reinit after repeated nil events")
 				a.teardownScreen()
 				if err := a.initScreen(); err != nil {
-					slog.Error("tui.loop reinit failed after repeated nil events", "error", err, "err", err)
+					tuiLog.Logger().Error("tui.loop reinit failed after repeated nil events", "error", err, "err", err)
 					a.running = false
 					continue
 				}
 				nilEventStreak = 0
-				slog.Debug("tui.loop reinit succeeded after repeated nil events", "screen", fmt.Sprintf("%p", a.screen))
+				tuiLog.Logger().Debug("tui.loop reinit succeeded after repeated nil events", "screen", fmt.Sprintf("%p", a.screen))
 				a.draw()
 				continue
 			}
 
-			slog.Error("tui.loop repeated nil events with running=true; terminating",
+			tuiLog.Logger().Error("tui.loop repeated nil events with running=true; terminating",
 				"screen", fmt.Sprintf("%p", a.screen),
 				"nil_event_streak", nilEventStreak,
 				"err", "repeated_nil_events")
@@ -1041,10 +1048,10 @@ func (a *App) Run() error {
 			a.lastNonInterruptAt = a.lastEventAt
 		}
 		if !isSpinnerInterrupt && !isHealthInterrupt {
-			slog.Debug("tui.loop dispatching event", "event", eventType)
+			tuiLog.Logger().Debug("tui.loop dispatching event", "event", eventType)
 		}
 		if a.screen == nil {
-			slog.Debug("tui.loop screen became nil before dispatch")
+			tuiLog.Logger().Debug("tui.loop screen became nil before dispatch")
 			continue
 		}
 		handleStartedAt := time.Now()
@@ -1058,7 +1065,7 @@ func (a *App) Run() error {
 		}
 		if shouldDraw && isSpinnerInterrupt && !a.appFocused && !compactOverlay {
 			shouldDraw = false
-			slog.Debug("tui.loop.skip_draw.spinner_unfocused",
+			tuiLog.Logger().Debug("tui.loop.skip_draw.spinner_unfocused",
 				"component", "tui",
 				"active_tab", a.activeTab,
 				"has_overlay", a.overlay != nil,
@@ -1073,7 +1080,7 @@ func (a *App) Run() error {
 					a.screen.Sync()
 				})
 				a.pendingResizeDisplaySync = false
-				slog.Debug("tui.display.synced_after_resize", "component", "tui")
+				tuiLog.Logger().Debug("tui.display.synced_after_resize", "component", "tui")
 			}
 		}
 		if eventType != "*tcell.EventInterrupt" || handleDuration > 20*time.Millisecond || drawDuration > 35*time.Millisecond {
@@ -1081,7 +1088,7 @@ func (a *App) Run() error {
 			if handleDuration > 40*time.Millisecond || drawDuration > 80*time.Millisecond || pollDuration > 1500*time.Millisecond {
 				logLevel = slog.LevelWarn
 			}
-			slog.Log(context.Background(), logLevel, "tui.loop.event_timing",
+			tuiLog.Logger().Log(context.Background(), logLevel, "tui.loop.event_timing",
 				"event", eventType,
 				"poll_ms", pollDuration.Milliseconds(),
 				"handle_ms", handleDuration.Milliseconds(),
@@ -1135,12 +1142,12 @@ func (a *App) runHealthTicker(stop <-chan struct{}) {
 
 func (a *App) runSelfReloadWatcher(stop <-chan struct{}) {
 	if err := a.refreshExecutableBaseline(); err != nil {
-		slog.Warn("tui.self_reload.snapshot_failed",
+		tuiLog.Logger().Warn("tui.self_reload.snapshot_failed",
 			"component", "tui",
 			"err", err)
 		return
 	}
-	slog.Debug("tui.self_reload.watcher_started",
+	tuiLog.Logger().Debug("tui.self_reload.watcher_started",
 		"component", "tui",
 		"path", a.executableBaselinePath(),
 		"mtime", a.executableBaselineModTime(),
@@ -1155,7 +1162,7 @@ func (a *App) runSelfReloadWatcher(stop <-chan struct{}) {
 		case <-t.C:
 			changed, reason, err := a.executableChangedSinceBaseline()
 			if err != nil {
-				slog.Debug("tui.self_reload.check_failed",
+				tuiLog.Logger().Debug("tui.self_reload.check_failed",
 					"component", "tui",
 					"path", a.executableBaselinePath(),
 					"err", err)
@@ -1227,12 +1234,18 @@ func currentExecutableSnapshot() (executableSnapshot, error) {
 	if err != nil {
 		return executableSnapshot{}, fmt.Errorf("stat executable: %w", err)
 	}
+	if err := validateExecutableCandidate(path, info); err != nil {
+		return executableSnapshot{}, err
+	}
 	return executableSnapshot{path: path, info: info}, nil
 }
 
 func executableChanged(base executableSnapshot) (bool, string, error) {
 	info, err := os.Stat(base.path)
 	if err != nil {
+		return false, "", err
+	}
+	if err := validateExecutableCandidate(base.path, info); err != nil {
 		return false, "", err
 	}
 	if !os.SameFile(base.info, info) {
@@ -1247,8 +1260,65 @@ func executableChanged(base executableSnapshot) (bool, string, error) {
 	return false, "", nil
 }
 
+func validateExecutableCandidate(path string, info os.FileInfo) error {
+	if info == nil {
+		return fmt.Errorf("self-reload candidate has no file info: %s", path)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("self-reload candidate is not a regular file: %s", path)
+	}
+	if info.Size() <= 0 {
+		return fmt.Errorf("self-reload candidate is empty: %s", path)
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		return fmt.Errorf("self-reload candidate is not executable: %s", path)
+	}
+	return nil
+}
+
+const selfReloadProbeOK = "clyde-self-reload-probe:ok"
+
+func validateSelfReloadCandidate(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if err := validateExecutableCandidate(path, info); err != nil {
+		return err
+	}
+	return probeSelfReloadCandidate(path)
+}
+
+var probeSelfReloadCandidate = func(path string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, path, "__clyde_self_reload_probe__")
+	cmd.Env = append(os.Environ(), "CLYDE_SELF_RELOAD_PROBE=1")
+	out, err := cmd.CombinedOutput()
+	output := strings.TrimSpace(string(out))
+	if ctx.Err() != nil {
+		return fmt.Errorf("self-reload probe timed out: %w", ctx.Err())
+	}
+	if err != nil {
+		return fmt.Errorf("self-reload probe failed: %w", err)
+	}
+	if output != selfReloadProbeOK {
+		return fmt.Errorf("self-reload probe returned unexpected output %q", trimmedSelfReloadProbeOutput(output))
+	}
+	return nil
+}
+
+func trimmedSelfReloadProbeOutput(output string) string {
+	const maxProbeOutput = 200
+	if len(output) <= maxProbeOutput {
+		return output
+	}
+	return output[:maxProbeOutput] + "...(truncated)"
+}
+
 var execCurrentProcess = func(path string) error {
-	slog.Info("tui.self_reload.exec",
+	tuiLog.Logger().Info("tui.self_reload.exec",
 		"component", "tui",
 		"path", path,
 		"arg_count", len(os.Args))
@@ -1258,7 +1328,7 @@ var execCurrentProcess = func(path string) error {
 func (a *App) execNewBinaryBeforeReinit(source string) bool {
 	changed, reason, err := a.executableChangedSinceBaseline()
 	if err != nil {
-		slog.Debug("tui.self_reload.reentry_check_failed",
+		tuiLog.Logger().Debug("tui.self_reload.reentry_check_failed",
 			"component", "tui",
 			"source", source,
 			"path", a.executableBaselinePath(),
@@ -1269,14 +1339,23 @@ func (a *App) execNewBinaryBeforeReinit(source string) bool {
 		return false
 	}
 	path := a.executableBaselinePath()
+	if err := validateSelfReloadCandidate(path); err != nil {
+		tuiLog.Logger().Warn("tui.self_reload.reentry_rejected",
+			"component", "tui",
+			"source", source,
+			"path", path,
+			"reason", reason,
+			"err", err)
+		return false
+	}
 	a.exportReturnPromptForExec(source)
-	slog.Info("tui.self_reload.reentry_exec",
+	tuiLog.Logger().Info("tui.self_reload.reentry_exec",
 		"component", "tui",
 		"source", source,
 		"path", path,
 		"reason", reason)
 	if err := execCurrentProcess(path); err != nil {
-		slog.Warn("tui.self_reload.reentry_exec_failed",
+		tuiLog.Logger().Warn("tui.self_reload.reentry_exec_failed",
 			"component", "tui",
 			"source", source,
 			"path", path,
@@ -1291,19 +1370,28 @@ func (a *App) exportReturnPromptForExec(source string) {
 	if source != "suspend_return" || a.returnPathSession == nil {
 		return
 	}
-	_ = os.Setenv(EnvTUIReturnSessionID, a.returnPathSession.Metadata.SessionID)
+	_ = os.Setenv(EnvTUIReturnSessionID, a.returnPathSession.Metadata.ProviderSessionID())
 	_ = os.Setenv(EnvTUIReturnSessionName, a.returnPathSession.Name)
-	slog.Info("tui.self_reload.return_prompt_exported",
+	tuiLog.Logger().Info("tui.self_reload.return_prompt_exported",
 		"component", "tui",
 		"session", a.returnPathSession.Name,
-		"session_id", a.returnPathSession.Metadata.SessionID)
+		"session_id", a.returnPathSession.Metadata.ProviderSessionID())
 }
 
 func (a *App) requestSelfReload(path, reason, source, hash string) {
 	if path == "" {
 		path = a.executableBaselinePath()
 	}
-	slog.Info("tui.self_reload.requested",
+	if err := validateSelfReloadCandidate(path); err != nil {
+		tuiLog.Logger().Warn("tui.self_reload.rejected",
+			"component", "tui",
+			"source", source,
+			"path", path,
+			"reason", reason,
+			"err", err)
+		return
+	}
+	tuiLog.Logger().Info("tui.self_reload.requested",
 		"component", "tui",
 		"source", source,
 		"path", path,
@@ -1336,7 +1424,7 @@ func (a *App) daemonBinaryUpdateAlreadyRunning(hash string) bool {
 	if runningHash != hash {
 		return false
 	}
-	slog.Debug("tui.self_reload.daemon_event_ignored",
+	tuiLog.Logger().Debug("tui.self_reload.daemon_event_ignored",
 		"component", "tui",
 		"reason", "already_running_binary",
 		"hash", hash)
@@ -1525,7 +1613,7 @@ func (a *App) requestSessionsAsync(reason string) {
 	go func() {
 		started := time.Now()
 		snapshot, err := a.cb.ListSessions()
-		slog.Debug("tui.sessions.load.finished",
+		tuiLog.Logger().Debug("tui.sessions.load.finished",
 			"component", "tui",
 			"reason", reason,
 			"duration_ms", time.Since(started).Milliseconds(),
@@ -1595,7 +1683,7 @@ func (a *App) applySessionEvent(ev SessionEvent) {
 	switch ev.Kind {
 	case "SESSION_ADOPTED", "SESSION_UPDATED":
 		a.upsertSessionEvent(ev)
-		if ev.Session != nil && a.sidecar != nil && (ev.Session.Name == a.sidecarSessionName || ev.Session.Metadata.SessionID == a.sidecarSessionID) {
+		if ev.Session != nil && a.sidecar != nil && (ev.Session.Name == a.sidecarSessionName || ev.Session.Metadata.ProviderSessionID() == a.sidecarSessionID) {
 			a.maybeOpenSidecarTail()
 		}
 	case "SESSION_RENAMED":
@@ -1642,7 +1730,7 @@ func (a *App) upsertSessionEvent(ev SessionEvent) {
 	filtered := a.sessions[:0]
 	replaced := false
 	for _, sess := range a.sessions {
-		if sess.Name == ev.Session.Name || (ev.Session.Metadata.SessionID != "" && sess.Metadata.SessionID == ev.Session.Metadata.SessionID) {
+		if sess.Name == ev.Session.Name || (ev.Session.Metadata.ProviderSessionID() != "" && sess.Metadata.ProviderSessionID() == ev.Session.Metadata.ProviderSessionID()) {
 			if !replaced {
 				filtered = append(filtered, ev.Session)
 				replaced = true
@@ -1668,7 +1756,7 @@ func (a *App) renameSessionEvent(ev SessionEvent) {
 		filtered := a.sessions[:0]
 		renamed := false
 		for _, sess := range a.sessions {
-			if sess.Name == ev.OldName || (ev.Session.Metadata.SessionID != "" && sess.Metadata.SessionID == ev.Session.Metadata.SessionID) {
+			if sess.Name == ev.OldName || (ev.Session.Metadata.ProviderSessionID() != "" && sess.Metadata.ProviderSessionID() == ev.Session.Metadata.ProviderSessionID()) {
 				if !renamed {
 					filtered = append(filtered, ev.Session)
 					renamed = true
@@ -1702,7 +1790,7 @@ func (a *App) deleteSessionEvent(ev SessionEvent) {
 		if ev.SessionName != "" && sess.Name == ev.SessionName {
 			continue
 		}
-		if ev.SessionID != "" && sess.Metadata.SessionID == ev.SessionID {
+		if ev.SessionID != "" && sess.Metadata.ProviderSessionID() == ev.SessionID {
 			continue
 		}
 		filtered = append(filtered, sess)
@@ -1781,19 +1869,19 @@ func (a *App) noteInteraction() {
 // closed bridges within milliseconds. The reload runs on the same
 // code path as the polling watcher so concurrency stays simple.
 func (a *App) runRegistrySubscriber(events <-chan SessionEvent) {
-	slog.Info("tui.registry_subscriber.started", "component", "tui")
+	tuiLog.Logger().Info("tui.registry_subscriber.started", "component", "tui")
 	for ev := range events {
 		a.postInterrupt(registryEvent{event: ev})
 	}
-	slog.Warn("tui.registry_subscriber.exited", "component", "tui")
+	tuiLog.Logger().Warn("tui.registry_subscriber.exited", "component", "tui")
 }
 
 func (a *App) runProviderStatsSubscriber(events <-chan ProviderStats) {
-	slog.Info("tui.provider_stats_subscriber.started", "component", "tui")
+	tuiLog.Logger().Info("tui.provider_stats_subscriber.started", "component", "tui")
 	for ev := range events {
 		a.postInterrupt(providerStatsEvent{stats: ev})
 	}
-	slog.Warn("tui.provider_stats_subscriber.exited", "component", "tui")
+	tuiLog.Logger().Warn("tui.provider_stats_subscriber.exited", "component", "tui")
 }
 
 func (a *App) runRegistrySupervisor(stop <-chan struct{}) {
@@ -1807,20 +1895,20 @@ func (a *App) runRegistrySupervisor(stop <-chan struct{}) {
 	for {
 		select {
 		case <-stop:
-			slog.Debug("tui.registry_supervisor.stopped", "component", "tui")
+			tuiLog.Logger().Debug("tui.registry_supervisor.stopped", "component", "tui")
 			return
 		default:
 		}
 
 		subscribeStartedAt := time.Now()
-		slog.Debug("tui.registry_supervisor.subscribe_begin",
+		tuiLog.Logger().Debug("tui.registry_supervisor.subscribe_begin",
 			"component", "tui",
 			"started_at", subscribeStartedAt.Format(time.RFC3339Nano))
 		events, cancel, err := a.cb.SubscribeRegistry()
 		subscribeDuration := time.Since(subscribeStartedAt)
 		if err != nil {
 			a.setDaemonOffline("subscribe_failed", err)
-			slog.Warn("tui.registry_supervisor.subscribe_failed",
+			tuiLog.Logger().Warn("tui.registry_supervisor.subscribe_failed",
 				"component", "tui",
 				"subscribe_ms", subscribeDuration.Milliseconds(),
 				"retry_ms", retryDelay.Milliseconds(),
@@ -1833,7 +1921,7 @@ func (a *App) runRegistrySupervisor(stop <-chan struct{}) {
 		}
 
 		a.setDaemonOnline("subscribe_ok")
-		slog.Debug("tui.registry_supervisor.subscribe_ok",
+		tuiLog.Logger().Debug("tui.registry_supervisor.subscribe_ok",
 			"component", "tui",
 			"subscribe_ms", subscribeDuration.Milliseconds())
 		a.requestSessionsAsync("registry.resubscribe")
@@ -1849,12 +1937,12 @@ func (a *App) runRegistrySupervisor(stop <-chan struct{}) {
 		case <-stop:
 			cancel()
 			<-done
-			slog.Debug("tui.registry_supervisor.cancelled", "component", "tui")
+			tuiLog.Logger().Debug("tui.registry_supervisor.cancelled", "component", "tui")
 			return
 		case <-done:
 			cancel()
 			a.setDaemonOffline("stream_closed", fmt.Errorf("registry stream closed"))
-			slog.Warn("tui.registry_supervisor.stream_closed",
+			tuiLog.Logger().Warn("tui.registry_supervisor.stream_closed",
 				"component", "tui",
 				"retry_ms", retryDelay.Milliseconds())
 			if !waitForRegistryRetry(stop, retryDelay) {
@@ -1878,7 +1966,7 @@ func (a *App) runProviderStatsSupervisor(stop <-chan struct{}) {
 	for {
 		select {
 		case <-stop:
-			slog.Debug("tui.provider_stats_supervisor.stopped", "component", "tui")
+			tuiLog.Logger().Debug("tui.provider_stats_supervisor.stopped", "component", "tui")
 			return
 		default:
 		}
@@ -1986,7 +2074,7 @@ func (a *App) setDaemonOnline(source string) {
 	a.daemonMu.Unlock()
 
 	if !wasOnline {
-		slog.Info("tui.daemon.online",
+		tuiLog.Logger().Info("tui.daemon.online",
 			"component", "tui",
 			"source", source,
 			"previous_error", previousErr)
@@ -2008,7 +2096,7 @@ func (a *App) setDaemonOffline(source string, err error) {
 	a.daemonMu.Unlock()
 
 	if wasOnline || errorChanged {
-		slog.Warn("tui.daemon.offline",
+		tuiLog.Logger().Warn("tui.daemon.offline",
 			"component", "tui",
 			"source", source,
 			"err", errorMessage)
@@ -2095,7 +2183,7 @@ func (a *App) logHealthTick() {
 		sinceLastNonInterrupt = now.Sub(a.lastNonInterruptAt)
 	}
 
-	slog.Debug("tui.health.tick",
+	tuiLog.Logger().Debug("tui.health.tick",
 		"component", "tui",
 		"draw_count", a.drawCount,
 		"draw_delta", drawDelta,
@@ -2114,7 +2202,7 @@ func (a *App) logHealthTick() {
 		"daemon_online", a.isDaemonOnline())
 
 	if sinceLastDraw > 1500*time.Millisecond || drawDelta == 0 {
-		slog.Warn("tui.health.draw_stall_suspected",
+		tuiLog.Logger().Warn("tui.health.draw_stall_suspected",
 			"component", "tui",
 			"draw_count", a.drawCount,
 			"draw_delta", drawDelta,
@@ -2131,7 +2219,7 @@ func (a *App) logHealthTick() {
 			"overlay_type", fmt.Sprintf("%T", a.overlay))
 	}
 	if a.appFocused && sinceLastNonInterrupt > 4*time.Second {
-		slog.Warn("tui.health.input_starvation_suspected",
+		tuiLog.Logger().Warn("tui.health.input_starvation_suspected",
 			"component", "tui",
 			"draw_count", a.drawCount,
 			"draw_delta", drawDelta,
@@ -2198,7 +2286,7 @@ func (a *App) pickStaleForSweep() *session.Session {
 		if s == nil || s.Metadata.IsIncognito {
 			continue
 		}
-		if s.Metadata.TranscriptPath == "" {
+		if s.Metadata.ProviderTranscriptPath() == "" {
 			continue
 		}
 		if isEphemeralSession(s) {
@@ -2238,6 +2326,9 @@ func (a *App) cachedExportStatsForSession(sess *session.Session) (SessionExportS
 
 func (a *App) requestExportStatsAsync(sess *session.Session) {
 	if sess == nil || a.cb.LoadExportStats == nil {
+		return
+	}
+	if !sessionCapabilities(sess).TranscriptExport {
 		return
 	}
 	name := sess.Name
@@ -2283,16 +2374,16 @@ func (a *App) teardownScreen() {
 	a.screenMu.Lock()
 	scr := a.screen
 	if scr != nil {
-		slog.Debug("tui.teardownScreen.start", "screen", fmt.Sprintf("%p", scr))
+		tuiLog.Logger().Debug("tui.teardownScreen.start", "screen", fmt.Sprintf("%p", scr))
 		a.pendingResizeDisplaySync = false
 		scr.DisableMouse()
 		scr.DisableFocus()
 		scr.ShowCursor(0, 0)
 		scr.Fini()
-		slog.Debug("tui.teardownScreen.fini", "screen", fmt.Sprintf("%p", scr))
+		tuiLog.Logger().Debug("tui.teardownScreen.fini", "screen", fmt.Sprintf("%p", scr))
 		a.screen = nil
 	} else {
-		slog.Debug("tui.teardownScreen.no_screen")
+		tuiLog.Logger().Debug("tui.teardownScreen.no_screen")
 	}
 	a.screenMu.Unlock()
 
@@ -2304,7 +2395,7 @@ func (a *App) teardownScreen() {
 // initScreen allocates a tcell screen and enables mouse + focus.
 func (a *App) initScreen() error {
 	applyTUITheme(detectTerminalTheme())
-	slog.Info("tui.initScreen.start", "current_screen", fmt.Sprintf("%p", a.screen))
+	tuiLog.Logger().Info("tui.initScreen.start", "current_screen", fmt.Sprintf("%p", a.screen))
 	scr, err := tcell.NewScreen()
 	if err != nil {
 		return fmt.Errorf("tcell NewScreen: %w", err)
@@ -2318,7 +2409,7 @@ func (a *App) initScreen() error {
 	a.screenMu.Lock()
 	a.screen = scr
 	a.screenMu.Unlock()
-	slog.Info("tui.initScreen.success", "screen", fmt.Sprintf("%p", a.screen))
+	tuiLog.Logger().Info("tui.initScreen.success", "screen", fmt.Sprintf("%p", a.screen))
 	return nil
 }
 
@@ -2351,7 +2442,7 @@ func (a *App) runTerminalCall(call string, fn func()) {
 	startedAt := time.Now()
 	width, height := a.screenSizeSnapshot()
 	overlayType := fmt.Sprintf("%T", a.overlay)
-	slog.Debug("tui.terminal_call.begin",
+	tuiLog.Logger().Debug("tui.terminal_call.begin",
 		"component", "tui",
 		"call", call,
 		"started_at", startedAt.Format(time.RFC3339Nano),
@@ -2367,7 +2458,7 @@ func (a *App) runTerminalCall(call string, fn func()) {
 	if duration > terminalCallWarnThreshold(call) {
 		logLevel = slog.LevelWarn
 	}
-	slog.Log(context.Background(), logLevel, "tui.terminal_call.done",
+	tuiLog.Logger().Log(context.Background(), logLevel, "tui.terminal_call.done",
 		"component", "tui",
 		"call", call,
 		"started_at", startedAt.Format(time.RFC3339Nano),
@@ -2415,12 +2506,12 @@ func (a *App) handleEvent(ev tcell.Event) {
 		w, h := e.Size()
 		sw, sh := a.screen.Size()
 		if w != sw || h != sh {
-			slog.Debug("tui.event.resize.size_mismatch",
+			tuiLog.Logger().Debug("tui.event.resize.size_mismatch",
 				"component", "tui",
 				"event_w", w, "event_h", h, "screen_w", sw, "screen_h", sh,
 				"overlay_type", fmt.Sprintf("%T", a.overlay))
 		}
-		slog.Debug("tui.event.resize",
+		tuiLog.Logger().Debug("tui.event.resize",
 			"component", "tui",
 			"width", w,
 			"height", h,
@@ -2436,7 +2527,7 @@ func (a *App) handleEvent(ev tcell.Event) {
 			}
 		}
 	case *tcell.EventFocus:
-		slog.Debug("tui.event.focus",
+		tuiLog.Logger().Debug("tui.event.focus",
 			"component", "tui",
 			"focused", e.Focused,
 			"overlay_type", fmt.Sprintf("%T", a.overlay),
@@ -2459,7 +2550,7 @@ func (a *App) handleEvent(ev tcell.Event) {
 		case spinnerTick, healthTick:
 			// Skip per-tick logging for high-frequency heartbeat events.
 		default:
-			slog.Debug("tui.event.interrupt",
+			tuiLog.Logger().Debug("tui.event.interrupt",
 				"component", "tui",
 				"payload_type", interruptType,
 				"selected", a.selectedSessionName(),
@@ -2477,7 +2568,7 @@ func (a *App) handleEvent(ev tcell.Event) {
 				if d.reason == "startup" {
 					a.startupLoading = false
 				}
-				slog.Warn("tui.sessions.load.failed", "component", "tui", "reason", d.reason, "err", d.err)
+				tuiLog.Logger().Warn("tui.sessions.load.failed", "component", "tui", "reason", d.reason, "err", d.err)
 				break
 			}
 			a.startupLoading = false
@@ -2530,7 +2621,7 @@ func (a *App) handleEvent(ev tcell.Event) {
 			a.populateTable()
 		case bridgesLoaded:
 			if d.err != nil {
-				slog.Warn("tui.startup.list_bridges.failed",
+				tuiLog.Logger().Warn("tui.startup.list_bridges.failed",
 					"component", "tui",
 					"duration_ms", d.duration.Milliseconds(),
 					"err", d.err)
@@ -2542,7 +2633,7 @@ func (a *App) handleEvent(ev tcell.Event) {
 				a.bridges[b.SessionID] = b
 			}
 			a.bridgeMu.Unlock()
-			slog.Info("tui.startup.list_bridges.loaded",
+			tuiLog.Logger().Info("tui.startup.list_bridges.loaded",
 				"component", "tui",
 				"count", len(d.list),
 				"duration_ms", d.duration.Milliseconds())
@@ -2696,7 +2787,7 @@ func (a *App) handleEvent(ev tcell.Event) {
 // Global shortcuts (Ctrl+C) always apply. Overlays take priority over widgets.
 func (a *App) handleKey(e *tcell.EventKey) {
 	a.noteInteraction()
-	slog.Debug("tui.input.key",
+	tuiLog.Logger().Debug("tui.input.key",
 		"component", "tui",
 		"key", int(e.Key()),
 		"rune", string(e.Rune()),
@@ -2982,7 +3073,7 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 	}
 	x, y := e.Position()
 	btns := e.Buttons()
-	slog.Debug("tui.input.mouse",
+	tuiLog.Logger().Debug("tui.input.mouse",
 		"component", "tui",
 		"x", x,
 		"y", y,
@@ -2994,14 +3085,14 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 		"mode", int(a.mode))
 
 	if a.overlay != nil {
-		slog.Debug("tui.input.mouse.route", "component", "tui", "route", "overlay")
+		tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "overlay")
 		a.overlay.HandleEvent(e)
 		return
 	}
 
 	if btns&tcell.Button1 != 0 && a.statusRect.Contains(x, y) {
 		if action, ok := legendActionAt(a.status, a.statusRect, x); ok {
-			slog.Debug("tui.input.mouse.route", "component", "tui", "route", "status_legend", "action", int(action))
+			tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "status_legend", "action", int(action))
 			a.invokeLegendAction(action)
 			return
 		}
@@ -3009,7 +3100,7 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 
 	// Tab strip click takes priority over the rest of the body.
 	if a.tabs != nil && a.tabs.HandleEvent(e) {
-		slog.Debug("tui.input.mouse.route", "component", "tui", "route", "tabs")
+		tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "tabs")
 		return
 	}
 
@@ -3021,7 +3112,7 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 	// If the user is currently dragging a scrollbar, keep routing the
 	// mouse position to that widget until the button is released.
 	if a.grab != grabNone && btns&tcell.Button1 != 0 {
-		slog.Debug("tui.input.mouse.route", "component", "tui", "route", "grab", "grab", int(a.grab))
+		tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "grab", "grab", int(a.grab))
 		switch a.grab {
 		case grabTable:
 			a.table.JumpToScrollbarY(y)
@@ -3040,7 +3131,7 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 
 	// Click on the table scrollbar starts a grab and jumps.
 	if btns&tcell.Button1 != 0 && a.table.ScrollbarRect.Contains(x, y) {
-		slog.Debug("tui.input.mouse.route", "component", "tui", "route", "table_scrollbar")
+		tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "table_scrollbar")
 		a.grab = grabTable
 		a.table.JumpToScrollbarY(y)
 		a.syncTableSelectionWithOffset()
@@ -3052,14 +3143,14 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 	if a.selected != nil && a.details != nil {
 		// Scrollbar click or drag start on either sub-pane.
 		if btns&tcell.Button1 != 0 && a.details.Left.ScrollbarRect.Contains(x, y) {
-			slog.Debug("tui.input.mouse.route", "component", "tui", "route", "details_left_scrollbar")
+			tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "details_left_scrollbar")
 			a.grab = grabDetailsLeft
 			a.details.SetFocus(DetailsFocusLeft)
 			a.details.Left.JumpToScrollbarY(y)
 			return
 		}
 		if btns&tcell.Button1 != 0 && a.details.Right.ScrollbarRect.Contains(x, y) {
-			slog.Debug("tui.input.mouse.route", "component", "tui", "route", "details_right_scrollbar")
+			tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "details_right_scrollbar")
 			a.grab = grabDetailsRight
 			a.details.SetFocus(DetailsFocusRight)
 			a.details.Right.JumpToScrollbarY(y)
@@ -3075,7 +3166,7 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 				return
 			}
 			if btns&tcell.Button1 != 0 {
-				slog.Debug("tui.input.mouse.route", "component", "tui", "route", "details_left_focus")
+				tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "details_left_focus")
 				a.details.SetFocus(DetailsFocusLeft)
 				return
 			}
@@ -3090,7 +3181,7 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 				return
 			}
 			if btns&tcell.Button1 != 0 {
-				slog.Debug("tui.input.mouse.route", "component", "tui", "route", "details_right_focus")
+				tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "details_right_focus")
 				a.details.SetFocus(DetailsFocusRight)
 				return
 			}
@@ -3098,7 +3189,7 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 	}
 
 	if a.tableRect.Contains(x, y) {
-		slog.Debug("tui.input.mouse.route", "component", "tui", "route", "table")
+		tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "table")
 		// Wheel scroll
 		if btns&tcell.WheelUp != 0 {
 			a.table.ScrollUp(3)
@@ -3152,7 +3243,7 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 			a.lastClickRow = row
 
 			if isDouble {
-				slog.Debug("tui.input.mouse.double_click_resume", "component", "tui", "row", row)
+				tuiLog.Logger().Debug("tui.input.mouse.double_click_resume", "component", "tui", "row", row)
 				a.resumeRow(row)
 				return
 			}
@@ -3369,7 +3460,7 @@ func (a *App) draw() {
 		if totalDuration > 75*time.Millisecond || clearDuration > 50*time.Millisecond || showDuration > 30*time.Millisecond {
 			logLevel = slog.LevelWarn
 		}
-		slog.Log(context.Background(), logLevel, "tui.draw.timing",
+		tuiLog.Logger().Log(context.Background(), logLevel, "tui.draw.timing",
 			"component", "tui",
 			"total_ms", totalDuration.Milliseconds(),
 			"layout_ms", layoutDuration.Milliseconds(),
@@ -3391,7 +3482,7 @@ func (a *App) draw() {
 func (a *App) layout() {
 	w, h := a.screen.Size()
 	if w != a.lastLayoutW || h != a.lastLayoutH {
-		slog.Debug("tui.layout.size_change",
+		tuiLog.Logger().Debug("tui.layout.size_change",
 			"component", "tui",
 			"old_w", a.lastLayoutW,
 			"old_h", a.lastLayoutH,
@@ -3509,7 +3600,7 @@ func (a *App) populateTable() {
 		if duration > 40*time.Millisecond {
 			logLevel = slog.LevelWarn
 		}
-		slog.Log(context.Background(), logLevel, "tui.table.populate_timing",
+		tuiLog.Logger().Log(context.Background(), logLevel, "tui.table.populate_timing",
 			"component", "tui",
 			"duration_ms", duration.Milliseconds(),
 			"sessions_total", len(a.sessions),
@@ -3770,7 +3861,7 @@ func (a *App) captureTableSelection() tableSelectionAnchor {
 	}
 	if a.selected != nil {
 		anchor.name = a.selected.Name
-		anchor.sessionID = a.selected.Metadata.SessionID
+		anchor.sessionID = a.selected.Metadata.ProviderSessionID()
 		anchor.detailsOpen = true
 		return anchor
 	}
@@ -3778,7 +3869,7 @@ func (a *App) captureTableSelection() tableSelectionAnchor {
 		sess := a.sessionForTableRow(a.table.SelectedRow)
 		if sess != nil {
 			anchor.name = sess.Name
-			anchor.sessionID = sess.Metadata.SessionID
+			anchor.sessionID = sess.Metadata.ProviderSessionID()
 		}
 	}
 	return anchor
@@ -3867,7 +3958,7 @@ func (a *App) maybeRefreshSummary(sess *session.Session) {
 	if sess == nil || a.cb.RefreshSummary == nil {
 		return
 	}
-	if sess.Metadata.IsIncognito || sess.Metadata.TranscriptPath == "" {
+	if sess.Metadata.IsIncognito || sess.Metadata.ProviderTranscriptPath() == "" {
 		return
 	}
 	if a.summaryRefreshing[sess.Name] {
@@ -3910,7 +4001,7 @@ func (a *App) maybeRefreshSummary(sess *session.Session) {
 		a.postInterrupt(summaryRefreshed{})
 	}); err != nil {
 		a.summaryRefreshing[name] = false
-		slog.Warn("tui.summary.refresh.request_failed", "component", "tui", "session", name, "error", err)
+		tuiLog.Logger().Warn("tui.summary.refresh.request_failed", "component", "tui", "session", name, "error", err)
 	}
 }
 
@@ -4098,7 +4189,7 @@ func (a *App) resumeRow(row int) {
 	if sess == nil {
 		return
 	}
-	slog.Debug("resume.row_selected", "session", sess.Name, "row", row)
+	tuiLog.Logger().Debug("resume.row_selected", "session", sess.Name, "row", row)
 	a.runResumeLifecycle(sess, "resumeRow")
 }
 
@@ -4233,7 +4324,7 @@ func (a *App) openCreateFolderConfirm(basedir string) {
 			Action: func() {
 				a.closeOverlay()
 				if err := os.MkdirAll(basedir, 0o755); err != nil {
-					slog.Error("newsession.mkdir failed", "basedir", basedir, "error", err)
+					tuiLog.Logger().Error("newsession.mkdir failed", "basedir", basedir, "error", err)
 					return
 				}
 				a.openNewSessionTypeModal(basedir)
@@ -4262,7 +4353,7 @@ func (a *App) openSidecarCreateFolderConfirm(basedir string) {
 			Action: func() {
 				a.closeOverlay()
 				if err := os.MkdirAll(basedir, 0o755); err != nil {
-					slog.Error("sidecar.mkdir failed", "basedir", basedir, "error", err)
+					tuiLog.Logger().Error("sidecar.mkdir failed", "basedir", basedir, "error", err)
 					return
 				}
 				a.openSidecarLaunchTypeModal(basedir)
@@ -4506,9 +4597,12 @@ func (a *App) openRichCompactForm(sess *session.Session) {
 	if sess == nil {
 		return
 	}
+	if !sessionCapabilities(sess).Compaction {
+		return
+	}
 	panel := NewCompactPanel(sess.Name)
-	if sess.Metadata.SessionID != "" {
-		panel.sessionID = sess.Metadata.SessionID
+	if sess.Metadata.ProviderSessionID() != "" {
+		panel.sessionID = sess.Metadata.ProviderSessionID()
 	}
 	if cachedModel, ok := a.modelCache[sess.Name]; ok && cachedModel != "" {
 		panel.model = cachedModel
@@ -4682,7 +4776,11 @@ func (a *App) drawSidecarTab(r Rect) {
 // running TailTranscript subscription, then opens a fresh stream and
 // fans the events into the panel buffer.
 func (a *App) pinSidecar(sess *session.Session) {
-	if sess == nil || sess.Metadata.SessionID == "" {
+	if sess == nil || sess.Metadata.ProviderSessionID() == "" {
+		return
+	}
+	caps := sessionCapabilities(sess)
+	if !caps.RemoteControl || !caps.TranscriptTail {
 		return
 	}
 	if a.sidecarCancel != nil {
@@ -4693,21 +4791,21 @@ func (a *App) pinSidecar(sess *session.Session) {
 	if b, ok := a.bridgeFor(sess); ok {
 		bridgeURL = b.URL
 	}
-	panel := NewSidecarPanel(sess.Name, sess.Metadata.SessionID, bridgeURL)
+	panel := NewSidecarPanel(sess.Name, sess.Metadata.ProviderSessionID(), bridgeURL)
 	panel.OnSend = func(text string) error {
 		if a.cb.SendToSession == nil {
 			return fmt.Errorf("daemon offline")
 		}
 		panel.status = "sending..."
 		go func() {
-			err := a.cb.SendToSession(sess.Metadata.SessionID, text)
+			err := a.cb.SendToSession(sess.Metadata.ProviderSessionID(), text)
 			a.postInterrupt(sidecarSendDone{err: err})
 		}()
 		return nil
 	}
 	a.sidecar = panel
 	a.sidecarSessionName = sess.Name
-	a.sidecarSessionID = sess.Metadata.SessionID
+	a.sidecarSessionID = sess.Metadata.ProviderSessionID()
 	a.sidecarTailPending = false
 
 	if a.cb.TailTranscript == nil {
@@ -4715,7 +4813,7 @@ func (a *App) pinSidecar(sess *session.Session) {
 	}
 	panel.status = "opening tail..."
 	go func() {
-		events, cancel, err := a.cb.TailTranscript(sess.Metadata.SessionID, -1)
+		events, cancel, err := a.cb.TailTranscript(sess.Metadata.ProviderSessionID(), -1)
 		a.postInterrupt(sidecarTailOpened{events: events, cancel: cancel, err: err})
 	}()
 }
@@ -5149,7 +5247,7 @@ func (a *App) findVisibleSession(name, sessionID string) (*session.Session, int)
 		if sess == nil {
 			continue
 		}
-		if sessionID != "" && sess.Metadata.SessionID == sessionID {
+		if sessionID != "" && sess.Metadata.ProviderSessionID() == sessionID {
 			return sess, vi
 		}
 		if name != "" && sess.Name == name {
@@ -5172,6 +5270,7 @@ func (a *App) findSessionByName(name string) *session.Session {
 // The label flips between Enable and Disable based on the current
 // per session value as known to the wired callback.
 func (a *App) remoteControlEntry(sess *session.Session, close func()) OptionsModalEntry {
+	caps := sessionCapabilities(sess)
 	enabled := a.remoteControlCache[sess.Name]
 	label := "Enable remote control"
 	if enabled {
@@ -5190,13 +5289,16 @@ func (a *App) remoteControlEntry(sess *session.Session, close func()) OptionsMod
 				}()
 			}
 		},
-		Disabled: a.cb.SetRemoteControl == nil,
+		Disabled: a.cb.SetRemoteControl == nil || !caps.RemoteControl,
 	}
 }
 
 // openBridgeEntry builds the "open bridge in browser" entry.  Only
 // enabled when the daemon reports an active bridge for this session.
 func (a *App) openBridgeEntry(sess *session.Session, close func()) OptionsModalEntry {
+	if !sessionCapabilities(sess).RemoteControl {
+		return OptionsModalEntry{Label: "Open bridge in browser", Hint: "unsupported", Disabled: true}
+	}
 	b, ok := a.bridgeFor(sess)
 	return OptionsModalEntry{
 		Label: "Open bridge in browser",
@@ -5216,6 +5318,9 @@ func (a *App) openBridgeEntry(sess *session.Session, close func()) OptionsModalE
 // no bridge is active. Uses CopyToClipboard which picks the right
 // tool for the host OS (pbcopy, wl-copy, xclip, xsel, or clip.exe).
 func (a *App) copyBridgeEntry(sess *session.Session, close func()) OptionsModalEntry {
+	if !sessionCapabilities(sess).RemoteControl {
+		return OptionsModalEntry{Label: "Copy bridge URL", Hint: "unsupported", Disabled: true}
+	}
 	b, ok := a.bridgeFor(sess)
 	return OptionsModalEntry{
 		Label: "Copy bridge URL",
@@ -5234,13 +5339,20 @@ func (a *App) copyBridgeEntry(sess *session.Session, close func()) OptionsModalE
 // bridgeFor returns the cached bridge for sess, if any. Reads under
 // the bridge mutex.
 func (a *App) bridgeFor(sess *session.Session) (Bridge, bool) {
-	if sess == nil || sess.Metadata.SessionID == "" {
+	if sess == nil || sess.Metadata.ProviderSessionID() == "" {
 		return Bridge{}, false
 	}
 	a.bridgeMu.RLock()
 	defer a.bridgeMu.RUnlock()
-	b, ok := a.bridges[sess.Metadata.SessionID]
+	b, ok := a.bridges[sess.Metadata.ProviderSessionID()]
 	return b, ok
+}
+
+func sessionCapabilities(sess *session.Session) session.ProviderCapabilities {
+	if sess == nil {
+		return session.ProviderCapabilities{}
+	}
+	return sess.SessionProviderCapabilities()
 }
 
 // rowSession returns the session under the table cursor regardless of
@@ -5259,14 +5371,14 @@ func (a *App) rowSession() *session.Session {
 func (a *App) openSessionOptions(row int) {
 	sess := a.sessionForTableRow(row)
 	if sess == nil {
-		slog.Debug("tui.overlay.options.skipped",
+		tuiLog.Logger().Debug("tui.overlay.options.skipped",
 			"component", "tui",
 			"reason", "row_not_session",
 			"row", row,
 			"rows_total", len(a.tableRowIdx))
 		return
 	}
-	slog.Debug("tui.overlay.options.open_by_row",
+	tuiLog.Logger().Debug("tui.overlay.options.open_by_row",
 		"component", "tui",
 		"row", row,
 		"session", sess.Name,
@@ -5280,7 +5392,7 @@ func (a *App) openSessionOptions(row int) {
 // position so a user who just wants the old behavior types Enter twice.
 func (a *App) openSessionOptionsFor(sess *session.Session) {
 	if sess == nil {
-		slog.Debug("tui.overlay.options.skipped",
+		tuiLog.Logger().Debug("tui.overlay.options.skipped",
 			"component", "tui",
 			"reason", "session_nil")
 		return
@@ -5291,7 +5403,7 @@ func (a *App) openSessionOptionsFor(sess *session.Session) {
 	modal.StatsSegments, modal.StatsLoading = a.buildSessionStatsSegments(sess)
 	modal.StatsSessionName = sess.Name
 	a.overlay = modal
-	slog.Debug("tui.overlay.options.opened",
+	tuiLog.Logger().Debug("tui.overlay.options.opened",
 		"component", "tui",
 		"session", sess.Name,
 		"entries_total", len(modal.Entries),
@@ -5336,6 +5448,7 @@ func (a *App) applyExportStatsResult(name string, stats SessionExportStats, err 
 }
 
 func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []OptionsModalEntry {
+	caps := sessionCapabilities(sess)
 	entries := []OptionsModalEntry{
 		{
 			Label: "Resume",
@@ -5357,7 +5470,7 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []Optio
 				close()
 				a.viewSelected()
 			},
-			Disabled: a.cb.ViewContent == nil,
+			Disabled: a.cb.ViewContent == nil || !caps.TranscriptExport,
 		},
 		{
 			Label: "Export transcript",
@@ -5366,7 +5479,7 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []Optio
 				close()
 				a.openExportOptions(sess)
 			},
-			Disabled: a.cb.ExportSession == nil,
+			Disabled: a.cb.ExportSession == nil || !caps.TranscriptExport,
 		},
 		{
 			Label: "Edit basedir",
@@ -5383,7 +5496,7 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []Optio
 			Action: func() {
 				close()
 				if _, ok := a.bridgeFor(sess); !ok {
-					slog.Warn("sidecar.drive no bridge", "session", sess.Name)
+					tuiLog.Logger().Warn("sidecar.drive no bridge", "session", sess.Name)
 					return
 				}
 				a.pinSidecar(sess)
@@ -5393,6 +5506,9 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []Optio
 				}
 			},
 			Disabled: func() bool {
+				if !caps.RemoteControl || !caps.TranscriptTail {
+					return true
+				}
 				_, ok := a.bridgeFor(sess)
 				return !ok
 			}(),
@@ -5414,6 +5530,7 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []Optio
 			Action: func() {
 				a.openRichCompactForm(sess)
 			},
+			Disabled: !caps.Compaction,
 		},
 		{
 			Label: "Fork",
@@ -5422,7 +5539,7 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []Optio
 				close()
 				a.doFork()
 			},
-			Disabled: a.cb.ForkSession == nil,
+			Disabled: a.cb.ForkSession == nil || !caps.ForkByID,
 		},
 		{
 			Label: "Delete",
@@ -5505,6 +5622,9 @@ func (a *App) openBasedirEditor(sess *session.Session) {
 
 func (a *App) openExportOptions(sess *session.Session) {
 	if sess == nil || a.cb.ExportSession == nil {
+		return
+	}
+	if !sessionCapabilities(sess).TranscriptExport {
 		return
 	}
 	stats, loaded := a.cachedExportStatsForSession(sess)
@@ -5635,7 +5755,7 @@ func (a *App) closeOverlay() {
 		a.overlayStack = a.overlayStack[:idx]
 		a.overlay = frame.widget
 		a.mode = frame.mode
-		slog.Debug("tui.overlay.closed",
+		tuiLog.Logger().Debug("tui.overlay.closed",
 			"component", "tui",
 			"old_overlay_type", oldOverlay,
 			"restored_overlay_type", fmt.Sprintf("%T", a.overlay),
@@ -5646,14 +5766,24 @@ func (a *App) closeOverlay() {
 	}
 	a.overlay = nil
 	a.restoreModeAfterOverlayClose()
-	slog.Debug("tui.overlay.closed",
+	tuiLog.Logger().Debug("tui.overlay.closed",
 		"component", "tui",
 		"old_overlay_type", oldOverlay,
 		"selected", a.selectedSessionName(),
 		"active_tab", a.activeTab,
 		"mode", int(a.mode))
 	if a.pendingReloadPath != "" {
-		slog.Info("tui.self_reload.deferred_resume",
+		if err := validateSelfReloadCandidate(a.pendingReloadPath); err != nil {
+			tuiLog.Logger().Warn("tui.self_reload.deferred_rejected",
+				"component", "tui",
+				"path", a.pendingReloadPath,
+				"reason", a.pendingReloadReason,
+				"err", err)
+			a.pendingReloadPath = ""
+			a.pendingReloadReason = ""
+			return
+		}
+		tuiLog.Logger().Info("tui.self_reload.deferred_resume",
 			"component", "tui",
 			"path", a.pendingReloadPath,
 			"reason", a.pendingReloadReason)
@@ -5788,23 +5918,23 @@ func (a *App) suspendAndRun(fn func()) {
 	const callbackWarnInitial = 10 * time.Second
 	const callbackWarnEvery = 30 * time.Second
 	if a.screen == nil {
-		slog.Warn("tui.suspend no_screen running fn directly")
+		tuiLog.Logger().Warn("tui.suspend no_screen running fn directly")
 		defer func() {
 			if r := recover(); r != nil {
-				slog.Error("tui.suspend fn panic", "recover", fmt.Sprint(r), "err", "panic")
+				tuiLog.Logger().Error("tui.suspend fn panic", "recover", fmt.Sprint(r), "err", "panic")
 			}
 		}()
 		fn()
 		return
 	}
-	slog.Info("tui.suspend.start", "screen", fmt.Sprintf("%p", a.screen))
-	slog.Info("tui.suspend teardown")
+	tuiLog.Logger().Info("tui.suspend.start", "screen", fmt.Sprintf("%p", a.screen))
+	tuiLog.Logger().Info("tui.suspend teardown")
 	teardownStartedAt := time.Now()
 	a.teardownScreen()
 	teardownDuration := time.Since(teardownStartedAt)
-	slog.Info("tui.suspend teardown complete", "screen", fmt.Sprintf("%p", a.screen))
+	tuiLog.Logger().Info("tui.suspend teardown complete", "screen", fmt.Sprintf("%p", a.screen))
 	writeSuspendTerminalPrep(os.Stdout)
-	slog.Debug("tui.suspend.terminal_prepared", "component", "tui")
+	tuiLog.Logger().Debug("tui.suspend.terminal_prepared", "component", "tui")
 	callbackStartedAt := time.Now()
 	callbackDone := make(chan struct{})
 	go func() {
@@ -5817,7 +5947,7 @@ func (a *App) suspendAndRun(fn func()) {
 				return
 			case <-timer.C:
 				elapsed := time.Since(callbackStartedAt)
-				slog.Warn("tui.suspend.callback.still_running",
+				tuiLog.Logger().Warn("tui.suspend.callback.still_running",
 					"component", "tui",
 					"elapsed_ms", elapsed.Milliseconds(),
 					"selected", a.selectedSessionName(),
@@ -5832,20 +5962,20 @@ func (a *App) suspendAndRun(fn func()) {
 		defer close(callbackDone)
 		defer func() {
 			if r := recover(); r != nil {
-				slog.Error("tui.suspend fn panic", "recover", fmt.Sprint(r), "err", "panic")
+				tuiLog.Logger().Error("tui.suspend fn panic", "recover", fmt.Sprint(r), "err", "panic")
 			}
 		}()
 		fn()
 	}()
 	callbackDuration := time.Since(callbackStartedAt)
-	slog.Info("tui.suspend callback complete")
+	tuiLog.Logger().Info("tui.suspend callback complete")
 	if a.execNewBinaryBeforeReinit("suspend_return") {
 		return
 	}
-	slog.Info("tui.suspend reinit")
+	tuiLog.Logger().Info("tui.suspend reinit")
 	reinitStartedAt := time.Now()
 	if err := a.initScreen(); err != nil {
-		slog.Error("tui.suspend reinit failed", "error", err, "err", err)
+		tuiLog.Logger().Error("tui.suspend reinit failed", "error", err, "err", err)
 		// Mark the loop dead and bail. Without a screen the main loop
 		// would panic on the next PollEvent. Better to exit cleanly so
 		// the user sees their shell prompt and can relaunch clyde.
@@ -5855,16 +5985,16 @@ func (a *App) suspendAndRun(fn func()) {
 	reinitDuration := time.Since(reinitStartedAt)
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Error("tui.suspend draw panic", "recover", fmt.Sprint(r), "err", "panic")
+			tuiLog.Logger().Error("tui.suspend draw panic", "recover", fmt.Sprint(r), "err", "panic")
 			a.running = false
 		}
 	}()
 	drawStartedAt := time.Now()
 	a.draw()
 	drawDuration := time.Since(drawStartedAt)
-	slog.Info("tui.suspend resumed")
+	tuiLog.Logger().Info("tui.suspend resumed")
 	totalDuration := time.Since(totalStartedAt)
-	slog.Info("tui.suspend.timing",
+	tuiLog.Logger().Info("tui.suspend.timing",
 		"component", "tui",
 		"teardown_ms", teardownDuration.Milliseconds(),
 		"callback_ms", callbackDuration.Milliseconds(),
@@ -5875,7 +6005,7 @@ func (a *App) suspendAndRun(fn func()) {
 		"active_tab", a.activeTab,
 		"overlay_type", fmt.Sprintf("%T", a.overlay))
 	if totalDuration > 200*time.Millisecond || reinitDuration > 120*time.Millisecond || drawDuration > 80*time.Millisecond {
-		slog.Warn("tui.suspend.slow",
+		tuiLog.Logger().Warn("tui.suspend.slow",
 			"component", "tui",
 			"teardown_ms", teardownDuration.Milliseconds(),
 			"callback_ms", callbackDuration.Milliseconds(),
@@ -6049,14 +6179,14 @@ func shortStableHash(value string) string {
 func currentExecutableHash() string {
 	path, err := os.Executable()
 	if err != nil {
-		slog.Debug("tui.executable_hash.path_failed",
+		tuiLog.Logger().Debug("tui.executable_hash.path_failed",
 			"component", "tui",
 			"err", err)
 		return "unknown"
 	}
 	body, err := os.ReadFile(path)
 	if err != nil {
-		slog.Debug("tui.executable_hash.read_failed",
+		tuiLog.Logger().Debug("tui.executable_hash.read_failed",
 			"component", "tui",
 			"path", path,
 			"err", err)

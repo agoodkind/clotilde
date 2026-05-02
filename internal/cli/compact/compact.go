@@ -1,8 +1,6 @@
 package compact
 
 import (
-	"log/slog"
-
 	"github.com/spf13/cobra"
 
 	"goodkind.io/clyde/internal/cli"
@@ -53,7 +51,7 @@ both work.`,
 		ValidArgsFunction: func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 			store, err := f.Store()
 			if err != nil {
-				slog.Error("cli.compact.completion_store_failed", "err", err)
+				cliCompactLog.Logger().Error("cli.compact.completion_store_failed", "err", err)
 				return nil, cobra.ShellCompDirectiveNoFileComp
 			}
 			var sessions []*session.Session

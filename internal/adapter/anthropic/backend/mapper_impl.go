@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/url"
 	"regexp"
 	"strings"
@@ -82,6 +81,7 @@ func TranslateRequest(req OpenAIRequest, systemPrefix string, maxTokens int) (An
 	}
 
 	out = mergeConsecutiveSameRole(out)
+	out = dropTrailingAssistantPrefill(out)
 
 	systemJoined := strings.Join(systemPieces, "\n\n")
 	systemStr := joinSystem(systemPrefix, systemJoined)
@@ -113,7 +113,7 @@ func TranslateRequest(req OpenAIRequest, systemPrefix string, maxTokens int) (An
 		choiceType = toolChoice.Type
 		choiceName = toolChoice.Name
 	}
-	slog.Info("adapter.anthropic.request.translated",
+	anthropicBackendLog.Logger().Info("adapter.anthropic.request.translated",
 		"subcomponent", "anthropic",
 		"model", req.Model,
 		"system_len", len(systemStr),
@@ -170,6 +170,43 @@ func mergeConsecutiveSameRole(in []AnthMessage) []AnthMessage {
 	return out
 }
 
+// Cursor can resume an interrupted streamed turn by sending the visible
+// assistant prefix back as the final message. Anthropic Messages rejects that
+// shape for these models, so preserve only complete assistant tool-use turns.
+func dropTrailingAssistantPrefill(in []AnthMessage) []AnthMessage {
+	if len(in) < 2 {
+		return in
+	}
+	last := in[len(in)-1]
+	prev := in[len(in)-2]
+	if last.Role != "assistant" || prev.Role != "user" {
+		return in
+	}
+	if assistantHasToolUse(last) {
+		return in
+	}
+
+	textBytes := 0
+	for _, block := range last.Content {
+		textBytes += len(block.Text)
+	}
+	anthropicBackendLog.Logger().Info("adapter.anthropic.trailing_assistant_prefill.dropped",
+		"subcomponent", "anthropic_mapper",
+		"text_bytes", textBytes,
+		"block_count", len(last.Content),
+	)
+	return in[:len(in)-1]
+}
+
+func assistantHasToolUse(msg AnthMessage) bool {
+	for _, block := range msg.Content {
+		if block.Type == "tool_use" {
+			return true
+		}
+	}
+	return false
+}
+
 func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBlock, error) {
 	parts, _ := normalizeContent(msg.Content)
 	var blocks []AnthContentBlock
@@ -206,7 +243,7 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 				ToolUseID:     p.ToolUseID,
 				ResultContent: result,
 			})
-			slog.Debug("adapter.anthropic.tool_result.translated",
+			anthropicBackendLog.Logger().Debug("adapter.anthropic.tool_result.translated",
 				"subcomponent", "anthropic",
 				"msg_idx", msgIdx,
 				"part_idx", partIdx,
@@ -215,7 +252,7 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 				"carrier", "user_part",
 			)
 		default:
-			slog.Warn("adapter.anthropic.user_part.unknown_type",
+			anthropicBackendLog.Logger().Warn("adapter.anthropic.user_part.unknown_type",
 				"subcomponent", "anthropic",
 				"msg_idx", msgIdx,
 				"part_idx", partIdx,
@@ -235,7 +272,7 @@ func stripNotice(text string, msgIdx, partIdx int) string {
 	if stripped == text {
 		return text
 	}
-	slog.Info("adapter.sentinel.notice.stripped",
+	anthropicBackendLog.Logger().Info("adapter.sentinel.notice.stripped",
 		"subcomponent", "anthropic_mapper",
 		"msg_idx", msgIdx,
 		"part_idx", partIdx,
@@ -326,7 +363,7 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage) ([]AnthConten
 				Name:  p.Name,
 				Input: input,
 			})
-			slog.Debug("adapter.anthropic.tool_use.translated",
+			anthropicBackendLog.Logger().Debug("adapter.anthropic.tool_use.translated",
 				"subcomponent", "anthropic",
 				"msg_idx", msgIdx,
 				"part_idx", partIdx,
@@ -338,7 +375,7 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage) ([]AnthConten
 		case "thinking":
 			continue
 		default:
-			slog.Warn("adapter.anthropic.assistant_part.unknown_type",
+			anthropicBackendLog.Logger().Warn("adapter.anthropic.assistant_part.unknown_type",
 				"subcomponent", "anthropic",
 				"msg_idx", msgIdx,
 				"part_idx", partIdx,

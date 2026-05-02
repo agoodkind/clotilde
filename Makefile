@@ -1,4 +1,4 @@
-.PHONY: help build test test-watch coverage clean fmt lint staticcheck deadcode govulncheck audit \
+.PHONY: help build test test-watch coverage clean fmt lint staticcheck staticcheck-extra staticcheck-extra-baseline staticcheck-extra-bin deadcode govulncheck audit \
         install-build-guard uninstall-build-guard setup-hooks \
         deploy install-launch-agent uninstall-launch-agent install-hook uninstall-hook \
         release release-snapshot sign notarize dist/clyde
@@ -45,6 +45,7 @@ CLYDE_DEV_RUN         := $(CLYDE_BIN)
 UID                   := $(shell id -u)
 BUNDLE_ID             ?= io.goodkind.clyde
 CODESIGN_IDENTITY     := $(or $(CERT_ID),$(shell if [ "$$(uname)" = "Darwin" ]; then security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/ { print $$2; exit }'; fi))
+GO                     ?= go
 
 # ---------------------------------------------------------------------------
 # Default
@@ -60,7 +61,7 @@ help: ## Show this help message
 # Build
 # ---------------------------------------------------------------------------
 
-build: lint staticcheck deadcode dist/clyde ## Build and signing-check the clyde binary without leaving a repo-local executable
+build: check dist/clyde ## Build and signing-check the clyde binary without leaving a repo-local executable
 	@echo "Building clyde..."
 	@tmp="$$(mktemp -t clyde-build.XXXXXX)"; \
 	trap 'rm -f "$$tmp"' EXIT; \
@@ -126,6 +127,8 @@ coverage: ## Generate coverage report
 # Code quality
 # ---------------------------------------------------------------------------
 
+check: lint staticcheck staticcheck-extra deadcode govulncheck audit
+
 fmt: ## Format code with gofumpt and goimports
 	@echo "Formatting code..."
 	@go tool golangci-lint fmt ./...
@@ -148,6 +151,122 @@ staticcheck: ## Run Clyde's staticcheck bundle and custom architecture analyzers
 			exit 1; \
 		fi; \
 		echo "✓ Staticcheck passed"'
+
+STATICCHECK_EXTRA_BIN           ?=
+STATICCHECK_EXTRA_BUILD_REPO    ?=
+STATICCHECK_EXTRA_BUILD_PKG     ?=
+STATICCHECK_EXTRA_INSTALL       ?= github.com/agoodkind/go-makefile/staticcheck/cmd/staticcheck-extra@latest
+STATICCHECK_EXTRA_FLAGS         ?= \
+	-slog_error_without_err \
+	-banned_direct_output \
+	-hot_loop_info_log \
+	-missing_boundary_log \
+	-no_any_or_empty_interface \
+	-wrapped_error_without_slog \
+	-os_exit_outside_main \
+	-context_todo_in_production \
+	-time_sleep_in_production \
+	-panic_in_production \
+	-time_now_outside_clock \
+	-goroutine_without_recover \
+	-silent_defer_close \
+	-slog_missing_trace_id \
+	-grpc_handler_missing_peer_enrichment \
+	-sensitive_field_in_log
+STATICCHECK_EXTRA_TARGETS       ?= ./...
+STATICCHECK_EXTRA_BASELINE      ?= .staticcheck-extra-baseline.txt
+STATICCHECK_EXTRA_EXCLUDE_PATHS ?= \.pb\.go:|/api/
+
+staticcheck-extra-bin:
+	@bash -eu -c '\
+		bin="$(STATICCHECK_EXTRA_BIN)"; \
+		repo="$(STATICCHECK_EXTRA_BUILD_REPO)"; \
+		pkg="$(STATICCHECK_EXTRA_BUILD_PKG)"; \
+		install="$(STATICCHECK_EXTRA_INSTALL)"; \
+		if [ -n "$$bin" ]; then \
+			[ -x "$$bin" ] || { echo "staticcheck-extra: $$bin not executable"; exit 1; }; \
+			exit 0; \
+		fi; \
+		if [ -n "$$repo" ]; then \
+			if [ ! -d "$$repo" ]; then \
+				echo "staticcheck-extra: build repo $$repo not present; skipping"; exit 0; \
+			fi; \
+			if [ -z "$$pkg" ]; then \
+				echo "staticcheck-extra: STATICCHECK_EXTRA_BUILD_PKG not set"; exit 1; \
+			fi; \
+			mkdir -p .make; \
+			out="$(CURDIR)/.make/staticcheck-extra"; \
+			newest_src=$$(find "$$repo" -name "*.go" -newer "$$out" 2>/dev/null | head -1 || true); \
+			if [ ! -x "$$out" ] || [ -n "$$newest_src" ]; then \
+				cd "$$repo" && $(GO) build -o "$$out" "$$pkg"; \
+			fi; \
+			exit 0; \
+		fi; \
+		if [ -z "$$install" ]; then exit 0; fi; \
+		mkdir -p .make; \
+		out="$(CURDIR)/.make/staticcheck-extra"; \
+		base=$$(basename "$$install" | sed "s/@.*//"); \
+		gobin=$$($(GO) env GOPATH)/bin; \
+		installed="$$gobin/$$base"; \
+		if [ ! -x "$$installed" ]; then \
+			GOBIN="$$gobin" $(GO) install "$$install"; \
+		fi; \
+		ln -sf "$$installed" "$$out"'
+
+staticcheck-extra: staticcheck-extra-bin
+	@bash -eu -o pipefail -c '\
+		bin="$(STATICCHECK_EXTRA_BIN)"; \
+		[ -z "$$bin" ] && [ -x .make/staticcheck-extra ] && bin=".make/staticcheck-extra"; \
+		if [ -z "$$bin" ]; then \
+			echo "staticcheck-extra: not configured (skipped)"; exit 0; \
+		fi; \
+		if [ ! -x "$$bin" ]; then \
+			echo "staticcheck-extra: binary $$bin not executable; skipping"; exit 0; \
+		fi; \
+		mkdir -p .make; \
+		excludes="$(STATICCHECK_EXTRA_EXCLUDE_PATHS)"; \
+		filter() { \
+			if [ -z "$$excludes" ]; then cat; return; fi; \
+			grep -Ev "$$excludes" || true; \
+		}; \
+		"$$bin" $(STATICCHECK_EXTRA_FLAGS) $(STATICCHECK_EXTRA_TARGETS) 2>&1 \
+			| sed "s|$(CURDIR)/||g" | filter | sort > .make/staticcheck-extra.out || true; \
+		if [ ! -f "$(STATICCHECK_EXTRA_BASELINE)" ]; then \
+			touch "$(STATICCHECK_EXTRA_BASELINE)"; \
+		fi; \
+		new=$$(comm -23 .make/staticcheck-extra.out "$(STATICCHECK_EXTRA_BASELINE)" || true); \
+		if [ -n "$$new" ]; then \
+			echo "NEW staticcheck-extra findings (not in baseline):"; \
+			echo "$$new"; \
+			echo ""; \
+			echo "Either fix them, or refresh the baseline:"; \
+			echo "  make staticcheck-extra-baseline"; \
+			exit 1; \
+		fi; \
+		gone=$$(comm -13 .make/staticcheck-extra.out "$(STATICCHECK_EXTRA_BASELINE)" || true); \
+		if [ -n "$$gone" ]; then \
+			echo "RESOLVED staticcheck-extra findings (please refresh baseline):"; \
+			echo "$$gone"; \
+		fi; \
+		n=$$(wc -l < .make/staticcheck-extra.out); \
+		echo "staticcheck-extra: OK ($$n findings, all in baseline)"'
+
+staticcheck-extra-baseline: staticcheck-extra-bin
+	@bash -eu -o pipefail -c '\
+		bin="$(STATICCHECK_EXTRA_BIN)"; \
+		[ -z "$$bin" ] && [ -x .make/staticcheck-extra ] && bin=".make/staticcheck-extra"; \
+		if [ -z "$$bin" ] || [ ! -x "$$bin" ]; then \
+			echo "staticcheck-extra: not configured; cannot refresh baseline"; exit 1; \
+		fi; \
+		excludes="$(STATICCHECK_EXTRA_EXCLUDE_PATHS)"; \
+		filter() { \
+			if [ -z "$$excludes" ]; then cat; return; fi; \
+			grep -Ev "$$excludes" || true; \
+		}; \
+		"$$bin" $(STATICCHECK_EXTRA_FLAGS) $(STATICCHECK_EXTRA_TARGETS) 2>&1 \
+			| sed "s|$(CURDIR)/||g" | filter | sort > "$(STATICCHECK_EXTRA_BASELINE)" || true; \
+		n=$$(wc -l < "$(STATICCHECK_EXTRA_BASELINE)"); \
+		echo "staticcheck-extra: baseline $(STATICCHECK_EXTRA_BASELINE) refreshed ($$n findings)"'
 
 # CLYDE-125 MITM capture targets. Each target spawns the named
 # upstream through the local mitm proxy and writes a JSONL
@@ -216,7 +335,7 @@ govulncheck: ## Run vulnerability check
 
 audit: ## Run complexity and vulnerability checks (informational)
 	@echo "=== Cyclomatic complexity (>15) ==="
-	@go tool gocyclo -over 15 .
+	@go tool gocyclo -over 15 . || true
 	@echo ""
 	@echo "=== Vulnerability check ==="
 	@go tool govulncheck ./... || true
@@ -231,8 +350,12 @@ release-snapshot: ## Build release artifacts locally without publishing or notar
 install: dist/clyde ## Install the signed clyde binary to ~/.local/bin/clyde
 	@mkdir -p "$(HOME)/.local/bin"
 	@tmp="$$(mktemp -t clyde-install.XXXXXX)"; \
-	trap 'rm -f "$$tmp"' EXIT; \
+	out="$(CLYDE_BIN).new.$$"; \
+	trap 'rm -f "$$tmp" "$$out"' EXIT; \
+	set -e; \
 	go build -ldflags "$(LDFLAGS)" -o "$$tmp" ./cmd/clyde; \
+	test -s "$$tmp"; \
+	chmod 0755 "$$tmp"; \
 	if [ "$$(uname)" = "Darwin" ]; then \
 		if [ -z "$(CODESIGN_IDENTITY)" ]; then \
 			echo "No Developer ID Application signing identity found."; \
@@ -243,8 +366,10 @@ install: dist/clyde ## Install the signed clyde binary to ~/.local/bin/clyde
 		codesign --force --sign "$(CODESIGN_IDENTITY)" --identifier "$(BUNDLE_ID)" --options runtime --timestamp=none "$$tmp"; \
 		codesign --verify --verbose=2 "$$tmp"; \
 	fi; \
-	rm -f "$(CLYDE_BIN)"; \
-	cp -f "$$tmp" "$(CLYDE_BIN)"
+	cp -f "$$tmp" "$$out"; \
+	chmod 0755 "$$out"; \
+	test -s "$$out"; \
+	mv -f "$$out" "$(CLYDE_BIN)"
 	@if [ "$$(uname)" = "Darwin" ]; then codesign --verify --verbose=2 "$(CLYDE_BIN)"; fi
 	@chmod -R u+w dist/clyde 2>/dev/null; true
 	@rm -rf dist/clyde

@@ -274,6 +274,62 @@ func TestTranslateRequestRoleAlternationMerge(t *testing.T) {
 	}
 }
 
+func TestTranslateRequestDropsTrailingTextAssistantPrefill(t *testing.T) {
+	t.Parallel()
+	req := adapteropenai.ChatRequest{
+		Model: "x",
+		Messages: []adapteropenai.ChatMessage{
+			{Role: "user", Content: json.RawMessage(`"please inspect"`)},
+			{Role: "assistant", Content: json.RawMessage(`"I will inspect the code."`)},
+		},
+	}
+	out, err := TranslateRequest(req, "", 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Messages) != 1 {
+		t.Fatalf("messages len = %d want 1: %+v", len(out.Messages), out.Messages)
+	}
+	if out.Messages[0].Role != "user" {
+		t.Fatalf("last role = %q want user", out.Messages[0].Role)
+	}
+}
+
+func TestTranslateRequestKeepsTrailingAssistantToolUse(t *testing.T) {
+	t.Parallel()
+	req := adapteropenai.ChatRequest{
+		Model: "x",
+		Messages: []adapteropenai.ChatMessage{
+			{Role: "user", Content: json.RawMessage(`"please inspect"`)},
+			{
+				Role:    "assistant",
+				Content: json.RawMessage(`"I will inspect the code."`),
+				ToolCalls: []adapteropenai.ToolCall{{
+					ID:   "call_1",
+					Type: "function",
+					Function: adapteropenai.ToolCallFunction{
+						Name:      "Read",
+						Arguments: `{"path":"main.go"}`,
+					},
+				}},
+			},
+		},
+	}
+	out, err := TranslateRequest(req, "", 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Messages) != 2 {
+		t.Fatalf("messages len = %d want 2: %+v", len(out.Messages), out.Messages)
+	}
+	if out.Messages[1].Role != "assistant" {
+		t.Fatalf("last role = %q want assistant", out.Messages[1].Role)
+	}
+	if !assistantHasToolUse(out.Messages[1]) {
+		t.Fatalf("expected trailing assistant tool_use to be preserved: %+v", out.Messages[1])
+	}
+}
+
 func TestTranslateRequestSystemPrefixIdempotent(t *testing.T) {
 	t.Parallel()
 	req := adapteropenai.ChatRequest{

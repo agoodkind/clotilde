@@ -20,5 +20,6 @@ type PreparedRequest struct {
 	TrackerKey    string
 	JSONCoercion  JSONCoercion
 	IncludeUsage  bool
+	Stream        bool
 	NativeIngress bool
 }

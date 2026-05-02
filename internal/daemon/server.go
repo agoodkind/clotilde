@@ -36,7 +36,9 @@ import (
 	"goodkind.io/clyde/internal/outputstyle"
 	"goodkind.io/clyde/internal/session"
 	sessionartifacts "goodkind.io/clyde/internal/session/artifacts"
+	sessionsettings "goodkind.io/clyde/internal/session/settings"
 	"goodkind.io/clyde/internal/sessionctx"
+	"goodkind.io/clyde/internal/slogger"
 	"goodkind.io/clyde/internal/util"
 )
 
@@ -143,6 +145,7 @@ func (s *Server) preserveRuntimeDirsOnClose() {
 
 // New creates a new daemon Server and starts watching the global settings file.
 func New(log *slog.Logger) (*Server, error) {
+	log = slogger.WithConcern(log, slogger.ConcernProcessDaemonLifecycle)
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create settings watcher: %w", err)
@@ -438,7 +441,7 @@ func (s *Server) DeleteSession(ctx context.Context, req *clydev1.DeleteSessionRe
 	if sess == nil {
 		return nil, status.Errorf(codes.NotFound, "session %q not found", req.Name)
 	}
-	if err := sessionartifacts.Delete(ctx, session.DeleteArtifactsRequest{
+	if _, err := sessionartifacts.Delete(ctx, session.DeleteArtifactsRequest{
 		Session:   sess,
 		ClydeRoot: daemonProjectClydeRootForSession(sess),
 	}); err != nil {
@@ -528,7 +531,7 @@ func (s *Server) publishSessionSummaryEvent(kind clydev1.SubscribeRegistryRespon
 	ev := &clydev1.SubscribeRegistryResponse{
 		Kind:        kind,
 		SessionName: sess.Name,
-		SessionId:   sess.Metadata.SessionID,
+		SessionId:   sess.Metadata.ProviderSessionID(),
 		OldName:     oldName,
 	}
 	if store != nil {
@@ -1138,7 +1141,10 @@ func (s *Server) GetSessionExportStats(ctx context.Context, req *clydev1.GetSess
 	if sess == nil {
 		return nil, status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
 	}
-	stats := inspectExportStatsFor(sess.Metadata.TranscriptPath)
+	if !sess.SessionProviderCapabilities().TranscriptExport {
+		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support transcript export", sess.ProviderID())
+	}
+	stats := inspectExportStatsFor(sess.Metadata.ProviderTranscriptPath())
 	resp := &clydev1.GetSessionExportStatsResponse{
 		SessionName:           sess.Name,
 		VisibleTokensEstimate: int32(stats.VisibleTokensEstimate),
@@ -1177,6 +1183,9 @@ func (s *Server) ExportSession(ctx context.Context, req *clydev1.ExportSessionRe
 	if sess == nil {
 		return nil, status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
 	}
+	if !sess.SessionProviderCapabilities().TranscriptExport {
+		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support transcript export", sess.ProviderID())
+	}
 	body, err := buildSessionExport(sess, req)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "build export: %v", err)
@@ -1193,7 +1202,7 @@ func (s *Server) ExportSession(ctx context.Context, req *clydev1.ExportSessionRe
 }
 
 func (s *Server) contextStateForSession(sess *session.Session) sessionContextState {
-	if sess == nil || sess.Name == "" || sess.Metadata.SessionID == "" || strings.TrimSpace(sess.Metadata.TranscriptPath) == "" {
+	if sess == nil || !sess.SessionProviderCapabilities().ContextUsageInspect || sess.Name == "" || sess.Metadata.ProviderSessionID() == "" || strings.TrimSpace(sess.Metadata.ProviderTranscriptPath()) == "" {
 		return sessionContextState{}
 	}
 
@@ -1205,7 +1214,7 @@ func (s *Server) contextStateForSession(sess *session.Session) sessionContextSta
 	case !state.RetryAfter.IsZero() && time.Now().Before(state.RetryAfter):
 	case !state.Loaded:
 		needsRefresh = true
-	case transcriptNewerThan(sess.Metadata.TranscriptPath, state.Usage.CapturedAt):
+	case transcriptNewerThan(sess.Metadata.ProviderTranscriptPath(), state.Usage.CapturedAt):
 		needsRefresh = true
 	}
 	if needsRefresh {
@@ -1281,7 +1290,7 @@ func (s *Server) refreshContextUsage(sess *session.Session) {
 			"component", "daemon",
 			"subcomponent", "context_usage",
 			"session", sess.Name,
-			"session_id", sess.Metadata.SessionID,
+			"session_id", sess.Metadata.ProviderSessionID(),
 			"work_dir", workSess.Metadata.WorkDir,
 			"err", err)
 	} else {
@@ -1295,7 +1304,7 @@ func (s *Server) refreshContextUsage(sess *session.Session) {
 			"component", "daemon",
 			"subcomponent", "context_usage",
 			"session", sess.Name,
-			"session_id", sess.Metadata.SessionID,
+			"session_id", sess.Metadata.ProviderSessionID(),
 			"source", usage.Source,
 			"total_tokens", usage.TotalTokens,
 			"max_tokens", usage.MaxTokens)
@@ -1339,20 +1348,24 @@ func (s *Server) deleteContextState(name string) {
 }
 
 func (s *Server) sessionSummary(store *session.FileStore, sess *session.Session) *clydev1.SessionSummary {
-	settings, _ := store.LoadSettings(sess.Name)
+	caps := sess.SessionProviderCapabilities()
+	settings, _ := sessionsettings.Load(store, sess)
 	model := "-"
-	if sess.Metadata.TranscriptPath != "" {
-		if m := inspectExtractModel(sess.Metadata.TranscriptPath); m != "" {
+	if caps.TranscriptExport && sess.Metadata.ProviderTranscriptPath() != "" {
+		if m := inspectExtractModel(sess.Metadata.ProviderTranscriptPath()); m != "" {
 			model = m
 		}
 	}
 	if model == "-" && settings != nil && settings.Model != "" {
 		model = adaptercursor.NormalizeSessionSettingsModel(settings.Model)
 	}
-	stats := inspectStatsFor(sess.Metadata.TranscriptPath)
+	stats := inspectStats{}
+	if caps.TranscriptExport {
+		stats = inspectStatsFor(sess.Metadata.ProviderTranscriptPath())
+	}
 	size := int64(0)
 	lastActivity := sess.Metadata.LastAccessed
-	if p := sess.Metadata.TranscriptPath; p != "" {
+	if p := sess.Metadata.ProviderTranscriptPath(); caps.TranscriptExport && p != "" {
 		if info, err := os.Stat(p); err == nil {
 			size = info.Size()
 			if info.ModTime().After(lastActivity) {
@@ -1361,9 +1374,9 @@ func (s *Server) sessionSummary(store *session.FileStore, sess *session.Session)
 		}
 	}
 	var bridge *clydev1.Bridge
-	if sess.Metadata.SessionID != "" {
+	if caps.RemoteControl && sess.Metadata.ProviderSessionID() != "" {
 		s.bridgeMu.RLock()
-		if b := s.bridges[sess.Metadata.SessionID]; b != nil {
+		if b := s.bridges[sess.Metadata.ProviderSessionID()]; b != nil {
 			cp := proto.Clone(b).(*clydev1.Bridge)
 			bridge = cp
 		}
@@ -1373,15 +1386,15 @@ func (s *Server) sessionSummary(store *session.FileStore, sess *session.Session)
 	return &clydev1.SessionSummary{
 		Name:                  sess.Name,
 		MetadataName:          sess.Metadata.Name,
-		SessionId:             sess.Metadata.SessionID,
-		TranscriptPath:        sess.Metadata.TranscriptPath,
+		SessionId:             sess.Metadata.ProviderSessionID(),
+		TranscriptPath:        sess.Metadata.ProviderTranscriptPath(),
 		WorkDir:               sess.Metadata.WorkDir,
 		CreatedNanos:          sess.Metadata.Created.UnixNano(),
 		LastAccessedNanos:     sess.Metadata.LastAccessed.UnixNano(),
 		ParentSession:         sess.Metadata.ParentSession,
 		IsForkedSession:       sess.Metadata.IsForkedSession,
 		IsIncognito:           sess.Metadata.IsIncognito,
-		PreviousSessionIds:    append([]string(nil), sess.Metadata.PreviousSessionIDs...),
+		PreviousSessionIds:    append([]string(nil), sess.Metadata.PreviousProviderSessionIDStrings()...),
 		Context:               sess.Metadata.Context,
 		HasCustomOutputStyle:  sess.Metadata.HasCustomOutputStyle,
 		WorkspaceRoot:         sess.Metadata.WorkspaceRoot,
@@ -1403,18 +1416,22 @@ func (s *Server) sessionSummary(store *session.FileStore, sess *session.Session)
 }
 
 func (s *Server) sessionDetail(store *session.FileStore, sess *session.Session) *clydev1.GetSessionDetailResponse {
+	caps := sess.SessionProviderCapabilities()
 	model := "-"
-	if sess.Metadata.TranscriptPath != "" {
-		if m := inspectExtractModel(sess.Metadata.TranscriptPath); m != "" {
+	if caps.TranscriptExport && sess.Metadata.ProviderTranscriptPath() != "" {
+		if m := inspectExtractModel(sess.Metadata.ProviderTranscriptPath()); m != "" {
 			model = m
 		}
 	}
 	if model == "-" {
-		if settings, _ := store.LoadSettings(sess.Name); settings != nil && settings.Model != "" {
+		if settings, _ := sessionsettings.Load(store, sess); settings != nil && settings.Model != "" {
 			model = adaptercursor.NormalizeSessionSettingsModel(settings.Model)
 		}
 	}
-	stats := inspectStatsFor(sess.Metadata.TranscriptPath)
+	stats := inspectStats{}
+	if caps.TranscriptExport {
+		stats = inspectStatsFor(sess.Metadata.ProviderTranscriptPath())
+	}
 	resp := &clydev1.GetSessionDetailResponse{
 		SessionName:           sess.Name,
 		Model:                 model,
@@ -1424,24 +1441,26 @@ func (s *Server) sessionDetail(store *session.FileStore, sess *session.Session) 
 		CompactionCount:       int32(stats.CompactionCount),
 		LastPreCompactTokens:  int32(stats.LastPreCompactTokens),
 	}
-	if p := sess.Metadata.TranscriptPath; p != "" {
+	if p := sess.Metadata.ProviderTranscriptPath(); caps.TranscriptExport && p != "" {
 		if info, err := os.Stat(p); err == nil {
 			resp.TranscriptSizeBytes = info.Size()
 			resp.LastActivityNanos = info.ModTime().UnixNano()
 		}
 	}
-	for _, m := range inspectRecentMessages(sess.Metadata.TranscriptPath, 5, 150) {
-		text := strings.TrimSpace(m.Text)
-		if text == "" || strings.HasPrefix(text, "<") || len(text) < 5 {
-			continue
+	if caps.TranscriptExport {
+		for _, m := range inspectRecentMessages(sess.Metadata.ProviderTranscriptPath(), 5, 150) {
+			text := strings.TrimSpace(m.Text)
+			if text == "" || strings.HasPrefix(text, "<") || len(text) < 5 {
+				continue
+			}
+			resp.RecentMessages = append(resp.RecentMessages, detailMessageProto(m.Role, text, m.Timestamp))
 		}
-		resp.RecentMessages = append(resp.RecentMessages, detailMessageProto(m.Role, text, m.Timestamp))
-	}
-	for _, m := range inspectAllMessages(sess.Metadata.TranscriptPath, 1000) {
-		resp.AllMessages = append(resp.AllMessages, detailMessageProto(m.Role, m.Text, m.Timestamp))
-	}
-	for _, t := range inspectToolUseStats(sess.Metadata.TranscriptPath, 8) {
-		resp.Tools = append(resp.Tools, &clydev1.ToolUse{Name: t.Name, Count: int32(t.Count)})
+		for _, m := range inspectAllMessages(sess.Metadata.ProviderTranscriptPath(), 1000) {
+			resp.AllMessages = append(resp.AllMessages, detailMessageProto(m.Role, m.Text, m.Timestamp))
+		}
+		for _, t := range inspectToolUseStats(sess.Metadata.ProviderTranscriptPath(), 8) {
+			resp.Tools = append(resp.Tools, &clydev1.ToolUse{Name: t.Name, Count: int32(t.Count)})
+		}
 	}
 	return resp
 }
@@ -1484,11 +1503,18 @@ func (s *Server) UpdateSessionSettings(ctx context.Context, req *clydev1.UpdateS
 	if err != nil || sess == nil {
 		return nil, status.Errorf(codes.NotFound, "session %q not found", req.Name)
 	}
+	caps := sess.SessionProviderCapabilities()
+	if !caps.PerSessionSettings {
+		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support per-session settings", sess.ProviderID())
+	}
+	if req.Settings != nil && maskApplies(req.UpdateMask, "remote_control") && !caps.RemoteControl {
+		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support remote control", sess.ProviderID())
+	}
 	lock := s.settingsLockFor(req.Name)
 	lock.Lock()
 	defer lock.Unlock()
 
-	current, _ := store.LoadSettings(req.Name)
+	current, _ := sessionsettings.Load(store, sess)
 	if current == nil {
 		current = &session.Settings{}
 	}
@@ -1512,7 +1538,7 @@ func (s *Server) UpdateSessionSettings(ctx context.Context, req *clydev1.UpdateS
 			current.RemoteControl = req.Settings.RemoteControl
 		}
 	}
-	if err := store.SaveSettings(req.Name, current); err != nil {
+	if err := sessionsettings.Save(store, sess, current); err != nil {
 		return nil, status.Errorf(codes.Internal, "save settings: %v", err)
 	}
 	s.publishSessionSummaryEvent(clydev1.SubscribeRegistryResponse_KIND_SESSION_UPDATED, store, sess, "")
@@ -1524,6 +1550,10 @@ func (s *Server) UpdateSessionSettings(ctx context.Context, req *clydev1.UpdateS
 		slog.String("effort", current.EffortLevel),
 	)
 	return &clydev1.UpdateSessionSettingsResponse{}, nil
+}
+
+func maskApplies(mask []string, field string) bool {
+	return len(mask) == 0 || slices.Contains(mask, field)
 }
 
 // UpdateGlobalSettings mutates the clyde global config defaults
@@ -1682,7 +1712,7 @@ func (s *Server) StartRemoteSession(ctx context.Context, req *clydev1.StartRemot
 	if err := store.Create(sess); err != nil {
 		return nil, status.Errorf(codes.Internal, "create session: %v", err)
 	}
-	if err := store.SaveSettings(name, &session.Settings{RemoteControl: true}); err != nil {
+	if err := sessionsettings.Save(store, sess, &session.Settings{RemoteControl: true}); err != nil {
 		_ = store.Delete(name)
 		return nil, status.Errorf(codes.Internal, "save session settings: %v", err)
 	}
@@ -1787,7 +1817,7 @@ func (s *Server) removeBridge(sessionID string) {
 
 // resolveTranscriptPath looks up the transcript path for a Claude
 // session UUID. Walks the global session store and returns the path
-// of the first session whose Metadata.SessionID or PreviousSessionIDs
+// of the first session whose provider identity or previous provider identities
 // matches. Returns the empty string when nothing matches.
 func resolveTranscriptPath(sessionID string) string {
 	store, err := session.NewGlobalFileStore()
@@ -1799,14 +1829,38 @@ func resolveTranscriptPath(sessionID string) string {
 		return ""
 	}
 	for _, s := range all {
-		if s.Metadata.SessionID == sessionID {
-			return s.Metadata.TranscriptPath
+		if s.Metadata.ProviderSessionID() == sessionID {
+			return s.Metadata.ProviderTranscriptPath()
 		}
-		if slices.Contains(s.Metadata.PreviousSessionIDs, sessionID) {
-			return s.Metadata.TranscriptPath
+		if slices.Contains(s.Metadata.PreviousProviderSessionIDStrings(), sessionID) {
+			return s.Metadata.ProviderTranscriptPath()
 		}
 	}
 	return ""
+}
+
+func sessionByProviderSessionID(sessionID string) (*session.Session, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil, nil
+	}
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		return nil, err
+	}
+	all, err := store.List()
+	if err != nil {
+		return nil, err
+	}
+	for _, sess := range all {
+		if sess == nil {
+			continue
+		}
+		if sess.Metadata.ProviderSessionID() == sessionID || slices.Contains(sess.Metadata.PreviousProviderSessionIDStrings(), sessionID) {
+			return sess, nil
+		}
+	}
+	return nil, nil
 }
 
 // TailTranscript streams transcript lines for a session via the hub.
@@ -1815,6 +1869,11 @@ func resolveTranscriptPath(sessionID string) string {
 func (s *Server) TailTranscript(req *clydev1.TailTranscriptRequest, stream clydev1.ClydeService_TailTranscriptServer) error {
 	if req.SessionId == "" {
 		return status.Error(codes.InvalidArgument, "session_id is required")
+	}
+	if sess, err := sessionByProviderSessionID(req.SessionId); err != nil {
+		return status.Errorf(codes.Internal, "resolve session provider: %v", err)
+	} else if sess != nil && !sess.SessionProviderCapabilities().TranscriptTail {
+		return status.Errorf(codes.FailedPrecondition, "session provider %q does not support transcript tailing", sess.ProviderID())
 	}
 	path := resolveTranscriptPath(req.SessionId)
 	if path == "" {
@@ -1856,6 +1915,11 @@ func (s *Server) TailTranscript(req *clydev1.TailTranscriptRequest, stream clyde
 func (s *Server) SendToSession(_ context.Context, req *clydev1.SendToSessionRequest) (*clydev1.SendToSessionResponse, error) {
 	if req.SessionId == "" {
 		return nil, status.Error(codes.InvalidArgument, "session_id is required")
+	}
+	if sess, err := sessionByProviderSessionID(req.SessionId); err != nil {
+		return nil, status.Errorf(codes.Internal, "resolve session provider: %v", err)
+	} else if sess != nil && !sess.SessionProviderCapabilities().RemoteControl {
+		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support remote control", sess.ProviderID())
 	}
 	socketPath := injectSocketPath(req.SessionId)
 	if _, err := os.Stat(socketPath); err != nil {
@@ -1982,7 +2046,7 @@ func (s *Server) ProbeContextUsage(ctx context.Context, req *clydev1.ProbeContex
 		return nil, status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
 	}
 	usage, err := compactengine.ProbeContextUsage(ctx, compactengine.ProbeOptions{
-		SessionID:   sess.Metadata.SessionID,
+		SessionID:   sess.Metadata.ProviderSessionID(),
 		WorkDir:     s.contextProbeWorkDir(sess),
 		Timeout:     60 * time.Second,
 		ForkSession: true,
@@ -1992,14 +2056,14 @@ func (s *Server) ProbeContextUsage(ctx context.Context, req *clydev1.ProbeContex
 			"component", "daemon",
 			"subcomponent", "context_usage",
 			"session", sess.Name,
-			"session_id", sess.Metadata.SessionID,
+			"session_id", sess.Metadata.ProviderSessionID(),
 			"duration_ms", time.Since(started).Milliseconds(),
 			"err", err)
 		return nil, status.Errorf(codes.Internal, "probe context usage: %v", err)
 	}
 	resp := &clydev1.ProbeContextUsageResponse{
 		SessionName: sess.Name,
-		SessionId:   sess.Metadata.SessionID,
+		SessionId:   sess.Metadata.ProviderSessionID(),
 		Model:       usage.Model,
 		TotalTokens: int32(usage.TotalTokens),
 		MaxTokens:   int32(usage.MaxTokens),
@@ -2018,7 +2082,7 @@ func (s *Server) ProbeContextUsage(ctx context.Context, req *clydev1.ProbeContex
 		"component", "daemon",
 		"subcomponent", "context_usage",
 		"session", sess.Name,
-		"session_id", sess.Metadata.SessionID,
+		"session_id", sess.Metadata.ProviderSessionID(),
 		"duration_ms", time.Since(started).Milliseconds(),
 		"total_tokens", usage.TotalTokens,
 		"max_tokens", usage.MaxTokens,
@@ -2078,6 +2142,9 @@ func (s *Server) runCompact(
 	}
 	if sess == nil {
 		return status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
+	}
+	if !sess.SessionProviderCapabilities().Compaction {
+		return status.Errorf(codes.FailedPrecondition, "session provider %q does not support compaction", sess.ProviderID())
 	}
 	if mode == compactengine.RuntimeModeApply && !req.GetForce() && s.sessionIsActive(sess.Name) {
 		return status.Errorf(codes.FailedPrecondition, "session %q is currently open; exit it first or pass --force", sess.Name)
@@ -2233,7 +2300,7 @@ func (s *Server) runCompact(
 		"component", "daemon",
 		"subcomponent", "compact",
 		"session", req.GetSessionName(),
-		"session_id", sess.Metadata.SessionID,
+		"session_id", sess.Metadata.ProviderSessionID(),
 		"mode", mode,
 		"hit_target", result.Plan.HitTarget,
 		"final_tail", result.Plan.FinalTail,
@@ -2261,29 +2328,29 @@ func (s *Server) CompactUndo(ctx context.Context, req *clydev1.CompactUndoReques
 	if sess == nil {
 		return nil, status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
 	}
-	path := sess.Metadata.TranscriptPath
+	path := sess.Metadata.ProviderTranscriptPath()
 	if path == "" {
 		return nil, status.Error(codes.InvalidArgument, "session has no transcript")
 	}
-	entry, undoErr := compactengine.Undo(sess.Metadata.SessionID, path)
+	entry, undoErr := compactengine.Undo(sess.Metadata.ProviderSessionID(), path)
 	if undoErr != nil {
 		s.log.Error("daemon.compact.undo_failed",
 			"component", "daemon",
 			"subcomponent", "compact",
 			"session", req.GetSessionName(),
-			"session_id", sess.Metadata.SessionID,
+			"session_id", sess.Metadata.ProviderSessionID(),
 			"err", undoErr.Error(),
 		)
 		return nil, status.Errorf(codes.Internal, "undo: %v", undoErr)
 	}
-	ledgerPath, _ := compactengine.LedgerPath(sess.Metadata.SessionID)
+	ledgerPath, _ := compactengine.LedgerPath(sess.Metadata.ProviderSessionID())
 	postBytes := int64(-1)
 	if stat, statErr := os.Stat(path); statErr == nil {
 		postBytes = stat.Size()
 	}
 	resp := &clydev1.CompactUndoResponse{
 		SessionName:    sess.Name,
-		SessionId:      sess.Metadata.SessionID,
+		SessionId:      sess.Metadata.ProviderSessionID(),
 		TranscriptPath: path,
 		LedgerPath:     ledgerPath,
 		AppliedAt:      entry.Timestamp.UTC().Format(time.RFC3339),
@@ -2298,7 +2365,7 @@ func (s *Server) CompactUndo(ctx context.Context, req *clydev1.CompactUndoReques
 		"component", "daemon",
 		"subcomponent", "compact",
 		"session", req.GetSessionName(),
-		"session_id", sess.Metadata.SessionID,
+		"session_id", sess.Metadata.ProviderSessionID(),
 		"pre_apply_offset", entry.PreApplyOffset,
 		"post_undo_bytes", postBytes,
 	)

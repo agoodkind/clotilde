@@ -54,6 +54,8 @@ type CompletedAttrs struct {
 	DerivedCacheCreationTokens int
 	DurationMs                 int64
 	Stream                     bool
+	ToolCallCount              int
+	HasSubagentToolCall        bool
 
 	// Path tags which dispatch leg handled the request so aggregators
 	// can compare costs across backends. Known values include "oauth"
@@ -116,6 +118,8 @@ func LogCompleted(log *slog.Logger, ctx context.Context, attrs CompletedAttrs) {
 		slog.Float64("cache_hit_ratio", hitRatio),
 		slog.Int64("duration_ms", attrs.DurationMs),
 		slog.Bool("stream", attrs.Stream),
+		slog.Int("tool_call_count", attrs.ToolCallCount),
+		slog.Bool("has_subagent_tool_call", attrs.HasSubagentToolCall),
 		slog.Bool("cost_rates_known", breakdown.RatesKnown),
 		slog.Int64("cost_microcents", breakdown.TotalMicrocents),
 		slog.Int64("cost_input_microcents", breakdown.InputMicrocents),

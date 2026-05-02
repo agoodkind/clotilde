@@ -2,7 +2,6 @@ package session
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -108,7 +107,7 @@ func NewGlobalFileStore() (*FileStore, error) {
 	if home, err := os.UserHomeDir(); err == nil {
 		fs.discoveryCache = defaultDiscoveryCache(home)
 	} else {
-		slog.Warn("session.store.home_dir_failed",
+		sessionResolveLog.Logger().Warn("session.store.home_dir_failed",
 			"component", "session",
 			"subcomponent", "store",
 			"err", err,
@@ -216,7 +215,7 @@ func dedupeSessionsByIdentity(sessions []*Session) []*Session {
 		out = append(out, sess)
 	}
 	if len(out) != len(sessions) {
-		slog.Info("session.list.deduped",
+		sessionResolveLog.Logger().Info("session.list.deduped",
 			"component", "session",
 			"subcomponent", "store",
 			"sessions_before", len(sessions),
@@ -260,6 +259,7 @@ func (fs *FileStore) Get(name string) (*Session, error) {
 	if err := util.ReadJSON(metadataPath, &metadata); err != nil {
 		return nil, fmt.Errorf("failed to read session metadata: %w", err)
 	}
+	metadata.NormalizeProviderState()
 
 	return &Session{
 		Name:     name,
@@ -278,7 +278,7 @@ func (fs *FileStore) Search(query string) ([]*Session, error) {
 	var matches []*Session
 	for _, sess := range sessions {
 		if strings.Contains(strings.ToLower(sess.Name), q) ||
-			strings.Contains(strings.ToLower(sess.Metadata.SessionID), q) ||
+			strings.Contains(strings.ToLower(sess.Metadata.ProviderSessionID()), q) ||
 			strings.Contains(strings.ToLower(sess.Metadata.Context), q) {
 			matches = append(matches, sess)
 		}
@@ -297,7 +297,7 @@ func (fs *FileStore) Resolve(query string) (*Session, error) {
 	}
 
 	if fs.noAdopt || fs.discoveryCache == nil {
-		slog.Debug("session.resolve.miss",
+		sessionResolveLog.Logger().Debug("session.resolve.miss",
 			"component", "session",
 			"subcomponent", "resolve",
 			"query", query,
@@ -307,14 +307,14 @@ func (fs *FileStore) Resolve(query string) (*Session, error) {
 		return nil, nil
 	}
 
-	slog.Debug("session.resolve.tier4_started",
+	sessionResolveLog.Logger().Debug("session.resolve.tier4_started",
 		"component", "session",
 		"subcomponent", "resolve",
 		"query", query,
 	)
 	adopted, err := fs.adoptFromDiscovery(query)
 	if err != nil {
-		slog.Warn("session.resolve.tier4_failed",
+		sessionResolveLog.Logger().Warn("session.resolve.tier4_failed",
 			"component", "session",
 			"subcomponent", "resolve",
 			"query", query,
@@ -323,19 +323,19 @@ func (fs *FileStore) Resolve(query string) (*Session, error) {
 		return nil, nil
 	}
 	if adopted == nil {
-		slog.Debug("session.resolve.tier4_no_match",
+		sessionResolveLog.Logger().Debug("session.resolve.tier4_no_match",
 			"component", "session",
 			"subcomponent", "resolve",
 			"query", query,
 		)
 		return nil, nil
 	}
-	slog.Info("session.resolve.tier4_adopted",
+	sessionResolveLog.Logger().Info("session.resolve.tier4_adopted",
 		"component", "session",
 		"subcomponent", "resolve",
 		"query", query,
 		"session", adopted.Name,
-		"session_id", adopted.Metadata.SessionID,
+		"session_id", adopted.Metadata.ProviderSessionID(),
 		"display_title", adopted.Metadata.DisplayTitle,
 	)
 	// Re-run tiers 1-3 once against the now-adopted set. In the common
@@ -359,7 +359,7 @@ func (fs *FileStore) Resolve(query string) (*Session, error) {
 func (fs *FileStore) resolveFromStore(query string) *Session {
 	// Tier 1: exact name match
 	if sess, err := fs.Get(query); err == nil {
-		slog.Debug("session.resolve.tier1_hit",
+		sessionResolveLog.Logger().Debug("session.resolve.tier1_hit",
 			"component", "session",
 			"subcomponent", "resolve",
 			"query", query,
@@ -373,7 +373,7 @@ func (fs *FileStore) resolveFromStore(query string) *Session {
 	if listErr == nil {
 		for _, sess := range sessions {
 			if matchType := exactSessionIDMatchType(sess, query); matchType != "" {
-				slog.Debug("session.resolve.tier2_hit",
+				sessionResolveLog.Logger().Debug("session.resolve.tier2_hit",
 					"component", "session",
 					"subcomponent", "resolve",
 					"query", query,
@@ -391,7 +391,7 @@ func (fs *FileStore) resolveFromStore(query string) *Session {
 		return nil
 	}
 	if len(matches) == 1 {
-		slog.Debug("session.resolve.tier3_hit",
+		sessionResolveLog.Logger().Debug("session.resolve.tier3_hit",
 			"component", "session",
 			"subcomponent", "resolve",
 			"query", query,
@@ -399,7 +399,7 @@ func (fs *FileStore) resolveFromStore(query string) *Session {
 		)
 		return matches[0]
 	}
-	slog.Debug("session.resolve.tier3_ambiguous",
+	sessionResolveLog.Logger().Debug("session.resolve.tier3_ambiguous",
 		"component", "session",
 		"subcomponent", "resolve",
 		"query", query,
@@ -424,10 +424,10 @@ func (fs *FileStore) adoptFromDiscovery(query string) (*Session, error) {
 	var match *DiscoveryResult
 	for i := range results {
 		r := &results[i]
-		if r.IsAutoName || r.IsSubagent || r.SessionID == "" {
+		if r.IsAutoName || r.IsSubagent || r.ProviderSessionID() == "" {
 			continue
 		}
-		if strings.TrimSpace(r.SessionID) == strings.TrimSpace(query) {
+		if strings.TrimSpace(r.ProviderSessionID()) == strings.TrimSpace(query) {
 			if match == nil || shouldPreferDiscoveryResult(*r, *match) {
 				match = r
 			}
@@ -440,7 +440,7 @@ func (fs *FileStore) adoptFromDiscovery(query string) (*Session, error) {
 		}
 	}
 	if match == nil {
-		slog.Debug("session.resolve.tier4_scan_empty",
+		sessionResolveLog.Logger().Debug("session.resolve.tier4_scan_empty",
 			"component", "session",
 			"subcomponent", "resolve",
 			"query", query,
@@ -449,12 +449,12 @@ func (fs *FileStore) adoptFromDiscovery(query string) (*Session, error) {
 		return nil, nil
 	}
 
-	slog.Debug("session.resolve.tier4_scan_matched",
+	sessionResolveLog.Logger().Debug("session.resolve.tier4_scan_matched",
 		"component", "session",
 		"subcomponent", "resolve",
 		"query", query,
-		"session_id", match.SessionID,
-		"transcript", match.TranscriptPath,
+		"session_id", match.ProviderSessionID(),
+		"transcript", match.PrimaryArtifactPath(),
 		"raw_custom_title", match.CustomTitle,
 	)
 
@@ -464,7 +464,7 @@ func (fs *FileStore) adoptFromDiscovery(query string) (*Session, error) {
 	// to match the Claude Code title rather than creating a duplicate.
 	// The rename uses the sanitized customTitle so tier 1 finds it on
 	// the retry. DisplayTitle is backfilled unconditionally.
-	if existing := fs.findBySessionID(match.SessionID); existing != nil {
+	if existing := fs.findByProviderSessionID(match.ProviderIdentity()); existing != nil {
 		return fs.reconcileExisting(existing, match, query)
 	}
 
@@ -477,11 +477,11 @@ func (fs *FileStore) adoptFromDiscovery(query string) (*Session, error) {
 		// AdoptUnknown skipped the candidate (race with another process
 		// that adopted it just now, or scratch/subagent filter fired).
 		// Try one more read from the store before giving up.
-		slog.Debug("session.resolve.tier4_adopt_skipped",
+		sessionResolveLog.Logger().Debug("session.resolve.tier4_adopt_skipped",
 			"component", "session",
 			"subcomponent", "resolve",
 			"query", query,
-			"session_id", match.SessionID,
+			"session_id", match.ProviderSessionID(),
 		)
 		if sess := fs.resolveFromStore(query); sess != nil {
 			return sess, nil
@@ -505,28 +505,31 @@ func adoptDisabledReason(fs *FileStore) string {
 	return "unknown"
 }
 
-// findBySessionID returns the first registered session whose current or
-// historical direct session IDs contain sessionID, or nil when none match. Used by
-// tier 4 to detect a session that was previously auto-adopted (by the
-// daemon's background scanner or the hook) under a name that does not
-// reflect the user's customTitle.
-func (fs *FileStore) findBySessionID(sessionID string) *Session {
-	if sessionID == "" {
+// findByProviderSessionID returns the first registered session whose current or
+// historical provider identity matches id, or nil when none match. Used by tier
+// 4 to detect a session that was previously auto-adopted under a name that does
+// not reflect the provider custom title.
+func (fs *FileStore) findByProviderSessionID(id ProviderSessionID) *Session {
+	id = id.Normalized()
+	if id.IsZero() {
 		return nil
 	}
 	sessions, err := fs.List()
 	if err != nil {
-		slog.Warn("session.resolve.find_by_session_id_list_failed",
+		sessionResolveLog.Logger().Warn("session.resolve.find_by_provider_identity_list_failed",
 			"component", "session",
 			"subcomponent", "resolve",
-			"session_id", sessionID,
+			"provider", id.Provider,
+			"session_id", id.ID,
 			"err", err,
 		)
 		return nil
 	}
 	for _, sess := range sessions {
-		if MatchesAnySessionID(sess, sessionID) {
-			return sess
+		for _, identity := range HistoricalIdentities(sess) {
+			if identity.Normalized() == id {
+				return sess
+			}
 		}
 	}
 	return nil
@@ -537,11 +540,14 @@ func exactSessionIDMatchType(sess *Session, query string) string {
 	if query == "" || sess == nil {
 		return ""
 	}
+	if !MatchesAnySessionID(sess, query) {
+		return ""
+	}
 	if current, ok := CurrentIdentity(sess); ok && current.ID == query {
 		return "current_session_id"
 	}
 	for _, identity := range HistoricalIdentities(sess) {
-		if identity.ID == query && identity.ID != strings.TrimSpace(sess.Metadata.SessionID) {
+		if identity.ID == query && identity.ID != strings.TrimSpace(sess.Metadata.ProviderSessionID()) {
 			return "previous_session_id"
 		}
 	}
@@ -567,19 +573,19 @@ func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult
 	}
 	if titleChanged {
 		if err := fs.Update(existing); err != nil {
-			slog.Warn("session.resolve.display_title_backfill_failed",
+			sessionResolveLog.Logger().Warn("session.resolve.display_title_backfill_failed",
 				"component", "session",
 				"subcomponent", "resolve",
 				"session", existing.Name,
-				"session_id", existing.Metadata.SessionID,
+				"session_id", existing.Metadata.ProviderSessionID(),
 				"err", err,
 			)
 		} else {
-			slog.Info("session.resolve.display_title_backfilled",
+			sessionResolveLog.Logger().Info("session.resolve.display_title_backfilled",
 				"component", "session",
 				"subcomponent", "resolve",
 				"session", existing.Name,
-				"session_id", existing.Metadata.SessionID,
+				"session_id", existing.Metadata.ProviderSessionID(),
 				"display_title", match.CustomTitle,
 			)
 		}
@@ -587,7 +593,7 @@ func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult
 
 	sanitized := Sanitize(match.CustomTitle)
 	if sanitized == "" || sanitized == existing.Name {
-		slog.Debug("session.resolve.reconcile_no_rename",
+		sessionResolveLog.Logger().Debug("session.resolve.reconcile_no_rename",
 			"component", "session",
 			"subcomponent", "resolve",
 			"query", query,
@@ -603,7 +609,7 @@ func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult
 	// strategy AdoptUnknown uses during fresh adoption.
 	names, err := buildExistingNameSet(fs)
 	if err != nil {
-		slog.Warn("session.resolve.reconcile_name_set_failed",
+		sessionResolveLog.Logger().Warn("session.resolve.reconcile_name_set_failed",
 			"component", "session",
 			"subcomponent", "resolve",
 			"err", err,
@@ -617,22 +623,22 @@ func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult
 	}
 
 	if err := fs.Rename(existing.Name, target); err != nil {
-		slog.Warn("session.resolve.reconcile_rename_failed",
+		sessionResolveLog.Logger().Warn("session.resolve.reconcile_rename_failed",
 			"component", "session",
 			"subcomponent", "resolve",
 			"old_name", existing.Name,
 			"new_name", target,
-			"session_id", existing.Metadata.SessionID,
+			"session_id", existing.Metadata.ProviderSessionID(),
 			"err", err,
 		)
 		return existing, nil
 	}
-	slog.Info("session.resolve.reconcile_renamed",
+	sessionResolveLog.Logger().Info("session.resolve.reconcile_renamed",
 		"component", "session",
 		"subcomponent", "resolve",
 		"old_name", existing.Name,
 		"new_name", target,
-		"session_id", existing.Metadata.SessionID,
+		"session_id", existing.Metadata.ProviderSessionID(),
 		"display_title", match.CustomTitle,
 		"query", query,
 	)
@@ -658,10 +664,10 @@ func shouldPreferDiscoveryResult(candidate DiscoveryResult, current DiscoveryRes
 	if current.WorkspaceRoot != "" && candidate.WorkspaceRoot == "" {
 		return false
 	}
-	if candidate.TranscriptPath != current.TranscriptPath {
-		return candidate.TranscriptPath < current.TranscriptPath
+	if candidate.PrimaryArtifactPath() != current.PrimaryArtifactPath() {
+		return candidate.PrimaryArtifactPath() < current.PrimaryArtifactPath()
 	}
-	return candidate.SessionID < current.SessionID
+	return candidate.ProviderSessionID() < current.ProviderSessionID()
 }
 
 // Rename renames a session: moves the directory, updates metadata Name field,
@@ -726,6 +732,7 @@ func (fs *FileStore) Create(session *Session) error {
 	}
 
 	metadataPath := filepath.Join(sessionDir, metadataFile)
+	session.Metadata.NormalizeProviderState()
 	if err := util.WriteJSON(metadataPath, session.Metadata); err != nil {
 		return fmt.Errorf("failed to write session metadata: %w", err)
 	}
@@ -745,6 +752,7 @@ func (fs *FileStore) Update(session *Session) error {
 
 	sessionDir := config.GetSessionDir(fs.clydeRoot, session.Name)
 	metadataPath := filepath.Join(sessionDir, metadataFile)
+	session.Metadata.NormalizeProviderState()
 	if err := util.WriteJSON(metadataPath, session.Metadata); err != nil {
 		return fmt.Errorf("failed to update session metadata: %w", err)
 	}

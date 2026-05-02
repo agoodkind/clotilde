@@ -163,7 +163,7 @@ func ProbeContextUsage(ctx context.Context, opts ProbeOptions) (ContextUsage, er
 	}
 
 	started := time.Now()
-	slog.Info("compact.probe.spawned",
+	compactLog.Logger().Info("compact.probe.spawned",
 		"component", "compact",
 		"subcomponent", "probe",
 		"binary", binary,
@@ -210,7 +210,7 @@ func ProbeContextUsage(ctx context.Context, opts ProbeOptions) (ContextUsage, er
 	// Keeping stdin open would leave the process waiting for more
 	// messages until the context deadline.
 	if err := stdin.Close(); err != nil {
-		slog.Debug("compact.probe.stdin_close_warn",
+		compactLog.Logger().Debug("compact.probe.stdin_close_warn",
 			"component", "compact",
 			"subcomponent", "probe",
 			"err", err,
@@ -223,7 +223,7 @@ func ProbeContextUsage(ctx context.Context, opts ProbeOptions) (ContextUsage, er
 
 	durationMs := time.Since(started).Milliseconds()
 	if parseErr != nil {
-		slog.Warn("compact.probe.parse_failed",
+		compactLog.Logger().Warn("compact.probe.parse_failed",
 			"component", "compact",
 			"subcomponent", "probe",
 			"session_id", opts.SessionID,
@@ -234,7 +234,7 @@ func ProbeContextUsage(ctx context.Context, opts ProbeOptions) (ContextUsage, er
 		)
 		return ContextUsage{}, parseErr
 	}
-	slog.Info("compact.probe.completed",
+	compactLog.Logger().Info("compact.probe.completed",
 		"component", "compact",
 		"subcomponent", "probe",
 		"session_id", opts.SessionID,
@@ -314,7 +314,7 @@ func scanForUsage(stdout io.Reader, requestID string) (ContextUsage, error) {
 		if err := json.Unmarshal(env.Response.Response, &usage); err != nil {
 			return ContextUsage{}, fmt.Errorf("probe: decode usage payload: %w", err)
 		}
-		slog.Debug("compact.probe.response_received",
+		compactLog.Logger().Debug("compact.probe.response_received",
 			"component", "compact",
 			"subcomponent", "probe",
 			"lines_scanned", lines,

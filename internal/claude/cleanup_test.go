@@ -7,7 +7,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"goodkind.io/clyde/internal/claude"
+	claudeartifacts "goodkind.io/clyde/internal/claude/artifacts"
 	"goodkind.io/clyde/internal/config"
 )
 
@@ -37,7 +37,7 @@ var _ = Describe("Cleanup", func() {
 			Expect(transcriptPath).To(BeAnExistingFile())
 
 			// Delete session data with transcript path
-			deleted, err := claude.DeleteSessionData(clydeRoot, "session-uuid-123", transcriptPath)
+			deleted, err := claudeartifacts.DeleteSessionData(clydeRoot, "session-uuid-123", transcriptPath)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify transcript was deleted
@@ -64,7 +64,7 @@ var _ = Describe("Cleanup", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			// Delete session data
-			deleted, err := claude.DeleteSessionData(clydeRoot, "session-uuid-456", transcriptPath)
+			deleted, err := claudeartifacts.DeleteSessionData(clydeRoot, "session-uuid-456", transcriptPath)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify transcript was deleted
@@ -84,7 +84,7 @@ var _ = Describe("Cleanup", func() {
 		It("should handle missing transcript file gracefully", func() {
 			// Delete session data for non-existent transcript
 			transcriptPath := filepath.Join(projectDir, "non-existent.jsonl")
-			deleted, err := claude.DeleteSessionData(clydeRoot, "session-uuid-789", transcriptPath)
+			deleted, err := claudeartifacts.DeleteSessionData(clydeRoot, "session-uuid-789", transcriptPath)
 
 			// Should not error even though file doesn't exist
 			Expect(err).NotTo(HaveOccurred())
@@ -95,7 +95,7 @@ var _ = Describe("Cleanup", func() {
 		It("should fall back to computed path if transcript path is empty", func() {
 			// Create project directory matching clydeRoot encoding
 			// For this test, we won't create actual files, just verify it doesn't error
-			deleted, err := claude.DeleteSessionData(tempDir, "test-session-id", "")
+			deleted, err := claudeartifacts.DeleteSessionData(tempDir, "test-session-id", "")
 
 			// Should not error (files don't exist, which is fine)
 			Expect(err).NotTo(HaveOccurred())

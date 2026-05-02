@@ -188,7 +188,7 @@ func TestBridgesLoadedInterruptPopulatesBridgeMap(t *testing.T) {
 
 	a.handleEvent(tcell.NewEventInterrupt(bridgesLoaded{
 		list: []Bridge{{
-			SessionID:       a.sessions[0].Metadata.SessionID,
+			SessionID:       a.sessions[0].Metadata.ProviderSessionID(),
 			BridgeSessionID: "bridge-1",
 			URL:             "https://claude.ai/code/bridge-1",
 		}},
@@ -214,7 +214,7 @@ func TestLastUsedTickDoesNotDeadlockWhenUpdatingRows(t *testing.T) {
 	if err := os.WriteFile(transcriptPath, []byte("{}\n"), 0o644); err != nil {
 		t.Fatalf("write transcript: %v", err)
 	}
-	a.sessions[0].Metadata.TranscriptPath = transcriptPath
+	a.sessions[0].Metadata.SetProviderTranscriptPath(transcriptPath)
 
 	done := make(chan struct{})
 	go func() {

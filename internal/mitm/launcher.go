@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/slogger"
 )
 
 // LaunchUpstreamOptions configures a non-blocking launch of an
@@ -35,6 +36,7 @@ func LaunchUpstream(ctx context.Context, opts LaunchUpstreamOptions) error {
 	if log == nil {
 		log = slog.Default()
 	}
+	log = slogger.WithConcern(log, slogger.ConcernProviderMITMLifecycle)
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)

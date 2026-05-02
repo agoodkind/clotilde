@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -32,7 +31,7 @@ func Claim(kind string, resetsAt time.Time) bool {
 	defer noticeStateMu.Unlock()
 	claimed, err := claimLocked(kind, resetsAt, false)
 	if err != nil {
-		slog.Warn("adapter.notice.claim_failed",
+		adapterHTTPErrorLog.Logger().Warn("adapter.notice.claim_failed",
 			"subcomponent", "adapter",
 			"kind", kind,
 			"err", err.Error(),
@@ -56,7 +55,7 @@ func Unclaim(kind string, resetsAt time.Time) {
 	}
 	delete(state, noticeStateKey(kind, resetsAt))
 	if err := writeNoticeStateLocked(state); err != nil {
-		slog.Warn("adapter.notice.unclaim_failed",
+		adapterHTTPErrorLog.Logger().Warn("adapter.notice.unclaim_failed",
 			"subcomponent", "adapter",
 			"kind", kind,
 			"err", err.Error(),

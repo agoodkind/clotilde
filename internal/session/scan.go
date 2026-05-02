@@ -2,7 +2,6 @@ package session
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,21 +14,26 @@ type DiscoveryScanner interface {
 	Scan() ([]DiscoveryResult, error)
 }
 
-// DiscoveryResult captures the outcome of a single transcript discovery.
-// The TranscriptPath is always populated; the rest depend on whether the
-// first entry could be parsed.
+// ClaudeDiscoveryState captures discovery details that only the Claude scanner
+// understands. Generic adoption code should use DiscoveryResult methods instead
+// of reaching into this state directly.
+type ClaudeDiscoveryState struct {
+	TranscriptPath string
+}
+
+// DiscoveryResult captures the outcome of a single provider discovery scan.
 type DiscoveryResult struct {
 	Provider       ProviderID
-	TranscriptPath string
-	SessionID      string
+	Identity       ProviderSessionID
 	WorkspaceRoot  string
 	Entrypoint     string
 	FirstEntryTime time.Time
-	CustomTitle    string // user-given chat name from Claude Code "custom-title" entries
-	ForkParentID   string // parent session UUID when this transcript was created as a fork
-	IsAutoName     bool   // SDK-CLI invocation that looks like a clyde auto-name call
-	IsForked       bool   // transcript carries fork lineage from Claude Code
-	IsSubagent     bool   // file lives in a subagents/ directory
+	CustomTitle    string // user-given chat name from provider metadata
+	ForkParent     ProviderSessionID
+	IsAutoName     bool // provider invocation that looks like a clyde auto-name call
+	IsForked       bool // provider metadata carries fork lineage
+	IsSubagent     bool // provider artifact belongs to a subagent/background worker
+	Claude         ClaudeDiscoveryState
 }
 
 // AdoptedSession is the registry entry created for a previously-unknown
@@ -88,7 +92,7 @@ func looksLikeAutoNamePrompt(content string) bool {
 func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession, error) {
 	known, err := buildKnownIdentitySet(store)
 	if err != nil {
-		slog.Warn("session.adopt.known_identities_failed",
+		sessionAdoptLog.Logger().Warn("session.adopt.known_identities_failed",
 			"component", "session",
 			"subcomponent", "adopt",
 			"err", err,
@@ -97,7 +101,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 	}
 	existingNames, err := buildExistingNameSet(store)
 	if err != nil {
-		slog.Warn("session.adopt.existing_names_failed",
+		sessionAdoptLog.Logger().Warn("session.adopt.existing_names_failed",
 			"component", "session",
 			"subcomponent", "adopt",
 			"err", err,
@@ -129,10 +133,10 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 		if left.ProviderSessionKey() != right.ProviderSessionKey() {
 			return left.ProviderSessionKey() < right.ProviderSessionKey()
 		}
-		return left.TranscriptPath < right.TranscriptPath
+		return left.PrimaryArtifactPath() < right.PrimaryArtifactPath()
 	})
 
-	slog.Debug("session.adopt.started",
+	sessionAdoptLog.Logger().Debug("session.adopt.started",
 		"component", "session",
 		"subcomponent", "adopt",
 		"candidates", len(ordered),
@@ -155,7 +159,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 			skippedScratch++
 			continue
 		}
-		if r.SessionID == "" {
+		if r.ProviderSessionID() == "" {
 			skippedNoSessionID++
 			continue
 		}
@@ -169,19 +173,19 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 		md := Metadata{
 			Name:            name,
 			Provider:        NormalizeProviderID(r.Provider),
-			SessionID:       r.SessionID,
-			TranscriptPath:  r.TranscriptPath,
+			SessionID:       r.ProviderSessionID(),
 			WorkspaceRoot:   r.WorkspaceRoot,
 			WorkDir:         r.WorkspaceRoot,
 			DisplayTitle:    r.CustomTitle,
 			IsForkedSession: r.IsForked,
 		}
-		if r.IsForked && r.ForkParentID != "" {
-			if parentName, ok := known[providerSessionKey(r.Provider, r.ForkParentID)]; ok {
+		md.SetProviderTranscriptPath(r.PrimaryArtifactPath())
+		if r.IsForked {
+			if parentName, ok := known[r.ParentProviderSessionKey()]; ok {
 				md.ParentSession = parentName
 			}
 		}
-		fi, err := os.Stat(r.TranscriptPath)
+		fi, err := os.Stat(r.PrimaryArtifactPath())
 		if err == nil {
 			md.LastAccessed = fi.ModTime()
 		}
@@ -200,26 +204,26 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 		sess := &Session{Name: name, Metadata: md}
 		if err := store.Create(sess); err != nil {
 			createFailed++
-			slog.Warn("session.adopt.create_failed",
+			sessionAdoptLog.Logger().Warn("session.adopt.create_failed",
 				"component", "session",
 				"subcomponent", "adopt",
 				"session", name,
 				"provider", md.Provider,
-				"session_id", r.SessionID,
-				"transcript", r.TranscriptPath,
+				"session_id", r.ProviderSessionID(),
+				"transcript", r.PrimaryArtifactPath(),
 				"err", err,
 			)
 			continue
 		}
-		slog.Debug("session.adopt.created",
+		sessionAdoptLog.Logger().Debug("session.adopt.created",
 			"component", "session",
 			"subcomponent", "adopt",
 			"session", name,
 			"provider", md.Provider,
-			"session_id", r.SessionID,
+			"session_id", r.ProviderSessionID(),
 			"forked", md.IsForkedSession,
 			"parent_session", md.ParentSession,
-			"transcript", r.TranscriptPath,
+			"transcript", r.PrimaryArtifactPath(),
 			"workspace", r.WorkspaceRoot,
 			"name_source", nameSource,
 			"display_title", r.CustomTitle,
@@ -227,7 +231,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 		adopted = append(adopted, AdoptedSession{Name: name, Metadata: md})
 		known[r.ProviderSessionKey()] = name
 	}
-	slog.Debug("session.adopt.completed",
+	sessionAdoptLog.Logger().Debug("session.adopt.completed",
 		"component", "session",
 		"subcomponent", "adopt",
 		"adopted", len(adopted),
@@ -252,29 +256,29 @@ func pickAdoptedName(r DiscoveryResult, taken map[string]bool) (string, string) 
 	if sanitized := Sanitize(r.CustomTitle); sanitized != "" {
 		candidate := UniqueName(sanitized, taken)
 		if candidate != "" && ValidateName(candidate) == nil {
-			slog.Debug("session.adopt.name_picked",
+			sessionAdoptLog.Logger().Debug("session.adopt.name_picked",
 				"component", "session",
 				"subcomponent", "adopt",
-				"session_id", r.SessionID,
+				"session_id", r.ProviderSessionID(),
 				"source", "custom_title",
 				"raw_title", r.CustomTitle,
 				"name", candidate,
 			)
 			return candidate, "custom_title"
 		}
-		slog.Debug("session.adopt.name_sanitize_unusable",
+		sessionAdoptLog.Logger().Debug("session.adopt.name_sanitize_unusable",
 			"component", "session",
 			"subcomponent", "adopt",
-			"session_id", r.SessionID,
+			"session_id", r.ProviderSessionID(),
 			"raw_title", r.CustomTitle,
 			"sanitized", sanitized,
 		)
 	}
 	fallback := uniqueAdoptedName(r, taken)
-	slog.Debug("session.adopt.name_picked",
+	sessionAdoptLog.Logger().Debug("session.adopt.name_picked",
 		"component", "session",
 		"subcomponent", "adopt",
-		"session_id", r.SessionID,
+		"session_id", r.ProviderSessionID(),
 		"source", "workspace_uuid_fallback",
 		"raw_title", r.CustomTitle,
 		"name", fallback,
@@ -289,10 +293,10 @@ func buildKnownIdentitySet(store *FileStore) (map[string]string, error) {
 	}
 	out := make(map[string]string, len(all)*2)
 	for _, s := range all {
-		if s.Metadata.SessionID != "" {
-			out[providerSessionKey(metadataProvider(s.Metadata), s.Metadata.SessionID)] = s.Name
+		if s.Metadata.ProviderSessionID() != "" {
+			out[providerSessionKey(metadataProvider(s.Metadata), s.Metadata.ProviderSessionID())] = s.Name
 		}
-		for _, id := range s.Metadata.PreviousSessionIDs {
+		for _, id := range s.Metadata.PreviousProviderSessionIDStrings() {
 			out[providerSessionKey(metadataProvider(s.Metadata), id)] = s.Name
 		}
 	}
@@ -317,7 +321,7 @@ func buildExistingNameSet(store *FileStore) (map[string]bool, error) {
 // are resolved with the shared UniqueName helper.
 func uniqueAdoptedName(r DiscoveryResult, taken map[string]bool) string {
 	base := workspaceBaseName(r.WorkspaceRoot)
-	short := safeShortUUID(r.SessionID)
+	short := safeShortUUID(r.ProviderSessionID())
 	return UniqueName(fmt.Sprintf("%s-%s", base, short), taken)
 }
 
@@ -352,16 +356,39 @@ func safeShortUUID(id string) string {
 	return id
 }
 
+func (r DiscoveryResult) ProviderIdentity() ProviderSessionID {
+	id := r.Identity.Normalized()
+	if id.Provider == "" {
+		id.Provider = NormalizeProviderID(r.Provider)
+	}
+	return id.Normalized()
+}
+
+func (r DiscoveryResult) ProviderSessionID() string {
+	return r.ProviderIdentity().ID
+}
+
 func (r DiscoveryResult) ProviderSessionKey() string {
-	return providerSessionKey(r.Provider, r.SessionID)
+	return r.ProviderIdentity().Key()
+}
+
+func (r DiscoveryResult) ParentProviderSessionKey() string {
+	parent := r.ForkParent.Normalized()
+	if parent.Provider == "" {
+		parent.Provider = NormalizeProviderID(r.Provider)
+	}
+	return parent.Key()
+}
+
+func (r DiscoveryResult) PrimaryArtifactPath() string {
+	if r.Claude.TranscriptPath != "" {
+		return r.Claude.TranscriptPath
+	}
+	return ""
 }
 
 func providerSessionKey(provider ProviderID, sessionID string) string {
-	normalizedID := strings.TrimSpace(sessionID)
-	if normalizedID == "" {
-		return ""
-	}
-	return string(NormalizeProviderID(provider)) + ":sid:" + normalizedID
+	return ProviderSessionID{Provider: provider, ID: sessionID}.Key()
 }
 
 func metadataProvider(md Metadata) ProviderID {

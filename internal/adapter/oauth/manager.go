@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -70,7 +69,7 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 	}
 
 	if !isExpired(tokens) {
-		slog.Debug("oauth.token.cache_hit",
+		oauthLog.Logger().Debug("oauth.token.cache_hit",
 			"subcomponent", "oauth",
 			"expires_at_ms", tokens.ExpiresAt,
 		)
@@ -80,13 +79,13 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 	refreshStarted := time.Now()
 	refreshed, err := m.refreshLocked(ctx, tokens)
 	if err != nil {
-		slog.Error("oauth.token.refresh_failed",
+		oauthLog.Logger().Error("oauth.token.refresh_failed",
 			"subcomponent", "oauth",
 			"duration_ms", time.Since(refreshStarted).Milliseconds(),
 			"err", err,
 		)
 		if isInvalidGrant(err) {
-			slog.Info("oauth.refresh.invalid_grant_detected",
+			oauthLog.Logger().Info("oauth.refresh.invalid_grant_detected",
 				"subcomponent", "oauth",
 			)
 			if reErr := m.autoRelogin(ctx, err); reErr != nil {
@@ -101,7 +100,7 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 			}
 			m.cached = fresh
 			if !isExpired(fresh) {
-				slog.Info("oauth.token.refreshed_via_relogin",
+				oauthLog.Logger().Info("oauth.token.refreshed_via_relogin",
 					"subcomponent", "oauth",
 					"duration_ms", time.Since(refreshStarted).Milliseconds(),
 					"expires_at_ms", fresh.ExpiresAt,
@@ -113,7 +112,7 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 				return "", fmt.Errorf("post-relogin refresh: %w", retryErr)
 			}
 			m.cached = retried
-			slog.Info("oauth.token.refreshed_via_relogin",
+			oauthLog.Logger().Info("oauth.token.refreshed_via_relogin",
 				"subcomponent", "oauth",
 				"duration_ms", time.Since(refreshStarted).Milliseconds(),
 				"expires_at_ms", retried.ExpiresAt,
@@ -123,7 +122,7 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 		return "", err
 	}
 	m.cached = refreshed
-	slog.Info("oauth.token.refreshed",
+	oauthLog.Logger().Info("oauth.token.refreshed",
 		"subcomponent", "oauth",
 		"duration_ms", time.Since(refreshStarted).Milliseconds(),
 		"expires_at_ms", refreshed.ExpiresAt,
@@ -146,7 +145,7 @@ func (m *Manager) invalidateIfDiskChanged() {
 	mtime := info.ModTime().UnixNano()
 	if mtime != m.credsMtime {
 		if m.credsMtime != 0 {
-			slog.Info("oauth.credentials.disk_changed",
+			oauthLog.Logger().Info("oauth.credentials.disk_changed",
 				"subcomponent", "oauth",
 				"path", credsPath,
 			)

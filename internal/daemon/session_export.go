@@ -21,10 +21,10 @@ func buildSessionExport(sess *session.Session, req *clydev1.ExportSessionRequest
 	if sess == nil {
 		return nil, fmt.Errorf("nil session")
 	}
-	if strings.TrimSpace(sess.Metadata.TranscriptPath) == "" {
+	if strings.TrimSpace(sess.Metadata.ProviderTranscriptPath()) == "" {
 		return nil, fmt.Errorf("session has no transcript path")
 	}
-	messages, err := loadExportMessagesFromPath(sess.Metadata.TranscriptPath, req.GetIncludeSystemPrompts(), req.GetIncludeToolOutputs())
+	messages, err := loadExportMessagesFromPath(sess.Metadata.ProviderTranscriptPath(), req.GetIncludeSystemPrompts(), req.GetIncludeToolOutputs())
 	if err != nil {
 		return nil, err
 	}
@@ -94,10 +94,10 @@ func loadExportMessages(r io.Reader, includeSystemPrompts bool, includeToolOutpu
 }
 
 func loadExportHistoryMessages(sess *session.Session, req *clydev1.ExportSessionRequest) ([]transcript.Message, error) {
-	if sess == nil || sess.Metadata.SessionID == "" || req.GetHistoryStart() < 0 {
+	if sess == nil || sess.Metadata.ProviderSessionID() == "" || req.GetHistoryStart() < 0 {
 		return nil, nil
 	}
-	entries, err := compactengine.ReadLedger(sess.Metadata.SessionID)
+	entries, err := compactengine.ReadLedger(sess.Metadata.ProviderSessionID())
 	if err != nil || len(entries) == 0 {
 		return nil, err
 	}

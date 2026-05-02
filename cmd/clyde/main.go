@@ -21,7 +21,6 @@ package main
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 	"strings"
 
@@ -39,8 +38,13 @@ import (
 )
 
 func main() {
+	if os.Getenv("CLYDE_SELF_RELOAD_PROBE") == "1" && len(os.Args) == 2 && os.Args[1] == "__clyde_self_reload_probe__" {
+		_, _ = fmt.Fprintln(os.Stdout, "clyde-self-reload-probe:ok")
+		os.Exit(0)
+	}
+
 	exitCode := run()
-	slog.Info("cli.main.exit", "component", "cli", "exit_code", exitCode)
+	clydeMainLog.Logger().Info("cli.main.exit", "component", "cli", "exit_code", exitCode)
 	os.Exit(exitCode)
 }
 
@@ -53,7 +57,7 @@ func run() int {
 
 	closer, err := slogger.Setup(cfg.Logging, detectSlogRole(os.Args[1:]))
 	if err != nil {
-		slog.Error("clyde.slogger.setup_failed",
+		clydeMainLog.Logger().Error("clyde.slogger.setup_failed",
 			"component", "cli",
 			"err", err,
 		)
@@ -79,7 +83,7 @@ func run() int {
 		}
 	}
 
-	slog.Debug("cli.execute.invoked", "component", "cli")
+	clydeMainLog.Logger().Debug("cli.execute.invoked", "component", "cli")
 
 	root := &cobra.Command{
 		Use:     "clyde",
@@ -114,7 +118,7 @@ func run() int {
 		_, _ = fmt.Fprintln(f.IOStreams.Err, "Error:", err)
 		return 1
 	}
-	slog.Info("cli.execute.completed", "component", "cli")
+	clydeMainLog.Logger().Info("cli.execute.completed", "component", "cli")
 	return 0
 }
 

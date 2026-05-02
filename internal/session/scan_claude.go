@@ -3,7 +3,6 @@ package session
 import (
 	"bufio"
 	"encoding/json"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,7 +62,7 @@ func (s claudeDiscoveryScanner) Scan() ([]DiscoveryResult, error) {
 		return nil
 	})
 	if err != nil {
-		slog.Warn("session.scan.walk_failed",
+		sessionScanLog.Logger().Warn("session.scan.walk_failed",
 			"component", "session",
 			"subcomponent", "scan",
 			"provider", s.Provider(),
@@ -72,7 +71,7 @@ func (s claudeDiscoveryScanner) Scan() ([]DiscoveryResult, error) {
 		)
 		return nil, err
 	}
-	slog.Debug("session.scan.completed",
+	sessionScanLog.Logger().Debug("session.scan.completed",
 		"component", "session",
 		"subcomponent", "scan",
 		"provider", s.Provider(),
@@ -100,8 +99,10 @@ func readClaudeTranscriptHeader(path string) (DiscoveryResult, bool) {
 	defer f.Close()
 
 	dr := DiscoveryResult{
-		Provider:       ProviderClaude,
-		TranscriptPath: path,
+		Provider: ProviderClaude,
+		Claude: ClaudeDiscoveryState{
+			TranscriptPath: path,
+		},
 	}
 	if strings.Contains(path, string(os.PathSeparator)+"subagents"+string(os.PathSeparator)) {
 		dr.IsSubagent = true
@@ -128,20 +129,20 @@ func readClaudeTranscriptHeader(path string) (DiscoveryResult, bool) {
 			if h.CustomTitle != "" {
 				dr.CustomTitle = h.CustomTitle
 			}
-			if h.SessionID != "" && dr.SessionID == "" {
-				dr.SessionID = h.SessionID
+			if h.SessionID != "" && dr.ProviderIdentity().IsZero() {
+				dr.Identity = ProviderSessionID{Provider: ProviderClaude, ID: h.SessionID}
 			}
-			if h.ForkedFrom.SessionID != "" && dr.ForkParentID == "" {
-				dr.ForkParentID = h.ForkedFrom.SessionID
+			if h.ForkedFrom.SessionID != "" && dr.ForkParent.IsZero() {
+				dr.ForkParent = ProviderSessionID{Provider: ProviderClaude, ID: h.ForkedFrom.SessionID}
 				dr.IsForked = true
 			}
 			continue
 		}
-		if h.SessionID != "" && dr.SessionID == "" {
-			dr.SessionID = h.SessionID
+		if h.SessionID != "" && dr.ProviderIdentity().IsZero() {
+			dr.Identity = ProviderSessionID{Provider: ProviderClaude, ID: h.SessionID}
 		}
-		if h.ForkedFrom.SessionID != "" && dr.ForkParentID == "" {
-			dr.ForkParentID = h.ForkedFrom.SessionID
+		if h.ForkedFrom.SessionID != "" && dr.ForkParent.IsZero() {
+			dr.ForkParent = ProviderSessionID{Provider: ProviderClaude, ID: h.ForkedFrom.SessionID}
 			dr.IsForked = true
 		}
 		if h.CWD != "" && dr.WorkspaceRoot == "" {
@@ -155,11 +156,11 @@ func readClaudeTranscriptHeader(path string) (DiscoveryResult, bool) {
 				dr.FirstEntryTime = t
 			}
 		}
-		if dr.SessionID != "" && dr.WorkspaceRoot != "" && dr.Entrypoint != "" && !dr.FirstEntryTime.IsZero() {
+		if !dr.ProviderIdentity().IsZero() && dr.WorkspaceRoot != "" && dr.Entrypoint != "" && !dr.FirstEntryTime.IsZero() {
 			break
 		}
 	}
-	if dr.SessionID == "" {
+	if dr.ProviderIdentity().IsZero() {
 		return DiscoveryResult{}, false
 	}
 	if dr.Entrypoint == "sdk-cli" {

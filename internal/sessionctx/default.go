@@ -2,7 +2,6 @@ package sessionctx
 
 import (
 	"context"
-	"log/slog"
 	"time"
 
 	"goodkind.io/clyde/internal/compact"
@@ -36,14 +35,14 @@ func NewDefault(sess *session.Session, model, apiKey string) Layer {
 		return &nullLayer{}
 	}
 	return &defaultLayer{
-		sessionID:      sess.Metadata.SessionID,
-		transcriptPath: sess.Metadata.TranscriptPath,
+		sessionID:      sess.Metadata.ProviderSessionID(),
+		transcriptPath: sess.Metadata.ProviderTranscriptPath(),
 		workDir:        sess.Metadata.WorkDir,
 		defaultModel:   model,
 		memCache:       newMemoryCache(),
-		diskCache:      newDiskCache(sess.Metadata.SessionID, sess.Metadata.TranscriptPath, config.DefaultStateDir()),
-		probe:          newProbeBackend(sess.Metadata.SessionID, sess.Metadata.WorkDir),
-		countCalls:     newCountBackend(sess.Metadata.SessionID, model, apiKey),
+		diskCache:      newDiskCache(sess.Metadata.ProviderSessionID(), sess.Metadata.ProviderTranscriptPath(), config.DefaultStateDir()),
+		probe:          newProbeBackend(sess.Metadata.ProviderSessionID(), sess.Metadata.WorkDir),
+		countCalls:     newCountBackend(sess.Metadata.ProviderSessionID(), model, apiKey),
 	}
 }
 
@@ -58,7 +57,7 @@ func (l *defaultLayer) Usage(ctx context.Context, opts UsageOptions) (Usage, err
 	if opts.Refresh {
 		l.memCache.invalidate()
 		l.diskCache.invalidate()
-		slog.Debug("session.context.usage.cache_miss",
+		sessionContextLog.Logger().Debug("session.context.usage.cache_miss",
 			"component", "sessionctx",
 			"subcomponent", "usage",
 			"session_id", l.sessionID,
@@ -68,7 +67,7 @@ func (l *defaultLayer) Usage(ctx context.Context, opts UsageOptions) (Usage, err
 
 	if !opts.Refresh {
 		if hit := l.memCache.get(l.transcriptPath, opts); hit != nil {
-			slog.Debug("session.context.usage.cache_hit",
+			sessionContextLog.Logger().Debug("session.context.usage.cache_hit",
 				"component", "sessionctx",
 				"subcomponent", "usage",
 				"session_id", l.sessionID,
@@ -83,14 +82,14 @@ func (l *defaultLayer) Usage(ctx context.Context, opts UsageOptions) (Usage, err
 		}
 
 		if hit, err := l.diskCache.read(opts); err != nil {
-			slog.Warn("session.context.disk_cache.read_failed",
+			sessionContextLog.Logger().Warn("session.context.disk_cache.read_failed",
 				"component", "sessionctx",
 				"subcomponent", "disk_cache",
 				"session_id", l.sessionID,
 				"err", err,
 			)
 		} else if hit != nil {
-			slog.Debug("session.context.usage.cache_hit",
+			sessionContextLog.Logger().Debug("session.context.usage.cache_hit",
 				"component", "sessionctx",
 				"subcomponent", "usage",
 				"session_id", l.sessionID,
@@ -108,7 +107,7 @@ func (l *defaultLayer) Usage(ctx context.Context, opts UsageOptions) (Usage, err
 		}
 	}
 
-	slog.Debug("session.context.usage.cache_miss",
+	sessionContextLog.Logger().Debug("session.context.usage.cache_miss",
 		"component", "sessionctx",
 		"subcomponent", "usage",
 		"session_id", l.sessionID,

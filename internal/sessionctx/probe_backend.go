@@ -2,7 +2,6 @@ package sessionctx
 
 import (
 	"context"
-	"log/slog"
 	"time"
 
 	"goodkind.io/clyde/internal/compact"
@@ -42,7 +41,7 @@ func newProbeBackend(sessionID, workDir string) *probeBackend {
 // to callers and before writing to cache.
 func (p *probeBackend) Fetch(ctx context.Context) (compact.ContextUsage, error) {
 	started := time.Now()
-	slog.Debug("session.context.probe.started",
+	sessionContextLog.Logger().Debug("session.context.probe.started",
 		"component", "sessionctx",
 		"subcomponent", "probe",
 		"session_id", p.sessionID,
@@ -57,7 +56,7 @@ func (p *probeBackend) Fetch(ctx context.Context) (compact.ContextUsage, error) 
 	})
 	duration := time.Since(started)
 	if err != nil {
-		slog.Warn("session.context.probe.failed",
+		sessionContextLog.Logger().Warn("session.context.probe.failed",
 			"component", "sessionctx",
 			"subcomponent", "probe",
 			"session_id", p.sessionID,
@@ -66,7 +65,7 @@ func (p *probeBackend) Fetch(ctx context.Context) (compact.ContextUsage, error) 
 		)
 		return compact.ContextUsage{}, err
 	}
-	slog.Info("session.context.probe.completed",
+	sessionContextLog.Logger().Info("session.context.probe.completed",
 		"component", "sessionctx",
 		"subcomponent", "probe",
 		"session_id", p.sessionID,

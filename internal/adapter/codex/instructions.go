@@ -3,7 +3,6 @@ package codex
 import (
 	_ "embed"
 	"encoding/json"
-	"log/slog"
 	"strings"
 )
 
@@ -26,7 +25,7 @@ func BaseInstructions(modelName string) string {
 func loadModelInstructions() map[string]string {
 	var catalog modelInstructionCatalog
 	if err := json.Unmarshal(modelInstructionsJSON, &catalog); err != nil {
-		slog.Error("adapter.codex.instructions_catalog.parse_failed",
+		codexConcernLog.Logger().Error("adapter.codex.instructions_catalog.parse_failed",
 			"component", "adapter",
 			"subcomponent", "codex",
 			"err", err,

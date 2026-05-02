@@ -70,7 +70,7 @@ func (m *Manager) autoRelogin(ctx context.Context, originalErr error) error {
 	// annoyance (clicking an osascript-posted notification opens Script
 	// Editor).
 	if !term.IsTerminal(int(os.Stderr.Fd())) {
-		slog.Warn("oauth.relogin.skipped",
+		oauthLog.Logger().Warn("oauth.relogin.skipped",
 			"subcomponent", "oauth",
 			"reason", "non_tty",
 		)
@@ -79,7 +79,7 @@ func (m *Manager) autoRelogin(ctx context.Context, originalErr error) error {
 	}
 
 	if m.relogin.consecutiveFail >= reloginBreakerThreshold {
-		slog.Warn("oauth.relogin.skipped",
+		oauthLog.Logger().Warn("oauth.relogin.skipped",
 			"subcomponent", "oauth",
 			"reason", "breaker_open",
 			"consecutive_fail", m.relogin.consecutiveFail,
@@ -89,7 +89,7 @@ func (m *Manager) autoRelogin(ctx context.Context, originalErr error) error {
 	}
 
 	if !m.relogin.lastAttempt.IsZero() && time.Since(m.relogin.lastAttempt) < reloginMinInterval {
-		slog.Warn("oauth.relogin.skipped",
+		oauthLog.Logger().Warn("oauth.relogin.skipped",
 			"subcomponent", "oauth",
 			"reason", "rate_limited",
 			"since_last_ms", time.Since(m.relogin.lastAttempt).Milliseconds(),
@@ -118,7 +118,7 @@ func (m *Manager) autoRelogin(ctx context.Context, originalErr error) error {
 
 	// Post-lock re-read: another process may have already relogged.
 	if disk, rerr := readCredentials(m.credentialsDir, m.oauthCfg.KeychainService); rerr == nil && disk != nil && !isExpired(disk) {
-		slog.Info("oauth.relogin.raced",
+		oauthLog.Logger().Info("oauth.relogin.raced",
 			"subcomponent", "oauth",
 			"expires_at_ms", disk.ExpiresAt,
 		)
@@ -130,7 +130,7 @@ func (m *Manager) autoRelogin(ctx context.Context, originalErr error) error {
 	started := time.Now()
 
 	cmd := exec.CommandContext(lockCtx, "claude", "auth", "login")
-	slog.Info("oauth.relogin.spawned",
+	oauthLog.Logger().Info("oauth.relogin.spawned",
 		"subcomponent", "oauth",
 		"binary", "claude",
 		"args", []string{"auth", "login"},
@@ -146,7 +146,7 @@ func (m *Manager) autoRelogin(ctx context.Context, originalErr error) error {
 
 	if runErr != nil {
 		m.relogin.consecutiveFail++
-		slog.Error("oauth.relogin.failed",
+		oauthLog.Logger().Error("oauth.relogin.failed",
 			"subcomponent", "oauth",
 			"exit_code", exitCode,
 			"duration_ms", durationMs,
@@ -159,7 +159,7 @@ func (m *Manager) autoRelogin(ctx context.Context, originalErr error) error {
 	}
 
 	m.relogin.consecutiveFail = 0
-	slog.Info("oauth.relogin.completed",
+	oauthLog.Logger().Info("oauth.relogin.completed",
 		"subcomponent", "oauth",
 		"exit_code", exitCode,
 		"duration_ms", durationMs,

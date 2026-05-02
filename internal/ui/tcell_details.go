@@ -216,15 +216,15 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][
 	}
 
 	section("Identifiers")
-	kv("UUID", sess.Metadata.SessionID)
-	if len(sess.Metadata.PreviousSessionIDs) > 0 {
-		kv("Previous", fmt.Sprintf("%d prior UUID(s)", len(sess.Metadata.PreviousSessionIDs)))
+	kv("UUID", sess.Metadata.ProviderSessionID())
+	if len(sess.Metadata.PreviousProviderSessionIDStrings()) > 0 {
+		kv("Previous", fmt.Sprintf("%d prior UUID(s)", len(sess.Metadata.PreviousProviderSessionIDStrings())))
 	}
 	out = append(out, []TextSegment{})
 
 	section("Resume")
 	out = append(out, []TextSegment{{Text: "  clyde resume " + sess.Name, Style: StyleMuted}})
-	out = append(out, []TextSegment{{Text: "  claude --resume " + sess.Metadata.SessionID, Style: StyleMuted}})
+	out = append(out, []TextSegment{{Text: "  claude --resume " + sess.Metadata.ProviderSessionID(), Style: StyleMuted}})
 
 	return out
 }

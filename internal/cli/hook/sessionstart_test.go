@@ -197,7 +197,7 @@ var _ = Describe("Hook Commands", func() {
 
 				updatedSess, err := store.Get("session-with-transcript")
 				Expect(err).NotTo(HaveOccurred())
-				Expect(updatedSess.Metadata.TranscriptPath).To(Equal("/home/user/.claude/projects/test-project/test-uuid-123.jsonl"))
+				Expect(updatedSess.Metadata.ProviderTranscriptPath()).To(Equal("/home/user/.claude/projects/test-project/test-uuid-123.jsonl"))
 			})
 		})
 
@@ -245,7 +245,7 @@ var _ = Describe("Hook Commands", func() {
 
 				updatedSess, err := store.Get("session-resume-transcript")
 				Expect(err).NotTo(HaveOccurred())
-				Expect(updatedSess.Metadata.TranscriptPath).To(Equal("/home/user/.claude/projects/test-project/test-uuid-456.jsonl"))
+				Expect(updatedSess.Metadata.ProviderTranscriptPath()).To(Equal("/home/user/.claude/projects/test-project/test-uuid-456.jsonl"))
 			})
 		})
 	})

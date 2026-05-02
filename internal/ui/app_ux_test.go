@@ -14,6 +14,17 @@ import (
 	"goodkind.io/clyde/internal/session"
 )
 
+func stubSelfReloadProbe(t *testing.T, err error) {
+	t.Helper()
+	oldProbe := probeSelfReloadCandidate
+	probeSelfReloadCandidate = func(string) error {
+		return err
+	}
+	t.Cleanup(func() {
+		probeSelfReloadCandidate = oldProbe
+	})
+}
+
 func TestUX_OpenReturnPromptDoesNotBlockOnDetailExtraction(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 2)
 	defer cleanup()
@@ -193,6 +204,44 @@ func TestUX_BasedirLaunchKeepsDefaultNewSessionFlow(t *testing.T) {
 	}
 }
 
+func TestUX_SessionOptionsRespectProviderCapabilities(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 1)
+	defer cleanup()
+	sess := a.sessions[0]
+	sess.Metadata.Provider = session.ProviderCodex
+	sess.Metadata.ProviderState = &session.ProviderOwnedMetadata{
+		Current: session.ProviderSessionID{Provider: session.ProviderCodex, ID: "codex-123"},
+	}
+	a.cb.ViewContent = func(*session.Session) string { return "" }
+	a.cb.ExportSession = func(*session.Session, SessionExportRequest) ([]byte, error) { return nil, nil }
+	a.cb.SetRemoteControl = func(*session.Session, bool) error { return nil }
+	a.cb.ForkSession = func(*session.Session) error { return nil }
+
+	a.openSessionOptionsFor(sess)
+	modal, ok := a.overlay.(*OptionsModal)
+	if !ok {
+		t.Fatalf("overlay = %T, want *OptionsModal", a.overlay)
+	}
+	for _, label := range []string{
+		"View transcript",
+		"Export transcript",
+		"Enable remote control",
+		"Drive in sidecar",
+		"Open bridge in browser",
+		"Copy bridge URL",
+		"Compact",
+		"Fork",
+	} {
+		entry := findModalEntry(modal, label)
+		if entry == nil {
+			t.Fatalf("missing %q entry", label)
+		}
+		if !entry.Disabled {
+			t.Fatalf("%q disabled = false, want true for codex provider", label)
+		}
+	}
+}
+
 func TestUX_SnapshotRefreshKeepsHighlightedRowBySessionID(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 3)
 	defer cleanup()
@@ -221,8 +270,8 @@ func TestUX_SnapshotRefreshKeepsHighlightedRowBySessionID(t *testing.T) {
 	if got == nil {
 		t.Fatalf("no current session after snapshot refresh")
 	}
-	if got.Metadata.SessionID != highlighted.Metadata.SessionID {
-		t.Fatalf("highlighted session ID = %q, want %q", got.Metadata.SessionID, highlighted.Metadata.SessionID)
+	if got.Metadata.ProviderSessionID() != highlighted.Metadata.ProviderSessionID() {
+		t.Fatalf("highlighted session ID = %q, want %q", got.Metadata.ProviderSessionID(), highlighted.Metadata.ProviderSessionID())
 	}
 	if got.Name != "renamed-highlight" {
 		t.Fatalf("highlighted session name = %q, want renamed-highlight", got.Name)
@@ -561,7 +610,7 @@ func TestUX_RegistrySessionUpdateAppliesWithoutSnapshotReload(t *testing.T) {
 	a.applySessionEvent(SessionEvent{
 		Kind:          "SESSION_UPDATED",
 		SessionName:   updated.Name,
-		SessionID:     updated.Metadata.SessionID,
+		SessionID:     updated.Metadata.ProviderSessionID(),
 		Session:       updated,
 		Model:         "sonnet",
 		RemoteControl: true,
@@ -633,7 +682,7 @@ func TestUX_RegistryRenamePreservesSelection(t *testing.T) {
 		Kind:          "SESSION_RENAMED",
 		OldName:       "test-session-00",
 		SessionName:   renamed.Name,
-		SessionID:     renamed.Metadata.SessionID,
+		SessionID:     renamed.Metadata.ProviderSessionID(),
 		Session:       renamed,
 		Model:         "opus",
 		RemoteControl: false,
@@ -1104,6 +1153,20 @@ func findModalAction(modal *OptionsModal, label string) func() {
 	return nil
 }
 
+func findModalEntry(modal *OptionsModal, label string) *OptionsModalEntry {
+	for i := range modal.TopEntries {
+		if modal.TopEntries[i].Label == label {
+			return &modal.TopEntries[i]
+		}
+	}
+	for i := range modal.Entries {
+		if modal.Entries[i].Label == label {
+			return &modal.Entries[i]
+		}
+	}
+	return nil
+}
+
 // TestUX_OpenDetailsSpaceRequiresOneTap counts Space presses to open
 // the details pane from the freshly-launched dashboard.
 func TestUX_OpenDetailsSpaceRequiresOneTap(t *testing.T) {
@@ -1123,13 +1186,18 @@ func TestUX_OpenDetailsSpaceRequiresOneTap(t *testing.T) {
 }
 
 func TestSelfReloadDefersWhileOverlayOpen(t *testing.T) {
+	stubSelfReloadProbe(t, nil)
+	path := filepath.Join(t.TempDir(), "clyde")
+	if err := os.WriteFile(path, []byte("new-binary"), 0o755); err != nil {
+		t.Fatalf("write binary: %v", err)
+	}
 	panel := NewCompactPanel("demo")
 	a := &App{
 		overlay: panel,
 		running: true,
 	}
 
-	a.handleEvent(tcell.NewEventInterrupt(selfReloadAvailable{path: "/tmp/clyde", reason: "mtime_changed"}))
+	a.handleEvent(tcell.NewEventInterrupt(selfReloadAvailable{path: path, reason: "mtime_changed"}))
 	if !a.running {
 		t.Fatalf("self reload should not stop the app while overlay is open")
 	}
@@ -1147,17 +1215,22 @@ func TestSelfReloadDefersWhileOverlayOpen(t *testing.T) {
 	if a.running {
 		t.Fatalf("expected deferred reload to stop app after overlay close")
 	}
-	if a.reloadExecPath != "/tmp/clyde" {
-		t.Fatalf("reloadExecPath=%q want /tmp/clyde", a.reloadExecPath)
+	if a.reloadExecPath != path {
+		t.Fatalf("reloadExecPath=%q want %s", a.reloadExecPath, path)
 	}
 }
 
 func TestDaemonBinaryUpdateTriggersSelfReload(t *testing.T) {
+	stubSelfReloadProbe(t, nil)
 	a := &App{running: true}
+	path := filepath.Join(t.TempDir(), "new-clyde")
+	if err := os.WriteFile(path, []byte("new-binary"), 0o755); err != nil {
+		t.Fatalf("write binary: %v", err)
+	}
 
 	a.applySessionEvent(SessionEvent{
 		Kind:         "CLYDE_BINARY_UPDATED",
-		BinaryPath:   "/tmp/new-clyde",
+		BinaryPath:   path,
 		BinaryReason: "file_replaced",
 		BinaryHash:   "def456",
 	})
@@ -1165,8 +1238,8 @@ func TestDaemonBinaryUpdateTriggersSelfReload(t *testing.T) {
 	if a.running {
 		t.Fatalf("daemon binary update should stop the app for exec reload")
 	}
-	if a.reloadExecPath != "/tmp/new-clyde" {
-		t.Fatalf("reloadExecPath=%q want /tmp/new-clyde", a.reloadExecPath)
+	if a.reloadExecPath != path {
+		t.Fatalf("reloadExecPath=%q want %s", a.reloadExecPath, path)
 	}
 }
 
@@ -1188,7 +1261,53 @@ func TestDaemonBinaryUpdateIgnoresAlreadyRunningHash(t *testing.T) {
 	}
 }
 
+func TestDaemonBinaryUpdateRejectsInvalidSelfReloadBinary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "new-clyde")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("write invalid binary: %v", err)
+	}
+	a := &App{running: true}
+
+	a.applySessionEvent(SessionEvent{
+		Kind:         "CLYDE_BINARY_UPDATED",
+		BinaryPath:   path,
+		BinaryReason: "file_replaced",
+		BinaryHash:   "def456",
+	})
+
+	if !a.running {
+		t.Fatalf("invalid binary update should not stop the app")
+	}
+	if a.reloadExecPath != "" {
+		t.Fatalf("reloadExecPath=%q want empty", a.reloadExecPath)
+	}
+}
+
+func TestDaemonBinaryUpdateRejectsProbeFailingSelfReloadBinary(t *testing.T) {
+	stubSelfReloadProbe(t, fmt.Errorf("probe failed"))
+	path := filepath.Join(t.TempDir(), "new-clyde")
+	if err := os.WriteFile(path, []byte("new-binary"), 0o755); err != nil {
+		t.Fatalf("write binary: %v", err)
+	}
+	a := &App{running: true}
+
+	a.applySessionEvent(SessionEvent{
+		Kind:         "CLYDE_BINARY_UPDATED",
+		BinaryPath:   path,
+		BinaryReason: "file_replaced",
+		BinaryHash:   "def456",
+	})
+
+	if !a.running {
+		t.Fatalf("probe-failing binary update should not stop the app")
+	}
+	if a.reloadExecPath != "" {
+		t.Fatalf("reloadExecPath=%q want empty", a.reloadExecPath)
+	}
+}
+
 func TestSelfReloadExecsBeforeSuspendReinit(t *testing.T) {
+	stubSelfReloadProbe(t, nil)
 	path := filepath.Join(t.TempDir(), "clyde")
 	if err := os.WriteFile(path, []byte("old"), 0o755); err != nil {
 		t.Fatalf("write old binary: %v", err)

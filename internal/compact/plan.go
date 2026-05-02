@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log/slog"
 	"sort"
 	"time"
 )
@@ -538,7 +537,7 @@ func chatDropOrder(slice *Slice) []chatDropStep {
 	for ei, e := range slice.PostBoundary {
 		if e.Type == "user" && !isToolResultOnly(e) {
 			if summary, ok := parseSyntheticSummary(e); ok {
-				slog.Debug("compact.plan.synthetic_summary_detected",
+				compactLog.Logger().Debug("compact.plan.synthetic_summary_detected",
 					"component", "compact",
 					"subcomponent", "plan",
 					"entry_index", ei,
@@ -595,7 +594,7 @@ func droppedSummaryChunkCount(opts SynthOptions) int {
 
 func applyChatDropStep(droppedEntries map[int]bool, droppedChunks map[int]map[string]bool, step chatDropStep) {
 	if step.ChunkKey == "" {
-		slog.Debug("compact.plan.chat_drop_applied",
+		compactLog.Logger().Debug("compact.plan.chat_drop_applied",
 			"component", "compact",
 			"subcomponent", "plan",
 			"entry_index", step.EntryIdx,
@@ -611,7 +610,7 @@ func applyChatDropStep(droppedEntries map[int]bool, droppedChunks map[int]map[st
 		droppedChunks[step.EntryIdx] = map[string]bool{}
 	}
 	droppedChunks[step.EntryIdx][step.ChunkKey] = true
-	slog.Debug("compact.plan.chat_drop_applied",
+	compactLog.Logger().Debug("compact.plan.chat_drop_applied",
 		"component", "compact",
 		"subcomponent", "plan",
 		"entry_index", step.EntryIdx,
@@ -622,7 +621,7 @@ func applyChatDropStep(droppedEntries map[int]bool, droppedChunks map[int]map[st
 
 func revertChatDropStep(droppedEntries map[int]bool, droppedChunks map[int]map[string]bool, step chatDropStep) {
 	if step.ChunkKey == "" {
-		slog.Debug("compact.plan.chat_drop_reverted",
+		compactLog.Logger().Debug("compact.plan.chat_drop_reverted",
 			"component", "compact",
 			"subcomponent", "plan",
 			"entry_index", step.EntryIdx,
@@ -639,7 +638,7 @@ func revertChatDropStep(droppedEntries map[int]bool, droppedChunks map[int]map[s
 	if len(chunks) == 0 {
 		delete(droppedChunks, step.EntryIdx)
 	}
-	slog.Debug("compact.plan.chat_drop_reverted",
+	compactLog.Logger().Debug("compact.plan.chat_drop_reverted",
 		"component", "compact",
 		"subcomponent", "plan",
 		"entry_index", step.EntryIdx,

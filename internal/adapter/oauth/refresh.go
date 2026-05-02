@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -41,7 +40,7 @@ func (m *Manager) refreshLocked(ctx context.Context, current *Tokens) (*Tokens, 
 	defer func() { _ = lock.Unlock() }()
 
 	if disk, err := readCredentials(m.credentialsDir, m.oauthCfg.KeychainService); err == nil && disk != nil && !isExpired(disk) {
-		slog.Info("oauth.token.refresh_raced",
+		oauthLog.Logger().Info("oauth.token.refresh_raced",
 			"subcomponent", "oauth",
 			"expires_at_ms", disk.ExpiresAt,
 		)
@@ -99,7 +98,7 @@ func (m *Manager) refreshLocked(ctx context.Context, current *Tokens) (*Tokens, 
 	}
 
 	if err := writeCredentials(m.credentialsDir, newTokens); err != nil {
-		slog.Warn("oauth.credentials.write_failed",
+		oauthLog.Logger().Warn("oauth.credentials.write_failed",
 			"subcomponent", "oauth",
 			"err", err,
 		)

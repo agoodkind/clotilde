@@ -166,6 +166,85 @@ func TestHandleChatLogsRawBody(t *testing.T) {
 	}
 }
 
+func TestRequestDebugLogsRawPayloadForEveryRoute(t *testing.T) {
+	t.Parallel()
+	srv, buf := newLoggingServer(t, config.LoggingConfig{
+		Body: config.LoggingBody{
+			Mode:  "raw",
+			MaxKB: 4,
+		},
+	})
+
+	payload := `{"prompt":"hello"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/completions", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "Cursor/raw-debug-test")
+	resp := httptest.NewRecorder()
+	srv.mux.ServeHTTP(resp, req)
+
+	evt := findLogEvent(t, buf, "adapter.request.raw")
+	if evt == nil {
+		t.Fatalf("expected adapter.request.raw event")
+	}
+	if evt["path"] != "/v1/completions" {
+		t.Fatalf("path=%v", evt["path"])
+	}
+	if evt["user_agent"] != "Cursor/raw-debug-test" {
+		t.Fatalf("user_agent=%v", evt["user_agent"])
+	}
+	if evt["body"] != payload {
+		t.Fatalf("body=%v", evt["body"])
+	}
+	if _, ok := evt["body_b64"].(string); !ok {
+		t.Fatalf("expected body_b64 in raw request debug event")
+	}
+}
+
+func TestAdapterErrorBoundaryRecoversPanicWithShapedError(t *testing.T) {
+	t.Parallel()
+	srv, buf := newLoggingServer(t, config.LoggingConfig{
+		Body: config.LoggingBody{
+			Mode: "off",
+		},
+	})
+
+	handler := srv.withAdapterErrorBoundary(func(w http.ResponseWriter, r *http.Request) {
+		panic("boom")
+	})
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("User-Agent", "Cursor/panic-test")
+	resp := httptest.NewRecorder()
+	handler(resp, req)
+
+	if resp.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var out ErrorResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal error response: %v body=%s", err, resp.Body.String())
+	}
+	if out.Error.Type != "internal_error" || out.Error.Code != "internal_error" {
+		t.Fatalf("error response = %+v", out.Error)
+	}
+	if !strings.Contains(out.Error.Message, "request_id") {
+		t.Fatalf("error message should include request_id: %q", out.Error.Message)
+	}
+
+	evt := findLogEvent(t, buf, "adapter.request.panic")
+	if evt == nil {
+		t.Fatalf("expected adapter.request.panic event")
+	}
+	if evt["path"] != "/v1/models" {
+		t.Fatalf("path=%v", evt["path"])
+	}
+	if evt["response_started"] != false {
+		t.Fatalf("response_started=%v", evt["response_started"])
+	}
+	if stack, ok := evt["stack"].(string); !ok || !strings.Contains(stack, "TestAdapterErrorBoundaryRecoversPanicWithShapedError") {
+		t.Fatalf("stack missing test frame: %T %v", evt["stack"], evt["stack"])
+	}
+}
+
 func TestHandleChatLogsOffModeSkipsEvent(t *testing.T) {
 	t.Parallel()
 	srv, buf := newLoggingServer(t, config.LoggingConfig{

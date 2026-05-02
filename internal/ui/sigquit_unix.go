@@ -5,7 +5,6 @@ package ui
 import (
 	"bytes"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -29,13 +28,13 @@ func installSIGQUITDumpHandler() func() {
 			case <-ch:
 				path, err := writeSIGQUITDump()
 				if err != nil {
-					slog.Error("tui.signal.sigquit.dump_failed",
+					tuiLog.Logger().Error("tui.signal.sigquit.dump_failed",
 						"component", "tui",
 						"err", err)
 					_, _ = fmt.Fprintf(os.Stderr, "clyde SIGQUIT goroutine dump failed: %v\n", err)
 					continue
 				}
-				slog.Error("tui.signal.sigquit.dump_written",
+				tuiLog.Logger().Error("tui.signal.sigquit.dump_written",
 					"component", "tui",
 					"path", path,
 					"err", "sigquit_dump")

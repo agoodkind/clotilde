@@ -24,8 +24,8 @@ func buildKnownTranscriptPaths(store session.Store) (map[string]bool, error) {
 	}
 	out := make(map[string]bool, len(all))
 	for _, sess := range all {
-		if sess.Metadata.TranscriptPath != "" {
-			out[sess.Metadata.TranscriptPath] = true
+		if sess.Metadata.ProviderTranscriptPath() != "" {
+			out[sess.Metadata.ProviderTranscriptPath()] = true
 		}
 	}
 	for path := range out {
@@ -82,10 +82,10 @@ func PruneAutoname(
 		if !result.IsAutoName {
 			continue
 		}
-		if knownPaths[result.TranscriptPath] {
+		if knownPaths[result.PrimaryArtifactPath()] {
 			continue
 		}
-		fileInfo, statErr := os.Stat(result.TranscriptPath)
+		fileInfo, statErr := os.Stat(result.PrimaryArtifactPath())
 		if statErr != nil {
 			continue
 		}
@@ -95,7 +95,7 @@ func PruneAutoname(
 		matches = append(matches, result)
 		log.Debug("prune.autoname.candidate",
 			"component", "prune",
-			"transcript", result.TranscriptPath,
+			"transcript", result.PrimaryArtifactPath(),
 		)
 	}
 
@@ -107,7 +107,7 @@ func PruneAutoname(
 
 	_, _ = fmt.Fprintf(out, "Found %d auto-name transcript(s):\n", len(matches))
 	for _, match := range matches {
-		_, _ = fmt.Fprintf(out, "  %s\n", match.TranscriptPath)
+		_, _ = fmt.Fprintf(out, "  %s\n", match.PrimaryArtifactPath())
 	}
 
 	if opts.DryRun {
@@ -119,15 +119,15 @@ func PruneAutoname(
 	var failures []DeleteFailure
 	pruned := 0
 	for _, match := range matches {
-		log.Debug("prune.autoname.removing", "component", "prune", "transcript", match.TranscriptPath)
-		if err := os.Remove(match.TranscriptPath); err != nil {
-			_, _ = fmt.Fprintf(out, "  FAIL %s: %v\n", match.TranscriptPath, err)
-			log.Error("prune.autoname.remove_failed", "component", "prune", "transcript", match.TranscriptPath, "err", err)
-			failures = append(failures, DeleteFailure{Target: match.TranscriptPath, Err: err})
+		log.Debug("prune.autoname.removing", "component", "prune", "transcript", match.PrimaryArtifactPath())
+		if err := os.Remove(match.PrimaryArtifactPath()); err != nil {
+			_, _ = fmt.Fprintf(out, "  FAIL %s: %v\n", match.PrimaryArtifactPath(), err)
+			log.Error("prune.autoname.remove_failed", "component", "prune", "transcript", match.PrimaryArtifactPath(), "err", err)
+			failures = append(failures, DeleteFailure{Target: match.PrimaryArtifactPath(), Err: err})
 			continue
 		}
 		pruned++
-		log.Debug("prune.autoname.deleted", "component", "prune", "transcript", match.TranscriptPath)
+		log.Debug("prune.autoname.deleted", "component", "prune", "transcript", match.PrimaryArtifactPath())
 	}
 
 	_, _ = fmt.Fprintf(out, "\nDeleted %d of %d transcripts.\n", pruned, len(matches))

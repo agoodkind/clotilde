@@ -27,7 +27,9 @@ import (
 	"github.com/spf13/cobra"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/daemon"
+	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/session"
 	sessionlifecycle "goodkind.io/clyde/internal/session/lifecycle"
 	"goodkind.io/clyde/internal/ui"
@@ -57,7 +59,7 @@ func RunDashboard(cmd *cobra.Command, args []string) {
 // stdout are TTYs (see RunDashboard).
 func runDashboardTUI() {
 	daemon.NudgeDiscoveryScan()
-	slog.Info("dashboard.opened", "component", "tui")
+	cmdUILog.Logger().Info("dashboard.opened", "component", "tui")
 
 	dashboardCwd, _ := os.Getwd()
 	cb := buildAppCallbacks(dashboardCwd)
@@ -65,13 +67,13 @@ func runDashboardTUI() {
 
 	if err := app.Run(); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
-		slog.Error("dashboard.tui_error",
+		cmdUILog.Logger().Error("dashboard.tui_error",
 			"component", "tui",
 			"err", err,
 		)
 		os.Exit(1)
 	}
-	slog.Info("dashboard.closed", "component", "tui")
+	cmdUILog.Logger().Info("dashboard.closed", "component", "tui")
 }
 
 // RunBasedirLaunch opens the dashboard biased toward one workspace root.
@@ -82,7 +84,7 @@ func RunBasedirLaunch(basedir string) int {
 	}
 	daemon.NudgeDiscoveryScan()
 	canonical := session.CanonicalWorkspaceRoot(basedir)
-	slog.Info("dashboard.basedir.opened",
+	cmdUILog.Logger().Info("dashboard.basedir.opened",
 		"component", "tui",
 		"basedir", canonical,
 	)
@@ -93,14 +95,14 @@ func RunBasedirLaunch(basedir string) int {
 
 	if err := app.Run(); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
-		slog.Error("dashboard.basedir.tui_error",
+		cmdUILog.Logger().Error("dashboard.basedir.tui_error",
 			"component", "tui",
 			"basedir", canonical,
 			"err", err,
 		)
 		return 1
 	}
-	slog.Info("dashboard.basedir.closed",
+	cmdUILog.Logger().Info("dashboard.basedir.closed",
 		"component", "tui",
 		"basedir", canonical,
 	)
@@ -129,7 +131,7 @@ func consumeTUIReturnSession() *session.Session {
 	}
 	store, err := session.NewGlobalFileStoreReadOnly()
 	if err != nil {
-		slog.Warn("dashboard.return_session.store_failed",
+		cmdUILog.Logger().Warn("dashboard.return_session.store_failed",
 			"component", "tui",
 			"session", sessionName,
 			"session_id", sessionID,
@@ -138,17 +140,17 @@ func consumeTUIReturnSession() *session.Session {
 	}
 	sess, err := store.Resolve(query)
 	if err != nil || sess == nil {
-		slog.Warn("dashboard.return_session.resolve_failed",
+		cmdUILog.Logger().Warn("dashboard.return_session.resolve_failed",
 			"component", "tui",
 			"session", sessionName,
 			"session_id", sessionID,
 			"err", err)
 		return nil
 	}
-	slog.Info("dashboard.return_session.restored",
+	cmdUILog.Logger().Info("dashboard.return_session.restored",
 		"component", "tui",
 		"session", sess.Name,
-		"session_id", sess.Metadata.SessionID)
+		"session_id", sess.Metadata.ProviderSessionID())
 	return sess
 }
 
@@ -790,20 +792,20 @@ func timeFromNanos(n int64) time.Time {
 // the exit code. Used by the dispatch path and by RunDashboard's
 // piped-input shortcut.
 func ForwardToClaude(args []string) int {
-	return runClaudeWithEnv(args, os.Environ())
+	return runClaudeWithEnv(args, applyClaudeMITMEnv(os.Environ()))
 }
 
 func runClaudeWithEnv(args []string, env []string) int {
 	claudePath, err := exec.LookPath("claude")
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "clyde: cannot find claude binary: %v\n", err)
-		slog.Error("forward.claude_not_found",
+		cmdUILog.Logger().Error("forward.claude_not_found",
 			"component", "cli",
 			"err", err,
 		)
 		return 1
 	}
-	slog.Debug("forward.claude.invoked",
+	cmdUILog.Logger().Debug("forward.claude.invoked",
 		"component", "cli",
 		"argc", len(args),
 	)
@@ -819,6 +821,23 @@ func runClaudeWithEnv(args []string, env []string) int {
 		return 1
 	}
 	return 0
+}
+
+func applyClaudeMITMEnv(env []string) []string {
+	cfg, err := config.LoadGlobalOrDefault()
+	if err != nil {
+		return env
+	}
+	extra, err := mitm.ClaudeEnv(context.Background(), cfg.MITM, slog.Default())
+	if err != nil {
+		cmdUILog.Logger().Warn("forward.mitm.claude_env_failed", "component", "cli", "err", err)
+		return env
+	}
+	out := append([]string(nil), env...)
+	for key, value := range extra {
+		out = withEnvValue(out, key, value)
+	}
+	return out
 }
 
 // claudePassthroughFirstArgSkipsPostSessionTUI lists argv[0] values that
@@ -888,7 +907,7 @@ func ForwardToClaudeThenDashboard(args []string) int {
 			name, nerr := nextChatSessionName(store)
 			if nerr == nil {
 				env = append(env, "CLYDE_SESSION_NAME="+name)
-				slog.Info("forward.passthrough_wrapped",
+				cmdUILog.Logger().Info("forward.passthrough_wrapped",
 					"component", "cli",
 					"session", name,
 				)
@@ -970,7 +989,7 @@ func startNewSessionInDir(basedir string, store session.Store, dashboardFallback
 		return err
 	}
 	_, _ = fmt.Fprintf(os.Stdout, "Starting new session %q in %s\n\n", name, workDir)
-	slog.Info("session.new.started",
+	cmdUILog.Logger().Info("session.new.started",
 		"component", "cli",
 		"session", name,
 		"workdir", workDir,
@@ -1012,13 +1031,13 @@ func resumeSession(sess *session.Session, store session.Store, allowSelfReload b
 		currentWorkDir = cwd
 	}
 
-	_, _ = fmt.Fprintf(os.Stdout, "Resuming session '%s' (%s)\n\n", sess.Name, sess.Metadata.SessionID)
+	_, _ = fmt.Fprintf(os.Stdout, "Resuming session '%s' (%s)\n\n", sess.Name, sess.Metadata.ProviderSessionID())
 	_, _ = fmt.Fprintln(os.Stdout, "Dashboard is suspended while Claude runs. Exit Claude to return.")
 	_, _ = fmt.Fprintln(os.Stdout)
-	slog.Info("session.resume.started",
+	cmdUILog.Logger().Info("session.resume.started",
 		"component", "cli",
 		"session", sess.Name,
-		"session_id", sess.Metadata.SessionID,
+		"session_id", sess.Metadata.ProviderSessionID(),
 	)
 
 	runtime, err := sessionlifecycle.ForSession(sess, store)

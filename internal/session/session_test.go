@@ -20,7 +20,7 @@ var _ = Describe("Session", func() {
 			Expect(s.Name).To(Equal(name))
 			Expect(s.Metadata.Name).To(Equal(name))
 			Expect(s.ProviderID()).To(Equal(session.ProviderClaude))
-			Expect(s.Metadata.SessionID).To(Equal(sessionID))
+			Expect(s.Metadata.ProviderSessionID()).To(Equal(sessionID))
 			Expect(s.Metadata.Created).To(BeTemporally("~", time.Now(), time.Second))
 			Expect(s.Metadata.LastAccessed).To(BeTemporally("~", time.Now(), time.Second))
 			Expect(s.Metadata.IsForkedSession).To(BeFalse())
@@ -90,10 +90,87 @@ var _ = Describe("Session", func() {
 				ID:       "uuid-2",
 			})
 
-			Expect(s.Metadata.SessionID).To(Equal("uuid-2"))
+			Expect(s.Metadata.ProviderSessionID()).To(Equal("uuid-2"))
 			Expect(s.Metadata.PreviousSessionIDs).To(Equal([]string{"uuid-1"}))
 			Expect(s.Identity().HasID("uuid-1")).To(BeTrue())
 			Expect(s.Identity().HasID("uuid-2")).To(BeTrue())
+		})
+
+		It("normalizes legacy metadata into provider-owned state", func() {
+			md := session.Metadata{
+				Name:               "legacy",
+				SessionID:          "uuid-current",
+				PreviousSessionIDs: []string{"uuid-previous"},
+				TranscriptPath:     "/tmp/transcript.jsonl",
+			}
+
+			md.NormalizeProviderState()
+
+			Expect(md.ProviderState).ToNot(BeNil())
+			Expect(md.ProviderState.Current).To(Equal(session.ProviderSessionID{
+				Provider: session.ProviderClaude,
+				ID:       "uuid-current",
+			}))
+			Expect(md.ProviderState.Previous).To(Equal([]session.ProviderSessionID{{
+				Provider: session.ProviderClaude,
+				ID:       "uuid-previous",
+			}}))
+			Expect(md.ProviderState.Artifacts.TranscriptPath).To(Equal("/tmp/transcript.jsonl"))
+			Expect(md.ProviderSessionID()).To(Equal("uuid-current"))
+			Expect(md.PreviousProviderSessionIDStrings()).To(Equal([]string{"uuid-previous"}))
+			Expect(md.ProviderTranscriptPath()).To(Equal("/tmp/transcript.jsonl"))
+		})
+
+		It("mirrors provider-owned state back to legacy fields", func() {
+			md := session.Metadata{
+				Name: "provider-owned",
+				ProviderState: &session.ProviderOwnedMetadata{
+					Current: session.ProviderSessionID{
+						Provider: session.ProviderID("codex"),
+						ID:       "codex-current",
+					},
+					Previous: []session.ProviderSessionID{{
+						Provider: session.ProviderID("codex"),
+						ID:       "codex-previous",
+					}},
+					Artifacts: session.ProviderArtifacts{
+						TranscriptPath: "/tmp/codex.jsonl",
+					},
+				},
+			}
+
+			md.NormalizeProviderState()
+
+			Expect(md.Provider).To(Equal(session.ProviderID("codex")))
+			Expect(md.ProviderSessionID()).To(Equal("codex-current"))
+			Expect(md.PreviousSessionIDs).To(Equal([]string{"codex-previous"}))
+			Expect(md.ProviderTranscriptPath()).To(Equal("/tmp/codex.jsonl"))
+		})
+	})
+
+	Describe("Provider capabilities", func() {
+		It("keeps Claude as the full-featured default provider", func() {
+			caps := session.ProviderInfo(session.ProviderClaude).Capabilities
+			Expect(caps.ResumeByID).To(BeTrue())
+			Expect(caps.ForkByID).To(BeTrue())
+			Expect(caps.PerSessionSettings).To(BeTrue())
+			Expect(caps.RemoteControl).To(BeTrue())
+			Expect(caps.TranscriptTail).To(BeTrue())
+			Expect(caps.TranscriptExport).To(BeTrue())
+			Expect(caps.Compaction).To(BeTrue())
+			Expect(caps.ContextUsageInspect).To(BeTrue())
+		})
+
+		It("advertises only conservative Codex session capabilities", func() {
+			caps := session.ProviderInfo(session.ProviderCodex).Capabilities
+			Expect(caps.ResumeByID).To(BeTrue())
+			Expect(caps.ForkByID).To(BeFalse())
+			Expect(caps.PerSessionSettings).To(BeFalse())
+			Expect(caps.RemoteControl).To(BeFalse())
+			Expect(caps.TranscriptTail).To(BeFalse())
+			Expect(caps.TranscriptExport).To(BeFalse())
+			Expect(caps.Compaction).To(BeFalse())
+			Expect(caps.ContextUsageInspect).To(BeFalse())
 		})
 	})
 })

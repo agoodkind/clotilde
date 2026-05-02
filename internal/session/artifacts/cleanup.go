@@ -10,15 +10,23 @@ import (
 )
 
 // Delete removes provider-owned artifacts for a logical session row.
-func Delete(_ context.Context, req session.DeleteArtifactsRequest) error {
+func Delete(_ context.Context, req session.DeleteArtifactsRequest) (*session.DeletedArtifacts, error) {
 	if req.Session == nil {
-		return fmt.Errorf("nil session")
+		return nil, fmt.Errorf("nil session")
 	}
 	switch req.Session.ProviderID() {
 	case session.ProviderClaude:
-		_, err := claudeartifacts.DeleteSessionArtifacts(req.ClydeRoot, req.Session)
-		return err
+		deleted, err := claudeartifacts.DeleteSessionArtifacts(req.ClydeRoot, req.Session)
+		if err != nil {
+			return nil, err
+		}
+		return &session.DeletedArtifacts{
+			Transcripts: deleted.Transcript,
+			AgentLogs:   deleted.AgentLogs,
+		}, nil
+	case session.ProviderCodex:
+		return &session.DeletedArtifacts{}, nil
 	default:
-		return fmt.Errorf("unsupported session provider %q", req.Session.ProviderID())
+		return nil, fmt.Errorf("unsupported session provider %q", req.Session.ProviderID())
 	}
 }

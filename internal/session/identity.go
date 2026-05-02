@@ -7,8 +7,8 @@ import (
 
 // ProviderSessionID is a provider-scoped session identifier.
 type ProviderSessionID struct {
-	Provider ProviderID
-	ID       string
+	Provider ProviderID `json:"provider"`
+	ID       string     `json:"id"`
 }
 
 // Normalized returns a trimmed provider session id with default provider fallback.
@@ -183,4 +183,17 @@ func appendUniqueString(existing []string, value string) []string {
 		return existing
 	}
 	return append(existing, trimmed)
+}
+
+func appendProviderSessionID(existing []ProviderSessionID, value ProviderSessionID) []ProviderSessionID {
+	normalized := value.Normalized()
+	if normalized.IsZero() {
+		return existing
+	}
+	for _, item := range existing {
+		if item.Normalized() == normalized {
+			return existing
+		}
+	}
+	return append(existing, normalized)
 }

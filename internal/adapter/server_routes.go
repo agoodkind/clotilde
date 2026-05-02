@@ -156,13 +156,13 @@ func (s *Server) closeTrackedConns(states ...http.ConnState) {
 
 func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", s.handleHealth)
-	mux.HandleFunc("/v1/models", s.auth(s.handleModels))
-	mux.HandleFunc("/v1/chat/completions", s.auth(s.handleChat))
-	mux.HandleFunc("/v1/completions", s.auth(s.handleLegacy))
-	mux.HandleFunc("/v1/messages", s.authAnthropic(s.handleAnthropicMessages))
-	mux.HandleFunc("/v1/messages/count_tokens", s.authAnthropic(s.handleAnthropicCountTokens))
-	mux.HandleFunc("/", s.handleRoot)
+	mux.HandleFunc("/healthz", s.withAdapterErrorBoundary(s.withRequestDebug(s.handleHealth)))
+	mux.HandleFunc("/v1/models", s.withAdapterErrorBoundary(s.withRequestDebug(s.auth(s.handleModels))))
+	mux.HandleFunc("/v1/chat/completions", s.withAdapterErrorBoundary(s.withRequestDebug(s.auth(s.handleChat))))
+	mux.HandleFunc("/v1/completions", s.withAdapterErrorBoundary(s.withRequestDebug(s.auth(s.handleLegacy))))
+	mux.HandleFunc("/v1/messages", s.withAdapterErrorBoundary(s.withRequestDebug(s.authAnthropic(s.handleAnthropicMessages))))
+	mux.HandleFunc("/v1/messages/count_tokens", s.withAdapterErrorBoundary(s.withRequestDebug(s.authAnthropic(s.handleAnthropicCountTokens))))
+	mux.HandleFunc("/", s.withAdapterErrorBoundary(s.withRequestDebug(s.handleRoot)))
 	return mux
 }
 

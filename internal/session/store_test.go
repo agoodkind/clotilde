@@ -39,7 +39,7 @@ var _ = Describe("FileStore", func() {
 			retrieved, err := store.Get("test-session")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(retrieved.Name).To(Equal("test-session"))
-			Expect(retrieved.Metadata.SessionID).To(Equal("uuid-123"))
+			Expect(retrieved.Metadata.ProviderSessionID()).To(Equal("uuid-123"))
 		})
 
 		It("should reject invalid session names", func() {
@@ -203,7 +203,7 @@ var _ = Describe("FileStore", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(sessions).To(HaveLen(1))
 			Expect(sessions[0].Name).To(Equal("unified-session-resolution"))
-			Expect(sessions[0].Metadata.SessionID).To(Equal("uuid-shared"))
+			Expect(sessions[0].Metadata.ProviderSessionID()).To(Equal("uuid-shared"))
 		})
 
 		It("keeps same direct session ids from different providers distinct", func() {

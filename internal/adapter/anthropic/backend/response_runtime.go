@@ -71,10 +71,12 @@ type CollectExecutionResult struct {
 }
 
 type StreamExecutionResult struct {
-	Usage          adapteropenai.Usage
-	FinishReason   string
-	AnthropicUsage anthropic.Usage
-	EmittedContent bool
+	Usage               adapteropenai.Usage
+	FinishReason        string
+	AnthropicUsage      anthropic.Usage
+	EmittedContent      bool
+	ToolCallCount       int
+	HasSubagentToolCall bool
 }
 
 func RunCollectExecution(
@@ -176,10 +178,15 @@ func RunStreamExecution(
 	emit func(adapterrender.Event) error,
 ) (StreamExecutionResult, error) {
 	emittedContent := false
+	toolCallCount := 0
+	hasSubagentToolCall := false
 	emitTracked := func(ev adapterrender.Event) error {
 		if eventHasVisibleContent(ev) {
 			emittedContent = true
 		}
+		count, hasSubagent := toolCallStats(ev)
+		toolCallCount += count
+		hasSubagentToolCall = hasSubagentToolCall || hasSubagent
 		return emit(ev)
 	}
 	anthUsage, _, finishReason, err := RunTranslatorEvents(rt.AnthropicStreamClient(), ctx, req, model, reqID, emitTracked)
@@ -199,10 +206,12 @@ func RunStreamExecution(
 		)
 	}
 	return StreamExecutionResult{
-		Usage:          finalUsage,
-		FinishReason:   finishReason,
-		AnthropicUsage: anthUsage,
-		EmittedContent: emittedContent,
+		Usage:               finalUsage,
+		FinishReason:        finishReason,
+		AnthropicUsage:      anthUsage,
+		EmittedContent:      emittedContent,
+		ToolCallCount:       toolCallCount,
+		HasSubagentToolCall: hasSubagentToolCall,
 	}, err
 }
 
@@ -502,6 +511,8 @@ func StreamResponse(
 		CacheTTL:            d.CacheTTL(),
 		DurationMs:          time.Since(started).Milliseconds(),
 		Stream:              true,
+		ToolCallCount:       result.ToolCallCount,
+		HasSubagentToolCall: result.HasSubagentToolCall,
 	})
 	breakdown := adapterruntime.EstimateCost(adapterruntime.CostInputs{
 		ModelID:             req.Model,
@@ -526,6 +537,8 @@ func StreamResponse(
 			CacheReadTokens:     anthUsage.CacheReadInputTokens,
 			CacheCreationTokens: anthUsage.CacheCreationInputTokens,
 			CostMicrocents:      breakdown.TotalMicrocents,
+			ToolCallCount:       result.ToolCallCount,
+			HasSubagentToolCall: result.HasSubagentToolCall,
 			DurationMs:          time.Since(started).Milliseconds(),
 		})
 	}
@@ -536,9 +549,28 @@ func eventHasVisibleContent(ev adapterrender.Event) bool {
 	switch ev.Kind {
 	case adapterrender.EventAssistantTextDelta, adapterrender.EventAssistantRefusalDelta, adapterrender.EventReasoningDelta:
 		return strings.TrimSpace(ev.Text) != "" || ev.Text != ""
+	case adapterrender.EventToolCallDelta:
+		return len(ev.ToolCalls) > 0
 	default:
 		return false
 	}
+}
+
+func toolCallStats(ev adapterrender.Event) (count int, hasSubagent bool) {
+	if ev.Kind != adapterrender.EventToolCallDelta {
+		return 0, false
+	}
+	for _, tc := range ev.ToolCalls {
+		if strings.TrimSpace(tc.ID) == "" && strings.TrimSpace(tc.Function.Name) == "" {
+			continue
+		}
+		count++
+		switch tc.Function.Name {
+		case "Subagent", "Task", "spawn_agent":
+			hasSubagent = true
+		}
+	}
+	return count, hasSubagent
 }
 
 func backendJSONCoercion(coercion anthropic.JSONCoercion) JSONCoercion {

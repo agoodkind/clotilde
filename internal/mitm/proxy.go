@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/slogger"
 )
 
 var (
@@ -49,6 +50,7 @@ func EnsureStarted(cfg config.MITMConfig, log *slog.Logger) (*Proxy, error) {
 	if log == nil {
 		log = slog.Default()
 	}
+	log = slogger.WithConcern(log, slogger.ConcernProviderMITMLifecycle)
 	ln, err := net.Listen("tcp", "[::1]:0") // TODO: make this configurable
 	if err != nil {
 		return nil, err

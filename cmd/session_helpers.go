@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -35,7 +34,7 @@ func printResumeInstructions(sess *session.Session) {
 	_, _ = fmt.Fprintf(os.Stdout, "  clyde resume %s\n", sess.Name)
 	runtime, err := sessionlifecycle.ForSession(sess, nil)
 	if err != nil {
-		slog.Warn("cmd.session.resume_instructions_provider_failed",
+		cmdResumeLog.Logger().Warn("cmd.session.resume_instructions_provider_failed",
 			"component", "cli",
 			"session", sess.Name,
 			"provider", sess.ProviderID(),
@@ -46,7 +45,7 @@ func printResumeInstructions(sess *session.Session) {
 			_, _ = fmt.Fprintf(os.Stdout, "  %s\n", line)
 		}
 	}
-	slog.Info("cmd.session.resume_instructions", "session", sess.Name, "session_id", sess.Metadata.SessionID)
+	cmdResumeLog.Logger().Info("cmd.session.resume_instructions", "session", sess.Name, "session_id", sess.Metadata.ProviderSessionID())
 }
 
 // autoUpdateContext sends a fire-and-forget request to the daemon to generate
@@ -111,7 +110,7 @@ func resolveSessionForResume(cmd *cobra.Command, store *session.FileStore, query
 	}
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Multiple sessions match '%s':\n", query)
 	for _, s := range matches {
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s (%s)\n", s.Name, s.Metadata.SessionID)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s (%s)\n", s.Name, s.Metadata.ProviderSessionID())
 	}
 	return nil, fmt.Errorf("ambiguous session name '%s'; specify the full name", query)
 }

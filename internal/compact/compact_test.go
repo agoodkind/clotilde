@@ -613,11 +613,11 @@ func TestResolveModelForCountingNormalizesSettingsModel(t *testing.T) {
 	}
 
 	modelForCount, modelForRender, source := ResolveModelForCounting(store, sess, "")
-	if modelForCount != "clyde-gpt-5.4-1m" {
-		t.Fatalf("modelForCount=%q want %q", modelForCount, "clyde-gpt-5.4-1m")
+	if modelForCount != "clyde-gpt-5.4-1m-medium" {
+		t.Fatalf("modelForCount=%q want %q", modelForCount, "clyde-gpt-5.4-1m-medium")
 	}
-	if modelForRender != "clyde-gpt-5.4-1m" {
-		t.Fatalf("modelForRender=%q want %q", modelForRender, "clyde-gpt-5.4-1m")
+	if modelForRender != "clyde-gpt-5.4-1m-medium" {
+		t.Fatalf("modelForRender=%q want %q", modelForRender, "clyde-gpt-5.4-1m-medium")
 	}
 	if source != "settings" {
 		t.Fatalf("source=%q want %q", source, "settings")

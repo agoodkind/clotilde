@@ -9,11 +9,12 @@ import (
 	"path/filepath"
 	"time"
 
-	"goodkind.io/clyde/internal/claude"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/outputstyle"
 	"goodkind.io/clyde/internal/session"
+	sessionartifacts "goodkind.io/clyde/internal/session/artifacts"
+	"goodkind.io/clyde/internal/slogger"
 	"goodkind.io/clyde/internal/ui"
 )
 
@@ -74,6 +75,7 @@ func Run(
 	if log == nil {
 		log = slog.Default()
 	}
+	log = slogger.WithConcern(log, slogger.ConcernDaemonWorkersPrune)
 	switch kind {
 	case KindEmpty:
 		return PruneEmpty(ctx, store, log, out, opts)
@@ -115,42 +117,20 @@ func deleteTrackedSession(
 	sess *session.Session,
 	store session.Store,
 ) error {
-	allDeletedFiles := &claude.DeletedFiles{
-		Transcript: []string{},
-		AgentLogs:  []string{},
-	}
-
 	projClydeRoot := projectClydeRootForSession(sess)
 
-	deleted, err := claude.DeleteSessionData(projClydeRoot, sess.Metadata.SessionID, sess.Metadata.TranscriptPath)
+	deleted, err := sessionartifacts.Delete(ctx, session.DeleteArtifactsRequest{
+		Session:   sess,
+		ClydeRoot: projClydeRoot,
+	})
 	if err != nil {
-		_, _ = fmt.Fprintln(out, ui.Warning(fmt.Sprintf("Failed to delete Claude data for current session: %v", err)))
-		log.Error("prune.delete.current_data_failed",
+		_, _ = fmt.Fprintln(out, ui.Warning(fmt.Sprintf("Failed to delete provider artifacts: %v", err)))
+		log.Error("prune.delete.provider_artifacts_failed",
 			"component", "prune",
 			"session", sess.Name,
-			"session_id", sess.Metadata.SessionID,
+			"provider", sess.ProviderID(),
 			"err", err,
 		)
-	} else {
-		allDeletedFiles.Transcript = append(allDeletedFiles.Transcript, deleted.Transcript...)
-		allDeletedFiles.AgentLogs = append(allDeletedFiles.AgentLogs, deleted.AgentLogs...)
-	}
-
-	for _, previousSessionID := range sess.Metadata.PreviousSessionIDs {
-		deleted, err := claude.DeleteSessionData(projClydeRoot, previousSessionID, "")
-		if err != nil {
-			msg := fmt.Sprintf("Failed to delete Claude data for previous session %s: %v", previousSessionID, err)
-			_, _ = fmt.Fprintln(out, ui.Warning(msg))
-			log.Error("prune.delete.previous_data_failed",
-				"component", "prune",
-				"session", sess.Name,
-				"previous_session_id", previousSessionID,
-				"err", err,
-			)
-		} else {
-			allDeletedFiles.Transcript = append(allDeletedFiles.Transcript, deleted.Transcript...)
-			allDeletedFiles.AgentLogs = append(allDeletedFiles.AgentLogs, deleted.AgentLogs...)
-		}
 	}
 
 	if ok, derr := daemon.DeleteSessionViaDaemon(ctx, sess.Name); ok {
@@ -167,8 +147,12 @@ func deleteTrackedSession(
 		}
 	}
 
-	transcriptCount := len(allDeletedFiles.Transcript)
-	agentLogCount := len(allDeletedFiles.AgentLogs)
+	transcriptCount := 0
+	agentLogCount := 0
+	if deleted != nil {
+		transcriptCount = len(deleted.Transcripts)
+		agentLogCount = len(deleted.AgentLogs)
+	}
 	_, _ = fmt.Fprintln(out, ui.Success(fmt.Sprintf("Deleted session '%s'", sess.Name)))
 	_, _ = fmt.Fprintf(out, "  Session folder, %d transcript(s), %d agent log(s)\n", transcriptCount, agentLogCount)
 	log.Info("prune.delete.completed",

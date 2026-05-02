@@ -75,7 +75,7 @@ func autoAdoptSession(
 	errOut io.Writer,
 ) {
 	sess := session.NewSession(name, hookData.SessionID)
-	sess.Metadata.TranscriptPath = hookData.TranscriptPath
+	sess.Metadata.SetProviderTranscriptPath(hookData.TranscriptPath)
 
 	var header session.DiscoveryResult
 	var headerOK bool
@@ -109,8 +109,9 @@ func autoAdoptSession(
 		}
 		if header.IsForked {
 			sess.Metadata.IsForkedSession = true
-			if header.ForkParentID != "" {
-				if parentName, err := findSessionByUUID(store, header.ForkParentID); err == nil {
+			parentID := header.ForkParent.Normalized().ID
+			if parentID != "" {
+				if parentName, err := findSessionByUUID(store, parentID); err == nil {
 					sess.Metadata.ParentSession = parentName
 				}
 			}
@@ -119,7 +120,7 @@ func autoAdoptSession(
 				"subject", "sessionstart",
 				"session", name,
 				"parent_session", sess.Metadata.ParentSession,
-				"parent_session_id", header.ForkParentID,
+				"parent_session_id", parentID,
 			)
 		}
 	}
@@ -193,7 +194,7 @@ func handleCompact(
 	}
 
 	sess.AddPreviousSessionID(hookData.SessionID)
-	sess.Metadata.TranscriptPath = hookData.TranscriptPath
+	sess.Metadata.SetProviderTranscriptPath(hookData.TranscriptPath)
 	sess.UpdateLastAccessed()
 
 	if err := store.Update(sess); err != nil {
@@ -245,7 +246,7 @@ func saveTranscriptPath(store session.Store, sessionName, transcriptPath string)
 		return fmt.Errorf("session '%s' not found: %w", sessionName, err)
 	}
 
-	sess.Metadata.TranscriptPath = transcriptPath
+	sess.Metadata.SetProviderTranscriptPath(transcriptPath)
 	sess.UpdateLastAccessed()
 
 	if err := store.Update(sess); err != nil {

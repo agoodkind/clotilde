@@ -65,8 +65,8 @@ func TestStartRemoteSessionCreatesCanonicalSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get session: %v", err)
 	}
-	if sess.Metadata.SessionID != resp.GetSessionId() {
-		t.Fatalf("session id = %q want %q", sess.Metadata.SessionID, resp.GetSessionId())
+	if sess.Metadata.ProviderSessionID() != resp.GetSessionId() {
+		t.Fatalf("session id = %q want %q", sess.Metadata.ProviderSessionID(), resp.GetSessionId())
 	}
 	if sess.Metadata.WorkDir != basedir {
 		t.Fatalf("workdir = %q want %q", sess.Metadata.WorkDir, basedir)

@@ -11,15 +11,22 @@ type ProviderID string
 const (
 	ProviderUnknown ProviderID = ""
 	ProviderClaude  ProviderID = "claude"
+	ProviderCodex   ProviderID = "codex"
 )
 
 // ProviderCapabilities describes the session lifecycle features a provider supports.
 type ProviderCapabilities struct {
-	ResumeByID         bool
-	ForkByID           bool
-	SessionIDRotation  bool
-	CustomTitles       bool
-	PerSessionSettings bool
+	ResumeByID          bool
+	ForkByID            bool
+	SessionIDRotation   bool
+	CustomTitles        bool
+	PerSessionSettings  bool
+	RemoteControl       bool
+	TranscriptTail      bool
+	TranscriptExport    bool
+	Compaction          bool
+	ProviderArtifactGC  bool
+	ContextUsageInspect bool
 }
 
 // ProviderInfoRecord is a typed provider descriptor used by session metadata.
@@ -31,11 +38,24 @@ type ProviderInfoRecord struct {
 var defaultProviderInfo = ProviderInfoRecord{
 	ID: ProviderClaude,
 	Capabilities: ProviderCapabilities{
-		ResumeByID:         true,
-		ForkByID:           true,
-		SessionIDRotation:  true,
-		CustomTitles:       true,
-		PerSessionSettings: true,
+		ResumeByID:          true,
+		ForkByID:            true,
+		SessionIDRotation:   true,
+		CustomTitles:        true,
+		PerSessionSettings:  true,
+		RemoteControl:       true,
+		TranscriptTail:      true,
+		TranscriptExport:    true,
+		Compaction:          true,
+		ProviderArtifactGC:  true,
+		ContextUsageInspect: true,
+	},
+}
+
+var codexProviderInfo = ProviderInfoRecord{
+	ID: ProviderCodex,
+	Capabilities: ProviderCapabilities{
+		ResumeByID: true,
 	},
 }
 
@@ -106,6 +126,12 @@ type DeleteArtifactsRequest struct {
 	ClydeRoot string
 }
 
+// DeletedArtifacts summarizes provider-owned artifacts removed for a session.
+type DeletedArtifacts struct {
+	Transcripts []string
+	AgentLogs   []string
+}
+
 // SessionLauncher is the narrow lifecycle contract cmd should use for new
 // interactive session startup.
 type SessionLauncher interface {
@@ -138,7 +164,7 @@ type ContextMessageProvider interface {
 
 // ArtifactCleaner deletes provider-owned files associated with a session row.
 type ArtifactCleaner interface {
-	DeleteArtifacts(ctx context.Context, req DeleteArtifactsRequest) error
+	DeleteArtifacts(ctx context.Context, req DeleteArtifactsRequest) (*DeletedArtifacts, error)
 }
 
 // NormalizeProviderID resolves empty legacy metadata to the current default provider.
@@ -155,6 +181,9 @@ func ProviderInfo(provider ProviderID) ProviderInfoRecord {
 	normalized := NormalizeProviderID(provider)
 	if normalized == defaultProviderInfo.ID {
 		return defaultProviderInfo
+	}
+	if normalized == codexProviderInfo.ID {
+		return codexProviderInfo
 	}
 	return ProviderInfoRecord{ID: normalized}
 }

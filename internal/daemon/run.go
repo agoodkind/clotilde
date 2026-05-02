@@ -27,6 +27,7 @@ import (
 	"goodkind.io/clyde/internal/adapter"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/mitm"
+	"goodkind.io/clyde/internal/slogger"
 	"goodkind.io/clyde/internal/webapp"
 )
 
@@ -125,6 +126,7 @@ type daemonRuntime struct {
 // monolith stays one process. Additional opt-in background loops
 // (prune, oauth refresh) are passed in by the caller.
 func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
+	log = slogger.WithConcern(log, slogger.ConcernProcessDaemonLifecycle)
 	if err := config.EnsureRuntimeDir(); err != nil {
 		return err
 	}

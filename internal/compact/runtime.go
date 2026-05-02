@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"regexp"
 	"strings"
@@ -13,17 +12,18 @@ import (
 
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	"goodkind.io/clyde/internal/session"
+	sessionsettings "goodkind.io/clyde/internal/session/settings"
 )
 
 func ResolveModelForCounting(store session.Store, sess *session.Session, fallback string) (string, string, string) {
 	if strings.TrimSpace(fallback) == "" {
 		fallback = DefaultCountModel
 	}
-	if sess != nil && sess.Metadata.TranscriptPath != "" {
-		rawModel, displayModel := extractRawModelAndFamily(sess.Metadata.TranscriptPath)
+	if sess != nil && sess.Metadata.ProviderTranscriptPath() != "" {
+		rawModel, displayModel := extractRawModelAndFamily(sess.Metadata.ProviderTranscriptPath())
 		rawModel = strings.TrimSpace(rawModel)
 		if rawModel != "" {
-			slog.Debug("compact.runtime.model_resolved",
+			compactLog.Logger().Debug("compact.runtime.model_resolved",
 				"component", "compact",
 				"subcomponent", "runtime",
 				"source", "transcript",
@@ -33,10 +33,10 @@ func ResolveModelForCounting(store session.Store, sess *session.Session, fallbac
 		}
 	}
 	if store != nil && sess != nil && strings.TrimSpace(sess.Name) != "" {
-		settings, err := store.LoadSettings(sess.Name)
+		settings, err := sessionsettings.Load(store, sess)
 		if err == nil && settings != nil && strings.TrimSpace(settings.Model) != "" {
 			settingsModel := adaptercursor.NormalizeSessionSettingsModel(strings.TrimSpace(settings.Model))
-			slog.Debug("compact.runtime.model_resolved",
+			compactLog.Logger().Debug("compact.runtime.model_resolved",
 				"component", "compact",
 				"subcomponent", "runtime",
 				"source", "settings",
@@ -45,7 +45,7 @@ func ResolveModelForCounting(store session.Store, sess *session.Session, fallbac
 			return settingsModel, settingsModel, "settings"
 		}
 	}
-	slog.Debug("compact.runtime.model_resolved",
+	compactLog.Logger().Debug("compact.runtime.model_resolved",
 		"component", "compact",
 		"subcomponent", "runtime",
 		"source", "fallback",
@@ -61,14 +61,14 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 	if req.Reserved <= 0 {
 		req.Reserved = 13_000
 	}
-	slice, err := LoadSlice(req.Session.Metadata.TranscriptPath)
+	slice, err := LoadSlice(req.Session.Metadata.ProviderTranscriptPath())
 	if err != nil {
-		slog.Error("compact.runtime.upfront.load_slice_failed",
+		compactLog.Logger().Error("compact.runtime.upfront.load_slice_failed",
 			"component", "compact",
 			"subcomponent", "runtime",
 			"session", req.Session.Name,
-			"session_id", req.Session.Metadata.SessionID,
-			"transcript", req.Session.Metadata.TranscriptPath,
+			"session_id", req.Session.Metadata.ProviderSessionID(),
+			"transcript", req.Session.Metadata.ProviderTranscriptPath(),
 			"err", err.Error(),
 		)
 		return RuntimeUpfront{}, 0, nil, err
@@ -76,7 +76,7 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 	thinking, images, toolPairs, chatTurns := categoryCounts(slice)
 	upfront := RuntimeUpfront{
 		SessionName:   req.Session.Name,
-		SessionID:     req.Session.Metadata.SessionID,
+		SessionID:     req.Session.Metadata.ProviderSessionID(),
 		Model:         modelForRender,
 		Target:        req.TargetTokens,
 		Reserved:      req.Reserved,
@@ -87,7 +87,7 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 		StrippersText: strippersDescribe(req.Strippers),
 	}
 	usage, usageErr := ProbeContextUsage(ctx, ProbeOptions{
-		SessionID:   req.Session.Metadata.SessionID,
+		SessionID:   req.Session.Metadata.ProviderSessionID(),
 		WorkDir:     req.Session.Metadata.WorkDir,
 		Timeout:     30 * time.Second,
 		ForkSession: true,
@@ -98,13 +98,13 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 	}
 	staticOverhead := 0
 	if req.TargetTokens > 0 {
-		cal, ok, calErr := LoadCalibration(req.Session.Metadata.SessionID)
+		cal, ok, calErr := LoadCalibration(req.Session.Metadata.ProviderSessionID())
 		if calErr != nil {
-			slog.Error("compact.runtime.upfront.calibration_load_failed",
+			compactLog.Logger().Error("compact.runtime.upfront.calibration_load_failed",
 				"component", "compact",
 				"subcomponent", "runtime",
 				"session", req.Session.Name,
-				"session_id", req.Session.Metadata.SessionID,
+				"session_id", req.Session.Metadata.ProviderSessionID(),
 				"err", calErr.Error(),
 			)
 			return RuntimeUpfront{}, 0, nil, calErr
@@ -115,11 +115,11 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 		}
 	}
 	upfront.StaticFloor = staticOverhead
-	slog.Info("compact.runtime.upfront_built",
+	compactLog.Logger().Info("compact.runtime.upfront_built",
 		"component", "compact",
 		"subcomponent", "runtime",
 		"session", req.Session.Name,
-		"session_id", req.Session.Metadata.SessionID,
+		"session_id", req.Session.Metadata.ProviderSessionID(),
 		"model", modelForRender,
 		"target", req.TargetTokens,
 		"current_total", upfront.CurrentTotal,
@@ -161,11 +161,11 @@ func RunRuntime(
 			return nil, err
 		}
 	}
-	slog.Info("compact.runtime.run_started",
+	compactLog.Logger().Info("compact.runtime.run_started",
 		"component", "compact",
 		"subcomponent", "runtime",
 		"session", req.Session.Name,
-		"session_id", req.Session.Metadata.SessionID,
+		"session_id", req.Session.Metadata.ProviderSessionID(),
 		"mode", req.Mode,
 		"model", modelForCount,
 		"target", req.TargetTokens,
@@ -174,11 +174,11 @@ func RunRuntime(
 	if req.TargetTokens > 0 {
 		key, keyErr := AnthropicAPIKey()
 		if keyErr != nil {
-			slog.Error("compact.runtime.api_key_missing",
+			compactLog.Logger().Error("compact.runtime.api_key_missing",
 				"component", "compact",
 				"subcomponent", "runtime",
 				"session", req.Session.Name,
-				"session_id", req.Session.Metadata.SessionID,
+				"session_id", req.Session.Metadata.ProviderSessionID(),
 				"err", keyErr.Error(),
 			)
 			return nil, keyErr
@@ -202,11 +202,11 @@ func RunRuntime(
 		},
 	})
 	if err != nil {
-		slog.Error("compact.runtime.plan_failed",
+		compactLog.Logger().Error("compact.runtime.plan_failed",
 			"component", "compact",
 			"subcomponent", "runtime",
 			"session", req.Session.Name,
-			"session_id", req.Session.Metadata.SessionID,
+			"session_id", req.Session.Metadata.ProviderSessionID(),
 			"err", err.Error(),
 		)
 		return nil, err
@@ -218,13 +218,13 @@ func RunRuntime(
 		ModelForRender: modelForRender,
 		Slice:          slice,
 		Plan:           planRes,
-		TranscriptPath: req.Session.Metadata.TranscriptPath,
+		TranscriptPath: req.Session.Metadata.ProviderTranscriptPath(),
 	}
 
 	if req.Mode == RuntimeModeApply {
 		in := ApplyInput{
 			Slice:         slice,
-			SessionID:     req.Session.Metadata.SessionID,
+			SessionID:     req.Session.Metadata.ProviderSessionID(),
 			Cwd:           req.Session.Metadata.WorkspaceRoot,
 			Version:       "clyde",
 			Strippers:     req.Strippers,
@@ -234,22 +234,22 @@ func RunRuntime(
 		}
 		applyRes, applyErr := Apply(in)
 		if applyErr != nil {
-			slog.Error("compact.runtime.apply_failed",
+			compactLog.Logger().Error("compact.runtime.apply_failed",
 				"component", "compact",
 				"subcomponent", "runtime",
 				"session", req.Session.Name,
-				"session_id", req.Session.Metadata.SessionID,
+				"session_id", req.Session.Metadata.ProviderSessionID(),
 				"err", applyErr.Error(),
 			)
 			return nil, applyErr
 		}
 		result.Apply = applyRes
 	}
-	slog.Info("compact.runtime.run_completed",
+	compactLog.Logger().Info("compact.runtime.run_completed",
 		"component", "compact",
 		"subcomponent", "runtime",
 		"session", req.Session.Name,
-		"session_id", req.Session.Metadata.SessionID,
+		"session_id", req.Session.Metadata.ProviderSessionID(),
 		"mode", req.Mode,
 		"hit_target", result.Plan.HitTarget,
 		"baseline_tail", result.Plan.BaselineTail,

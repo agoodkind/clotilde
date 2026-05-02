@@ -2,7 +2,6 @@ package compact
 
 import (
 	"fmt"
-	"log/slog"
 	"strings"
 )
 
@@ -30,7 +29,7 @@ func parseSyntheticSummary(e Entry) (*syntheticSummary, bool) {
 		return nil, false
 	}
 	if e.TextOnly != "" || len(e.Content) == 0 {
-		slog.Debug("compact.synthetic_summary.parse_skipped",
+		compactLog.Logger().Debug("compact.synthetic_summary.parse_skipped",
 			"component", "compact",
 			"subcomponent", "synthetic_summary",
 			"reason", "missing_content_array",
@@ -42,7 +41,7 @@ func parseSyntheticSummary(e Entry) (*syntheticSummary, bool) {
 	blocks := make([]string, 0, len(e.Content))
 	for _, b := range e.Content {
 		if b.Type != "text" {
-			slog.Debug("compact.synthetic_summary.parse_skipped",
+			compactLog.Logger().Debug("compact.synthetic_summary.parse_skipped",
 				"component", "compact",
 				"subcomponent", "synthetic_summary",
 				"reason", "non_text_block",
@@ -56,7 +55,7 @@ func parseSyntheticSummary(e Entry) (*syntheticSummary, bool) {
 
 	summary, err := parseSyntheticSummaryBlocks(blocks)
 	if err != nil {
-		slog.Debug("compact.synthetic_summary.parse_failed",
+		compactLog.Logger().Debug("compact.synthetic_summary.parse_failed",
 			"component", "compact",
 			"subcomponent", "synthetic_summary",
 			"entry_line", e.LineIndex,
@@ -65,7 +64,7 @@ func parseSyntheticSummary(e Entry) (*syntheticSummary, bool) {
 		return nil, false
 	}
 
-	slog.Debug("compact.synthetic_summary.parsed",
+	compactLog.Logger().Debug("compact.synthetic_summary.parsed",
 		"component", "compact",
 		"subcomponent", "synthetic_summary",
 		"entry_line", e.LineIndex,

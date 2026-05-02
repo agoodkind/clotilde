@@ -12,6 +12,7 @@
 package slogger
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -29,6 +30,7 @@ const (
 	defaultBaseSubdir = "clyde"
 	defaultTUIFile    = "clyde-tui.jsonl"
 	defaultDaemonFile = "clyde-daemon.jsonl"
+	concernAttr       = "concern"
 )
 
 // ProcessRole identifies which process family is initializing slog.
@@ -63,6 +65,7 @@ func Setup(cfg config.LoggingConfig, role ProcessRole) (io.Closer, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nopCloser{}, fmt.Errorf("slogger: mkdir %s: %w", filepath.Dir(path), err)
 	}
+	concernRoot := defaultConcernRoot(cfg, role)
 	rotationEnabled := true
 	if cfg.Rotation.Enabled != nil {
 		rotationEnabled = *cfg.Rotation.Enabled
@@ -73,7 +76,9 @@ func Setup(cfg config.LoggingConfig, role ProcessRole) (io.Closer, error) {
 			return nopCloser{}, fmt.Errorf("slogger: open json log file %s: %w", path, err)
 		}
 		lockedFile := gklog.NewLockedWriteCloser(path, file)
-		logger := slog.New(slog.NewJSONHandler(lockedFile, &slog.HandlerOptions{Level: parseJSONMinLevel(level)}))
+		handlers := []slog.Handler{slog.NewJSONHandler(lockedFile, &slog.HandlerOptions{Level: parseJSONMinLevel(level)})}
+		handlers = append(handlers, concernHandlers(concernRoot, parseJSONMinLevel(level), gklog.RotationConfig{})...)
+		logger := slog.New(gklog.NewTeeHandler(handlers...))
 		slog.SetDefault(logger.With("build", version.String()))
 		return lockedFile, nil
 	}
@@ -86,22 +91,56 @@ func Setup(cfg config.LoggingConfig, role ProcessRole) (io.Closer, error) {
 	if compress == nil {
 		compress = new(true)
 	}
-	logger, closer, err := gklog.New(gklog.Config{
-		JSONLogFile:   path,
-		DisableStdout: true,
-		JSONMinLevel:  level,
-		Rotation: gklog.RotationConfig{
+	handlers := []slog.Handler{
+		gklog.FileJSON(path, parseJSONMinLevel(level), gklog.RotationConfig{
 			MaxSizeMB:  cfg.Rotation.MaxSizeMB,
 			MaxBackups: cfg.Rotation.MaxBackups,
 			MaxAgeDays: cfg.Rotation.MaxAgeDays,
 			Compress:   compress,
-		},
-	})
-	if err != nil {
-		return nopCloser{}, fmt.Errorf("slogger: gklog.New: %w", err)
+		}),
 	}
+	handlers = append(handlers, concernHandlers(concernRoot, parseJSONMinLevel(level), gklog.RotationConfig{
+		MaxSizeMB:  cfg.Rotation.MaxSizeMB,
+		MaxBackups: cfg.Rotation.MaxBackups,
+		MaxAgeDays: cfg.Rotation.MaxAgeDays,
+		Compress:   compress,
+	})...)
+	logger, closer := gklog.New(gklog.Config{
+		BuildVersion: version.String(),
+		Handlers:     handlers,
+	})
 	slog.SetDefault(logger)
 	return closer, nil
+}
+
+func WithConcern(logger *slog.Logger, concern string) *slog.Logger {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if concern = strings.TrimSpace(concern); concern == "" {
+		return logger
+	}
+	return logger.With(concernAttr, concern)
+}
+
+func For(concern string) *slog.Logger {
+	return WithConcern(slog.Default(), concern)
+}
+
+// ConcernLogger is a package-level safe concern logger.
+//
+// It intentionally resolves slog.Default at each call instead of retaining a
+// *slog.Logger captured during package init. Clyde initializes logging after
+// packages are loaded, so package-level `slogger.For(...)` variables would bind
+// to Go's bootstrap text logger and corrupt JSON logs after setup.
+type ConcernLogger string
+
+func Concern(concern string) ConcernLogger {
+	return ConcernLogger(concern)
+}
+
+func (l ConcernLogger) Logger() *slog.Logger {
+	return For(string(l))
 }
 
 func parseJSONMinLevel(level string) slog.Level {
@@ -141,6 +180,10 @@ func defaultPath(cfg config.LoggingConfig, role ProcessRole) string {
 	return filepath.Join(state, defaultBaseSubdir, fileForRole(role))
 }
 
+func defaultConcernRoot(cfg config.LoggingConfig, role ProcessRole) string {
+	return filepath.Join(filepath.Dir(defaultPath(cfg, role)), "logs")
+}
+
 func fileForRole(role ProcessRole) string {
 	if role == ProcessRoleDaemon {
 		return defaultDaemonFile
@@ -153,3 +196,68 @@ type nopCloser struct {
 }
 
 func (nopCloser) Close() error { return nil }
+
+type concernFilterHandler struct {
+	concern string
+	attrs   []slog.Attr
+	handler slog.Handler
+}
+
+func newConcernFilterHandler(concern string, handler slog.Handler) slog.Handler {
+	return &concernFilterHandler{concern: concern, handler: handler}
+}
+
+func (h *concernFilterHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return h.handler.Enabled(ctx, level)
+}
+
+func (h *concernFilterHandler) Handle(ctx context.Context, record slog.Record) error {
+	if !h.matches(record) {
+		return nil
+	}
+	return h.handler.Handle(ctx, record)
+}
+
+func (h *concernFilterHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	next := &concernFilterHandler{
+		concern: h.concern,
+		attrs:   append(append([]slog.Attr(nil), h.attrs...), attrs...),
+		handler: h.handler.WithAttrs(attrs),
+	}
+	return next
+}
+
+func (h *concernFilterHandler) WithGroup(name string) slog.Handler {
+	return &concernFilterHandler{
+		concern: h.concern,
+		attrs:   append([]slog.Attr(nil), h.attrs...),
+		handler: h.handler.WithGroup(name),
+	}
+}
+
+func (h *concernFilterHandler) Close() error {
+	if closer, ok := h.handler.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
+}
+
+func (h *concernFilterHandler) matches(record slog.Record) bool {
+	if concernForEvent(record.Message) == h.concern {
+		return true
+	}
+	for _, attr := range h.attrs {
+		if attr.Key == concernAttr && attr.Value.String() == h.concern {
+			return true
+		}
+	}
+	matched := false
+	record.Attrs(func(attr slog.Attr) bool {
+		if attr.Key == concernAttr && attr.Value.String() == h.concern {
+			matched = true
+			return false
+		}
+		return true
+	})
+	return matched
+}

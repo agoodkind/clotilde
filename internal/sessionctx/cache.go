@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -122,7 +121,7 @@ func (d *diskCache) read(opts UsageOptions) (*cachedUsage, error) {
 		return nil, fmt.Errorf("diskcache decode: %w", err)
 	}
 	if payload.SchemaVersion != diskCacheSchemaV {
-		slog.Debug("session.context.disk_cache.schema_mismatch",
+		sessionContextLog.Logger().Debug("session.context.disk_cache.schema_mismatch",
 			"component", "sessionctx",
 			"subcomponent", "disk_cache",
 			"got", payload.SchemaVersion,
@@ -148,7 +147,7 @@ func (d *diskCache) read(opts UsageOptions) (*cachedUsage, error) {
 // the fresh value; a missed disk write only hurts the next process.
 func (d *diskCache) write(payload *cachedUsage) {
 	if err := os.MkdirAll(filepath.Dir(d.path), 0o755); err != nil {
-		slog.Warn("session.context.disk_cache.mkdir_failed",
+		sessionContextLog.Logger().Warn("session.context.disk_cache.mkdir_failed",
 			"component", "sessionctx",
 			"subcomponent", "disk_cache",
 			"path", d.path,
@@ -158,7 +157,7 @@ func (d *diskCache) write(payload *cachedUsage) {
 	}
 	encoded, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
-		slog.Warn("session.context.disk_cache.encode_failed",
+		sessionContextLog.Logger().Warn("session.context.disk_cache.encode_failed",
 			"component", "sessionctx",
 			"subcomponent", "disk_cache",
 			"err", err,
@@ -167,7 +166,7 @@ func (d *diskCache) write(payload *cachedUsage) {
 	}
 	tmp := d.path + ".tmp"
 	if err := os.WriteFile(tmp, encoded, 0o644); err != nil {
-		slog.Warn("session.context.disk_cache.write_failed",
+		sessionContextLog.Logger().Warn("session.context.disk_cache.write_failed",
 			"component", "sessionctx",
 			"subcomponent", "disk_cache",
 			"path", tmp,
@@ -177,7 +176,7 @@ func (d *diskCache) write(payload *cachedUsage) {
 	}
 	if err := os.Rename(tmp, d.path); err != nil {
 		_ = os.Remove(tmp)
-		slog.Warn("session.context.disk_cache.rename_failed",
+		sessionContextLog.Logger().Warn("session.context.disk_cache.rename_failed",
 			"component", "sessionctx",
 			"subcomponent", "disk_cache",
 			"path", d.path,
@@ -185,7 +184,7 @@ func (d *diskCache) write(payload *cachedUsage) {
 		)
 		return
 	}
-	slog.Debug("session.context.disk_cache.write",
+	sessionContextLog.Logger().Debug("session.context.disk_cache.write",
 		"component", "sessionctx",
 		"subcomponent", "disk_cache",
 		"path", d.path,
@@ -195,7 +194,7 @@ func (d *diskCache) write(payload *cachedUsage) {
 
 func (d *diskCache) invalidate() {
 	if err := os.Remove(d.path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		slog.Warn("session.context.disk_cache.invalidate_failed",
+		sessionContextLog.Logger().Warn("session.context.disk_cache.invalidate_failed",
 			"component", "sessionctx",
 			"subcomponent", "disk_cache",
 			"path", d.path,
@@ -203,7 +202,7 @@ func (d *diskCache) invalidate() {
 		)
 		return
 	}
-	slog.Debug("session.context.disk_cache.invalidated",
+	sessionContextLog.Logger().Debug("session.context.disk_cache.invalidated",
 		"component", "sessionctx",
 		"subcomponent", "disk_cache",
 		"path", d.path,

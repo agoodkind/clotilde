@@ -95,14 +95,14 @@ func (l *Lifecycle) StartInteractive(_ context.Context, req session.StartRequest
 		return nil
 	}
 	if err := PersistRemoteControlSetting(l.settingsStore, req.SessionName); err != nil {
-		slog.Warn("claude.session.start.persist_remote_control_failed",
+		claudeLifecycleLog.Logger().Warn("claude.session.start.persist_remote_control_failed",
 			"component", "claude",
 			"session", req.SessionName,
 			"err", err,
 		)
 		return nil
 	}
-	slog.Info("claude.session.start.remote_control_persisted",
+	claudeLifecycleLog.Logger().Info("claude.session.start.remote_control_persisted",
 		"component", "claude",
 		"session", req.SessionName,
 		"remote_control", true,
@@ -128,7 +128,7 @@ func (l *Lifecycle) ResumeInstructions(sess *session.Session) []string {
 	if sess == nil {
 		return nil
 	}
-	sessionID := strings.TrimSpace(sess.Metadata.SessionID)
+	sessionID := strings.TrimSpace(sess.Metadata.ProviderSessionID())
 	if sessionID == "" {
 		return nil
 	}
@@ -136,10 +136,10 @@ func (l *Lifecycle) ResumeInstructions(sess *session.Session) []string {
 }
 
 func (l *Lifecycle) RecentContextMessages(sess *session.Session, limit, maxLen int) []session.ContextMessage {
-	if sess == nil || strings.TrimSpace(sess.Metadata.TranscriptPath) == "" {
+	if sess == nil || strings.TrimSpace(sess.Metadata.ProviderTranscriptPath()) == "" {
 		return nil
 	}
-	recent := ExtractRecentMessages(sess.Metadata.TranscriptPath, limit, maxLen)
+	recent := ExtractRecentMessages(sess.Metadata.ProviderTranscriptPath(), limit, maxLen)
 	out := make([]session.ContextMessage, 0, len(recent))
 	for _, msg := range recent {
 		out = append(out, session.ContextMessage{
@@ -150,21 +150,24 @@ func (l *Lifecycle) RecentContextMessages(sess *session.Session, limit, maxLen i
 	return out
 }
 
-func (l *Lifecycle) DeleteArtifacts(_ context.Context, req session.DeleteArtifactsRequest) error {
+func (l *Lifecycle) DeleteArtifacts(_ context.Context, req session.DeleteArtifactsRequest) (*session.DeletedArtifacts, error) {
 	if req.Session == nil {
-		return fmt.Errorf("nil session")
+		return nil, fmt.Errorf("nil session")
 	}
 	deleted, err := deleteSessionArtifacts(req.ClydeRoot, req.Session)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	slog.Info("claude.session.artifacts_deleted",
+	claudeLifecycleLog.Logger().Info("claude.session.artifacts_deleted",
 		"component", "claude",
 		"session", req.Session.Name,
 		"transcript_count", len(deleted.Transcript),
 		"agent_log_count", len(deleted.AgentLogs),
 	)
-	return nil
+	return &session.DeletedArtifacts{
+		Transcripts: deleted.Transcript,
+		AgentLogs:   deleted.AgentLogs,
+	}, nil
 }
 
 // appendCommonArgs adds settings flags and global defaults to the arg list.
@@ -234,7 +237,7 @@ func PersistRemoteControlSetting(store SessionSettingsStore, sessionName string)
 // Resume invokes claude CLI to resume an existing session.
 func Resume(clydeRoot string, sess *session.Session, opts ResumeOptions) error {
 	settingsFile := sessionSettingsFile(clydeRoot, sess.Name)
-	args := []string{"--resume", sess.Metadata.SessionID, "-n", sess.Name}
+	args := []string{"--resume", sess.Metadata.ProviderSessionID(), "-n", sess.Name}
 	args = appendCommonArgs(args, settingsFile)
 	args = append(args, resumeAdditionalArgs(sess, opts.CurrentWorkDir)...)
 	args = append(args, opts.AdditionalArgs...)
@@ -253,7 +256,7 @@ func Resume(clydeRoot string, sess *session.Session, opts ResumeOptions) error {
 	}
 
 	if remoteControlEnabled(settingsFile) {
-		return invokeInteractivePTY(args, env, sess.Metadata.WorkDir, sess.Metadata.SessionID)
+		return invokeInteractivePTY(args, env, sess.Metadata.WorkDir, sess.Metadata.ProviderSessionID())
 	}
 	return invokeInteractive(args, env, sess.Metadata.WorkDir)
 }
@@ -283,7 +286,7 @@ func applyMITMEnv(env map[string]string) {
 	}
 	extra, err := mitm.ClaudeEnv(context.Background(), cfg.MITM, slog.Default())
 	if err != nil {
-		slog.Warn("wrapper.mitm.claude_env_failed", "component", "wrapper", "err", err)
+		claudeLifecycleLog.Logger().Warn("wrapper.mitm.claude_env_failed", "component", "wrapper", "err", err)
 		return
 	}
 	maps.Copy(env, extra)
@@ -373,7 +376,7 @@ func invokeInteractive(args []string, env map[string]string, workDir string) err
 	<-monitorStopped
 	if shouldSelfReloadWrapper(env, runErr, monitor) {
 		if reloadErr := selfReloadCurrentProcess(); reloadErr != nil {
-			slog.Warn("wrapper.self_reload.failed",
+			claudeLifecycleLog.Logger().Warn("wrapper.self_reload.failed",
 				"component", "wrapper",
 				"session", sessionName,
 				"error", reloadErr)
@@ -433,7 +436,7 @@ func monitorDaemon(
 			if acqErr == nil && state.sawConnectionError {
 				state.reloadRequested.Store(true)
 				state.sawConnectionError = false
-				slog.Debug("wrapper.self_reload.requested",
+				claudeLifecycleLog.Logger().Debug("wrapper.self_reload.requested",
 					"component", "wrapper",
 					"session", sessionName,
 					"wrapper_id", wrapperID,
@@ -458,7 +461,7 @@ func selfReloadCurrentProcess() error {
 	if err != nil {
 		return fmt.Errorf("resolve executable path: %w", err)
 	}
-	slog.Info("wrapper.self_reload.exec",
+	claudeLifecycleLog.Logger().Info("wrapper.self_reload.exec",
 		"component", "wrapper",
 		"path", executablePath,
 		"arg_count", len(os.Args))
@@ -485,15 +488,15 @@ func invokeWithCleanup(clydeRoot string, sess *session.Session, args []string, e
 	defer func() {
 		deleted, err := cleanupIncognitoSession(clydeRoot, sess)
 		if err != nil {
-			slog.Warn("claude.incognito.cleanup.failed", "session", sess.Name, "err", err)
+			claudeLifecycleLog.Logger().Warn("claude.incognito.cleanup.failed", "session", sess.Name, "err", err)
 		} else {
-			slog.Info("claude.incognito.deleted", "session", sess.Name, "transcript_count", len(deleted.Transcript), "agent_log_count", len(deleted.AgentLogs))
+			claudeLifecycleLog.Logger().Info("claude.incognito.deleted", "session", sess.Name, "transcript_count", len(deleted.Transcript), "agent_log_count", len(deleted.AgentLogs))
 
 			// Show detailed info in verbose mode
 			if VerboseFunc() {
 				transcriptCount := len(deleted.Transcript)
 				agentLogCount := len(deleted.AgentLogs)
-				slog.Debug("claude.incognito.cleanup.details",
+				claudeLifecycleLog.Logger().Debug("claude.incognito.cleanup.details",
 					"session", sess.Name,
 					"transcripts", transcriptCount,
 					"agent_logs", agentLogCount,
@@ -532,14 +535,14 @@ func deleteSessionArtifacts(clydeRoot string, sess *session.Session) (*DeletedFi
 // DefaultSessionUsed checks if a Claude Code session was actually used by looking
 // for a transcript file. Sessions with no ID are considered unused.
 func DefaultSessionUsed(globalRoot string, sess *session.Session) bool {
-	sessionID := sess.Metadata.SessionID
+	sessionID := sess.Metadata.ProviderSessionID()
 	if sessionID == "" {
 		return false
 	}
 
 	// Prefer the transcript path saved by the hook (accurate even with symlinks).
-	if sess.Metadata.TranscriptPath != "" {
-		return util.FileExists(sess.Metadata.TranscriptPath)
+	if sess.Metadata.ProviderTranscriptPath() != "" {
+		return util.FileExists(sess.Metadata.ProviderTranscriptPath())
 	}
 
 	homeDir, err := util.HomeDir()

@@ -13,7 +13,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -71,7 +70,7 @@ func invokePTY(args []string, env map[string]string, workDir, sessionID string, 
 	if interactive {
 		displayCommand(claudeBin, args, env)
 	} else {
-		slog.Info("wrapper.remote_headless.starting",
+		claudeRemoteLog.Logger().Info("wrapper.remote_headless.starting",
 			"component", "wrapper",
 			"session", sessionName,
 			"session_id", sessionID,

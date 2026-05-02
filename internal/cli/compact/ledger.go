@@ -3,7 +3,6 @@ package compact
 import (
 	"fmt"
 	"io"
-	"log/slog"
 	"strings"
 
 	compactengine "goodkind.io/clyde/internal/compact"
@@ -11,24 +10,24 @@ import (
 )
 
 func runListBackups(out io.Writer, sess *session.Session) error {
-	slog.Info("cli.compact.ledger.started",
+	cliCompactLog.Logger().Info("cli.compact.ledger.started",
 		"session", sess.Name,
-		"session_id", sess.Metadata.SessionID,
+		"session_id", sess.Metadata.ProviderSessionID(),
 	)
-	entries, err := compactengine.ReadLedger(sess.Metadata.SessionID)
+	entries, err := compactengine.ReadLedger(sess.Metadata.ProviderSessionID())
 	if err != nil {
-		slog.Error("cli.compact.ledger.failed",
+		cliCompactLog.Logger().Error("cli.compact.ledger.failed",
 			"session", sess.Name,
-			"session_id", sess.Metadata.SessionID,
+			"session_id", sess.Metadata.ProviderSessionID(),
 			"err", err,
 		)
 		return err
 	}
 	if len(entries) == 0 {
 		_, _ = fmt.Fprintln(out, "(no ledger entries)")
-		slog.Info("cli.compact.ledger.completed",
+		cliCompactLog.Logger().Info("cli.compact.ledger.completed",
 			"session", sess.Name,
-			"session_id", sess.Metadata.SessionID,
+			"session_id", sess.Metadata.ProviderSessionID(),
 			"entries", 0,
 		)
 		return nil
@@ -42,9 +41,9 @@ func runListBackups(out io.Writer, sess *session.Session) error {
 			e.PreApplyOffset,
 			e.SnapshotPath)
 	}
-	slog.Info("cli.compact.ledger.completed",
+	cliCompactLog.Logger().Info("cli.compact.ledger.completed",
 		"session", sess.Name,
-		"session_id", sess.Metadata.SessionID,
+		"session_id", sess.Metadata.ProviderSessionID(),
 		"entries", len(entries),
 	)
 	return nil

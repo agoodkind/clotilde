@@ -25,10 +25,10 @@ func TestNormalizeModelAliasPreservesForegroundAliasParity(t *testing.T) {
 	}
 }
 
-func TestNormalizeSessionSettingsModelStripsEffortSuffixFor1MModels(t *testing.T) {
+func TestNormalizeSessionSettingsModelPreservesDeclarativeAliases(t *testing.T) {
 	testCases := map[string]string{
-		"clyde-gpt-5.4-1m-medium": "clyde-gpt-5.4-1m",
-		"clyde-gpt-5.5-1m-xhigh":  "clyde-gpt-5.5-1m",
+		"clyde-gpt-5.4-1m-medium": "clyde-gpt-5.4-1m-medium",
+		"clyde-gpt-5.5-xhigh":     "clyde-gpt-5.5-xhigh",
 		"clyde-gpt-5.4":           "clyde-gpt-5.4",
 	}
 
@@ -73,6 +73,24 @@ func TestRequestPathClassifiesSubagentRequests(t *testing.T) {
 	}
 	if req.PathKind != RequestPathForeground {
 		t.Fatalf("PathKind=%q want %q", req.PathKind, RequestPathForeground)
+	}
+}
+
+func TestRequestPathClassifiesTaskAsSubagentCapability(t *testing.T) {
+	req := TranslateRequest(adapteropenai.ChatRequest{
+		Tools: []adapteropenai.Tool{{
+			Type: "function",
+			Function: adapteropenai.ToolFunctionSchema{
+				Name: "Task",
+			},
+		}},
+	})
+
+	if len(req.RawToolNames) != 1 || req.RawToolNames[0] != "Task" {
+		t.Fatalf("RawToolNames=%v", req.RawToolNames)
+	}
+	if !req.CanSpawnAgent {
+		t.Fatalf("CanSpawnAgent=false want true")
 	}
 }
 

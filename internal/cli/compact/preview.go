@@ -16,15 +16,15 @@ import (
 )
 
 func runMetricsDashboard(ctx context.Context, out io.Writer, sess *session.Session, path string, refresh bool) error {
-	slog.Info("cli.compact.preview.metrics.started",
+	cliCompactLog.Logger().Info("cli.compact.preview.metrics.started",
 		"session", sess.Name,
-		"session_id", sess.Metadata.SessionID,
+		"session_id", sess.Metadata.ProviderSessionID(),
 		"transcript", path,
 		"refresh", refresh,
 	)
 	slice, err := compactengine.LoadSlice(path)
 	if err != nil {
-		slog.Error("cli.compact.preview.metrics.failed",
+		cliCompactLog.Logger().Error("cli.compact.preview.metrics.failed",
 			"session", sess.Name,
 			"transcript", path,
 			"err", err,
@@ -33,7 +33,7 @@ func runMetricsDashboard(ctx context.Context, out io.Writer, sess *session.Sessi
 	}
 	stat, err := os.Stat(path)
 	if err != nil {
-		slog.Error("cli.compact.preview.metrics.failed",
+		cliCompactLog.Logger().Error("cli.compact.preview.metrics.failed",
 			"session", sess.Name,
 			"transcript", path,
 			"err", err,
@@ -41,10 +41,10 @@ func runMetricsDashboard(ctx context.Context, out io.Writer, sess *session.Sessi
 		return err
 	}
 	_, _ = fmt.Fprintln(out, "session     "+sess.Name)
-	_, _ = fmt.Fprintln(out, "uuid        "+sess.Metadata.SessionID)
+	_, _ = fmt.Fprintln(out, "uuid        "+sess.Metadata.ProviderSessionID())
 	_, _ = fmt.Fprintf(out, "file        %s   (%d lines, %s)\n", path, len(slice.AllEntries), util.FormatSize(stat.Size()))
 
-	if cal, ok, _ := compactengine.LoadCalibration(sess.Metadata.SessionID); ok {
+	if cal, ok, _ := compactengine.LoadCalibration(sess.Metadata.ProviderSessionID()); ok {
 		_, _ = fmt.Fprintf(out, "calibration static_overhead = %s  (captured %s)\n",
 			humanInt(cal.StaticOverhead), cal.CapturedAt.UTC().Format("2006-01-02"))
 	} else {
@@ -81,9 +81,9 @@ func runMetricsDashboard(ctx context.Context, out io.Writer, sess *session.Sessi
 	})
 	_, _ = fmt.Fprintln(out)
 	if usageErr != nil {
-		slog.Warn("cli.compact.preview.metrics.usage_failed",
+		cliCompactLog.Logger().Warn("cli.compact.preview.metrics.usage_failed",
 			"session", sess.Name,
-			"session_id", sess.Metadata.SessionID,
+			"session_id", sess.Metadata.ProviderSessionID(),
 			slog.Any("err", usageErr),
 		)
 		_, _ = fmt.Fprintf(out, "context     unavailable (%v)\n", usageErr)
@@ -104,9 +104,9 @@ func runMetricsDashboard(ctx context.Context, out io.Writer, sess *session.Sessi
 			"static overhead", humanInt(usage.StaticOverhead()))
 	}
 
-	slog.Info("cli.compact.preview.metrics.completed",
+	cliCompactLog.Logger().Info("cli.compact.preview.metrics.completed",
 		"session", sess.Name,
-		"session_id", sess.Metadata.SessionID,
+		"session_id", sess.Metadata.ProviderSessionID(),
 		"transcript", path,
 		"usage_available", usageErr == nil,
 	)

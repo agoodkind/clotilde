@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"goodkind.io/clyde/internal/claude"
+	"goodkind.io/clyde/internal/codex"
 	"goodkind.io/clyde/internal/session"
 )
 
@@ -40,6 +41,8 @@ func ForProvider(provider session.ProviderID, store session.Store) (Runtime, err
 			return claude.NewLifecycle(nil), nil
 		}
 		return claude.NewLifecycle(store), nil
+	case session.ProviderCodex:
+		return codex.NewLifecycle(), nil
 	default:
 		return nil, fmt.Errorf("unsupported session provider %q", session.NormalizeProviderID(provider))
 	}

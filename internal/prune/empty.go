@@ -30,7 +30,7 @@ func findEmptySessions(store session.Store, settings EmptySettings) ([]*session.
 	cutoff := time.Now().Add(-settings.MinAge)
 
 	for _, sess := range all {
-		transcriptPath := sess.Metadata.TranscriptPath
+		transcriptPath := sess.Metadata.ProviderTranscriptPath()
 		if transcriptPath == "" || !fileExists(transcriptPath) {
 			if emptyIncludeNilTranscript {
 				hits = append(hits, sess)

@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
 	"github.com/spf13/cobra"
 
@@ -29,7 +28,7 @@ func NewResumeCmd() *cobra.Command {
 		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			query := args[0]
-			slog.Info("cli.resume.invoked",
+			cmdResumeLog.Logger().Info("cli.resume.invoked",
 				"component", "cli",
 				"query", query,
 			)
@@ -42,7 +41,7 @@ func NewResumeCmd() *cobra.Command {
 				return err
 			}
 			if sess == nil {
-				slog.Info("cli.resume.unknown_session.forwarding_to_provider",
+				cmdResumeLog.Logger().Info("cli.resume.unknown_session.forwarding_to_provider",
 					"component", "cli",
 					"query", query,
 				)
@@ -56,11 +55,11 @@ func NewResumeCmd() *cobra.Command {
 					Query: query,
 				})
 			}
-			slog.Info("cli.resume.resolved",
+			cmdResumeLog.Logger().Info("cli.resume.resolved",
 				"component", "cli",
 				"query", query,
 				"session", sess.Name,
-				"session_id", sess.Metadata.SessionID,
+				"session_id", sess.Metadata.ProviderSessionID(),
 			)
 			return resumeSession(sess, store, false)
 		},

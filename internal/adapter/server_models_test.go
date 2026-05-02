@@ -36,7 +36,7 @@ func TestHandleModelsIncludesLegacyAndOpenAIContextFields(t *testing.T) {
 	if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode models response: %v", err)
 	}
-	const alias = "clyde-opus-4-7-medium-1m-thinking-enabled"
+	const alias = "clyde-opus-4.7-1m-medium-thinking"
 	for _, model := range payload.Data {
 		if model["id"] != alias {
 			continue
@@ -90,5 +90,86 @@ func TestCodexCapabilityOverlayAppliesTransportAwareContextTruth(t *testing.T) {
 		if got != 244800 {
 			t.Fatalf("effective safe fields = %+v", entry)
 		}
+	}
+}
+
+func TestModelCatalogFingerprintIsStableAcrossModelAndCapabilityOrder(t *testing.T) {
+	models := []ResolvedModel{
+		{
+			Alias:           "clyde-gpt-5.5-high",
+			Backend:         BackendCodex,
+			ClaudeModel:     "gpt-5.5",
+			Context:         200_000,
+			MaxOutputTokens: 128_000,
+			Efforts:         []string{EffortHigh, EffortMedium},
+			Effort:          EffortHigh,
+			SupportsTools:   true,
+			FamilySlug:      "gpt-5.5",
+		},
+		{
+			Alias:           "clyde-sonnet-4.6-medium-thinking",
+			Backend:         BackendAnthropic,
+			ClaudeModel:     "claude-sonnet-4-6-20260415",
+			Context:         200_000,
+			MaxOutputTokens: 64_000,
+			Efforts:         []string{EffortMedium},
+			Effort:          EffortMedium,
+			ThinkingModes:   []string{ThinkingEnabled, ThinkingDefault},
+			Thinking:        ThinkingEnabled,
+			SupportsTools:   true,
+			SupportsVision:  true,
+			FamilySlug:      "sonnet-4.6",
+		},
+	}
+	reordered := []ResolvedModel{
+		{
+			Alias:           "clyde-sonnet-4.6-medium-thinking",
+			Backend:         BackendAnthropic,
+			ClaudeModel:     "claude-sonnet-4-6-20260415",
+			Context:         200_000,
+			MaxOutputTokens: 64_000,
+			Efforts:         []string{EffortMedium},
+			Effort:          EffortMedium,
+			ThinkingModes:   []string{ThinkingDefault, ThinkingEnabled},
+			Thinking:        ThinkingEnabled,
+			SupportsTools:   true,
+			SupportsVision:  true,
+			FamilySlug:      "sonnet-4.6",
+		},
+		{
+			Alias:           "clyde-gpt-5.5-high",
+			Backend:         BackendCodex,
+			ClaudeModel:     "gpt-5.5",
+			Context:         200_000,
+			MaxOutputTokens: 128_000,
+			Efforts:         []string{EffortMedium, EffortHigh},
+			Effort:          EffortHigh,
+			SupportsTools:   true,
+			FamilySlug:      "gpt-5.5",
+		},
+	}
+
+	if got, want := modelCatalogFingerprint(reordered), modelCatalogFingerprint(models); got != want {
+		t.Fatalf("fingerprint changed across order: got %s want %s", got, want)
+	}
+}
+
+func TestModelCatalogFingerprintChangesWhenCatalogSemanticsChange(t *testing.T) {
+	models := []ResolvedModel{
+		{
+			Alias:           "clyde-gpt-5.5-high",
+			Backend:         BackendCodex,
+			ClaudeModel:     "gpt-5.5",
+			Context:         200_000,
+			MaxOutputTokens: 128_000,
+			Effort:          EffortHigh,
+			SupportsTools:   true,
+		},
+	}
+	changed := append([]ResolvedModel(nil), models...)
+	changed[0].Context = 1_000_000
+
+	if got, wantDifferent := modelCatalogFingerprint(changed), modelCatalogFingerprint(models); got == wantDifferent {
+		t.Fatalf("fingerprint did not change after catalog semantic changed: %s", got)
 	}
 }

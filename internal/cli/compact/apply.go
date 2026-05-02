@@ -3,7 +3,6 @@ package compact
 import (
 	"fmt"
 	"io"
-	"log/slog"
 
 	compactengine "goodkind.io/clyde/internal/compact"
 	"goodkind.io/clyde/internal/session"
@@ -18,15 +17,15 @@ func runApply(
 	planRes *compactengine.PlanResult,
 	force bool,
 ) error {
-	slog.Info("cli.compact.apply.started",
+	cliCompactLog.Logger().Info("cli.compact.apply.started",
 		"session", sess.Name,
-		"session_id", sess.Metadata.SessionID,
+		"session_id", sess.Metadata.ProviderSessionID(),
 		"target", target,
 		"force", force,
 	)
 	in := compactengine.ApplyInput{
 		Slice:         slice,
-		SessionID:     sess.Metadata.SessionID,
+		SessionID:     sess.Metadata.ProviderSessionID(),
 		Cwd:           sess.Metadata.WorkspaceRoot,
 		Version:       "clyde",
 		Strippers:     strippers,
@@ -36,9 +35,9 @@ func runApply(
 	}
 	res, err := compactengine.Apply(in)
 	if err != nil {
-		slog.Error("cli.compact.apply.failed",
+		cliCompactLog.Logger().Error("cli.compact.apply.failed",
 			"session", sess.Name,
-			"session_id", sess.Metadata.SessionID,
+			"session_id", sess.Metadata.ProviderSessionID(),
 			"err", err,
 		)
 		return err
@@ -46,9 +45,9 @@ func runApply(
 	_, _ = fmt.Fprintln(out, "  verified appended transcript lines as valid JSON boundary/synthetic pair")
 	_, _ = fmt.Fprintf(out, "\napplied:\n  boundary uuid:   %s\n  synthetic uuid:  %s\n  pre-apply bytes: %d\n  post-apply bytes: %d\n  snapshot:        %s\n  ledger:          %s\n",
 		res.BoundaryUUID, res.SyntheticUUID, res.PreApplyOffset, res.PostApplyOffset, res.SnapshotPath, res.LedgerPath)
-	slog.Info("cli.compact.apply.completed",
+	cliCompactLog.Logger().Info("cli.compact.apply.completed",
 		"session", sess.Name,
-		"session_id", sess.Metadata.SessionID,
+		"session_id", sess.Metadata.ProviderSessionID(),
 		"boundary_uuid", res.BoundaryUUID,
 		"synthetic_uuid", res.SyntheticUUID,
 		"pre_apply_offset", res.PreApplyOffset,

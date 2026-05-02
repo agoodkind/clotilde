@@ -418,7 +418,7 @@ func handleAnalyzeResults(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 		return mcp.NewToolResultText(fmt.Sprintf("Analysis failed: %v", err)), nil
 	}
 
-	slog.Info("analyze_results complete",
+	mcpSearchLog.Logger().Info("analyze_results complete",
 		"result_id", resultID,
 		"session", cached.SessionName,
 		"cached_messages", len(cached.Messages),
@@ -454,14 +454,14 @@ func loadMessages(name string) ([]transcript.Message, error) {
 	clydeRoot := root + "/.claude/clyde"
 
 	var paths []string
-	for _, prevID := range sess.Metadata.PreviousSessionIDs {
+	for _, prevID := range sess.Metadata.PreviousProviderSessionIDStrings() {
 		if prevID != "" {
 			paths = append(paths, claudeTranscriptPath(homeDir, clydeRoot, prevID))
 		}
 	}
-	current := sess.Metadata.TranscriptPath
-	if current == "" && sess.Metadata.SessionID != "" {
-		current = claudeTranscriptPath(homeDir, clydeRoot, sess.Metadata.SessionID)
+	current := sess.Metadata.ProviderTranscriptPath()
+	if current == "" && sess.Metadata.ProviderSessionID() != "" {
+		current = claudeTranscriptPath(homeDir, clydeRoot, sess.Metadata.ProviderSessionID())
 	}
 	if current != "" {
 		paths = append(paths, current)

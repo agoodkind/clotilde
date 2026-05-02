@@ -24,6 +24,7 @@ import (
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/slogger"
 )
 
 // DefaultPort is the loopback port the adapter listens on when
@@ -124,6 +125,7 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 	if log == nil {
 		log = slog.Default()
 	}
+	log = slogger.WithConcern(log, slogger.ConcernAdapterHTTPIngress)
 	if logging.Body.Mode == "" {
 		logging.Body.Mode = "summary"
 	}
@@ -161,7 +163,7 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 		s.codexProvider = adaptercodex.NewProvider(adapterprovider.Deps{
 			Config:     cfg,
 			Auth:       codexAuthLookup{server: s},
-			Logger:     log.With("subcomponent", "codex_provider"),
+			Logger:     slogger.WithConcern(log.With("subcomponent", "codex_provider"), slogger.ConcernAdapterProviderCodex),
 			HTTPClient: s.httpClient,
 		}, adaptercodex.ProviderOptions{
 			BodyLog: adaptercodex.BodyLogConfig{Mode: logging.Body.Mode, MaxKB: logging.Body.MaxKB},
@@ -200,7 +202,7 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 		})
 		s.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{
 			Config: cfg,
-			Logger: log.With("subcomponent", "anthropic_provider"),
+			Logger: slogger.WithConcern(log.With("subcomponent", "anthropic_provider"), slogger.ConcernAdapterProviderAnthReq),
 		}, anthropic.ProviderOptions{
 			Prepare:         s.prepareAnthropicProviderRequest,
 			ExecutePrepared: s.executeAnthropicPreparedRequest,

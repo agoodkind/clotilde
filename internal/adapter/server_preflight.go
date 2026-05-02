@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+
+	"goodkind.io/clyde/internal/slogger"
 )
 
 type preflightError struct {
@@ -92,7 +94,7 @@ func (s *Server) validateAudio(ctx context.Context, req *ChatRequest, reqID stri
 			if p.Type != "input_audio" {
 				continue
 			}
-			s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.audio_rejected",
+			slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.audio_rejected",
 				slog.String("request_id", reqID),
 				slog.String("model", req.Model),
 				slog.Int("message_index", msgIdx),
@@ -123,7 +125,7 @@ func (s *Server) validateVision(ctx context.Context, req *ChatRequest, model Res
 		return nil
 	}
 	if model.Backend == BackendAnthropic && !model.SupportsVision {
-		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.vision_rejected",
+		slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.vision_rejected",
 			slog.String("request_id", reqID),
 			slog.String("model", req.Model),
 		)
@@ -135,7 +137,7 @@ func (s *Server) validateVision(ctx context.Context, req *ChatRequest, model Res
 func (s *Server) validateTools(ctx context.Context, req *ChatRequest, reqID string) *preflightError {
 	for tIdx, t := range req.Tools {
 		if t.Function.Name == "" {
-			s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.tools_invalid_name",
+			slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.tools_invalid_name",
 				slog.String("request_id", reqID),
 				slog.String("model", req.Model),
 				slog.Int("tool_index", tIdx),
@@ -146,7 +148,7 @@ func (s *Server) validateTools(ctx context.Context, req *ChatRequest, reqID stri
 	}
 	for fIdx, f := range req.Functions {
 		if f.Name == "" {
-			s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.tools_invalid_name",
+			slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.tools_invalid_name",
 				slog.String("request_id", reqID),
 				slog.String("model", req.Model),
 				slog.Int("function_index", fIdx),
@@ -164,7 +166,7 @@ func (s *Server) validateToolChoice(ctx context.Context, req *ChatRequest, model
 	}
 	wantsTools := len(req.Tools) > 0 || len(req.Functions) > 0 || toolChoiceRequestsTools(req.ToolChoice)
 	if wantsTools && !model.SupportsTools {
-		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.tools_rejected",
+		slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.tools_rejected",
 			slog.String("request_id", reqID),
 			slog.String("model", req.Model),
 		)
@@ -182,7 +184,7 @@ func (s *Server) validateLogprobs(ctx context.Context, req *ChatRequest, model R
 	case BackendAnthropic:
 		switch s.logprobs.Anthropic {
 		case "reject":
-			s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.logprobs_rejected",
+			slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.logprobs_rejected",
 				slog.String("request_id", reqID),
 				slog.String("model", req.Model),
 				slog.String("backend", "anthropic"),
