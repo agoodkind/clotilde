@@ -17,11 +17,9 @@ import (
 // our requests onto a different identity and degrade quality on
 // Cursor's Anthropic OAuth bucket.
 //
-// When the captured reference is regenerated (via
-// `clyde mitm codegen --package anthropic
-// research/claude-code/snapshots/latest/reference.toml`) and a header
-// genuinely changed upstream, this test fails until the override
-// values in the test cfg or the runtime-only branches in
+// When the captured reference is regenerated from the daemon-owned MITM
+// baseline and a header genuinely changed upstream, this test fails until the
+// override values in the test cfg or the runtime-only branches in
 // freeIdentityHeaders are updated to match.
 func TestOutboundHeadersMatchClaudeCLIInteractiveFlavor(t *testing.T) {
 	t.Parallel()

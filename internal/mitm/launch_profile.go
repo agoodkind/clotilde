@@ -11,7 +11,8 @@ import (
 )
 
 // LaunchProfile describes how to start one upstream client through
-// the MITM proxy. Used by `clyde mitm capture --upstream <name>`.
+// the MITM proxy. This is internal infrastructure for daemon/config-driven
+// capture workflows.
 // Each profile knows where to find its binary, what env vars to
 // inject, what Chromium flags Electron renderers need, and which
 // upstream domains to expect in the capture.

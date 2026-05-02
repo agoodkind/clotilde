@@ -5,6 +5,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"goodkind.io/clyde/internal/config"
@@ -84,6 +85,33 @@ func TestPersistRemoteControlSetting(t *testing.T) {
 	}
 	if store.saved == nil || !store.saved.RemoteControl || store.saved.Model != "sonnet" {
 		t.Fatalf("PersistRemoteControlSetting preserved settings = %#v", store.saved)
+	}
+}
+
+func TestApplyMITMEnvAddsAnthropicBaseURLForWrapperLaunch(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	cfgDir := filepath.Join(configHome, "clyde")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	cfg := []byte("[mitm]\nenabled_default = true\nproviders = \"claude\"\nbody_mode = \"summary\"\ncapture_dir = \"" + t.TempDir() + "\"\n")
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), cfg, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	env := map[string]string{
+		"ANTHROPIC_BASE_URL": "https://old.example",
+		"KEEP":               "1",
+	}
+	applyMITMEnv(env)
+
+	if env["KEEP"] != "1" {
+		t.Fatalf("KEEP env = %q, want 1", env["KEEP"])
+	}
+	baseURL := env["ANTHROPIC_BASE_URL"]
+	if !strings.HasPrefix(baseURL, "http://[::1]:") {
+		t.Fatalf("ANTHROPIC_BASE_URL=%q, want local MITM proxy", baseURL)
 	}
 }
 

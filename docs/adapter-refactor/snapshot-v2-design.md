@@ -7,13 +7,14 @@ owns the daemon-backed always-on MITM baseline architecture.
 
 - MITM capture tooling exists.
 - Snapshot v2 extraction exists.
-- `clyde mitm diff` can auto-detect Snapshot v2 references.
-- `wire-snapshot-check` can use `reference-v2.toml` plus `--v2` when that
-  reference exists.
+- MITM diff/drift tooling remains internal daemon/config-driven
+  infrastructure, not a user-facing `clyde` subcommand surface.
 - Claude Code Snapshot v2 baselines are local XDG-state artifacts under
   `XDG_STATE_HOME/clyde/mitm-baselines/`.
 - Daemon startup owns the always-on MITM listener when `[mitm].enabled_default`
   is set.
+- Clyde-launched Claude sessions route through the daemon-owned MITM proxy when
+  `[mitm].enabled_default` includes the Claude provider.
 - Baselines refresh from accumulated captures on daemon-owned drift ticks and
   debounced capture callbacks, with drift logged before replacement.
 - `internal/adapter/anthropic/wire_flavors_gen.go` is generated from that

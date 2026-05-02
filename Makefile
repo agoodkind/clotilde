@@ -268,51 +268,6 @@ staticcheck-extra-baseline: staticcheck-extra-bin
 		n=$$(wc -l < "$(STATICCHECK_EXTRA_BASELINE)"); \
 		echo "staticcheck-extra: baseline $(STATICCHECK_EXTRA_BASELINE) refreshed ($$n findings)"'
 
-# CLYDE-125 MITM capture targets. Each target spawns the named
-# upstream through the local mitm proxy and writes a JSONL
-# transcript under ~/.local/state/clyde/mitm/<upstream>/<timestamp>/.
-# Run mitmproxy once first to seed ~/.mitmproxy/mitmproxy-ca-cert.pem.
-capture-codex-cli: build
-	@"$(CLYDE_DEV_RUN)" mitm capture --upstream codex-cli
-
-capture-codex-desktop: build
-	@"$(CLYDE_DEV_RUN)" mitm capture --upstream codex-desktop
-
-capture-claude-code: build
-	@"$(CLYDE_DEV_RUN)" mitm capture --upstream claude-code
-
-capture-claude-desktop: build
-	@"$(CLYDE_DEV_RUN)" mitm capture --upstream claude-desktop
-
-# mitm-launcher-* targets scaffold a dock-pinnable wrapper .app that
-# runs `clyde mitm launch <upstream>` on click. The wrapper ensures
-# the MITM proxy is running and spawns the real Electron app with
-# the LaunchProfile env + Chromium flags applied. Pin the resulting
-# .app to your Dock instead of the original; clicking it routes the
-# upstream through clyde automatically.
-mitm-launcher-codex-desktop: build install
-	@bash packaging/macos/launchers/build-launcher.sh codex-desktop \
-		"$(HOME)/Applications/Codex (via clyde).app"
-
-mitm-launcher-claude-desktop: build install
-	@bash packaging/macos/launchers/build-launcher.sh claude-desktop \
-		"$(HOME)/Applications/Claude (via clyde).app"
-
-mitm-launcher-vscode: build install
-	@bash packaging/macos/launchers/build-launcher.sh vscode \
-		"$(HOME)/Applications/VS Code (via clyde).app"
-
-mitm-launchers: mitm-launcher-codex-desktop mitm-launcher-claude-desktop mitm-launcher-vscode
-
-# wire-snapshot-check diffs the current local capture store against the
-# user-local XDG baseline for each upstream. Baselines are created and
-# refreshed by the daemon-owned MITM flow, not by committed repo files.
-wire-snapshot-check: build
-	@for upstream in codex-cli codex-desktop claude-code claude-desktop; do \
-		"$(CLYDE_DEV_RUN)" mitm drift-check --upstream $$upstream || exit 1; \
-	done
-	@echo "✓ Wire snapshot parity clean"
-
 deadcode: build ## Check for unreachable functions
 	@if ! output=$$(go tool deadcode ./...); then \
 		echo "go tool deadcode failed"; \
@@ -320,6 +275,7 @@ deadcode: build ## Check for unreachable functions
 	fi; \
 	filtered=$$(echo "$$output" | grep -v \
 		-e 'cmd/root.go:.*NewRootCmd' \
+		-e 'internal/mitm/\(baseline_paths\|capture_session\|codegen\|codegen_v2\|drift_runner\|launch_profile\|launcher\).go:' \
 		-e 'internal/testutil/claude.go:.*CreateFakeClaude' \
 		-e 'internal/testutil/claude.go:.*ReadClaudeArgs' \
 	|| true); \

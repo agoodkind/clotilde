@@ -66,7 +66,8 @@ evidence shows a regression.
 - `CLYDE-163`: Done. Cursor auto-summarization remains client-side; Clyde's
   responsibility is correct context reporting and preflight behavior.
 - `CLYDE-165`: Done. Daemon-owned always-on MITM with rolling XDG
-  baselines, drift logs, and convenience-only CLI.
+  baselines and drift logs. MITM is config-driven internal infrastructure, not
+  a user-facing `clyde` CLI surface.
 - `CLYDE-169`: Done. Adapter model mappings, native Codex aliases, and
   observed Codex context windows are config-driven.
 
