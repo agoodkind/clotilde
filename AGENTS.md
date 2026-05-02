@@ -284,9 +284,46 @@ When deleting a session, remove:
 
 This ensures complete cleanup even after multiple `/clear` operations (and `/compact`, if Claude Code's behavior changes to create new UUIDs for compaction).
 
-### OpenAI compatible adapter **\*IN FLUX THIS SECTION IS STALE\*\***
+### OpenAI compatible adapter
 
-The daemon optionally hosts an OpenAI Chat Completions v1 HTTP surface under `internal/adapter/`. Incoming `model` strings resolve through a registry built from `[adapter]` and `[adapter.models]` in config (`internal/adapter/models.go`). Backends include direct Claude, Anthropic HTTP, configured shunts, and the local `claude` CLI fallback (`BackendFallback`). See `reasoning_effort` and family `efforts` in the adapter packages for how effort maps to wire format. Streaming and non streaming paths exist; tool calling, images, and embeddings policies are enforced in the dispatcher. There is no checked in `docs/openai-adapter.md`; read the code and config schema as the source of truth.
+The daemon optionally hosts an OpenAI Chat Completions v1 HTTP surface under
+`internal/adapter/`. Incoming `model` strings resolve through the model
+registry and typed resolver before dispatching to Anthropic OAuth, Codex
+websocket, configured shunts, or other provider-owned backends. Streaming and
+non-streaming paths exist; tool calling, images, embeddings policy, and
+provider-specific finish/error mapping are enforced in the dispatcher and
+provider packages. Current adapter planning and research live in
+`docs/adapter-refactor/`; keep that documentation current when debugging
+Cursor/Codex behavior.
+
+Important Cursor/Codex facts agents should not rediscover:
+
+- Cursor appears to query `/v1/models` before sending chat, then decides
+  locally whether to summarize/compact, then sends `/v1/chat/completions` with
+  its chosen payload. Clyde cannot rely on chat requests to include the selected
+  context-mode toggle.
+- Cursor does not forward the MAX Mode / 1m toggle in the chat body. Request
+  bodies observed by Clyde contain the model id and metadata such as
+  `cursorConversationId`, but no reliable requested-context-length field.
+- Cursor's visible "API usage limit", "User API key rate limit exceeded", and
+  "Unable to reach the model provider" messages are often fallback UI wrappers.
+  Check Clyde logs before treating them as real quota or rate-limit events.
+- Native-looking GPT ids can trigger Cursor's built-in model catalog behavior
+  even when Clyde advertises different `/v1/models` metadata. In particular,
+  `gpt-5.5` has been observed as large-context in Cursor while Clyde and Codex
+  upstream treat it as about `272000` input tokens.
+- Clyde-specific GPT/Codex aliases are effort-qualified and config-driven, for
+  example `clyde-gpt-5.5-high` and `clyde-gpt-5.4-1m-medium`. Do not expose
+  bare non-effort `clyde-gpt-*` aliases. `/v1/models` is necessary for
+  ergonomics but is not a sufficient safety boundary.
+- Adapter-side preflight is required for known context-window overflows. Do not
+  open an upstream Codex turn when Clyde can already tell the request exceeds
+  the resolved model budget; return a Cursor-compatible context-length error
+  shape instead.
+- GPT/Codex model aliases, effort tiers, context budgets, safe budgets, and
+  advertised/native alias exposure should become fully config-driven. Avoid
+  adding new hard-coded model facts to the registry unless you also file or
+  update the config-driven follow-up.
 
 ### Daemon reload behavior
 
@@ -370,6 +407,99 @@ the options popup, Sidecar tab for tail/send). The standalone
 - Test both success and error cases
 - Keep tests focused and independent
 - Use descriptive test names
+
+### Real-world Cursor verification with Hammerspoon
+
+For changes that touch the OpenAI-compatible adapter, the Cursor BYOK
+ingress, or anything that is supposed to render in Cursor's chat
+(thinking blocks, tool calls, file reads, and so on), unit tests are
+necessary but not sufficient. Cursor's renderer is a real client and
+its parser sees the actual SSE bytes. Drive a real Cursor turn end to
+end before declaring a fix shipped.
+
+**Why Hammerspoon is the right driver here**
+
+Hammerspoon is already installed at `/opt/homebrew/bin/hs` on the
+developer machine and can drive Cursor without the developer at the
+keyboard. Cursor itself does not expose a stable scripting API the
+agent can call directly. Hammerspoon focuses windows, types text, and
+takes screenshots, which is exactly the surface needed to verify what
+the user actually sees.
+
+**When to use it**
+
+Use Hammerspoon-driven Cursor turns whenever a change could affect
+the rendered chat output. That includes streaming SSE shape changes,
+new finish-reason mappings, thinking-block formatting, tool-call
+delta shape, and anything that touches the per-provider request
+builder. Do not use it as a substitute for unit tests. Use it as the
+final live check after the unit tests pass.
+
+**The minimum viable script**
+
+Open a fresh chat, type the prompt, send it, wait, capture a
+screenshot of the second monitor where Cursor is running. The
+Built-in Retina Display is the secondary screen on the developer
+laptop. Adjust the screen name if a different machine is used.
+
+```bash
+hs -c '
+local app = hs.application.find("Cursor")
+app:activate()
+hs.timer.usleep(300000)
+hs.eventtap.keyStroke({"cmd"}, "n")
+hs.timer.usleep(500000)
+local prompt = [=[<the test prompt>]=]
+hs.eventtap.keyStrokes(prompt)
+hs.timer.usleep(500000)
+hs.eventtap.keyStroke({}, "return")
+print("sent")
+'
+# Wait for the agent loop, then snapshot the screen Cursor is on.
+hs -c '
+for i, s in ipairs(hs.screen.allScreens()) do
+  if s:name() == "Built-in Retina Display" then
+    s:snapshot():saveToFile("/tmp/cursor-after.png")
+    return
+  end
+end
+'
+```
+
+**Prompt design rules**
+
+The prompt is the test. A good prompt is a real-world investigation
+or task. Do not list the tools the model should use. The point is to
+exercise the natural agentic flow. Bad prompts read like a checklist
+("call Glob, then Read three files, then Grep, then Task..."). Good
+prompts read like something a senior engineer would actually ask
+("trace where finish_reason is set in the streaming path and tell me
+under what conditions tokens_out=0 is possible"). The model decides
+which tools to call. The test verifies the client receives the
+results correctly.
+
+**Correlation with daemon logs**
+
+Every prompt should embed a unique probe id (for example
+`[CLYDE-PROBE-LIVE-1]`) so the daemon log sequence is unambiguously
+attributable to the run. Tail
+`~/.local/state/clyde/logs/adapter/http/ingress.jsonl` and
+`~/.local/state/clyde/logs/adapter/providers/anthropic/request.jsonl`
+during the run to confirm the per-turn shape matches expectations.
+
+**Reload before testing**
+
+Always `make build install` and `~/.local/bin/clyde daemon reload`
+before sending a new prompt. The daemon does a zero-bind-gap binary
+handoff, so the live wire path picks up the new code without dropping
+in-flight Cursor connections.
+
+**Hard limit**
+
+Do not script destructive operations into the prompt. Read-only
+exploration only. Cursor will execute whatever tool the model
+requests. Editing or deleting from a Hammerspoon-driven probe is a
+foot-gun the agent must not arm.
 
 ## Documentation
 
@@ -472,6 +602,27 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 ```
 
 `gklog.WithLogger(ctx, log)` stores the logger on the context. `gklog.LoggerFromContext(ctx)` returns that logger, or `slog.Default()` when none was stored. `gklog.L(ctx)` is a short alias.
+
+### Concern loggers
+
+Use explicit concern loggers for production diagnostics. The unified
+process logs still exist, but Clyde also fans records out to the
+hard-coded nested concern tree under `$XDG_STATE_HOME/clyde/logs/`.
+New code should choose the concern at the subsystem/request boundary:
+
+```go
+log := slogger.For(slogger.ConcernAdapterModelsCatalog)
+log.Info("adapter.models.listed", "model_count", count)
+
+requestLog := slogger.WithConcern(baseLog, slogger.ConcernAdapterChatDispatch)
+requestLog.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.received", attrs...)
+```
+
+Do not rely on event-name prefix routing for new call sites. That
+table is a temporary compatibility shim while older `slog.*` and
+unconcerned logger calls are migrated. If a package cannot import
+`internal/slogger` because it would create an import cycle, attach the
+literal `concern` attribute at the boundary and leave a narrow note.
 
 ### What to log **THIS LIST IS NON-EXHAUSTIVE**
 

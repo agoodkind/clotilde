@@ -96,6 +96,7 @@ func TestStreamPipelineDeliversToolCallsAndThinking(t *testing.T) {
 	hasToolArgs := false
 	hasThinkingOpen := false
 	hasThinkingClose := false
+	hasReasoningContent := false
 	emptyToolCallChunks := 0
 	for _, ch := range chunks {
 		for _, choice := range ch.Choices {
@@ -104,6 +105,9 @@ func TestStreamPipelineDeliversToolCallsAndThinking(t *testing.T) {
 			}
 			if strings.Contains(choice.Delta.Content, "<!--/clyde-thinking-->") {
 				hasThinkingClose = true
+			}
+			if strings.TrimSpace(choice.Delta.ReasoningContent) != "" {
+				hasReasoningContent = true
 			}
 			for _, tc := range choice.Delta.ToolCalls {
 				if strings.TrimSpace(tc.Function.Name) != "" {
@@ -136,6 +140,9 @@ func TestStreamPipelineDeliversToolCallsAndThinking(t *testing.T) {
 	}
 	if !hasThinkingClose {
 		t.Errorf("missing signal: no chunk with <!--/clyde-thinking--> close marker")
+	}
+	if !hasReasoningContent {
+		t.Errorf("missing signal: no chunk with non-empty delta.reasoning_content (dual-emit probe for native Cursor BYOK reasoning render)")
 	}
 	if emptyToolCallChunks > 0 {
 		t.Errorf("found %d empty tool_call chunks (no name, args, or id); Cursor will drop the tool call", emptyToolCallChunks)

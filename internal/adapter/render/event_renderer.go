@@ -223,15 +223,37 @@ func (r *EventRenderer) renderToolCalls(toolCalls []adapteropenai.ToolCall) *ada
 	return &ch
 }
 
+// renderReasoning emits a reasoning delta into BOTH delta.content
+// (wrapped in <!--clyde-thinking--> markers and a markdown blockquote)
+// AND delta.reasoning_content (plain text). The dual emit is a probe
+// for Cursor BYOK behavior:
+//
+//   - delta.content with markers is what Cursor renders today on the
+//     custom-OpenAI ingress; the markers act as a thinking-block
+//     boundary Cursor's parser already recognizes.
+//   - delta.reasoning_content is the OpenAI-extension field used by
+//     first-party reasoning models. If Cursor's BYOK ingress consumes
+//     it natively we get clean styling; if BYOK drops it the markers
+//     keep thinking visible.
+//
+// Cache impact is zero either way: stripThinkingBlockquote in
+// mapper_impl.go removes the marker envelope from inbound assistant
+// content on the next turn, and the mapper does not consume
+// reasoning_content on inbound (silently dropped). The outbound
+// Anthropic message bytes are unchanged.
 func (r *EventRenderer) renderReasoning(ev Event) *adapteropenai.StreamChunk {
 	text := strings.TrimSpace(ev.Text)
 	if text == "" && ev.Text == "" {
 		return nil
 	}
 	open := !r.reasoningOpen
-	contentOut := FormatThinkingInlineDelta(open, r.decorateReasoningDelta(ev))
+	decorated := r.decorateReasoningDelta(ev)
+	contentOut := FormatThinkingInlineDelta(open, decorated)
 	r.reasoningOpen = true
-	delta := adapteropenai.StreamDelta{Content: contentOut}
+	delta := adapteropenai.StreamDelta{
+		Content:          contentOut,
+		ReasoningContent: decorated,
+	}
 	if !r.seenRole {
 		delta.Role = "assistant"
 		r.seenRole = true
@@ -266,6 +288,11 @@ func (r *EventRenderer) decorateReasoningDelta(ev Event) string {
 	return prefix + ev.Text
 }
 
+// renderReasoningClose emits the closing <!--/clyde-thinking-->
+// marker into delta.content so Cursor's marker-aware parser knows
+// the reasoning block is complete. Clients that consume
+// delta.reasoning_content infer the boundary from delta.content
+// starting to flow, so they do not need a dedicated close.
 func (r *EventRenderer) renderReasoningClose() *adapteropenai.StreamChunk {
 	if !r.reasoningOpen {
 		return nil
