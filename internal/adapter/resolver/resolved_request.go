@@ -49,6 +49,10 @@ type ResolvedRequest struct {
 	// populate the upstream wire request. Empty means leave thinking
 	// unset on the upstream call.
 	Thinking string
+	// Efforts is the list of allowed effort tiers the family declared
+	// for this alias. Per-provider request builders gate output_config
+	// (and equivalents) on this being non-empty.
+	Efforts []string
 
 	Cursor adaptercursor.Request
 	OpenAI adapteropenai.ChatRequest

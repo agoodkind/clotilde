@@ -36,6 +36,11 @@ type ResolvedModelView struct {
 	// back into the model registry. Empty means leave the upstream
 	// thinking field unset.
 	Thinking string
+	// Efforts is the list of allowed effort tiers the family declared.
+	// Per-provider request builders gate output_config on this being
+	// non-empty so they only send the effort field to families that
+	// accept it. Empty means leave output_config unset.
+	Efforts []string
 }
 
 // ErrUnresolvedProvider signals that the model alias resolved to a
@@ -73,6 +78,7 @@ func Resolve(req adaptercursor.Request, registry ModelRegistry) (ResolvedRequest
 			TotalTokens:  view.Context,
 		},
 		Thinking: view.Thinking,
+		Efforts:  view.Efforts,
 		Cursor:   req,
 		OpenAI:   req.OpenAI,
 	}, nil

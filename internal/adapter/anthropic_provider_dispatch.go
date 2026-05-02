@@ -294,6 +294,7 @@ func anthropicResolvedModelFromRequest(req adapterresolver.ResolvedRequest) adap
 		ClaudeModel:     req.Model,
 		Context:         req.ContextBudget.InputTokens,
 		Effort:          req.Effort.String(),
+		Efforts:         req.Efforts,
 		MaxOutputTokens: req.ContextBudget.OutputTokens,
 		FamilySlug:      req.Family,
 		Thinking:        req.Thinking,
