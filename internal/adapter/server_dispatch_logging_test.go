@@ -149,20 +149,8 @@ func TestHandleChatLogsRawBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode body_b64: %v", err)
 	}
-	var decodedBody map[string]any
-	if err := json.Unmarshal(decoded, &decodedBody); err != nil {
-		t.Fatalf("unmarshal decoded body_b64: %v", err)
-	}
-	messages, ok := decodedBody["messages"].([]any)
-	if !ok || len(messages) != 1 {
-		t.Fatalf("decoded messages shape = %#v", decodedBody["messages"])
-	}
-	msg, ok := messages[0].(map[string]any)
-	if !ok {
-		t.Fatalf("decoded message shape = %T", messages[0])
-	}
-	if got := msg["content"].(string); len(got) != 2048 {
-		t.Fatalf("decoded body_b64 content length = %d; want 2048", len(got))
+	if len(decoded) > 1024 {
+		t.Fatalf("decoded body_b64 should be capped to 1KB; got %d", len(decoded))
 	}
 }
 

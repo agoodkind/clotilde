@@ -48,7 +48,7 @@ func (s *Server) logHTTPRequestDebug(ctx context.Context, r *http.Request) {
 		if raw != "" {
 			attrs = append(attrs, slog.String("body", raw))
 		}
-		if b64 := encodeBodyB64(body); b64 != "" {
+		if b64 := encodeBodyB64(body, bodyLimit); b64 != "" {
 			attrs = append(attrs, slog.String("body_b64", b64))
 		}
 		if truncated {

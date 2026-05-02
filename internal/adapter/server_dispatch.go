@@ -185,7 +185,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			rawAttrs.BodySummary = &bodySummary
 		}
 		rawAttrs.BodyRaw, rawAttrs.BodyTruncated = truncateBody(body, bodyLimit)
-		rawAttrs.BodyB64 = encodeBodyB64(body)
+		rawAttrs.BodyB64 = encodeBodyB64(body, bodyLimit)
 	case "off", "":
 	default:
 		rawAttrs.BodyRaw, rawAttrs.BodyTruncated = truncateBody(body, bodyLimit)

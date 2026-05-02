@@ -79,9 +79,15 @@ func (attrs rawChatLogEvent) asAttrs() []slog.Attr {
 	return correlation.AppendAttrs(out, attrs.Correlation)
 }
 
-func encodeBodyB64(body []byte) string {
+func encodeBodyB64(body []byte, maxBytes int) string {
 	if len(body) == 0 {
 		return ""
+	}
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(body) > maxBytes {
+		body = body[:maxBytes]
 	}
 	return base64.StdEncoding.EncodeToString(body)
 }
@@ -169,6 +175,12 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 			HTTPClient: s.httpClient,
 		}, adaptercodex.ProviderOptions{
 			BodyLog: adaptercodex.BodyLogConfig{Mode: logging.Body.Mode, MaxKB: logging.Body.MaxKB},
+			FileLog: adaptercodex.FileLogRotationConfig{
+				MaxSizeMB:  logging.Rotation.MaxSizeMB,
+				MaxBackups: logging.Rotation.MaxBackups,
+				MaxAgeDays: logging.Rotation.MaxAgeDays,
+				Compress:   logging.Rotation.Compress,
+			},
 		})
 		s.providerRegistry.Register(s.codexProvider)
 		log.LogAttrs(context.Background(), slog.LevelInfo, "adapter.provider_registry.registered",

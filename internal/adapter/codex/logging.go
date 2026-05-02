@@ -1,7 +1,7 @@
 // Package codex contains Codex transport and runtime integration.
-// package's logging surface so payload corruption on the Codex path is
-// observable end-to-end. The dedicated JSONL sink lives next to
-// anthropic.jsonl under $XDG_STATE_HOME/clyde/codex.jsonl.
+// The package keeps a dedicated logging surface so payload corruption on the
+// Codex path is observable end-to-end. The dedicated JSONL sidecar lives at
+// $XDG_STATE_HOME/clyde/codex.jsonl and uses locked volume-based rotation.
 package codex
 
 import (
@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 
 	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/slogger"
+	"goodkind.io/gklog"
 )
 
 // BodyLogConfig controls how much of the outbound Codex request bytes
@@ -29,11 +31,25 @@ type BodyLogConfig struct {
 	MaxKB int
 }
 
+// FileLogRotationConfig controls the dedicated Codex JSONL sidecar sink.
+// It mirrors internal/config.LoggingRotation without importing config into
+// the provider package.
+type FileLogRotationConfig struct {
+	MaxSizeMB  int
+	MaxBackups int
+	MaxAgeDays int
+	Compress   *bool
+}
+
 const (
 	BodyLogOff       = "off"
 	BodyLogSummary   = "summary"
 	BodyLogWhitelist = "whitelist"
 	BodyLogRaw       = "raw"
+
+	defaultCodexLogRotationMaxSizeMB  = 64
+	defaultCodexLogRotationMaxBackups = 192
+	defaultCodexLogRotationMaxAgeDays = 14
 )
 
 // Resolve returns the effective body-log mode and byte cap. Empty mode
@@ -70,24 +86,67 @@ func CodexLogPath() string {
 var (
 	codexFileLoggerOnce sync.Once
 	codexFileLogger     *slog.Logger
+	codexFileCloser     io.Closer
+	codexFileRotation   = FileLogRotationConfig{
+		MaxSizeMB:  defaultCodexLogRotationMaxSizeMB,
+		MaxBackups: defaultCodexLogRotationMaxBackups,
+		MaxAgeDays: defaultCodexLogRotationMaxAgeDays,
+		Compress:   new(true),
+	}
 )
 
+// ConfigureCodexFileLogger installs rotation settings for codex.jsonl before
+// the first Codex event is emitted. Later calls are ignored because slog
+// handlers bind their writer path and lumberjack settings at construction.
+func ConfigureCodexFileLogger(rotation FileLogRotationConfig) {
+	if codexFileLogger != nil {
+		return
+	}
+	codexFileRotation = normalizeCodexLogRotation(rotation)
+}
+
 // dedicatedCodexLogger returns a JSON slog handler writing to
-// CodexLogPath(). Best effort: a missing log dir never blocks traffic.
-// The handler is bound to the path observed at first call.
+// CodexLogPath(). Best effort: a missing log dir never blocks traffic. The
+// handler is bound to the path and rotation config observed at first call.
 func dedicatedCodexLogger() *slog.Logger {
 	codexFileLoggerOnce.Do(func() {
 		path := CodexLogPath()
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return
 		}
-		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-		if err != nil {
-			return
+		handler := gklog.FileJSON(path, slog.LevelDebug, codexFileRotation.toGKLog())
+		if closer, ok := handler.(io.Closer); ok {
+			codexFileCloser = closer
 		}
-		codexFileLogger = slog.New(slog.NewJSONHandler(f, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		codexFileLogger = slog.New(handler)
 	})
 	return codexFileLogger
+}
+
+func normalizeCodexLogRotation(rotation FileLogRotationConfig) FileLogRotationConfig {
+	if rotation.MaxSizeMB <= 0 {
+		rotation.MaxSizeMB = defaultCodexLogRotationMaxSizeMB
+	}
+	if rotation.MaxBackups <= 0 {
+		rotation.MaxBackups = defaultCodexLogRotationMaxBackups
+	}
+	if rotation.MaxAgeDays <= 0 {
+		rotation.MaxAgeDays = defaultCodexLogRotationMaxAgeDays
+	}
+	if rotation.Compress == nil {
+		rotation.Compress = new(true)
+	}
+	return rotation
+}
+
+func (c FileLogRotationConfig) toGKLog() gklog.RotationConfig {
+	c = normalizeCodexLogRotation(c)
+	return gklog.RotationConfig{
+		MaxSizeMB:  c.MaxSizeMB,
+		MaxBackups: c.MaxBackups,
+		MaxAgeDays: c.MaxAgeDays,
+		Compress:   c.Compress,
+	}
 }
 
 // requestEvent is the typed payload for each codex.responses.request
@@ -473,7 +532,7 @@ func containsAny(haystack string, needles ...string) bool {
 //	off:       both empty, body_bytes only
 //	summary:   both empty (caller emits BodySummary separately)
 //	whitelist: body string truncated to maxBytes, no b64
-//	raw:       body string truncated to maxBytes plus b64 of full bytes
+//	raw:       body string and b64 bytes truncated to maxBytes
 func applyBodyMode(raw []byte, mode string, maxBytes int) (body, b64 string, truncated bool) {
 	switch mode {
 	case BodyLogOff, BodyLogSummary:
@@ -483,7 +542,14 @@ func applyBodyMode(raw []byte, mode string, maxBytes int) (body, b64 string, tru
 		return body, "", truncated
 	case BodyLogRaw:
 		body, truncated = truncateCodexBody(raw, maxBytes)
-		b64 = base64.StdEncoding.EncodeToString(raw)
+		if maxBytes <= 0 {
+			return body, "", truncated
+		}
+		b64Bytes := raw
+		if truncated {
+			b64Bytes = raw[:maxBytes]
+		}
+		b64 = base64.StdEncoding.EncodeToString(b64Bytes)
 		return body, b64, truncated
 	default:
 		body, truncated = truncateCodexBody(raw, maxBytes)

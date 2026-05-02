@@ -31,6 +31,7 @@ type Provider struct {
 	workspaceProbe *WorkspaceProbe
 	accountID      string
 	bodyLog        BodyLogConfig
+	fileLog        FileLogRotationConfig
 }
 
 // ProviderOptions extends the generic provider.Deps with Codex-only
@@ -40,6 +41,7 @@ type Provider struct {
 type ProviderOptions struct {
 	AccountID        string
 	BodyLog          BodyLogConfig
+	FileLog          FileLogRotationConfig
 	WsSessionIdleTTL time.Duration
 }
 
@@ -63,6 +65,7 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 	if idleTTL <= 0 {
 		idleTTL = defaultWsSessionIdleTTL
 	}
+	ConfigureCodexFileLogger(opts.FileLog)
 	return &Provider{
 		cfg:            deps.Config.Codex,
 		auth:           deps.Auth,
@@ -73,6 +76,7 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 		workspaceProbe: NewWorkspaceProbe(),
 		accountID:      strings.TrimSpace(opts.AccountID),
 		bodyLog:        opts.BodyLog,
+		fileLog:        opts.FileLog,
 	}
 }
 
@@ -132,6 +136,7 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		SessionCache:     p.sessionCache,
 		Log:              p.log,
 		BodyLog:          p.bodyLog,
+		FileLog:          p.fileLog,
 	}
 
 	model := resolvedModelFromRequest(req)

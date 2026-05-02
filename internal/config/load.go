@@ -138,6 +138,13 @@ func NewConfigWithDefaults() *Config {
 	return cfg
 }
 
+const (
+	defaultLoggingRotationMaxSizeMB  = 64
+	defaultLoggingRotationMaxBackups = 192
+	defaultLoggingRotationMaxAgeDays = 14
+	defaultLoggingBodyMaxKB          = 32
+)
+
 func applyLoggingDefaultsAndValidate(cfg *Config) error {
 	if cfg == nil {
 		return nil
@@ -151,7 +158,7 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 	cfg.Logging.Paths.Daemon = strings.TrimSpace(cfg.Logging.Paths.Daemon)
 
 	if cfg.Logging.Rotation.MaxSizeMB <= 0 {
-		cfg.Logging.Rotation.MaxSizeMB = 5
+		cfg.Logging.Rotation.MaxSizeMB = defaultLoggingRotationMaxSizeMB
 	}
 	if cfg.Logging.Rotation.Enabled == nil {
 		v := true
@@ -161,13 +168,13 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 		return fmt.Errorf("logging.rotation.max_backups must be >= 0")
 	}
 	if cfg.Logging.Rotation.MaxBackups == 0 {
-		cfg.Logging.Rotation.MaxBackups = 5
+		cfg.Logging.Rotation.MaxBackups = defaultLoggingRotationMaxBackups
 	}
 	if cfg.Logging.Rotation.MaxAgeDays < 0 {
 		return fmt.Errorf("logging.rotation.max_age_days must be >= 0")
 	}
 	if cfg.Logging.Rotation.MaxAgeDays == 0 {
-		cfg.Logging.Rotation.MaxAgeDays = 14
+		cfg.Logging.Rotation.MaxAgeDays = defaultLoggingRotationMaxAgeDays
 	}
 	if cfg.Logging.Rotation.Compress == nil {
 		v := true
@@ -181,7 +188,7 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 	cfg.Logging.Body.Mode = mode
 
 	if cfg.Logging.Body.MaxKB <= 0 {
-		cfg.Logging.Body.MaxKB = 32
+		cfg.Logging.Body.MaxKB = defaultLoggingBodyMaxKB
 	}
 	if cfg.Logging.Body.MaxKB > 256 {
 		return fmt.Errorf("logging.body.max_kb must be between 1 and 256")

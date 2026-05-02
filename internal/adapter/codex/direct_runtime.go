@@ -38,6 +38,7 @@ type DirectConfig struct {
 	SessionCache *WebsocketSessionCache
 	Log          *slog.Logger
 	BodyLog      BodyLogConfig
+	FileLog      FileLogRotationConfig
 }
 
 func RunDirect(
@@ -51,6 +52,7 @@ func RunDirect(
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = http.DefaultClient
 	}
+	ConfigureCodexFileLogger(cfg.FileLog)
 	if !cfg.WebsocketEnabled {
 		return NewRunResult("stop"), errCodexWebsocketDisabled
 	}

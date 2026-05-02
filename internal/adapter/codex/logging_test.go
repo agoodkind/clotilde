@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"encoding/base64"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -78,6 +79,24 @@ func TestApplyBodyModeRawIncludesB64(t *testing.T) {
 	}
 }
 
+func TestApplyBodyModeRawCapsB64(t *testing.T) {
+	raw := []byte(strings.Repeat("a", 2048))
+	body, b64, truncated := applyBodyMode(raw, BodyLogRaw, 1024)
+	if !truncated {
+		t.Fatalf("large raw body should be truncated")
+	}
+	if len(body) != 1024 {
+		t.Fatalf("body len=%d want 1024", len(body))
+	}
+	decoded, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		t.Fatalf("decode body_b64: %v", err)
+	}
+	if len(decoded) != 1024 {
+		t.Fatalf("decoded b64 len=%d want 1024", len(decoded))
+	}
+}
+
 func TestCodexLogPathHonorsOverride(t *testing.T) {
 	tmp := filepath.Join(t.TempDir(), "codex.jsonl")
 	t.Setenv("CLYDE_CODEX_LOG_PATH", tmp)
@@ -99,12 +118,7 @@ func TestLogCodexEventDoubleWritesToDedicatedSink(t *testing.T) {
 	dir := t.TempDir()
 	sinkPath := filepath.Join(dir, "codex.jsonl")
 	t.Setenv("CLYDE_CODEX_LOG_PATH", sinkPath)
-	codexFileLoggerOnce = sync.Once{}
-	codexFileLogger = nil
-	t.Cleanup(func() {
-		codexFileLoggerOnce = sync.Once{}
-		codexFileLogger = nil
-	})
+	resetDedicatedCodexLoggerForTest(t)
 
 	ev := requestEvent{
 		Subcomponent:    "codex",
@@ -138,6 +152,54 @@ func TestLogCodexEventDoubleWritesToDedicatedSink(t *testing.T) {
 	}
 }
 
+func TestDedicatedCodexLoggerRotatesByVolume(t *testing.T) {
+	dir := t.TempDir()
+	sinkPath := filepath.Join(dir, "codex.jsonl")
+	t.Setenv("CLYDE_CODEX_LOG_PATH", sinkPath)
+	resetDedicatedCodexLoggerForTest(t)
+
+	compress := false
+	ConfigureCodexFileLogger(FileLogRotationConfig{
+		MaxSizeMB:  1,
+		MaxBackups: 2,
+		MaxAgeDays: 7,
+		Compress:   &compress,
+	})
+
+	largeBody := strings.Repeat("x", 700*1024)
+	for range 3 {
+		ev := requestEvent{
+			Subcomponent: "codex",
+			Transport:    "responses_websocket",
+			RequestID:    "req-rotate",
+			Model:        "gpt-5",
+			BodyBytes:    len(largeBody),
+			Body:         largeBody,
+		}
+		logCodexEvent(context.Background(), slog.LevelDebug, "codex.responses.request", ev.toSlogAttrs())
+	}
+	if codexFileCloser != nil {
+		if err := codexFileCloser.Close(); err != nil {
+			t.Fatalf("close codex logger: %v", err)
+		}
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read log dir: %v", err)
+	}
+	var rotated int
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, "codex-") && strings.HasSuffix(name, ".jsonl") {
+			rotated++
+		}
+	}
+	if rotated == 0 {
+		t.Fatalf("expected rotated codex sidecar logs, entries=%v", entryNames(entries))
+	}
+}
+
 func TestSummarizeWsRequestPreservesPreviousResponseFlag(t *testing.T) {
 	payload := ResponseCreateWsRequest{
 		Model:              "gpt-5.4",
@@ -155,6 +217,44 @@ func TestSummarizeWsRequestPreservesPreviousResponseFlag(t *testing.T) {
 	if s.PromptCacheKey != "cursor:conv-x" {
 		t.Errorf("prompt_cache_key=%q want cursor:conv-x", s.PromptCacheKey)
 	}
+}
+
+func resetDedicatedCodexLoggerForTest(t *testing.T) {
+	t.Helper()
+	if codexFileCloser != nil {
+		_ = codexFileCloser.Close()
+	}
+	codexFileLoggerOnce = sync.Once{}
+	codexFileLogger = nil
+	codexFileCloser = nil
+	codexFileRotation = FileLogRotationConfig{
+		MaxSizeMB:  defaultCodexLogRotationMaxSizeMB,
+		MaxBackups: defaultCodexLogRotationMaxBackups,
+		MaxAgeDays: defaultCodexLogRotationMaxAgeDays,
+		Compress:   new(true),
+	}
+	t.Cleanup(func() {
+		if codexFileCloser != nil {
+			_ = codexFileCloser.Close()
+		}
+		codexFileLoggerOnce = sync.Once{}
+		codexFileLogger = nil
+		codexFileCloser = nil
+		codexFileRotation = FileLogRotationConfig{
+			MaxSizeMB:  defaultCodexLogRotationMaxSizeMB,
+			MaxBackups: defaultCodexLogRotationMaxBackups,
+			MaxAgeDays: defaultCodexLogRotationMaxAgeDays,
+			Compress:   new(true),
+		}
+	})
+}
+
+func entryNames(entries []os.DirEntry) []string {
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return names
 }
 
 func TestSummarizeFinalResponseCreateFrameCapturesPromptMarkersAndShape(t *testing.T) {
@@ -240,12 +340,7 @@ func TestLogWebsocketFrameSummaryDoesNotRequireBodyLogging(t *testing.T) {
 	dir := t.TempDir()
 	sinkPath := filepath.Join(dir, "codex.jsonl")
 	t.Setenv("CLYDE_CODEX_LOG_PATH", sinkPath)
-	codexFileLoggerOnce = sync.Once{}
-	codexFileLogger = nil
-	t.Cleanup(func() {
-		codexFileLoggerOnce = sync.Once{}
-		codexFileLogger = nil
-	})
+	resetDedicatedCodexLoggerForTest(t)
 
 	payload := ResponseCreateWsRequest{
 		Type:         "response.create",

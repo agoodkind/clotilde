@@ -596,6 +596,7 @@ Notes for `gklog` semantics:
 - `DisableStdout: true` is usually the right choice when stdout is part of the program's user-facing or machine-readable contract.
 - `JSONLogFile` and `TextLogFile` are optional and can be enabled together.
 - `Rotation` applies to the file handlers. `gklog` uses locked writers so multiple processes writing the same log path do not interleave records.
+- Clyde defaults are volume-oriented for high-churn adapter logs: 64 MB active files, 192 compressed backups, and 14 day age pruning. The dedicated Codex request sidecar (`$XDG_STATE_HOME/clyde/codex.jsonl`) uses the same volume/backups/compression settings and must not be returned to plain append-only writes.
 - `EmailSend` plus `EmailTo` enables an email alert handler with threshold and cooldown controls. Use this for rare operator-facing alerts, not routine app flow.
 - `JSONMinLevel` controls the JSON stdout and JSON file handlers. Empty or unknown values default to `debug` in `gklog`.
 
