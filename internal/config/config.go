@@ -247,6 +247,22 @@ type AdapterCodex struct {
 	NativeModelRouting string `json:"nativeModelRouting,omitempty" toml:"native_model_routing,omitempty"`
 	// NativeModelShunt is used when NativeModelRouting is "shunt".
 	NativeModelShunt string `json:"nativeModelShunt,omitempty" toml:"native_model_shunt,omitempty"`
+	// Models declares the Codex-backed model catalog that Clyde
+	// advertises and resolves for first-party clyde-* aliases.
+	Models []AdapterCodexModel `json:"models,omitempty" toml:"models,omitempty"`
+}
+
+type AdapterCodexModel struct {
+	AliasPrefix     string                     `json:"aliasPrefix,omitempty" toml:"alias_prefix,omitempty"`
+	Model           string                     `json:"model,omitempty" toml:"model,omitempty"`
+	Efforts         []string                   `json:"efforts,omitempty" toml:"efforts,omitempty"`
+	MaxOutputTokens int                        `json:"maxOutputTokens,omitempty" toml:"max_output_tokens,omitempty"`
+	Contexts        []AdapterCodexModelContext `json:"contexts,omitempty" toml:"contexts,omitempty"`
+}
+
+type AdapterCodexModelContext struct {
+	Tokens      int    `json:"tokens,omitempty" toml:"tokens,omitempty"`
+	AliasSuffix string `json:"aliasSuffix,omitempty" toml:"alias_suffix,omitempty"`
 }
 
 // AdapterLogprobs picks the per-backend behavior. Each value is
@@ -482,11 +498,14 @@ type AdapterClientIdentity struct {
 }
 
 // AdapterFamily describes one Claude model family and the cross
-// product of efforts, thinking modes, and context windows the
+// product of efforts, thinking state, and context windows the
 // registry expands into individual aliases. The registry generator
 // produces aliases of shape
-// `clyde-<family>[-<effort>][-<ctx>][-thinking-<mode>]`.
+// `clyde-<alias_prefix>-<ctx>-<effort>[-thinking]`.
 type AdapterFamily struct {
+	// AliasPrefix is the public clyde-* model stem without the
+	// leading "clyde-". When empty, the family map key is used.
+	AliasPrefix string `json:"aliasPrefix,omitempty" toml:"alias_prefix,omitempty"`
 	// Model is the wire-level model id (e.g. a snapshot name). The
 	// Contexts entries may add a wire
 	// suffix (e.g. "[1m]") when calling /v1/messages.
@@ -499,6 +518,14 @@ type AdapterFamily struct {
 	// accepts. Always at least default+enabled+disabled for
 	// thinking-capable families; adaptive is gated server-side.
 	ThinkingModes []string `json:"thinkingModes,omitempty" toml:"thinking_modes,omitempty"`
+	// ThinkingWireMode controls the upstream thinking shape for
+	// aliases generated with thinking enabled. Valid values are
+	// "enabled" (default; sends a typed thinking block with
+	// budget_tokens) and "adaptive" (sends Anthropic's adaptive
+	// variant, no budget). Some families require adaptive at the
+	// upstream (claude-opus-4-7 historically rejected enabled). Set
+	// "adaptive" to override per family. Empty means "enabled".
+	ThinkingWireMode string `json:"thinkingWireMode,omitempty" toml:"thinking_wire_mode,omitempty"`
 	// MaxOutputTokens caps this family's output. Used to derive
 	// thinking.budget_tokens (budget = max - 1) per the CLI's
 	// invariant.

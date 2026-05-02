@@ -70,7 +70,7 @@ type ResolvedModel struct {
 	// list; Resolve will then 400 any caller-supplied effort.
 	Efforts []string
 	// Effort is the bound effort value when the alias encodes one
-	// (e.g. clyde-opus-4-7-high-1m -> "high"). Empty when the
+	// (e.g. clyde-opus-4.7-1m-high -> "high"). Empty when the
 	// caller picks per-request via the OpenAI body.
 	Effort string
 	// ThinkingModes enumerates the allowed `thinking` values.
@@ -110,6 +110,7 @@ type Registry struct {
 	codexPrefix        []string
 	codexNativeRouting string
 	codexNativeShunt   string
+	codexModels        map[string]ResolvedModel
 }
 
 // NewRegistry builds the registry from a loaded AdapterConfig. It
@@ -185,6 +186,16 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 		if len(family.Contexts) == 0 {
 			return nil, fmt.Errorf("adapter: family %q missing contexts", slug)
 		}
+		switch family.ThinkingWireMode {
+		case "", ThinkingEnabled, ThinkingAdaptive:
+		default:
+			return nil, fmt.Errorf("adapter: family %q has invalid thinking_wire_mode %q (allowed: %q, %q)", slug, family.ThinkingWireMode, ThinkingEnabled, ThinkingAdaptive)
+		}
+		// Resolve the implicit per-family fallback for thinking_wire_mode.
+		// The result is what generateFamilyAliases will stamp onto every
+		// thinking-enabled alias. EffectiveThinkingMode does not patch
+		// this at request time; the family's choice is the wire choice.
+		family = withResolvedThinkingWireMode(slog.Default(), slug, family)
 		generateFamilyAliases(models, slug, family)
 	}
 
@@ -197,6 +208,7 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 		codexPrefix:        append([]string(nil), cfg.Codex.ModelPrefixes...),
 		codexNativeRouting: strings.ToLower(strings.TrimSpace(cfg.Codex.NativeModelRouting)),
 		codexNativeShunt:   strings.ToLower(strings.TrimSpace(cfg.Codex.NativeModelShunt)),
+		codexModels:        map[string]ResolvedModel{},
 	}
 	if r.codexNativeRouting == "" {
 		if r.codexEnabled {
@@ -231,6 +243,11 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 	for name, s := range cfg.Shunts {
 		r.shunts[strings.ToLower(name)] = s
 	}
+	for _, model := range cfg.Codex.Models {
+		if err := addCodexModelAliases(r.codexModels, model); err != nil {
+			return nil, err
+		}
+	}
 
 	rewritten := 0
 	for alias, rm := range r.models {
@@ -242,7 +259,7 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 		r.models[alias] = rm
 	}
 	if cfg.DirectOAuth {
-		slog.Info("adapter.registry.oauth_rewrite",
+		modelCatalogLog.Logger().Info("adapter.registry.oauth_rewrite",
 			"subcomponent", "adapter",
 			"models_rewritten", rewritten,
 			"models_total", len(r.models),
@@ -261,7 +278,7 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 		}
 	}
 
-	slog.Info("adapter.registry.capabilities_loaded",
+	modelCatalogLog.Logger().Info("adapter.registry.capabilities_loaded",
 		"subcomponent", "adapter",
 		"families", len(cfg.Families),
 		"tools_capable", toolsCapable,
@@ -292,56 +309,149 @@ func validateAdapterLogprobs(lp config.AdapterLogprobs) error {
 	return nil
 }
 
+// withResolvedThinkingWireMode populates family.ThinkingWireMode when
+// it is empty by applying any known per-model fallback. Today the only
+// fallback is the historical claude-opus-4-7 rule: that family's
+// upstream rejects enabled-mode thinking and requires adaptive, so an
+// unset config gets remapped to adaptive at registry construction. The
+// remap fires a one-shot Warn so operators see the implicit mapping
+// and can set thinking_wire_mode explicitly in their config to silence
+// it. Operators who explicitly set ThinkingWireMode (including
+// "enabled") are honored; this fallback never overrides them.
+func withResolvedThinkingWireMode(log *slog.Logger, slug string, f config.AdapterFamily) config.AdapterFamily {
+	if f.ThinkingWireMode != "" {
+		return f
+	}
+	if !contains(f.ThinkingModes, ThinkingEnabled) {
+		return f
+	}
+	if !strings.EqualFold(f.Model, "claude-opus-4-7") {
+		return f
+	}
+	if log != nil {
+		log.Warn("adapter.family.thinking_wire_mode_implicit",
+			"component", "adapter",
+			"subcomponent", "models",
+			"family", slug,
+			"model", f.Model,
+			"effective_mode", ThinkingAdaptive,
+			"reason", "claude-opus-4-7 historically rejected enabled-mode thinking. The registry is mapping enabled to adaptive at registry construction. Set thinking_wire_mode = \"adaptive\" in [adapter.families."+slug+"] to make this explicit and silence this warning.",
+		)
+	}
+	f.ThinkingWireMode = ThinkingAdaptive
+	return f
+}
+
 // generateFamilyAliases produces the full cross product of effort ×
-// thinking × context aliases for one family declaration. Schema:
+// context × thinking-enabled aliases for one family declaration. Schema:
 //
-//	clyde-<family>[-<effort>][-<ctx>][-thinking-<mode>]
+//	clyde-<family>[-<ctx>]-<effort>[-thinking]
 //
-// `thinking-default` and the empty effort sentinel are omitted from
-// the alias name so users get the shortest readable name when those
-// dimensions don't apply.
+// Absence of -thinking is the canonical disabled-thinking variant.
 func generateFamilyAliases(out map[string]ResolvedModel, slug string, f config.AdapterFamily) {
-	efforts := []string{""} // always emit a plain alias so callers can choose per-request effort
-	efforts = append(efforts, f.Efforts...)
-	thinking := f.ThinkingModes
-	if len(thinking) == 0 {
-		thinking = []string{""}
+	if len(f.Efforts) == 0 {
+		return
+	}
+	family := strings.TrimSpace(f.AliasPrefix)
+	if family == "" {
+		family = slug
+	}
+	emitThinking := contains(f.ThinkingModes, ThinkingEnabled)
+	thinkingWire := f.ThinkingWireMode
+	if thinkingWire == "" {
+		thinkingWire = ThinkingEnabled
 	}
 	for _, ctx := range f.Contexts {
-		for _, eff := range efforts {
-			for _, th := range thinking {
-				alias := buildAlias(slug, eff, ctx.AliasSuffix, th)
-				out[alias] = ResolvedModel{
-					Backend:         BackendClaude,
-					ClaudeModel:     f.Model + ctx.WireSuffix,
-					Context:         ctx.Tokens,
-					Efforts:         f.Efforts,
-					Effort:          eff,
-					ThinkingModes:   f.ThinkingModes,
-					Thinking:        th,
-					MaxOutputTokens: f.MaxOutputTokens,
-					SupportsTools:   *f.SupportsTools,
-					SupportsVision:  *f.SupportsVision,
-					FamilySlug:      slug,
-				}
+		for _, eff := range f.Efforts {
+			base := ResolvedModel{
+				Backend:         BackendClaude,
+				ClaudeModel:     f.Model + ctx.WireSuffix,
+				Context:         ctx.Tokens,
+				Efforts:         []string{eff},
+				Effort:          eff,
+				ThinkingModes:   f.ThinkingModes,
+				Thinking:        ThinkingDisabled,
+				MaxOutputTokens: f.MaxOutputTokens,
+				SupportsTools:   *f.SupportsTools,
+				SupportsVision:  *f.SupportsVision,
+				FamilySlug:      slug,
 			}
+			out[buildAlias(family, ctx.AliasSuffix, eff, false)] = base
+			if emitThinking {
+				thinkingModel := base
+				thinkingModel.Thinking = thinkingWire
+				out[buildAlias(family, ctx.AliasSuffix, eff, true)] = thinkingModel
+			}
+		}
+		out[buildAlias(family, ctx.AliasSuffix, "", false)] = ResolvedModel{
+			Backend:         BackendClaude,
+			ClaudeModel:     f.Model + ctx.WireSuffix,
+			Context:         ctx.Tokens,
+			Efforts:         f.Efforts,
+			ThinkingModes:   f.ThinkingModes,
+			Thinking:        ThinkingDisabled,
+			MaxOutputTokens: f.MaxOutputTokens,
+			SupportsTools:   *f.SupportsTools,
+			SupportsVision:  *f.SupportsVision,
+			FamilySlug:      slug,
 		}
 	}
 }
 
 // buildAlias assembles one alias from its components.
-func buildAlias(family, effort, ctxSuffix, thinking string) string {
+func buildAlias(family, ctxSuffix, effort string, thinking bool) string {
 	parts := []string{"clyde", family}
-	if effort != "" {
-		parts = append(parts, effort)
-	}
 	if ctxSuffix != "" {
 		parts = append(parts, ctxSuffix)
 	}
-	if thinking != "" && thinking != ThinkingDefault {
-		parts = append(parts, "thinking", thinking)
+	if effort != "" {
+		parts = append(parts, effort)
+	}
+	if thinking {
+		parts = append(parts, "thinking")
 	}
 	return strings.Join(parts, "-")
+}
+
+func addCodexModelAliases(out map[string]ResolvedModel, cfg config.AdapterCodexModel) error {
+	if strings.TrimSpace(cfg.AliasPrefix) == "" {
+		return fmt.Errorf("adapter: [adapter.codex.models] entry missing alias_prefix")
+	}
+	if strings.TrimSpace(cfg.Model) == "" {
+		return fmt.Errorf("adapter: [adapter.codex.models.%s] missing model", cfg.AliasPrefix)
+	}
+	if len(cfg.Efforts) == 0 {
+		return fmt.Errorf("adapter: [adapter.codex.models.%s] missing efforts", cfg.AliasPrefix)
+	}
+	if len(cfg.Contexts) == 0 {
+		return fmt.Errorf("adapter: [adapter.codex.models.%s] missing contexts", cfg.AliasPrefix)
+	}
+	for _, ctx := range cfg.Contexts {
+		for _, effort := range cfg.Efforts {
+			alias := buildAlias(cfg.AliasPrefix, ctx.AliasSuffix, effort, false)
+			out[strings.ToLower(alias)] = ResolvedModel{
+				Alias:           alias,
+				Backend:         BackendCodex,
+				ClaudeModel:     cfg.Model,
+				Context:         ctx.Tokens,
+				Efforts:         []string{effort},
+				Effort:          effort,
+				MaxOutputTokens: cfg.MaxOutputTokens,
+			}
+		}
+	}
+	for _, ctx := range cfg.Contexts {
+		alias := buildAlias(cfg.AliasPrefix, ctx.AliasSuffix, "", false)
+		out[strings.ToLower(alias)] = ResolvedModel{
+			Alias:           alias,
+			Backend:         BackendCodex,
+			ClaudeModel:     cfg.Model,
+			Context:         ctx.Tokens,
+			Efforts:         cfg.Efforts,
+			MaxOutputTokens: cfg.MaxOutputTokens,
+		}
+	}
+	return nil
 }
 
 // resolveFromConfig converts a user provided AdapterModel entry into
@@ -418,6 +528,10 @@ func normalizeCodexModelAlias(alias string) string {
 			break
 		}
 	}
+	if strings.HasPrefix(lower, "clyde-gpt-") {
+		key = "gpt-" + key[len("clyde-gpt-"):]
+		lower = strings.ToLower(key)
+	}
 	for _, suffix := range []string{"-low", "-medium", "-high", "-xhigh"} {
 		if strings.HasSuffix(lower, suffix) {
 			key = key[:len(key)-len(suffix)]
@@ -453,7 +567,7 @@ func codexAliasContext(alias string) int {
 	}
 	if strings.HasSuffix(original, "-1m") || strings.Contains(original, "-1m-") {
 		switch strings.ToLower(strings.TrimSpace(key)) {
-		case "gpt-5.4", "gpt-5.5":
+		case "gpt-5.4":
 			return 1000000
 		}
 	}
@@ -479,12 +593,6 @@ func codexAliasContext(alias string) int {
 func (r *Registry) Resolve(alias, reqEffort string) (ResolvedModel, string, error) {
 	if alias == "" {
 		alias = r.def
-	}
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(alias)), "clyde-gpt-") {
-		return ResolvedModel{}, "", fmt.Errorf(
-			"model %q is no longer supported; use Cursor's native GPT model IDs such as gpt-5.4",
-			alias,
-		)
 	}
 	if r.looksLikeNativeCodexModel(alias) {
 		switch r.codexNativeRouting {
@@ -516,6 +624,37 @@ func (r *Registry) Resolve(alias, reqEffort string) (ResolvedModel, string, erro
 			)
 		}
 	}
+	key := strings.ToLower(alias)
+	if m, ok := r.codexModels[key]; ok {
+		effort := strings.ToLower(strings.TrimSpace(reqEffort))
+		switch {
+		case effort == "":
+			if m.Effort == "" {
+				return ResolvedModel{}, "", fmt.Errorf(
+					"model %q requires an explicit effort-qualified alias",
+					m.Alias,
+				)
+			}
+			effort = m.Effort
+		case m.Effort != "" && effort != m.Effort:
+			return ResolvedModel{}, "", fmt.Errorf(
+				"effort %q conflicts with effort-bound model %q",
+				effort, m.Alias,
+			)
+		case m.Effort == "" && !contains(m.Efforts, effort):
+			return ResolvedModel{}, "", fmt.Errorf(
+				"effort %q not supported for %q (allowed: %s)",
+				effort, m.Alias, strings.Join(m.Efforts, ", "),
+			)
+		}
+		return m, effort, nil
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(alias)), "clyde-gpt-") {
+		return ResolvedModel{}, "", fmt.Errorf(
+			"unknown clyde GPT model %q (declare it under [adapter.codex.models] with an explicit effort alias)",
+			alias,
+		)
+	}
 	if r.looksLikeCodexModel(alias) {
 		effort := strings.ToLower(strings.TrimSpace(reqEffort))
 		if effort == "" {
@@ -528,7 +667,6 @@ func (r *Registry) Resolve(alias, reqEffort string) (ResolvedModel, string, erro
 			Context:     codexAliasContext(alias),
 		}, effort, nil
 	}
-	key := strings.ToLower(alias)
 	m, ok := r.models[key]
 	if !ok {
 		if r.fallbackShnt != "" {
@@ -580,14 +718,18 @@ func (r *Registry) Shunt(name string) (config.AdapterShunt, bool) {
 // List returns the resolved models for /v1/models. Order is
 // undefined; callers that care should sort by Alias.
 func (r *Registry) List() []ResolvedModel {
-	out := make([]ResolvedModel, 0, len(r.models))
-	seen := make(map[string]struct{}, len(r.models))
+	out := make([]ResolvedModel, 0, len(r.models)+len(r.codexModels))
+	seen := make(map[string]struct{}, len(r.models)+len(r.codexModels))
 	for _, m := range r.models {
 		out = append(out, m)
 		seen[strings.ToLower(strings.TrimSpace(m.Alias))] = struct{}{}
 	}
+	for _, m := range r.codexModels {
+		out = append(out, m)
+		seen[strings.ToLower(strings.TrimSpace(m.Alias))] = struct{}{}
+	}
 	if r.codexEnabled && r.codexNativeRouting == "codex" {
-		for _, alias := range []string{"gpt-5.4", "gpt-5.5", "gpt-5.3-codex", "gpt-5.3-codex-spark", "o3"} {
+		for _, alias := range codexAdvertisedAliases() {
 			if _, ok := seen[alias]; ok {
 				continue
 			}
@@ -601,6 +743,10 @@ func (r *Registry) List() []ResolvedModel {
 		}
 	}
 	return out
+}
+
+func codexAdvertisedAliases() []string {
+	return []string{"gpt-5.4", "gpt-5.5", "gpt-5.3-codex", "gpt-5.3-codex-spark", "o3"}
 }
 
 func (r *Registry) Models() map[string]ResolvedModel {

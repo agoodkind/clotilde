@@ -120,13 +120,20 @@ func TestBuildRequestThinkingDisplaySummarizedWhenEnabled(t *testing.T) {
 	}
 }
 
-func TestBuildRequestOpus47EnabledNormalizesToAdaptive(t *testing.T) {
+// TestBuildRequestPassesThinkingAdaptiveThrough locks in the contract
+// after the registry took ownership of per-family thinking_wire_mode
+// mapping. BuildRequest is now a passthrough: whatever Thinking value
+// the registry put on the ResolvedModel is what reaches the wire.
+// Callers that need the historical opus-4-7 enabled-to-adaptive remap
+// rely on the registry to apply it at construction time, not on
+// BuildRequest to patch it at request time.
+func TestBuildRequestPassesThinkingAdaptiveThrough(t *testing.T) {
 	req := requestBuilderChatRequest()
 	model := adaptermodel.ResolvedModel{
-		Alias:           "clyde-opus-4-7-medium-thinking-enabled",
+		Alias:           "clyde-opus-4-7-medium-thinking",
 		ClaudeModel:     "claude-opus-4-7",
 		MaxOutputTokens: 32000,
-		Thinking:        adaptermodel.ThinkingEnabled,
+		Thinking:        adaptermodel.ThinkingAdaptive,
 	}
 
 	out, err := BuildRequest(context.Background(), req, model, adaptermodel.EffortMedium, requestBuilderConfig(), "req-test")
@@ -141,6 +148,35 @@ func TestBuildRequestOpus47EnabledNormalizesToAdaptive(t *testing.T) {
 	}
 	if out.Thinking.Display != "summarized" {
 		t.Fatalf("Thinking.Display = %q want summarized", out.Thinking.Display)
+	}
+}
+
+// TestBuildRequestPassesThinkingEnabledThrough locks in that an
+// operator who explicitly sets thinking_wire_mode = "enabled" on a
+// family (including claude-opus-4-7) gets the typed enabled wire shape
+// with budget_tokens. The registry honors the explicit choice and the
+// request builder no longer rewrites it.
+func TestBuildRequestPassesThinkingEnabledThrough(t *testing.T) {
+	req := requestBuilderChatRequest()
+	model := adaptermodel.ResolvedModel{
+		Alias:           "clyde-opus-4-7-medium-thinking",
+		ClaudeModel:     "claude-opus-4-7",
+		MaxOutputTokens: 32000,
+		Thinking:        adaptermodel.ThinkingEnabled,
+	}
+
+	out, err := BuildRequest(context.Background(), req, model, adaptermodel.EffortMedium, requestBuilderConfig(), "req-test")
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	if out.Thinking == nil {
+		t.Fatal("Thinking is nil")
+	}
+	if out.Thinking.Type != "enabled" {
+		t.Fatalf("Thinking.Type = %q want enabled", out.Thinking.Type)
+	}
+	if out.Thinking.BudgetTokens != 31999 {
+		t.Fatalf("Thinking.BudgetTokens = %d want 31999", out.Thinking.BudgetTokens)
 	}
 }
 

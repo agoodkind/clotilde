@@ -7,10 +7,14 @@ import (
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 )
 
+// EffectiveThinkingMode returns the wire-level thinking mode for the
+// resolved model. The registry resolves per-family fallbacks
+// (including the historical claude-opus-4-7 enabled-to-adaptive remap)
+// at construction time, so this function is a passthrough today. The
+// strippedModel parameter is kept for callers that still pass it; the
+// mapping does not depend on the wire model id at request time.
 func EffectiveThinkingMode(model adaptermodel.ResolvedModel, strippedModel string) string {
-	if strings.EqualFold(strippedModel, "claude-opus-4-7") && model.Thinking == adaptermodel.ThinkingEnabled {
-		return adaptermodel.ThinkingAdaptive
-	}
+	_ = strippedModel
 	return model.Thinking
 }
 

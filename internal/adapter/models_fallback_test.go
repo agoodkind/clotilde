@@ -24,11 +24,13 @@ func validClientIdentity() config.AdapterClientIdentity {
 // validation for family expansion and model resolution tests.
 func baseConfig() config.AdapterConfig {
 	return config.AdapterConfig{
-		DefaultModel:   "clyde-haiku-4-5",
+		DefaultModel:   "clyde-haiku-4.5-medium",
 		ClientIdentity: validClientIdentity(),
 		Families: map[string]config.AdapterFamily{
 			"haiku-4-5": {
+				AliasPrefix:     "haiku-4.5",
 				Model:           "claude-haiku-4-5-20251001",
+				Efforts:         []string{EffortMedium},
 				ThinkingModes:   []string{"default"},
 				MaxOutputTokens: 16000,
 				SupportsTools:   &testBoolTrue,
@@ -90,8 +92,9 @@ func TestNewRegistryRejectsFallbackModelBackend(t *testing.T) {
 
 func modelMatrixConfig() config.AdapterConfig {
 	cfg := baseConfig()
-	cfg.DefaultModel = "clyde-opus-4-7"
+	cfg.DefaultModel = "clyde-opus-4.7-medium"
 	cfg.Families["opus-4-7"] = config.AdapterFamily{
+		AliasPrefix:     "opus-4.7",
 		Model:           "claude-opus-4-7",
 		Efforts:         []string{EffortLow, EffortMedium, EffortHigh, EffortMax},
 		ThinkingModes:   []string{ThinkingDefault, ThinkingAdaptive, ThinkingEnabled, ThinkingDisabled},
@@ -104,6 +107,7 @@ func modelMatrixConfig() config.AdapterConfig {
 		},
 	}
 	cfg.Families["opus-4-6"] = config.AdapterFamily{
+		AliasPrefix:     "opus-4.6",
 		Model:           "claude-opus-4-6",
 		Efforts:         []string{EffortLow, EffortMedium, EffortHigh, EffortMax},
 		ThinkingModes:   []string{ThinkingDefault, ThinkingAdaptive, ThinkingEnabled, ThinkingDisabled},
@@ -118,7 +122,31 @@ func modelMatrixConfig() config.AdapterConfig {
 	cfg.Codex.Enabled = true
 	cfg.Codex.ModelPrefixes = []string{"gpt-", "o"}
 	cfg.Codex.NativeModelRouting = "codex"
+	cfg.Codex.Models = testCodexModels()
 	return cfg
+}
+
+func testCodexModels() []config.AdapterCodexModel {
+	return []config.AdapterCodexModel{
+		{
+			AliasPrefix:     "gpt-5.4",
+			Model:           "gpt-5.4",
+			Efforts:         []string{EffortLow, EffortMedium, EffortHigh, EffortXHigh},
+			MaxOutputTokens: 128000,
+			Contexts: []config.AdapterCodexModelContext{
+				{Tokens: 1000000, AliasSuffix: "1m"},
+			},
+		},
+		{
+			AliasPrefix:     "gpt-5.5",
+			Model:           "gpt-5.5",
+			Efforts:         []string{EffortLow, EffortMedium, EffortHigh, EffortXHigh},
+			MaxOutputTokens: 128000,
+			Contexts: []config.AdapterCodexModelContext{
+				{Tokens: 272000},
+			},
+		},
+	}
 }
 
 func TestResolveRoutesCodexModelPrefixes(t *testing.T) {
@@ -212,10 +240,74 @@ func TestListIncludesNativeCodexModelsWhenRoutable(t *testing.T) {
 	}
 }
 
+func TestListIncludesClydeGPTCodexEffortAliasesWhenRoutable(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Codex.Enabled = true
+	cfg.Codex.Models = testCodexModels()
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	models := make(map[string]ResolvedModel)
+	for _, model := range r.List() {
+		models[model.Alias] = model
+	}
+	cases := []struct {
+		alias       string
+		wantModel   string
+		wantContext int
+	}{
+		{alias: "clyde-gpt-5.4-1m-low", wantModel: "gpt-5.4", wantContext: 1000000},
+		{alias: "clyde-gpt-5.4-1m-medium", wantModel: "gpt-5.4", wantContext: 1000000},
+		{alias: "clyde-gpt-5.4-1m-high", wantModel: "gpt-5.4", wantContext: 1000000},
+		{alias: "clyde-gpt-5.4-1m-xhigh", wantModel: "gpt-5.4", wantContext: 1000000},
+		{alias: "clyde-gpt-5.5-low", wantModel: "gpt-5.5", wantContext: 272000},
+		{alias: "clyde-gpt-5.5-medium", wantModel: "gpt-5.5", wantContext: 272000},
+		{alias: "clyde-gpt-5.5-high", wantModel: "gpt-5.5", wantContext: 272000},
+		{alias: "clyde-gpt-5.5-xhigh", wantModel: "gpt-5.5", wantContext: 272000},
+	}
+	for _, tc := range cases {
+		model, ok := models[tc.alias]
+		if !ok {
+			t.Fatalf("%s missing from model list", tc.alias)
+		}
+		if model.Backend != BackendCodex {
+			t.Fatalf("%s backend = %q want %q", tc.alias, model.Backend, BackendCodex)
+		}
+		if model.ClaudeModel != tc.wantModel {
+			t.Fatalf("%s ClaudeModel = %q want %q", tc.alias, model.ClaudeModel, tc.wantModel)
+		}
+		if model.Context != tc.wantContext {
+			t.Fatalf("%s Context = %d want %d", tc.alias, model.Context, tc.wantContext)
+		}
+	}
+	if _, ok := models["clyde-gpt-5.5-1m-high"]; ok {
+		t.Fatalf("clyde-gpt-5.5-1m-high should not be advertised")
+	}
+	if _, ok := models["clyde-gpt-5.5"]; !ok {
+		t.Fatalf("clyde-gpt-5.5 bare compatibility alias missing")
+	}
+	if _, _, err := r.Resolve("clyde-gpt-5.5", ""); err == nil {
+		t.Fatalf("clyde-gpt-5.5 should not resolve without explicit effort")
+	}
+	m, effort, err := r.Resolve("clyde-gpt-5.5", EffortHigh)
+	if err != nil {
+		t.Fatalf("clyde-gpt-5.5 should resolve when Cursor supplies effort: %v", err)
+	}
+	if m.Effort != "" {
+		t.Fatalf("bare compatibility alias Effort = %q, want empty", m.Effort)
+	}
+	if effort != EffortHigh {
+		t.Fatalf("effort = %q want %q", effort, EffortHigh)
+	}
+}
+
 func TestResolveRoutesClydeCodexAliases(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Codex.Enabled = true
 	cfg.Codex.NativeModelRouting = "codex"
+	cfg.Codex.Models = testCodexModels()
 	r, err := NewRegistry(cfg)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
@@ -232,6 +324,37 @@ func TestResolveRoutesClydeCodexAliases(t *testing.T) {
 		t.Fatalf("ClaudeModel = %q want gpt-5.4", m.ClaudeModel)
 	}
 
+	m, effort, err := r.Resolve("clyde-gpt-5.5-high", "")
+	if err != nil {
+		t.Fatalf("Resolve clyde-gpt-5.5-high: %v", err)
+	}
+	if m.Backend != BackendCodex {
+		t.Fatalf("backend = %q want %q", m.Backend, BackendCodex)
+	}
+	if m.ClaudeModel != "gpt-5.5" {
+		t.Fatalf("ClaudeModel = %q want gpt-5.5", m.ClaudeModel)
+	}
+	if m.Context != 272000 {
+		t.Fatalf("Context = %d want 272000", m.Context)
+	}
+	if effort != EffortHigh {
+		t.Fatalf("effort = %q want %q", effort, EffortHigh)
+	}
+
+	m, effort, err = r.Resolve("clyde-gpt-5.4-1m-xhigh", "")
+	if err != nil {
+		t.Fatalf("Resolve clyde-gpt-5.4-1m-xhigh: %v", err)
+	}
+	if m.ClaudeModel != "gpt-5.4" {
+		t.Fatalf("ClaudeModel = %q want gpt-5.4", m.ClaudeModel)
+	}
+	if m.Context != 1000000 {
+		t.Fatalf("Context = %d want 1000000", m.Context)
+	}
+	if effort != EffortXHigh {
+		t.Fatalf("effort = %q want %q", effort, EffortXHigh)
+	}
+
 	m, _, err = r.Resolve("gpt-5.3-codex-spark", "")
 	if err != nil {
 		t.Fatalf("Resolve gpt-5.3-codex-spark: %v", err)
@@ -243,7 +366,7 @@ func TestResolveRoutesClydeCodexAliases(t *testing.T) {
 		t.Fatalf("ClaudeModel = %q want gpt-5.3-codex-spark", m.ClaudeModel)
 	}
 
-	m, effort, err := r.Resolve("gpt-5.4", "xhigh")
+	m, effort, err = r.Resolve("gpt-5.4", "xhigh")
 	if err != nil {
 		t.Fatalf("Resolve gpt-5.4 xhigh: %v", err)
 	}
@@ -295,20 +418,6 @@ func TestResolveRoutesClydeCodexAliases(t *testing.T) {
 	}
 }
 
-func TestResolveRejectsRemovedClydeGPTAliases(t *testing.T) {
-	cfg := baseConfig()
-	cfg.Codex.Enabled = true
-	r, err := NewRegistry(cfg)
-	if err != nil {
-		t.Fatalf("NewRegistry: %v", err)
-	}
-	if _, _, err := r.Resolve("clyde-gpt-5.4-1m-high", ""); err == nil {
-		t.Fatalf("expected clyde-gpt alias to be rejected")
-	} else if !strings.Contains(err.Error(), "no longer supported") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
 func TestResolveDoesNotRouteCodexWhenDisabled(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Codex.Enabled = false
@@ -327,7 +436,7 @@ func TestResolveDoesNotRouteCodexWhenDisabled(t *testing.T) {
 
 func TestResolveDoesNotRouteClydeOpusAliasesToCodex(t *testing.T) {
 	r, err := NewRegistry(config.AdapterConfig{
-		DefaultModel: "clyde-opus-4-7",
+		DefaultModel: "clyde-opus-4.7-medium",
 		ClientIdentity: config.AdapterClientIdentity{
 			BetaHeader:              "beta",
 			UserAgent:               "ua",
@@ -340,6 +449,7 @@ func TestResolveDoesNotRouteClydeOpusAliasesToCodex(t *testing.T) {
 		},
 		Families: map[string]config.AdapterFamily{
 			"opus-4-7": {
+				AliasPrefix:     "opus-4.7",
 				Model:           "claude-opus-4-7",
 				Contexts:        []config.AdapterModelContext{{AliasSuffix: "", Tokens: 200000}},
 				Efforts:         []string{"medium"},
@@ -358,9 +468,9 @@ func TestResolveDoesNotRouteClydeOpusAliasesToCodex(t *testing.T) {
 		t.Fatalf("NewRegistry: %v", err)
 	}
 
-	m, _, err := r.Resolve("clyde-opus-4-7-medium-thinking-enabled", "")
+	m, _, err := r.Resolve("clyde-opus-4.7-medium-thinking", "")
 	if err != nil {
-		t.Fatalf("Resolve clyde-opus-4-7-medium-thinking-enabled: %v", err)
+		t.Fatalf("Resolve clyde-opus-4.7-medium-thinking: %v", err)
 	}
 	if m.Backend == BackendCodex {
 		t.Fatalf("backend = %q want non-codex", m.Backend)
@@ -388,42 +498,45 @@ func TestResolveModelRoutingMatrix(t *testing.T) {
 		wantSupportsVision bool
 	}{
 		{
-			alias:              "clyde-opus-4-7",
-			wantBackend:        BackendClaude,
-			wantModel:          "claude-opus-4-7",
-			wantContext:        200000,
-			wantEffort:         EffortLow,
-			wantThinking:       ThinkingDefault,
-			wantSupportsTools:  true,
-			wantSupportsVision: true,
-		},
-		{
-			alias:              "clyde-opus-4-7-medium-thinking-enabled",
+			alias:              "clyde-opus-4.7-medium",
 			wantBackend:        BackendClaude,
 			wantModel:          "claude-opus-4-7",
 			wantContext:        200000,
 			wantEffort:         EffortMedium,
-			wantThinking:       ThinkingEnabled,
+			wantThinking:       ThinkingDisabled,
 			wantSupportsTools:  true,
 			wantSupportsVision: true,
 		},
 		{
-			alias:              "clyde-opus-4-7-high-1m-thinking-enabled",
+			// claude-opus-4-7 with no explicit thinking_wire_mode hits
+			// the registry's implicit fallback in
+			// withResolvedThinkingWireMode and resolves to adaptive.
+			alias:              "clyde-opus-4.7-medium-thinking",
+			wantBackend:        BackendClaude,
+			wantModel:          "claude-opus-4-7",
+			wantContext:        200000,
+			wantEffort:         EffortMedium,
+			wantThinking:       ThinkingAdaptive,
+			wantSupportsTools:  true,
+			wantSupportsVision: true,
+		},
+		{
+			alias:              "clyde-opus-4.7-1m-high-thinking",
 			wantBackend:        BackendClaude,
 			wantModel:          "claude-opus-4-7[1m]",
 			wantContext:        1000000,
 			wantEffort:         EffortHigh,
-			wantThinking:       ThinkingEnabled,
+			wantThinking:       ThinkingAdaptive,
 			wantSupportsTools:  true,
 			wantSupportsVision: true,
 		},
 		{
-			alias:              "clyde-opus-4-6-max-1m-thinking-adaptive",
+			alias:              "clyde-opus-4.6-1m-max-thinking",
 			wantBackend:        BackendClaude,
 			wantModel:          "claude-opus-4-6[1m]",
 			wantContext:        1000000,
 			wantEffort:         EffortMax,
-			wantThinking:       ThinkingAdaptive,
+			wantThinking:       ThinkingEnabled,
 			wantSupportsTools:  true,
 			wantSupportsVision: true,
 		},
@@ -520,8 +633,9 @@ func TestResolveModelRoutingMatrix(t *testing.T) {
 
 func TestNewRegistrySupportsOpus46FamilyAliases(t *testing.T) {
 	cfg := baseConfig()
-	cfg.DefaultModel = "clyde-opus-4-6"
+	cfg.DefaultModel = "clyde-opus-4.6-medium"
 	cfg.Families["opus-4-6"] = config.AdapterFamily{
+		AliasPrefix:     "opus-4.6",
 		Model:           "claude-opus-4-6",
 		Efforts:         []string{EffortLow, EffortMedium, EffortHigh, EffortMax},
 		ThinkingModes:   []string{ThinkingDefault, ThinkingAdaptive, ThinkingEnabled, ThinkingDisabled},
@@ -548,25 +662,27 @@ func TestNewRegistrySupportsOpus46FamilyAliases(t *testing.T) {
 		wantFamily   string
 	}{
 		{
-			alias:        "clyde-opus-4-6",
+			alias:        "clyde-opus-4.6-medium",
 			wantModel:    "claude-opus-4-6",
 			wantContext:  200000,
-			wantThinking: ThinkingDefault,
+			wantEffort:   EffortMedium,
+			wantThinking: ThinkingDisabled,
 			wantFamily:   "opus-4-6",
 		},
 		{
-			alias:        "clyde-opus-4-6-1m",
+			alias:        "clyde-opus-4.6-1m-medium",
 			wantModel:    "claude-opus-4-6[1m]",
 			wantContext:  1000000,
-			wantThinking: ThinkingDefault,
+			wantEffort:   EffortMedium,
+			wantThinking: ThinkingDisabled,
 			wantFamily:   "opus-4-6",
 		},
 		{
-			alias:        "clyde-opus-4-6-max-1m-thinking-adaptive",
+			alias:        "clyde-opus-4.6-1m-max-thinking",
 			wantModel:    "claude-opus-4-6[1m]",
 			wantContext:  1000000,
 			wantEffort:   EffortMax,
-			wantThinking: ThinkingAdaptive,
+			wantThinking: ThinkingEnabled,
 			wantFamily:   "opus-4-6",
 		},
 	}
@@ -594,5 +710,91 @@ func TestNewRegistrySupportsOpus46FamilyAliases(t *testing.T) {
 		if !m.SupportsTools || !m.SupportsVision {
 			t.Fatalf("%s capabilities = tools:%v vision:%v want true/true", tc.alias, m.SupportsTools, m.SupportsVision)
 		}
+	}
+}
+
+// TestThinkingWireModeExplicitOverridesImplicitFallback locks in that
+// an operator can pin claude-opus-4-7 to enabled-mode wire shape by
+// setting thinking_wire_mode = "enabled". The implicit
+// enabled-to-adaptive fallback in withResolvedThinkingWireMode must
+// not override an explicit operator choice.
+func TestThinkingWireModeExplicitOverridesImplicitFallback(t *testing.T) {
+	cfg := baseConfig()
+	cfg.DefaultModel = "clyde-opus-4.7-medium-thinking"
+	cfg.Families["opus-4-7"] = config.AdapterFamily{
+		AliasPrefix:      "opus-4.7",
+		Model:            "claude-opus-4-7",
+		Efforts:          []string{EffortMedium},
+		ThinkingModes:    []string{ThinkingDefault, ThinkingEnabled},
+		ThinkingWireMode: ThinkingEnabled,
+		MaxOutputTokens:  32000,
+		SupportsTools:    &testBoolTrue,
+		SupportsVision:   &testBoolTrue,
+		Contexts:         []config.AdapterModelContext{{Tokens: 200000}},
+	}
+
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	m, ok := r.Models()["clyde-opus-4.7-medium-thinking"]
+	if !ok {
+		t.Fatalf("alias missing")
+	}
+	if m.Thinking != ThinkingEnabled {
+		t.Fatalf("Thinking = %q want %q (explicit thinking_wire_mode must win)", m.Thinking, ThinkingEnabled)
+	}
+}
+
+// TestThinkingWireModeExplicitAdaptive locks in the explicit-adaptive
+// path, so an operator who sets thinking_wire_mode = "adaptive" gets
+// adaptive without depending on the implicit fallback.
+func TestThinkingWireModeExplicitAdaptive(t *testing.T) {
+	cfg := baseConfig()
+	cfg.DefaultModel = "clyde-opus-4.7-medium-thinking"
+	cfg.Families["opus-4-7"] = config.AdapterFamily{
+		AliasPrefix:      "opus-4.7",
+		Model:            "claude-opus-4-7",
+		Efforts:          []string{EffortMedium},
+		ThinkingModes:    []string{ThinkingDefault, ThinkingEnabled},
+		ThinkingWireMode: ThinkingAdaptive,
+		MaxOutputTokens:  32000,
+		SupportsTools:    &testBoolTrue,
+		SupportsVision:   &testBoolTrue,
+		Contexts:         []config.AdapterModelContext{{Tokens: 200000}},
+	}
+
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	m, ok := r.Models()["clyde-opus-4.7-medium-thinking"]
+	if !ok {
+		t.Fatalf("alias missing")
+	}
+	if m.Thinking != ThinkingAdaptive {
+		t.Fatalf("Thinking = %q want %q", m.Thinking, ThinkingAdaptive)
+	}
+}
+
+// TestThinkingWireModeRejectsInvalid locks in the validation path so a
+// typo in thinking_wire_mode is caught at config-load time, not
+// silently dropped at request time.
+func TestThinkingWireModeRejectsInvalid(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Families["opus-4-7"] = config.AdapterFamily{
+		AliasPrefix:      "opus-4.7",
+		Model:            "claude-opus-4-7",
+		Efforts:          []string{EffortMedium},
+		ThinkingModes:    []string{ThinkingDefault, ThinkingEnabled},
+		ThinkingWireMode: "always-on",
+		MaxOutputTokens:  32000,
+		SupportsTools:    &testBoolTrue,
+		SupportsVision:   &testBoolTrue,
+		Contexts:         []config.AdapterModelContext{{Tokens: 200000}},
+	}
+
+	if _, err := NewRegistry(cfg); err == nil {
+		t.Fatal("expected NewRegistry to reject invalid thinking_wire_mode, got nil error")
 	}
 }
