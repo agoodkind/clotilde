@@ -274,14 +274,160 @@ func TestStartSessionUsesDaemonLaunch(t *testing.T) {
 	if gotName != "demo" || gotBasedir != "/tmp/demo" {
 		t.Fatalf("launch args = (%q, %q)", gotName, gotBasedir)
 	}
-	var body map[string]any
+	var body startSessionResponse
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if body["name"] != "chat-demo" {
-		t.Fatalf("name = %v, want chat-demo", body["name"])
+	if body.Name != "chat-demo" {
+		t.Fatalf("name = %v, want chat-demo", body.Name)
 	}
-	if body["session_id"] != "uuid-demo" {
-		t.Fatalf("session_id = %v, want uuid-demo", body["session_id"])
+	if body.SessionID != "uuid-demo" {
+		t.Fatalf("session_id = %v, want uuid-demo", body.SessionID)
+	}
+}
+
+func TestLiveSessionsEndpointSerializesDeps(t *testing.T) {
+	ts := newTestServer(t, config.WebAppConfig{}, Deps{
+		ListLiveSessions: func(context.Context) ([]LiveSession, error) {
+			return []LiveSession{{
+				Provider:       "codex",
+				SessionName:    "live-demo",
+				SessionID:      "codex-123",
+				Status:         "running",
+				SupportsSend:   true,
+				SupportsStream: true,
+				SupportsStop:   true,
+			}}, nil
+		},
+	})
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/live-sessions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var got liveSessionsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Sessions) != 1 || got.Sessions[0].SessionID != "codex-123" {
+		t.Fatalf("unexpected payload: %+v", got)
+	}
+}
+
+func TestStartLiveSessionUsesDaemonLaunch(t *testing.T) {
+	var got StartLiveSessionRequest
+	ts := newTestServer(t, config.WebAppConfig{}, Deps{
+		StartLiveSession: func(_ context.Context, req StartLiveSessionRequest) (LiveSession, error) {
+			got = req
+			return LiveSession{
+				Provider:       "codex",
+				SessionName:    "chat-demo",
+				SessionID:      "codex-demo",
+				Status:         "starting",
+				SupportsSend:   true,
+				SupportsStream: true,
+			}, nil
+		},
+	})
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/live-sessions", "application/json", strings.NewReader(`{"provider":"codex","name":"demo","basedir":"/tmp/demo","model":"gpt","effort":"high","incognito":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+	if got.Provider != "codex" || got.Name != "demo" || got.Basedir != "/tmp/demo" || got.Model != "gpt" || got.Effort != "high" || !got.Incognito {
+		t.Fatalf("launch args = %+v", got)
+	}
+	var body startLiveSessionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Session.SessionID != "codex-demo" {
+		t.Fatalf("session_id = %q, want codex-demo", body.Session.SessionID)
+	}
+}
+
+func TestSendLiveSessionUsesDaemonSend(t *testing.T) {
+	var gotSessionID, gotText string
+	ts := newTestServer(t, config.WebAppConfig{}, Deps{
+		SendLiveSession: func(_ context.Context, sessionID, text string) error {
+			gotSessionID = sessionID
+			gotText = text
+			return nil
+		},
+	})
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/live-sessions/codex-demo/send", "application/json", strings.NewReader(`{"text":"hello"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+	if gotSessionID != "codex-demo" || gotText != "hello" {
+		t.Fatalf("send args = (%q, %q)", gotSessionID, gotText)
+	}
+}
+
+func TestStopLiveSessionUsesDaemonStop(t *testing.T) {
+	var gotSessionID string
+	ts := newTestServer(t, config.WebAppConfig{}, Deps{
+		StopLiveSession: func(_ context.Context, sessionID string) error {
+			gotSessionID = sessionID
+			return nil
+		},
+	})
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/live-sessions/codex-demo/stop", "application/json", strings.NewReader(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+	if gotSessionID != "codex-demo" {
+		t.Fatalf("stop session = %q, want codex-demo", gotSessionID)
+	}
+}
+
+func TestStreamLiveSessionWritesSSE(t *testing.T) {
+	events := make(chan LiveSessionEvent, 1)
+	events <- LiveSessionEvent{SessionID: "codex-demo", Kind: "message", Role: "assistant", Text: "hi"}
+	close(events)
+	ts := newTestServer(t, config.WebAppConfig{}, Deps{
+		StreamLiveSession: func(context.Context, string) (<-chan LiveSessionEvent, error) {
+			return events, nil
+		},
+	})
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/live-sessions/codex-demo/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	if !strings.Contains(text, "event: live-session") || !strings.Contains(text, `"text":"hi"`) {
+		t.Fatalf("unexpected stream body: %s", text)
 	}
 }

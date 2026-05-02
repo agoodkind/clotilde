@@ -33,6 +33,7 @@ import (
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	"goodkind.io/clyde/internal/bridge"
+	"goodkind.io/clyde/internal/codex"
 	compactengine "goodkind.io/clyde/internal/compact"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/outputstyle"
@@ -84,6 +85,7 @@ type Server struct {
 
 	remoteMu      sync.Mutex
 	remoteWorkers map[string]*remoteWorker
+	liveSessions  map[string]*liveRuntimeSession
 
 	contextMu         sync.Mutex
 	contextStates     map[string]sessionContextState
@@ -108,6 +110,18 @@ type remoteWorker struct {
 	sessionID   string
 	incognito   bool
 	cmd         *exec.Cmd
+}
+
+type liveRuntimeSession struct {
+	provider     session.ProviderID
+	name         string
+	id           string
+	basedir      string
+	model        string
+	status       string
+	startedAt    time.Time
+	lastTurnID   string
+	codexRuntime codex.LiveRuntime
 }
 
 var remoteWorkerExecutable = os.Executable
@@ -181,6 +195,7 @@ func New(log *slog.Logger) (*Server, error) {
 		transcripts:       newTranscriptHub(),
 		providerStats:     newProviderStatsHub(log),
 		remoteWorkers:     make(map[string]*remoteWorker),
+		liveSessions:      make(map[string]*liveRuntimeSession),
 		contextStates:     make(map[string]sessionContextState),
 		contextRefreshSem: make(chan contextRefreshPermit, 2),
 	}
@@ -1500,6 +1515,7 @@ func (s *Server) sessionSummary(store *session.FileStore, sess *session.Session)
 		}
 		s.bridgeMu.RUnlock()
 	}
+	runtime := s.providerRuntimeBoundary(sess, settings, bridge)
 	contextState := s.contextStateForSession(sess)
 	return &clydev1.SessionSummary{
 		Name:                  sess.Name,
@@ -1530,11 +1546,14 @@ func (s *Server) sessionSummary(store *session.FileStore, sess *session.Session)
 		ContextMessagesTokens: int32(contextState.Usage.CategoryTokens("Messages")),
 		ContextUsageLoaded:    contextState.Loaded,
 		ContextUsageStatus:    contextState.Status,
+		Provider:              string(sess.ProviderID()),
+		Runtime:               protoRuntimeBoundary(runtime),
 	}
 }
 
 func (s *Server) sessionDetail(store *session.FileStore, sess *session.Session) *clydev1.GetSessionDetailResponse {
 	caps := sess.SessionProviderCapabilities()
+	settings, _ := sessionsettings.Load(store, sess)
 	model := "-"
 	if caps.TranscriptExport && sess.Metadata.ProviderTranscriptPath() != "" {
 		if m := inspectExtractModel(sess.Metadata.ProviderTranscriptPath()); m != "" {
@@ -1542,7 +1561,7 @@ func (s *Server) sessionDetail(store *session.FileStore, sess *session.Session) 
 		}
 	}
 	if model == "-" {
-		if settings, _ := sessionsettings.Load(store, sess); settings != nil && settings.Model != "" {
+		if settings != nil && settings.Model != "" {
 			model = adaptercursor.NormalizeSessionSettingsModel(settings.Model)
 		}
 	}
@@ -1558,6 +1577,8 @@ func (s *Server) sessionDetail(store *session.FileStore, sess *session.Session) 
 		LastMessageTokens:     int32(stats.LastMessageTokens),
 		CompactionCount:       int32(stats.CompactionCount),
 		LastPreCompactTokens:  int32(stats.LastPreCompactTokens),
+		Provider:              string(sess.ProviderID()),
+		Runtime:               protoRuntimeBoundary(s.providerRuntimeBoundary(sess, settings, nil)),
 	}
 	if p := sess.Metadata.ProviderTranscriptPath(); caps.TranscriptExport && p != "" {
 		if info, err := os.Stat(p); err == nil {
@@ -1580,7 +1601,50 @@ func (s *Server) sessionDetail(store *session.FileStore, sess *session.Session) 
 			resp.Tools = append(resp.Tools, &clydev1.ToolUse{Name: t.Name, Count: int32(t.Count)})
 		}
 	}
+	if sess.ProviderID() == session.ProviderCodex {
+		s.applyCodexSessionDetail(sess, resp)
+	}
 	return resp
+}
+
+func (s *Server) applyCodexSessionDetail(sess *session.Session, resp *clydev1.GetSessionDetailResponse) {
+	path := sess.Metadata.ProviderTranscriptPath()
+	if path == "" {
+		return
+	}
+	thread, err := codex.ReadThreadByRolloutPath(path, true, false)
+	if err != nil {
+		s.log.Warn("daemon.codex.detail_read_failed",
+			"component", "daemon",
+			"session", sess.Name,
+			"path", path,
+			"err", err,
+		)
+		return
+	}
+	if thread.ModelProvider != "" && resp.Model == "-" {
+		resp.Model = thread.ModelProvider
+	}
+	resp.TotalMessages = int32(len(thread.Messages))
+	for _, msg := range thread.Messages {
+		text := strings.TrimSpace(msg.Text)
+		if text == "" {
+			continue
+		}
+		resp.AllMessages = append(resp.AllMessages, detailMessageProto(msg.Role, text, msg.Timestamp))
+	}
+	start := max(len(thread.Messages)-5, 0)
+	for _, msg := range thread.Messages[start:] {
+		text := strings.TrimSpace(msg.Text)
+		if text == "" {
+			continue
+		}
+		resp.RecentMessages = append(resp.RecentMessages, detailMessageProto(msg.Role, text, msg.Timestamp))
+	}
+	if info, err := os.Stat(path); err == nil {
+		resp.TranscriptSizeBytes = info.Size()
+		resp.LastActivityNanos = info.ModTime().UnixNano()
+	}
 }
 
 func detailMessageProto(role, text string, ts time.Time) *clydev1.DetailMessage {
@@ -1589,6 +1653,64 @@ func detailMessageProto(role, text string, ts time.Time) *clydev1.DetailMessage 
 		out.TimestampNanos = ts.UnixNano()
 	}
 	return out
+}
+
+func (s *Server) providerRuntimeBoundary(sess *session.Session, settings *session.Settings, bridge *clydev1.Bridge) session.ProviderRuntimeBoundary {
+	runtime := sess.ProviderRuntimeBoundary()
+	runtime.Live.RemoteControlOn = settings != nil && settings.RemoteControl
+	if bridge == nil && runtime.Live.SessionID != "" {
+		s.bridgeMu.RLock()
+		if b := s.bridges[runtime.Live.SessionID]; b != nil {
+			bridge = b
+		}
+		s.bridgeMu.RUnlock()
+	}
+	if bridge != nil {
+		runtime.Live.BridgeSessionID = bridge.GetBridgeSessionId()
+		runtime.Live.BridgeURL = bridge.GetUrl()
+	}
+	return runtime
+}
+
+func protoRuntimeBoundary(runtime session.ProviderRuntimeBoundary) *clydev1.ProviderRuntimeBoundary {
+	return &clydev1.ProviderRuntimeBoundary{
+		History: protoHistoryBoundary(runtime.History),
+		Live:    protoLiveBoundary(runtime.Live),
+	}
+}
+
+func protoHistoryBoundary(history session.SessionHistoryBoundary) *clydev1.SessionHistoryBoundary {
+	previous := make([]*clydev1.ProviderSessionIdentity, 0, len(history.PreviousSessionIDs))
+	for _, previousID := range history.PreviousSessionIDs {
+		previous = append(previous, &clydev1.ProviderSessionIdentity{
+			Provider:  string(history.Provider),
+			SessionId: previousID,
+		})
+	}
+	return &clydev1.SessionHistoryBoundary{
+		Current: &clydev1.ProviderSessionIdentity{
+			Provider:  string(history.Provider),
+			SessionId: history.CurrentSessionID,
+		},
+		Previous:        previous,
+		PrimaryArtifact: history.PrimaryArtifact,
+		Readable:        history.Readable,
+		Exportable:      history.Exportable,
+	}
+}
+
+func protoLiveBoundary(live session.LiveSessionBoundary) *clydev1.LiveSessionBoundary {
+	return &clydev1.LiveSessionBoundary{
+		Current: &clydev1.ProviderSessionIdentity{
+			Provider:  string(live.Provider),
+			SessionId: live.SessionID,
+		},
+		TailReadable:    live.TailReadable,
+		InputWritable:   live.InputWritable,
+		RemoteControl:   live.RemoteControlOn,
+		BridgeSessionId: live.BridgeSessionID,
+		BridgeUrl:       live.BridgeURL,
+	}
 }
 
 // settingsLockFor returns the per-session mutex used to serialise
@@ -1949,69 +2071,89 @@ func (s *Server) removeBridge(sessionID string) {
 	)
 }
 
-// resolveTranscriptPath looks up the transcript path for a Claude
-// session UUID. Walks the global session store and returns the path
-// of the first session whose provider identity or previous provider identities
-// matches. Returns the empty string when nothing matches.
-func resolveTranscriptPath(sessionID string) string {
-	store, err := session.NewGlobalFileStore()
-	if err != nil {
-		return ""
-	}
-	all, err := store.List()
-	if err != nil {
-		return ""
-	}
-	for _, s := range all {
-		if s.Metadata.ProviderSessionID() == sessionID {
-			return s.Metadata.ProviderTranscriptPath()
-		}
-		if slices.Contains(s.Metadata.PreviousProviderSessionIDStrings(), sessionID) {
-			return s.Metadata.ProviderTranscriptPath()
-		}
-	}
-	return ""
+type resolvedSessionRuntime struct {
+	Session         *session.Session
+	Provider        session.ProviderID
+	SessionID       string
+	HistoryArtifact string
 }
 
-func sessionByProviderSessionID(sessionID string) (*session.Session, error) {
-	sessionID = strings.TrimSpace(sessionID)
-	if sessionID == "" {
-		return nil, nil
-	}
+func resolveSessionRuntime(sessionName, provider, sessionID string) (resolvedSessionRuntime, error) {
 	store, err := session.NewGlobalFileStore()
 	if err != nil {
-		return nil, err
+		return resolvedSessionRuntime{}, err
+	}
+	sessionName = strings.TrimSpace(sessionName)
+	providerID := session.ProviderID(strings.TrimSpace(provider))
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionName != "" {
+		sess, err := store.Resolve(sessionName)
+		if err != nil {
+			return resolvedSessionRuntime{}, err
+		}
+		runtime := sess.ProviderRuntimeBoundary()
+		return resolvedSessionRuntime{
+			Session:         sess,
+			Provider:        runtime.Live.Provider,
+			SessionID:       runtime.Live.SessionID,
+			HistoryArtifact: runtime.History.PrimaryArtifact,
+		}, nil
+	}
+	if sessionID == "" {
+		return resolvedSessionRuntime{}, nil
 	}
 	all, err := store.List()
 	if err != nil {
-		return nil, err
+		return resolvedSessionRuntime{}, err
 	}
 	for _, sess := range all {
 		if sess == nil {
 			continue
 		}
-		if sess.Metadata.ProviderSessionID() == sessionID || slices.Contains(sess.Metadata.PreviousProviderSessionIDStrings(), sessionID) {
-			return sess, nil
+		for _, identity := range session.HistoricalIdentities(sess) {
+			normalized := identity.Normalized()
+			if normalized.ID != sessionID {
+				continue
+			}
+			if providerID != session.ProviderUnknown && session.NormalizeProviderID(providerID) != normalized.Provider {
+				continue
+			}
+			runtime := sess.ProviderRuntimeBoundary()
+			return resolvedSessionRuntime{
+				Session:         sess,
+				Provider:        normalized.Provider,
+				SessionID:       normalized.ID,
+				HistoryArtifact: runtime.History.PrimaryArtifact,
+			}, nil
 		}
 	}
-	return nil, nil
+	return resolvedSessionRuntime{}, nil
 }
 
-// TailTranscript streams transcript lines for a session via the hub.
+// TailTranscript streams provider history lines for a session via the hub.
 // Reference counted so multiple subscribers share one underlying
-// fsnotify watcher per transcript.
+// fsnotify watcher per provider history artifact. Legacy callers may still
+// pass session_id only; generic callers can pass session_name and provider.
 func (s *Server) TailTranscript(req *clydev1.TailTranscriptRequest, stream clydev1.ClydeService_TailTranscriptServer) error {
-	if req.SessionId == "" {
-		return status.Error(codes.InvalidArgument, "session_id is required")
+	if req.SessionId == "" && req.SessionName == "" {
+		return status.Error(codes.InvalidArgument, "session_id or session_name is required")
 	}
-	if sess, err := sessionByProviderSessionID(req.SessionId); err != nil {
-		return status.Errorf(codes.Internal, "resolve session provider: %v", err)
-	} else if sess != nil && !sess.SessionProviderCapabilities().TranscriptTail {
-		return status.Errorf(codes.FailedPrecondition, "session provider %q does not support transcript tailing", sess.ProviderID())
+	target, err := resolveSessionRuntime(req.SessionName, req.Provider, req.SessionId)
+	if err != nil {
+		return status.Errorf(codes.Internal, "resolve session runtime: %v", err)
 	}
-	path := resolveTranscriptPath(req.SessionId)
+	if target.Session != nil && !target.Session.ProviderRuntimeBoundary().Live.TailReadable {
+		return status.Errorf(codes.FailedPrecondition, "session provider %q does not support live tailing", target.Session.ProviderID())
+	}
+	if target.Session == nil {
+		return status.Errorf(codes.NotFound, "no session runtime for %q", req.SessionId)
+	}
+	if !target.Session.SessionProviderCapabilities().TranscriptTail {
+		return status.Errorf(codes.FailedPrecondition, "session provider %q does not support transcript tailing", target.Session.ProviderID())
+	}
+	path := target.HistoryArtifact
 	if path == "" {
-		return status.Errorf(codes.NotFound, "no transcript for session %q", req.SessionId)
+		return status.Errorf(codes.NotFound, "no history artifact for session %q", target.SessionID)
 	}
 	startOffset := req.StartAtOffset
 	if startOffset == 0 {
@@ -2020,7 +2162,7 @@ func (s *Server) TailTranscript(req *clydev1.TailTranscriptRequest, stream clyde
 		// nonzero positive value before the file size).
 		startOffset = -1
 	}
-	ch, cleanup, err := s.transcripts.Subscribe(req.SessionId, path, startOffset)
+	ch, cleanup, err := s.transcripts.Subscribe(target.SessionID, path, startOffset)
 	if err != nil {
 		return status.Errorf(codes.Internal, "open tailer: %v", err)
 	}
@@ -2033,6 +2175,11 @@ func (s *Server) TailTranscript(req *clydev1.TailTranscriptRequest, stream clyde
 			if !ok {
 				return nil
 			}
+			line.Provider = string(target.Provider)
+			line.SessionId = target.SessionID
+			if target.Session != nil {
+				line.SessionName = target.Session.Name
+			}
 			if err := stream.Send(line); err != nil {
 				return err
 			}
@@ -2042,20 +2189,29 @@ func (s *Server) TailTranscript(req *clydev1.TailTranscriptRequest, stream clyde
 	}
 }
 
-// SendToSession delivers text into a running claude session via the
-// per session inject socket the wrapper opened on launch. Returns
+// SendToSession delivers text into a running provider session via the
+// provider runtime input channel. Claude compatibility uses the per-session
+// inject socket the wrapper opened on launch. Returns
 // delivered=false when no socket exists, so callers can fall back to
 // telling the user to use the local terminal directly.
 func (s *Server) SendToSession(_ context.Context, req *clydev1.SendToSessionRequest) (*clydev1.SendToSessionResponse, error) {
-	if req.SessionId == "" {
-		return nil, status.Error(codes.InvalidArgument, "session_id is required")
+	if req.SessionId == "" && req.SessionName == "" {
+		return nil, status.Error(codes.InvalidArgument, "session_id or session_name is required")
 	}
-	if sess, err := sessionByProviderSessionID(req.SessionId); err != nil {
-		return nil, status.Errorf(codes.Internal, "resolve session provider: %v", err)
-	} else if sess != nil && !sess.SessionProviderCapabilities().RemoteControl {
-		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support remote control", sess.ProviderID())
+	target, err := resolveSessionRuntime(req.SessionName, req.Provider, req.SessionId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "resolve session runtime: %v", err)
 	}
-	socketPath := injectSocketPath(req.SessionId)
+	if target.Session != nil && !target.Session.ProviderRuntimeBoundary().Live.InputWritable {
+		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support live input", target.Session.ProviderID())
+	}
+	if target.Session == nil {
+		return nil, status.Errorf(codes.NotFound, "no session runtime for %q", req.SessionId)
+	}
+	if !target.Session.SessionProviderCapabilities().RemoteControl {
+		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support remote control", target.Session.ProviderID())
+	}
+	socketPath := injectSocketPath(target.SessionID)
 	if _, err := os.Stat(socketPath); err != nil {
 		return &clydev1.SendToSessionResponse{Delivered: false}, nil
 	}

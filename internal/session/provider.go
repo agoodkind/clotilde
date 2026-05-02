@@ -21,6 +21,10 @@ type ProviderCapabilities struct {
 	SessionIDRotation   bool
 	CustomTitles        bool
 	PerSessionSettings  bool
+	HistoryRead         bool
+	HistoryExport       bool
+	LiveTail            bool
+	LiveInput           bool
 	RemoteControl       bool
 	TranscriptTail      bool
 	TranscriptExport    bool
@@ -35,6 +39,64 @@ type ProviderInfoRecord struct {
 	Capabilities ProviderCapabilities
 }
 
+// SessionHistoryBoundary describes the provider-neutral read side of a session.
+// Legacy Claude transcript paths are represented as the primary artifact while
+// newer providers can map their own durable history handle to the same field.
+type SessionHistoryBoundary struct {
+	Provider           ProviderID
+	CurrentSessionID   string
+	PreviousSessionIDs []string
+	PrimaryArtifact    string
+	Readable           bool
+	Exportable         bool
+}
+
+// LiveSessionBoundary describes the provider-neutral live runtime side of a
+// session, including whether callers may tail output or send input.
+type LiveSessionBoundary struct {
+	Provider        ProviderID
+	SessionID       string
+	TailReadable    bool
+	InputWritable   bool
+	RemoteControlOn bool
+	BridgeURL       string
+	BridgeSessionID string
+}
+
+// ProviderRuntimeBoundary is the combined provider-neutral contract exposed to
+// daemon clients that need history and live-session capabilities.
+type ProviderRuntimeBoundary struct {
+	History SessionHistoryBoundary
+	Live    LiveSessionBoundary
+}
+
+// ProviderRuntimeBoundary returns the provider-neutral history/live runtime
+// contract for this session. Compatibility fields such as TranscriptExport and
+// RemoteControl still feed the generic flags for existing Claude rows.
+func (s *Session) ProviderRuntimeBoundary() ProviderRuntimeBoundary {
+	if s == nil {
+		return ProviderRuntimeBoundary{}
+	}
+	caps := s.SessionProviderCapabilities()
+	return ProviderRuntimeBoundary{
+		History: SessionHistoryBoundary{
+			Provider:           s.ProviderID(),
+			CurrentSessionID:   s.Metadata.ProviderSessionID(),
+			PreviousSessionIDs: append([]string(nil), s.Metadata.PreviousProviderSessionIDStrings()...),
+			PrimaryArtifact:    s.Metadata.ProviderTranscriptPath(),
+			Readable:           caps.HistoryRead || caps.TranscriptTail || caps.TranscriptExport,
+			Exportable:         caps.HistoryExport || caps.TranscriptExport,
+		},
+		Live: LiveSessionBoundary{
+			Provider:        s.ProviderID(),
+			SessionID:       s.Metadata.ProviderSessionID(),
+			TailReadable:    caps.LiveTail || caps.TranscriptTail,
+			InputWritable:   caps.LiveInput || caps.RemoteControl,
+			RemoteControlOn: false,
+		},
+	}
+}
+
 var defaultProviderInfo = ProviderInfoRecord{
 	ID: ProviderClaude,
 	Capabilities: ProviderCapabilities{
@@ -43,6 +105,10 @@ var defaultProviderInfo = ProviderInfoRecord{
 		SessionIDRotation:   true,
 		CustomTitles:        true,
 		PerSessionSettings:  true,
+		HistoryRead:         true,
+		HistoryExport:       true,
+		LiveTail:            true,
+		LiveInput:           true,
 		RemoteControl:       true,
 		TranscriptTail:      true,
 		TranscriptExport:    true,
@@ -55,7 +121,11 @@ var defaultProviderInfo = ProviderInfoRecord{
 var codexProviderInfo = ProviderInfoRecord{
 	ID: ProviderCodex,
 	Capabilities: ProviderCapabilities{
-		ResumeByID: true,
+		ResumeByID:    true,
+		HistoryRead:   true,
+		HistoryExport: true,
+		LiveTail:      true,
+		LiveInput:     true,
 	},
 }
 

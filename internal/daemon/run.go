@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -22,11 +23,14 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/peer"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/adapter"
+	"goodkind.io/clyde/internal/codex"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/mitm"
+	"goodkind.io/clyde/internal/session"
 	"goodkind.io/clyde/internal/slogger"
 	"goodkind.io/clyde/internal/webapp"
 )
@@ -814,6 +818,11 @@ func startWebApp(log *slog.Logger, srv *Server, inherited net.Listener) (*webApp
 			}
 			return resp.GetSessionName(), resp.GetSessionId(), nil
 		},
+		ListLiveSessions:  srv.listLiveSessionsForWebApp,
+		StartLiveSession:  srv.startLiveSessionForWebApp,
+		SendLiveSession:   srv.sendLiveSessionForWebApp,
+		StreamLiveSession: srv.streamLiveSessionForWebApp,
+		StopLiveSession:   srv.stopLiveSessionForWebApp,
 	}
 	srvW := webapp.New(cfg.WebApp, deps, log)
 	lis := inherited
@@ -855,6 +864,207 @@ func startWebApp(log *slog.Logger, srv *Server, inherited net.Listener) (*webApp
 		lis:           lis,
 		cfg:           cfg.WebApp,
 	}, nil
+}
+
+func (s *Server) listLiveSessionsForWebApp(context.Context) ([]webapp.LiveSession, error) {
+	s.remoteMu.Lock()
+	defer s.remoteMu.Unlock()
+	out := make([]webapp.LiveSession, 0, len(s.liveSessions))
+	for _, live := range s.liveSessions {
+		out = append(out, webapp.LiveSession{
+			Provider:       string(live.provider),
+			SessionName:    live.name,
+			SessionID:      live.id,
+			Status:         live.status,
+			Basedir:        live.basedir,
+			StartedAt:      live.startedAt,
+			SupportsSend:   true,
+			SupportsStream: true,
+			SupportsStop:   true,
+		})
+	}
+	return out, nil
+}
+
+func (s *Server) startLiveSessionForWebApp(ctx context.Context, req webapp.StartLiveSessionRequest) (webapp.LiveSession, error) {
+	provider := strings.TrimSpace(req.Provider)
+	if provider == "" {
+		provider = string(session.ProviderCodex)
+	}
+	if provider != string(session.ProviderCodex) {
+		return webapp.LiveSession{}, fmt.Errorf("live provider %q is not supported yet", provider)
+	}
+	basedir := strings.TrimSpace(req.Basedir)
+	if basedir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return webapp.LiveSession{}, err
+		}
+		basedir = home
+	}
+	runtime := codex.NewLiveRuntime(codex.LiveRuntimeOptions{WorkDir: basedir})
+	live, err := runtime.Start(ctx, codex.LiveStartRequest{
+		WorkDir:     basedir,
+		Model:       strings.TrimSpace(req.Model),
+		SessionName: strings.TrimSpace(req.Name),
+		Ephemeral:   req.Incognito,
+	})
+	if err != nil {
+		_ = runtime.Close()
+		return webapp.LiveSession{}, err
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		name = live.ThreadID
+	}
+	record := &liveRuntimeSession{
+		provider:     session.ProviderCodex,
+		name:         name,
+		id:           live.ThreadID,
+		basedir:      live.WorkDir,
+		model:        live.Model,
+		status:       "idle",
+		startedAt:    daemonNow(),
+		codexRuntime: runtime,
+	}
+	if record.basedir == "" {
+		record.basedir = basedir
+	}
+	if record.model == "" {
+		record.model = strings.TrimSpace(req.Model)
+	}
+	s.remoteMu.Lock()
+	s.liveSessions[record.id] = record
+	s.remoteMu.Unlock()
+	return webapp.LiveSession{
+		Provider:       string(record.provider),
+		SessionName:    record.name,
+		SessionID:      record.id,
+		Status:         record.status,
+		Basedir:        record.basedir,
+		StartedAt:      record.startedAt,
+		SupportsSend:   true,
+		SupportsStream: true,
+		SupportsStop:   true,
+	}, nil
+}
+
+func (s *Server) sendLiveSessionForWebApp(ctx context.Context, sessionID, text string) error {
+	live, err := s.liveSessionRecord(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	turn, err := live.codexRuntime.Send(ctx, codex.LiveSendRequest{
+		ThreadID: live.id,
+		Text:     text,
+		WorkDir:  live.basedir,
+		Model:    live.model,
+	})
+	if err != nil {
+		return err
+	}
+	s.remoteMu.Lock()
+	live.lastTurnID = turn.TurnID
+	live.status = string(turn.Status)
+	s.remoteMu.Unlock()
+	return nil
+}
+
+func (s *Server) streamLiveSessionForWebApp(ctx context.Context, sessionID string) (<-chan webapp.LiveSessionEvent, error) {
+	_, _ = peer.FromContext(ctx)
+	live, err := s.liveSessionRecord(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if live.lastTurnID == "" {
+		return nil, fmt.Errorf("live session %q has no active turn", sessionID)
+	}
+	events, err := live.codexRuntime.Stream(ctx, codex.LiveStreamRequest{
+		ThreadID: live.id,
+		TurnID:   live.lastTurnID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make(chan webapp.LiveSessionEvent, 32)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				s.log.WarnContext(ctx, "daemon.live_session.stream_panicked",
+					"component", "daemon",
+					"session_id", live.id,
+					"panic", r,
+				)
+			}
+		}()
+		defer close(out)
+		for event := range events {
+			if event.Err != nil {
+				out <- webapp.LiveSessionEvent{SessionID: live.id, Kind: "error", Text: event.Err.Error(), Timestamp: daemonNow()}
+				return
+			}
+			role := "assistant"
+			text := event.Delta
+			if event.Kind == codex.LiveEventCompleted {
+				role = ""
+				text = string(event.Status)
+			}
+			out <- webapp.LiveSessionEvent{SessionID: live.id, Kind: string(event.Kind), Role: role, Text: text, Timestamp: daemonNow()}
+		}
+	}()
+	return out, nil
+}
+
+func (s *Server) stopLiveSessionForWebApp(ctx context.Context, sessionID string) error {
+	live, err := s.liveSessionRecord(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if live.lastTurnID != "" {
+		if err := live.codexRuntime.Stop(ctx, codex.LiveStopRequest{ThreadID: live.id, TurnID: live.lastTurnID}); err != nil {
+			return err
+		}
+	}
+	if err := live.codexRuntime.Close(); err != nil {
+		return err
+	}
+	s.remoteMu.Lock()
+	delete(s.liveSessions, live.id)
+	s.remoteMu.Unlock()
+	return nil
+}
+
+func (s *Server) liveSessionRecord(ctx context.Context, sessionID string) (*liveRuntimeSession, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil, fmt.Errorf("session id is required")
+	}
+	s.remoteMu.Lock()
+	live := s.liveSessions[sessionID]
+	if live != nil {
+		s.remoteMu.Unlock()
+		return live, nil
+	}
+	runtime := codex.NewLiveRuntime(codex.LiveRuntimeOptions{})
+	attached, err := runtime.Attach(ctx, codex.LiveAttachRequest{ThreadID: sessionID})
+	if err != nil {
+		s.remoteMu.Unlock()
+		_ = runtime.Close()
+		return nil, err
+	}
+	live = &liveRuntimeSession{
+		provider:     session.ProviderCodex,
+		name:         attached.ThreadID,
+		id:           attached.ThreadID,
+		basedir:      attached.WorkDir,
+		model:        attached.Model,
+		status:       "attached",
+		startedAt:    daemonNow(),
+		codexRuntime: runtime,
+	}
+	s.liveSessions[live.id] = live
+	s.remoteMu.Unlock()
+	return live, nil
 }
 
 // startAdapter reads the global config and launches the HTTP server

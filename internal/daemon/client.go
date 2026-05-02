@@ -23,6 +23,7 @@ import (
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/session"
 	"goodkind.io/gklog"
 )
 
@@ -888,14 +889,22 @@ func StartRemoteSessionViaDaemon(ctx context.Context, sessionName, basedir strin
 	return resp, nil
 }
 
-// SendToSessionViaDaemon delivers text into a running claude session
-// through its inject socket. The daemon resolves the session id to a
-// socket path and forwards the bytes. Returns false when no listener
-// is present (session not running, or wrapper does not own a pty).
-func SendToSessionViaDaemon(ctx context.Context, sessionID, text string) (bool, error) {
+// SessionRuntimeTarget identifies a provider-neutral live session. SessionName
+// is preferred for logical clyde sessions; Identity preserves compatibility for
+// callers that only have a provider-scoped session id.
+type SessionRuntimeTarget struct {
+	SessionName string
+	Identity    session.ProviderSessionID
+}
+
+// SendToLiveSessionViaDaemon delivers text into a running provider session.
+// Returns false when no live input endpoint exists.
+func SendToLiveSessionViaDaemon(ctx context.Context, target SessionRuntimeTarget, text string) (bool, error) {
 	log := daemonClientLog(ctx)
 	log.DebugContext(ctx, "daemon.client.send_to_session.begin",
-		"session_id", sessionID,
+		"session", target.SessionName,
+		"provider", target.Identity.Provider,
+		"session_id", target.Identity.ID,
 		"text_len", len(text),
 	)
 	c, err := ConnectOrStart(ctx)
@@ -907,8 +916,10 @@ func SendToSessionViaDaemon(ctx context.Context, sessionID, text string) (bool, 
 	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	resp, err := c.rpc.SendToSession(rpcCtx, &clydev1.SendToSessionRequest{
-		SessionId: sessionID,
-		Text:      text,
+		SessionId:   target.Identity.ID,
+		Text:        text,
+		Provider:    string(target.Identity.Provider),
+		SessionName: target.SessionName,
 	})
 	if err != nil {
 		log.DebugContext(rpcCtx, "daemon.client.send_to_session.rpc_failed", "err", err)
@@ -919,13 +930,15 @@ func SendToSessionViaDaemon(ctx context.Context, sessionID, text string) (bool, 
 	return delivered, nil
 }
 
-// TailTranscriptViaDaemon opens the daemon's transcript stream for
-// the given session id. The returned channel closes when the stream
+// TailSessionHistoryViaDaemon opens the daemon's provider-neutral history
+// stream for a live session. The returned channel closes when the stream
 // terminates. Calling cancel stops the subscription.
-func TailTranscriptViaDaemon(parent context.Context, sessionID string, startOffset int64) (<-chan *clydev1.TailTranscriptResponse, context.CancelFunc, error) {
+func TailSessionHistoryViaDaemon(parent context.Context, target SessionRuntimeTarget, startOffset int64) (<-chan *clydev1.TailTranscriptResponse, context.CancelFunc, error) {
 	log := daemonClientLog(parent)
 	log.DebugContext(parent, "daemon.client.tail_transcript.begin",
-		"session_id", sessionID,
+		"session", target.SessionName,
+		"provider", target.Identity.Provider,
+		"session_id", target.Identity.ID,
 		"start_offset", startOffset,
 	)
 	c, err := ConnectOrStart(parent)
@@ -935,8 +948,10 @@ func TailTranscriptViaDaemon(parent context.Context, sessionID string, startOffs
 	}
 	ctx, cancel := context.WithCancel(parent)
 	stream, err := c.rpc.TailTranscript(ctx, &clydev1.TailTranscriptRequest{
-		SessionId:     sessionID,
+		SessionId:     target.Identity.ID,
 		StartAtOffset: startOffset,
+		Provider:      string(target.Identity.Provider),
+		SessionName:   target.SessionName,
 	})
 	if err != nil {
 		log.DebugContext(ctx, "daemon.client.tail_transcript.stream_open_failed", "err", err)
@@ -950,7 +965,8 @@ func TailTranscriptViaDaemon(parent context.Context, sessionID string, startOffs
 		defer func() {
 			if r := recover(); r != nil {
 				daemonClientLog(ctx).WarnContext(ctx, "daemon.client.tail_transcript.panicked",
-					"session_id", sessionID,
+					"session", target.SessionName,
+					"session_id", target.Identity.ID,
 					"panic", r,
 				)
 			}

@@ -364,14 +364,14 @@ func TestUX_SidecarRemoteLaunchPinsCanonicalSession(t *testing.T) {
 	a, scr, cleanup := mkAppWithSessions(t, 2)
 	defer cleanup()
 
-	a.cb.StartRemoteSession = func(basedir string, incognito bool) (string, string, error) {
-		if basedir != "/tmp/remote" {
-			t.Fatalf("basedir = %q, want /tmp/remote", basedir)
+	a.cb.StartLiveSession = func(req LiveSessionStartRequest) (LiveSession, error) {
+		if req.Basedir != "/tmp/remote" {
+			t.Fatalf("basedir = %q, want /tmp/remote", req.Basedir)
 		}
-		if incognito {
+		if req.Incognito {
 			t.Fatalf("incognito = true, want false")
 		}
-		return "chat-remote", "uuid-remote", nil
+		return LiveSession{SessionName: "chat-remote", SessionID: "uuid-remote"}, nil
 	}
 
 	a.openSidecarLaunchTypeModal("/tmp/remote")
@@ -379,7 +379,7 @@ func TestUX_SidecarRemoteLaunchPinsCanonicalSession(t *testing.T) {
 	if !ok {
 		t.Fatalf("overlay = %T, want *OptionsModal", a.overlay)
 	}
-	action := findModalAction(modal, "Tracked remote session")
+	action := findModalAction(modal, "Tracked live session")
 	if action == nil {
 		t.Fatalf("missing tracked remote session action")
 	}

@@ -71,10 +71,16 @@ type AppCallbacks struct {
 	// to basedir. The session auto deletes on exit unless persisted
 	// later. enableRC requests the --remote-control flag at launch.
 	StartIncognitoWithBasedir func(basedir string, enableRC bool) error
-	// StartRemoteSession launches a daemon-owned remote-control session
-	// anchored at basedir and returns the canonical session name plus
-	// pre-assigned Claude session UUID.
-	StartRemoteSession func(basedir string, incognito bool) (sessionName, sessionID string, err error)
+	// ListLiveSessions returns provider-neutral live sessions from the daemon.
+	ListLiveSessions func() ([]LiveSession, error)
+	// StartLiveSession launches a provider-neutral daemon-owned live session.
+	StartLiveSession func(req LiveSessionStartRequest) (LiveSession, error)
+	// SendLiveSession sends text to a provider-neutral live session.
+	SendLiveSession func(sessionID, text string) error
+	// StreamLiveSession subscribes to provider-neutral live session events.
+	StreamLiveSession func(sessionID string) (<-chan LiveSessionEvent, func(), error)
+	// StopLiveSession stops a provider-neutral live session.
+	StopLiveSession func(sessionID string) error
 	// SetBasedir rewrites the session's workspaceRoot field in metadata.
 	// newPath is already resolved by the caller; "" clears the field.
 	SetBasedir func(sess *session.Session, newPath string) error
@@ -101,13 +107,6 @@ type AppCallbacks struct {
 	ListBridges func() ([]Bridge, error)
 	// RestartDaemon asks the local daemon supervisor to self-heal and restart.
 	RestartDaemon func() error
-	// SendToSession injects text into the running claude session via
-	// the daemon. The TUI sidecar uses this for user input.
-	SendToSession func(sessionID, text string) error
-	// TailTranscript opens a streaming subscription for live transcript
-	// lines from the daemon. Used by the sidecar widget. The returned
-	// cancel function tears down the stream.
-	TailTranscript func(sessionID string, startOffset int64) (<-chan TranscriptEntry, func(), error)
 	// RefreshSummary triggers a background regeneration of the session's
 	// Context field via the daemon. It should return quickly once the
 	// request is queued. The returned sessions callback (may be nil)
@@ -259,6 +258,40 @@ type TranscriptEntry struct {
 	Timestamp  time.Time
 }
 
+// LiveSession is the TUI-facing provider-neutral live session summary.
+type LiveSession struct {
+	Provider       string
+	SessionName    string
+	SessionID      string
+	Status         string
+	Basedir        string
+	URL            string
+	StartedAt      time.Time
+	SupportsSend   bool
+	SupportsStream bool
+	SupportsStop   bool
+}
+
+// LiveSessionStartRequest carries provider-neutral launch intent from
+// the sidecar UI to the daemon.
+type LiveSessionStartRequest struct {
+	Provider  string
+	Name      string
+	Basedir   string
+	Model     string
+	Effort    string
+	Incognito bool
+}
+
+// LiveSessionEvent is one streamed provider-neutral sidecar event.
+type LiveSessionEvent struct {
+	SessionID string
+	Kind      string
+	Role      string
+	Text      string
+	Timestamp time.Time
+}
+
 // SessionDetail holds pre-extracted data for the details pane.
 // Messages is the most-recent short list used in the original design;
 // AllMessages carries the full transcript for the scrollable right pane.
@@ -386,7 +419,7 @@ type App struct {
 	sidecarSessionID    string
 	sidecarSessionName  string
 	sidecarTailPending  bool
-	sidecarCancel       func() // cancels the daemon TailTranscript stream
+	sidecarCancel       func() // cancels the daemon live-session stream
 	compactCancel       func() // cancels in-flight compact preview/apply stream
 	reloadExecPath      string // set when the on-disk executable changed and Run should exec after teardown
 	pendingReloadPath   string // deferred self-reload while an overlay is open
@@ -1533,6 +1566,7 @@ type sidecarSendDone struct {
 type sidecarLaunchDone struct {
 	sessionName string
 	sessionID   string
+	liveURL     string
 	err         error
 }
 
@@ -1776,7 +1810,7 @@ func (a *App) applySessionEvent(ev SessionEvent) {
 		}
 		a.bridgeMu.Unlock()
 		if a.sidecar != nil && a.sidecarSessionID == ev.SessionID {
-			a.sidecar.BridgeURL = ev.BridgeURL
+			a.sidecar.LiveURL = ev.BridgeURL
 			a.maybeOpenSidecarTail()
 		}
 	case "BRIDGE_CLOSED":
@@ -1784,7 +1818,7 @@ func (a *App) applySessionEvent(ev SessionEvent) {
 		delete(a.bridges, ev.SessionID)
 		a.bridgeMu.Unlock()
 		if a.sidecar != nil && a.sidecarSessionID == ev.SessionID {
-			a.sidecar.BridgeURL = ""
+			a.sidecar.LiveURL = ""
 		}
 	case "GLOBAL_SETTINGS_UPDATED":
 		// Global defaults already applied above. Refresh the generic
@@ -2846,10 +2880,11 @@ func (a *App) handleEvent(ev tcell.Event) {
 			a.sidecarSessionName = d.sessionName
 			a.sidecarSessionID = d.sessionID
 			a.sidecarTailPending = true
-			panel := NewSidecarPanel(d.sessionName, d.sessionID, "")
+			panel := NewSidecarPanel(d.sessionName, d.sessionID, d.liveURL)
 			panel.status = "waiting for transcript..."
 			panel.OnSend = func(text string) error {
-				if a.cb.SendToSession == nil {
+				send := a.sidecarSendFunc()
+				if send == nil {
 					return fmt.Errorf("daemon offline")
 				}
 				panel.status = "sending..."
@@ -2859,7 +2894,7 @@ func (a *App) handleEvent(ev tcell.Event) {
 							logUIGoroutinePanic("sidecar_send", fmt.Sprint(r))
 						}
 					}()
-					err := a.cb.SendToSession(d.sessionID, text)
+					err := send(d.sessionID, text)
 					a.postInterrupt(sidecarSendDone{err: err})
 				}()
 				return nil
@@ -3070,8 +3105,8 @@ func (a *App) handleKey(e *tcell.EventKey) {
 		case 'S':
 			// Pin the highlighted row in the sidecar tab and switch
 			// to it. Useful when the user wants the live transcript
-			// view of a remote control session one keystroke away.
-			if sess := a.rowSession(); sess != nil {
+			// view of a daemon live session one keystroke away.
+			if sess := a.rowSession(); sess != nil && a.sidecarCanDrive(sess) {
 				a.pinSidecar(sess)
 				a.activeTab = tabSidecar
 				a.tabs.SetActive(tabSidecar)
@@ -4538,7 +4573,7 @@ func (a *App) openSidecarLaunchTypeModal(basedir string) {
 			a.tabs.SetActive(tabSidecar)
 		}
 		a.sidecar = NewSidecarPanel("launching…", "", "")
-		a.sidecar.status = "launching remote session..."
+		a.sidecar.status = "launching live session..."
 		a.sidecarSessionName = ""
 		a.sidecarSessionID = ""
 		a.sidecarTailPending = false
@@ -4548,28 +4583,32 @@ func (a *App) openSidecarLaunchTypeModal(basedir string) {
 					logUIGoroutinePanic("sidecar_launch", fmt.Sprint(r))
 				}
 			}()
-			if a.cb.StartRemoteSession == nil {
-				a.postInterrupt(sidecarLaunchDone{err: fmt.Errorf("daemon remote launch unavailable")})
+			if a.cb.StartLiveSession == nil {
+				a.postInterrupt(sidecarLaunchDone{err: fmt.Errorf("daemon live launch unavailable")})
 				return
 			}
-			name, sessionID, err := a.cb.StartRemoteSession(basedir, incognito)
+			live, err := a.cb.StartLiveSession(LiveSessionStartRequest{
+				Basedir:   basedir,
+				Incognito: incognito,
+			})
 			a.postInterrupt(sidecarLaunchDone{
-				sessionName: name,
-				sessionID:   sessionID,
+				sessionName: live.SessionName,
+				sessionID:   live.SessionID,
+				liveURL:     live.URL,
 				err:         err,
 			})
 		}()
 	}
 	entries := []OptionsModalEntry{
 		{
-			Label: "Tracked remote session",
+			Label: a.sidecarLaunchLabel(false),
 			Hint:  "daemon-owned, re-enterable",
 			Action: func() {
 				launch(false)
 			},
 		},
 		{
-			Label: "Temporary remote session",
+			Label: a.sidecarLaunchLabel(true),
 			Hint:  "daemon-owned incognito",
 			Action: func() {
 				launch(true)
@@ -4580,6 +4619,13 @@ func (a *App) openSidecarLaunchTypeModal(basedir string) {
 	modal.OnCancel = func() { a.closeOverlay() }
 	a.overlay = modal
 	a.mode = StatusFilter
+}
+
+func (a *App) sidecarLaunchLabel(temporary bool) string {
+	if temporary {
+		return "Temporary live session"
+	}
+	return "Tracked live session"
 }
 
 // openNewSessionRemoteControlModalIncognito mirrors the regular
@@ -4916,22 +4962,21 @@ func (a *App) drawSidecarTab(r Rect) {
 	if a.sidecar == nil {
 		drawString(a.screen, r.X+2, r.Y+1, StyleDefault.Foreground(ColorAccent).Bold(true), "Sidecar", r.W-4)
 		drawString(a.screen, r.X+2, r.Y+3, StyleSubtext, "Press S on a Sessions row to pin its live transcript here.", r.W-4)
-		drawString(a.screen, r.X+2, r.Y+4, StyleSubtext, "Press N here to launch a daemon-owned remote session directly into Sidecar.", r.W-4)
-		drawString(a.screen, r.X+2, r.Y+5, StyleSubtext, "Sessions launched with --remote-control accept text from this panel.", r.W-4)
+		drawString(a.screen, r.X+2, r.Y+4, StyleSubtext, "Press N here to launch a daemon-owned live session directly into Sidecar.", r.W-4)
+		drawString(a.screen, r.X+2, r.Y+5, StyleSubtext, "Live sessions accept text from this panel when the daemon exposes send support.", r.W-4)
 		return
 	}
 	a.sidecar.Draw(a.screen, r)
 }
 
 // pinSidecar sets the panel target to the given session. Cancels any
-// running TailTranscript subscription, then opens a fresh stream and
+// running live stream subscription, then opens a fresh stream and
 // fans the events into the panel buffer.
 func (a *App) pinSidecar(sess *session.Session) {
 	if sess == nil || sess.Metadata.ProviderSessionID() == "" {
 		return
 	}
-	caps := sessionCapabilities(sess)
-	if !caps.RemoteControl || !caps.TranscriptTail {
+	if !a.sidecarCanDrive(sess) {
 		return
 	}
 	if a.sidecarCancel != nil {
@@ -4944,7 +4989,8 @@ func (a *App) pinSidecar(sess *session.Session) {
 	}
 	panel := NewSidecarPanel(sess.Name, sess.Metadata.ProviderSessionID(), bridgeURL)
 	panel.OnSend = func(text string) error {
-		if a.cb.SendToSession == nil {
+		send := a.sidecarSendFunc()
+		if send == nil {
 			return fmt.Errorf("daemon offline")
 		}
 		panel.status = "sending..."
@@ -4954,7 +5000,7 @@ func (a *App) pinSidecar(sess *session.Session) {
 					logUIGoroutinePanic("sidecar_pin_send", fmt.Sprint(r))
 				}
 			}()
-			err := a.cb.SendToSession(sess.Metadata.ProviderSessionID(), text)
+			err := send(sess.Metadata.ProviderSessionID(), text)
 			a.postInterrupt(sidecarSendDone{err: err})
 		}()
 		return nil
@@ -4964,7 +5010,7 @@ func (a *App) pinSidecar(sess *session.Session) {
 	a.sidecarSessionID = sess.Metadata.ProviderSessionID()
 	a.sidecarTailPending = false
 
-	if a.cb.TailTranscript == nil {
+	if !a.sidecarCanStream(sess) {
 		return
 	}
 	panel.status = "opening tail..."
@@ -4974,7 +5020,7 @@ func (a *App) pinSidecar(sess *session.Session) {
 				logUIGoroutinePanic("sidecar_tail_open", fmt.Sprint(r))
 			}
 		}()
-		events, cancel, err := a.cb.TailTranscript(sess.Metadata.ProviderSessionID(), -1)
+		events, cancel, err := a.openSidecarStream(sess.Metadata.ProviderSessionID())
 		a.postInterrupt(sidecarTailOpened{events: events, cancel: cancel, err: err})
 	}()
 }
@@ -4997,7 +5043,7 @@ func (a *App) runSidecarTail(events <-chan TranscriptEntry, panel *SidecarPanel)
 }
 
 func (a *App) maybeOpenSidecarTail() {
-	if a.sidecar == nil || a.sidecarSessionID == "" || a.cb.TailTranscript == nil {
+	if a.sidecar == nil || a.sidecarSessionID == "" || !a.sidecarHasStreamCallback() {
 		return
 	}
 	if a.sidecarCancel != nil {
@@ -5010,7 +5056,7 @@ func (a *App) maybeOpenSidecarTail() {
 				logUIGoroutinePanic("sidecar_tail_reopen", fmt.Sprint(r))
 			}
 		}()
-		events, cancel, err := a.cb.TailTranscript(sessionID, -1)
+		events, cancel, err := a.openSidecarStream(sessionID)
 		if err != nil {
 			if strings.Contains(strings.ToLower(err.Error()), "no transcript") {
 				a.sidecarTailPending = true
@@ -5020,6 +5066,90 @@ func (a *App) maybeOpenSidecarTail() {
 		}
 		a.postInterrupt(sidecarTailOpened{events: events, cancel: cancel, err: err})
 	}(a.sidecarSessionID)
+}
+
+func (a *App) sidecarCanDrive(sess *session.Session) bool {
+	if sess == nil || sess.Metadata.ProviderSessionID() == "" {
+		return false
+	}
+	return a.sidecarCanStream(sess) && a.sidecarSendFunc() != nil
+}
+
+func (a *App) sidecarCanStream(sess *session.Session) bool {
+	if sess == nil || sess.Metadata.ProviderSessionID() == "" {
+		return false
+	}
+	return a.cb.StreamLiveSession != nil
+}
+
+func (a *App) sidecarHasStreamCallback() bool {
+	return a.cb.StreamLiveSession != nil
+}
+
+func (a *App) sidecarSendFunc() func(sessionID, text string) error {
+	return a.cb.SendLiveSession
+}
+
+func (a *App) openSidecarStream(sessionID string) (<-chan TranscriptEntry, func(), error) {
+	if a.cb.StreamLiveSession == nil {
+		return nil, nil, fmt.Errorf("daemon live stream unavailable")
+	}
+	events, cancel, err := a.cb.StreamLiveSession(sessionID)
+	if err != nil {
+		return nil, cancel, err
+	}
+	out := make(chan TranscriptEntry)
+	done := make(chan struct{})
+	var once sync.Once
+	cancelAll := func() {
+		once.Do(func() {
+			if cancel != nil {
+				cancel()
+			}
+			close(done)
+		})
+	}
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				tuiLog.Logger().Error("ui.sidecar.stream_panic",
+					"component", "ui",
+					"session_id", sessionID,
+					"panic", recovered,
+				)
+			}
+		}()
+		defer close(out)
+		for {
+			select {
+			case <-done:
+				return
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+				role := ev.Role
+				if role == "" {
+					role = ev.Kind
+				}
+				text := ev.Text
+				if text == "" {
+					text = ev.Kind
+				}
+				entry := TranscriptEntry{
+					Role:      role,
+					Text:      text,
+					Timestamp: ev.Timestamp,
+				}
+				select {
+				case <-done:
+					return
+				case out <- entry:
+				}
+			}
+		}
+	}()
+	return out, cancelAll, nil
 }
 
 // drawSettingsTab renders the Settings tab body. It surfaces the active
@@ -5668,11 +5798,11 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []Optio
 		a.remoteControlEntry(sess, close),
 		{
 			Label: "Drive in sidecar",
-			Hint:  "needs --remote-control",
+			Hint:  "live stream",
 			Action: func() {
 				close()
-				if _, ok := a.bridgeFor(sess); !ok {
-					tuiLog.Logger().Warn("sidecar.drive no bridge", "session", sess.Name)
+				if !a.sidecarCanDrive(sess) {
+					tuiLog.Logger().Warn("sidecar.drive unavailable", "session", sess.Name)
 					return
 				}
 				a.pinSidecar(sess)
@@ -5681,13 +5811,7 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []Optio
 					a.tabs.SetActive(tabSidecar)
 				}
 			},
-			Disabled: func() bool {
-				if !caps.RemoteControl || !caps.TranscriptTail {
-					return true
-				}
-				_, ok := a.bridgeFor(sess)
-				return !ok
-			}(),
+			Disabled: !a.sidecarCanDrive(sess),
 		},
 		a.openBridgeEntry(sess, close),
 		a.copyBridgeEntry(sess, close),

@@ -219,12 +219,21 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			}
 			return startNewSessionInDir(basedir, store, dashboardLaunchCWD, enableRC)
 		},
-		StartRemoteSession: func(basedir string, incognito bool) (string, string, error) {
-			resp, err := daemon.StartRemoteSessionViaDaemon(context.Background(), "", basedir, incognito)
+		StartLiveSession: func(req ui.LiveSessionStartRequest) (ui.LiveSession, error) {
+			resp, err := daemon.StartRemoteSessionViaDaemon(context.Background(), req.Name, req.Basedir, req.Incognito)
 			if err != nil {
-				return "", "", err
+				return ui.LiveSession{}, err
 			}
-			return resp.GetSessionName(), resp.GetSessionId(), nil
+			return ui.LiveSession{
+				Provider:       string(session.ProviderClaude),
+				SessionName:    resp.GetSessionName(),
+				SessionID:      resp.GetSessionId(),
+				Status:         resp.GetLaunchState().String(),
+				Basedir:        req.Basedir,
+				SupportsSend:   true,
+				SupportsStream: true,
+				SupportsStop:   false,
+			}, nil
 		},
 		ResumeSession: func(sess *session.Session) error {
 			store, err := openStore()
@@ -423,8 +432,10 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			}
 			return out, nil
 		},
-		SendToSession: func(sessionID, text string) error {
-			ok, err := daemon.SendToSessionViaDaemon(context.Background(), sessionID, text)
+		SendLiveSession: func(sessionID, text string) error {
+			ok, err := daemon.SendToLiveSessionViaDaemon(context.Background(), daemon.SessionRuntimeTarget{
+				Identity: session.ProviderSessionID{ID: sessionID},
+			}, text)
 			if err != nil {
 				return err
 			}
@@ -433,16 +444,18 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			}
 			return nil
 		},
-		TailTranscript: func(sessionID string, startOffset int64) (<-chan ui.TranscriptEntry, func(), error) {
-			raw, cancel, err := daemon.TailTranscriptViaDaemon(context.Background(), sessionID, startOffset)
+		StreamLiveSession: func(sessionID string) (<-chan ui.LiveSessionEvent, func(), error) {
+			raw, cancel, err := daemon.TailSessionHistoryViaDaemon(context.Background(), daemon.SessionRuntimeTarget{
+				Identity: session.ProviderSessionID{ID: sessionID},
+			}, -1)
 			if err != nil {
 				return nil, nil, err
 			}
-			out := make(chan ui.TranscriptEntry, 32)
+			out := make(chan ui.LiveSessionEvent, 32)
 			go func() {
 				defer func() {
 					if recovered := recover(); recovered != nil {
-						cmdUILog.Logger().Error("dashboard.transcript.forwarder_panic",
+						cmdUILog.Logger().Error("dashboard.live_session.forwarder_panic",
 							"component", "tui",
 							"session_id", sessionID,
 							"err", fmt.Errorf("panic: %v", recovered),
@@ -455,12 +468,12 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 					if ln.GetTimestampNanos() > 0 {
 						ts = time.Unix(0, ln.GetTimestampNanos())
 					}
-					out <- ui.TranscriptEntry{
-						ByteOffset: ln.GetByteOffset(),
-						RawJSONL:   ln.GetRawJsonl(),
-						Role:       ln.GetRole(),
-						Text:       ln.GetText(),
-						Timestamp:  ts,
+					out <- ui.LiveSessionEvent{
+						SessionID: sessionID,
+						Kind:      "message",
+						Role:      ln.GetRole(),
+						Text:      ln.GetText(),
+						Timestamp: ts,
 					}
 				}
 			}()

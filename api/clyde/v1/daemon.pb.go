@@ -250,7 +250,7 @@ func (x SubscribeRegistryResponse_Kind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use SubscribeRegistryResponse_Kind.Descriptor instead.
 func (SubscribeRegistryResponse_Kind) EnumDescriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{25, 0}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{29, 0}
 }
 
 type StartRemoteSessionResponse_LaunchState int32
@@ -299,7 +299,7 @@ func (x StartRemoteSessionResponse_LaunchState) Number() protoreflect.EnumNumber
 
 // Deprecated: Use StartRemoteSessionResponse_LaunchState.Descriptor instead.
 func (StartRemoteSessionResponse_LaunchState) EnumDescriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{50, 0}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{54, 0}
 }
 
 type CompactEvent_Kind int32
@@ -357,7 +357,7 @@ func (x CompactEvent_Kind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use CompactEvent_Kind.Descriptor instead.
 func (CompactEvent_Kind) EnumDescriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{67, 0}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{71, 0}
 }
 
 type AcquireSessionRequest struct {
@@ -832,43 +832,309 @@ func (*ListSessionsRequest) Descriptor() ([]byte, []int) {
 	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{9}
 }
 
+type ProviderSessionIdentity struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Provider      string                 `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`
+	SessionId     string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProviderSessionIdentity) Reset() {
+	*x = ProviderSessionIdentity{}
+	mi := &file_clyde_v1_daemon_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProviderSessionIdentity) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProviderSessionIdentity) ProtoMessage() {}
+
+func (x *ProviderSessionIdentity) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProviderSessionIdentity.ProtoReflect.Descriptor instead.
+func (*ProviderSessionIdentity) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ProviderSessionIdentity) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *ProviderSessionIdentity) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+type SessionHistoryBoundary struct {
+	state           protoimpl.MessageState     `protogen:"open.v1"`
+	Current         *ProviderSessionIdentity   `protobuf:"bytes,1,opt,name=current,proto3" json:"current,omitempty"`
+	Previous        []*ProviderSessionIdentity `protobuf:"bytes,2,rep,name=previous,proto3" json:"previous,omitempty"`
+	PrimaryArtifact string                     `protobuf:"bytes,3,opt,name=primary_artifact,json=primaryArtifact,proto3" json:"primary_artifact,omitempty"`
+	Readable        bool                       `protobuf:"varint,4,opt,name=readable,proto3" json:"readable,omitempty"`
+	Exportable      bool                       `protobuf:"varint,5,opt,name=exportable,proto3" json:"exportable,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *SessionHistoryBoundary) Reset() {
+	*x = SessionHistoryBoundary{}
+	mi := &file_clyde_v1_daemon_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionHistoryBoundary) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionHistoryBoundary) ProtoMessage() {}
+
+func (x *SessionHistoryBoundary) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionHistoryBoundary.ProtoReflect.Descriptor instead.
+func (*SessionHistoryBoundary) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *SessionHistoryBoundary) GetCurrent() *ProviderSessionIdentity {
+	if x != nil {
+		return x.Current
+	}
+	return nil
+}
+
+func (x *SessionHistoryBoundary) GetPrevious() []*ProviderSessionIdentity {
+	if x != nil {
+		return x.Previous
+	}
+	return nil
+}
+
+func (x *SessionHistoryBoundary) GetPrimaryArtifact() string {
+	if x != nil {
+		return x.PrimaryArtifact
+	}
+	return ""
+}
+
+func (x *SessionHistoryBoundary) GetReadable() bool {
+	if x != nil {
+		return x.Readable
+	}
+	return false
+}
+
+func (x *SessionHistoryBoundary) GetExportable() bool {
+	if x != nil {
+		return x.Exportable
+	}
+	return false
+}
+
+type LiveSessionBoundary struct {
+	state           protoimpl.MessageState   `protogen:"open.v1"`
+	Current         *ProviderSessionIdentity `protobuf:"bytes,1,opt,name=current,proto3" json:"current,omitempty"`
+	TailReadable    bool                     `protobuf:"varint,2,opt,name=tail_readable,json=tailReadable,proto3" json:"tail_readable,omitempty"`
+	InputWritable   bool                     `protobuf:"varint,3,opt,name=input_writable,json=inputWritable,proto3" json:"input_writable,omitempty"`
+	RemoteControl   bool                     `protobuf:"varint,4,opt,name=remote_control,json=remoteControl,proto3" json:"remote_control,omitempty"`
+	BridgeSessionId string                   `protobuf:"bytes,5,opt,name=bridge_session_id,json=bridgeSessionId,proto3" json:"bridge_session_id,omitempty"`
+	BridgeUrl       string                   `protobuf:"bytes,6,opt,name=bridge_url,json=bridgeUrl,proto3" json:"bridge_url,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *LiveSessionBoundary) Reset() {
+	*x = LiveSessionBoundary{}
+	mi := &file_clyde_v1_daemon_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LiveSessionBoundary) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LiveSessionBoundary) ProtoMessage() {}
+
+func (x *LiveSessionBoundary) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LiveSessionBoundary.ProtoReflect.Descriptor instead.
+func (*LiveSessionBoundary) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *LiveSessionBoundary) GetCurrent() *ProviderSessionIdentity {
+	if x != nil {
+		return x.Current
+	}
+	return nil
+}
+
+func (x *LiveSessionBoundary) GetTailReadable() bool {
+	if x != nil {
+		return x.TailReadable
+	}
+	return false
+}
+
+func (x *LiveSessionBoundary) GetInputWritable() bool {
+	if x != nil {
+		return x.InputWritable
+	}
+	return false
+}
+
+func (x *LiveSessionBoundary) GetRemoteControl() bool {
+	if x != nil {
+		return x.RemoteControl
+	}
+	return false
+}
+
+func (x *LiveSessionBoundary) GetBridgeSessionId() string {
+	if x != nil {
+		return x.BridgeSessionId
+	}
+	return ""
+}
+
+func (x *LiveSessionBoundary) GetBridgeUrl() string {
+	if x != nil {
+		return x.BridgeUrl
+	}
+	return ""
+}
+
+type ProviderRuntimeBoundary struct {
+	state         protoimpl.MessageState  `protogen:"open.v1"`
+	History       *SessionHistoryBoundary `protobuf:"bytes,1,opt,name=history,proto3" json:"history,omitempty"`
+	Live          *LiveSessionBoundary    `protobuf:"bytes,2,opt,name=live,proto3" json:"live,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProviderRuntimeBoundary) Reset() {
+	*x = ProviderRuntimeBoundary{}
+	mi := &file_clyde_v1_daemon_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProviderRuntimeBoundary) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProviderRuntimeBoundary) ProtoMessage() {}
+
+func (x *ProviderRuntimeBoundary) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProviderRuntimeBoundary.ProtoReflect.Descriptor instead.
+func (*ProviderRuntimeBoundary) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *ProviderRuntimeBoundary) GetHistory() *SessionHistoryBoundary {
+	if x != nil {
+		return x.History
+	}
+	return nil
+}
+
+func (x *ProviderRuntimeBoundary) GetLive() *LiveSessionBoundary {
+	if x != nil {
+		return x.Live
+	}
+	return nil
+}
+
 type SessionSummary struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	Name                  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	MetadataName          string                 `protobuf:"bytes,2,opt,name=metadata_name,json=metadataName,proto3" json:"metadata_name,omitempty"`
-	SessionId             string                 `protobuf:"bytes,3,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	TranscriptPath        string                 `protobuf:"bytes,4,opt,name=transcript_path,json=transcriptPath,proto3" json:"transcript_path,omitempty"`
-	WorkDir               string                 `protobuf:"bytes,5,opt,name=work_dir,json=workDir,proto3" json:"work_dir,omitempty"`
-	CreatedNanos          int64                  `protobuf:"varint,6,opt,name=created_nanos,json=createdNanos,proto3" json:"created_nanos,omitempty"`
-	LastAccessedNanos     int64                  `protobuf:"varint,7,opt,name=last_accessed_nanos,json=lastAccessedNanos,proto3" json:"last_accessed_nanos,omitempty"`
-	ParentSession         string                 `protobuf:"bytes,8,opt,name=parent_session,json=parentSession,proto3" json:"parent_session,omitempty"`
-	IsForkedSession       bool                   `protobuf:"varint,9,opt,name=is_forked_session,json=isForkedSession,proto3" json:"is_forked_session,omitempty"`
-	IsIncognito           bool                   `protobuf:"varint,10,opt,name=is_incognito,json=isIncognito,proto3" json:"is_incognito,omitempty"`
-	PreviousSessionIds    []string               `protobuf:"bytes,11,rep,name=previous_session_ids,json=previousSessionIds,proto3" json:"previous_session_ids,omitempty"`
-	Context               string                 `protobuf:"bytes,12,opt,name=context,proto3" json:"context,omitempty"`
-	HasCustomOutputStyle  bool                   `protobuf:"varint,13,opt,name=has_custom_output_style,json=hasCustomOutputStyle,proto3" json:"has_custom_output_style,omitempty"`
-	WorkspaceRoot         string                 `protobuf:"bytes,14,opt,name=workspace_root,json=workspaceRoot,proto3" json:"workspace_root,omitempty"`
-	ContextMessageCount   int32                  `protobuf:"varint,15,opt,name=context_message_count,json=contextMessageCount,proto3" json:"context_message_count,omitempty"`
-	DisplayTitle          string                 `protobuf:"bytes,16,opt,name=display_title,json=displayTitle,proto3" json:"display_title,omitempty"`
-	Model                 string                 `protobuf:"bytes,17,opt,name=model,proto3" json:"model,omitempty"`
-	RemoteControl         bool                   `protobuf:"varint,18,opt,name=remote_control,json=remoteControl,proto3" json:"remote_control,omitempty"`
-	MessageCount          int32                  `protobuf:"varint,19,opt,name=message_count,json=messageCount,proto3" json:"message_count,omitempty"`
-	TranscriptSizeBytes   int64                  `protobuf:"varint,20,opt,name=transcript_size_bytes,json=transcriptSizeBytes,proto3" json:"transcript_size_bytes,omitempty"`
-	LastActivityNanos     int64                  `protobuf:"varint,21,opt,name=last_activity_nanos,json=lastActivityNanos,proto3" json:"last_activity_nanos,omitempty"`
-	Bridge                *Bridge                `protobuf:"bytes,22,opt,name=bridge,proto3" json:"bridge,omitempty"`
-	ContextTotalTokens    int32                  `protobuf:"varint,23,opt,name=context_total_tokens,json=contextTotalTokens,proto3" json:"context_total_tokens,omitempty"`
-	ContextMaxTokens      int32                  `protobuf:"varint,24,opt,name=context_max_tokens,json=contextMaxTokens,proto3" json:"context_max_tokens,omitempty"`
-	ContextPercentage     int32                  `protobuf:"varint,25,opt,name=context_percentage,json=contextPercentage,proto3" json:"context_percentage,omitempty"`
-	ContextMessagesTokens int32                  `protobuf:"varint,26,opt,name=context_messages_tokens,json=contextMessagesTokens,proto3" json:"context_messages_tokens,omitempty"`
-	ContextUsageLoaded    bool                   `protobuf:"varint,27,opt,name=context_usage_loaded,json=contextUsageLoaded,proto3" json:"context_usage_loaded,omitempty"`
-	ContextUsageStatus    string                 `protobuf:"bytes,28,opt,name=context_usage_status,json=contextUsageStatus,proto3" json:"context_usage_status,omitempty"`
+	state                 protoimpl.MessageState   `protogen:"open.v1"`
+	Name                  string                   `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	MetadataName          string                   `protobuf:"bytes,2,opt,name=metadata_name,json=metadataName,proto3" json:"metadata_name,omitempty"`
+	SessionId             string                   `protobuf:"bytes,3,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	TranscriptPath        string                   `protobuf:"bytes,4,opt,name=transcript_path,json=transcriptPath,proto3" json:"transcript_path,omitempty"`
+	WorkDir               string                   `protobuf:"bytes,5,opt,name=work_dir,json=workDir,proto3" json:"work_dir,omitempty"`
+	CreatedNanos          int64                    `protobuf:"varint,6,opt,name=created_nanos,json=createdNanos,proto3" json:"created_nanos,omitempty"`
+	LastAccessedNanos     int64                    `protobuf:"varint,7,opt,name=last_accessed_nanos,json=lastAccessedNanos,proto3" json:"last_accessed_nanos,omitempty"`
+	ParentSession         string                   `protobuf:"bytes,8,opt,name=parent_session,json=parentSession,proto3" json:"parent_session,omitempty"`
+	IsForkedSession       bool                     `protobuf:"varint,9,opt,name=is_forked_session,json=isForkedSession,proto3" json:"is_forked_session,omitempty"`
+	IsIncognito           bool                     `protobuf:"varint,10,opt,name=is_incognito,json=isIncognito,proto3" json:"is_incognito,omitempty"`
+	PreviousSessionIds    []string                 `protobuf:"bytes,11,rep,name=previous_session_ids,json=previousSessionIds,proto3" json:"previous_session_ids,omitempty"`
+	Context               string                   `protobuf:"bytes,12,opt,name=context,proto3" json:"context,omitempty"`
+	HasCustomOutputStyle  bool                     `protobuf:"varint,13,opt,name=has_custom_output_style,json=hasCustomOutputStyle,proto3" json:"has_custom_output_style,omitempty"`
+	WorkspaceRoot         string                   `protobuf:"bytes,14,opt,name=workspace_root,json=workspaceRoot,proto3" json:"workspace_root,omitempty"`
+	ContextMessageCount   int32                    `protobuf:"varint,15,opt,name=context_message_count,json=contextMessageCount,proto3" json:"context_message_count,omitempty"`
+	DisplayTitle          string                   `protobuf:"bytes,16,opt,name=display_title,json=displayTitle,proto3" json:"display_title,omitempty"`
+	Model                 string                   `protobuf:"bytes,17,opt,name=model,proto3" json:"model,omitempty"`
+	RemoteControl         bool                     `protobuf:"varint,18,opt,name=remote_control,json=remoteControl,proto3" json:"remote_control,omitempty"`
+	MessageCount          int32                    `protobuf:"varint,19,opt,name=message_count,json=messageCount,proto3" json:"message_count,omitempty"`
+	TranscriptSizeBytes   int64                    `protobuf:"varint,20,opt,name=transcript_size_bytes,json=transcriptSizeBytes,proto3" json:"transcript_size_bytes,omitempty"`
+	LastActivityNanos     int64                    `protobuf:"varint,21,opt,name=last_activity_nanos,json=lastActivityNanos,proto3" json:"last_activity_nanos,omitempty"`
+	Bridge                *Bridge                  `protobuf:"bytes,22,opt,name=bridge,proto3" json:"bridge,omitempty"`
+	ContextTotalTokens    int32                    `protobuf:"varint,23,opt,name=context_total_tokens,json=contextTotalTokens,proto3" json:"context_total_tokens,omitempty"`
+	ContextMaxTokens      int32                    `protobuf:"varint,24,opt,name=context_max_tokens,json=contextMaxTokens,proto3" json:"context_max_tokens,omitempty"`
+	ContextPercentage     int32                    `protobuf:"varint,25,opt,name=context_percentage,json=contextPercentage,proto3" json:"context_percentage,omitempty"`
+	ContextMessagesTokens int32                    `protobuf:"varint,26,opt,name=context_messages_tokens,json=contextMessagesTokens,proto3" json:"context_messages_tokens,omitempty"`
+	ContextUsageLoaded    bool                     `protobuf:"varint,27,opt,name=context_usage_loaded,json=contextUsageLoaded,proto3" json:"context_usage_loaded,omitempty"`
+	ContextUsageStatus    string                   `protobuf:"bytes,28,opt,name=context_usage_status,json=contextUsageStatus,proto3" json:"context_usage_status,omitempty"`
+	Provider              string                   `protobuf:"bytes,29,opt,name=provider,proto3" json:"provider,omitempty"`
+	Runtime               *ProviderRuntimeBoundary `protobuf:"bytes,30,opt,name=runtime,proto3" json:"runtime,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
 
 func (x *SessionSummary) Reset() {
 	*x = SessionSummary{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[10]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -880,7 +1146,7 @@ func (x *SessionSummary) String() string {
 func (*SessionSummary) ProtoMessage() {}
 
 func (x *SessionSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[10]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -893,7 +1159,7 @@ func (x *SessionSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionSummary.ProtoReflect.Descriptor instead.
 func (*SessionSummary) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{10}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *SessionSummary) GetName() string {
@@ -1092,6 +1358,20 @@ func (x *SessionSummary) GetContextUsageStatus() string {
 	return ""
 }
 
+func (x *SessionSummary) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *SessionSummary) GetRuntime() *ProviderRuntimeBoundary {
+	if x != nil {
+		return x.Runtime
+	}
+	return nil
+}
+
 type ListSessionsResponse struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
 	Sessions            []*SessionSummary      `protobuf:"bytes,1,rep,name=sessions,proto3" json:"sessions,omitempty"`
@@ -1102,7 +1382,7 @@ type ListSessionsResponse struct {
 
 func (x *ListSessionsResponse) Reset() {
 	*x = ListSessionsResponse{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[11]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1114,7 +1394,7 @@ func (x *ListSessionsResponse) String() string {
 func (*ListSessionsResponse) ProtoMessage() {}
 
 func (x *ListSessionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[11]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1127,7 +1407,7 @@ func (x *ListSessionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSessionsResponse.ProtoReflect.Descriptor instead.
 func (*ListSessionsResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{11}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ListSessionsResponse) GetSessions() []*SessionSummary {
@@ -1155,7 +1435,7 @@ type DetailMessage struct {
 
 func (x *DetailMessage) Reset() {
 	*x = DetailMessage{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[12]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1167,7 +1447,7 @@ func (x *DetailMessage) String() string {
 func (*DetailMessage) ProtoMessage() {}
 
 func (x *DetailMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[12]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1180,7 +1460,7 @@ func (x *DetailMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DetailMessage.ProtoReflect.Descriptor instead.
 func (*DetailMessage) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{12}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *DetailMessage) GetRole() string {
@@ -1214,7 +1494,7 @@ type ToolUse struct {
 
 func (x *ToolUse) Reset() {
 	*x = ToolUse{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[13]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1226,7 +1506,7 @@ func (x *ToolUse) String() string {
 func (*ToolUse) ProtoMessage() {}
 
 func (x *ToolUse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[13]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1239,7 +1519,7 @@ func (x *ToolUse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolUse.ProtoReflect.Descriptor instead.
 func (*ToolUse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{13}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ToolUse) GetName() string {
@@ -1265,7 +1545,7 @@ type GetSessionDetailRequest struct {
 
 func (x *GetSessionDetailRequest) Reset() {
 	*x = GetSessionDetailRequest{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[14]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1277,7 +1557,7 @@ func (x *GetSessionDetailRequest) String() string {
 func (*GetSessionDetailRequest) ProtoMessage() {}
 
 func (x *GetSessionDetailRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[14]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1290,7 +1570,7 @@ func (x *GetSessionDetailRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSessionDetailRequest.ProtoReflect.Descriptor instead.
 func (*GetSessionDetailRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{14}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *GetSessionDetailRequest) GetSessionName() string {
@@ -1301,26 +1581,28 @@ func (x *GetSessionDetailRequest) GetSessionName() string {
 }
 
 type GetSessionDetailResponse struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	SessionName           string                 `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
-	Model                 string                 `protobuf:"bytes,2,opt,name=model,proto3" json:"model,omitempty"`
-	RecentMessages        []*DetailMessage       `protobuf:"bytes,3,rep,name=recent_messages,json=recentMessages,proto3" json:"recent_messages,omitempty"`
-	AllMessages           []*DetailMessage       `protobuf:"bytes,4,rep,name=all_messages,json=allMessages,proto3" json:"all_messages,omitempty"`
-	Tools                 []*ToolUse             `protobuf:"bytes,5,rep,name=tools,proto3" json:"tools,omitempty"`
-	TotalMessages         int32                  `protobuf:"varint,6,opt,name=total_messages,json=totalMessages,proto3" json:"total_messages,omitempty"`
-	VisibleTokensEstimate int32                  `protobuf:"varint,7,opt,name=visible_tokens_estimate,json=visibleTokensEstimate,proto3" json:"visible_tokens_estimate,omitempty"`
-	LastMessageTokens     int32                  `protobuf:"varint,8,opt,name=last_message_tokens,json=lastMessageTokens,proto3" json:"last_message_tokens,omitempty"`
-	CompactionCount       int32                  `protobuf:"varint,9,opt,name=compaction_count,json=compactionCount,proto3" json:"compaction_count,omitempty"`
-	LastPreCompactTokens  int32                  `protobuf:"varint,10,opt,name=last_pre_compact_tokens,json=lastPreCompactTokens,proto3" json:"last_pre_compact_tokens,omitempty"`
-	TranscriptSizeBytes   int64                  `protobuf:"varint,11,opt,name=transcript_size_bytes,json=transcriptSizeBytes,proto3" json:"transcript_size_bytes,omitempty"`
-	LastActivityNanos     int64                  `protobuf:"varint,12,opt,name=last_activity_nanos,json=lastActivityNanos,proto3" json:"last_activity_nanos,omitempty"`
+	state                 protoimpl.MessageState   `protogen:"open.v1"`
+	SessionName           string                   `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
+	Model                 string                   `protobuf:"bytes,2,opt,name=model,proto3" json:"model,omitempty"`
+	RecentMessages        []*DetailMessage         `protobuf:"bytes,3,rep,name=recent_messages,json=recentMessages,proto3" json:"recent_messages,omitempty"`
+	AllMessages           []*DetailMessage         `protobuf:"bytes,4,rep,name=all_messages,json=allMessages,proto3" json:"all_messages,omitempty"`
+	Tools                 []*ToolUse               `protobuf:"bytes,5,rep,name=tools,proto3" json:"tools,omitempty"`
+	TotalMessages         int32                    `protobuf:"varint,6,opt,name=total_messages,json=totalMessages,proto3" json:"total_messages,omitempty"`
+	VisibleTokensEstimate int32                    `protobuf:"varint,7,opt,name=visible_tokens_estimate,json=visibleTokensEstimate,proto3" json:"visible_tokens_estimate,omitempty"`
+	LastMessageTokens     int32                    `protobuf:"varint,8,opt,name=last_message_tokens,json=lastMessageTokens,proto3" json:"last_message_tokens,omitempty"`
+	CompactionCount       int32                    `protobuf:"varint,9,opt,name=compaction_count,json=compactionCount,proto3" json:"compaction_count,omitempty"`
+	LastPreCompactTokens  int32                    `protobuf:"varint,10,opt,name=last_pre_compact_tokens,json=lastPreCompactTokens,proto3" json:"last_pre_compact_tokens,omitempty"`
+	TranscriptSizeBytes   int64                    `protobuf:"varint,11,opt,name=transcript_size_bytes,json=transcriptSizeBytes,proto3" json:"transcript_size_bytes,omitempty"`
+	LastActivityNanos     int64                    `protobuf:"varint,12,opt,name=last_activity_nanos,json=lastActivityNanos,proto3" json:"last_activity_nanos,omitempty"`
+	Provider              string                   `protobuf:"bytes,13,opt,name=provider,proto3" json:"provider,omitempty"`
+	Runtime               *ProviderRuntimeBoundary `protobuf:"bytes,14,opt,name=runtime,proto3" json:"runtime,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
 
 func (x *GetSessionDetailResponse) Reset() {
 	*x = GetSessionDetailResponse{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[15]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1332,7 +1614,7 @@ func (x *GetSessionDetailResponse) String() string {
 func (*GetSessionDetailResponse) ProtoMessage() {}
 
 func (x *GetSessionDetailResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[15]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1345,7 +1627,7 @@ func (x *GetSessionDetailResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSessionDetailResponse.ProtoReflect.Descriptor instead.
 func (*GetSessionDetailResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{15}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *GetSessionDetailResponse) GetSessionName() string {
@@ -1432,6 +1714,20 @@ func (x *GetSessionDetailResponse) GetLastActivityNanos() int64 {
 	return 0
 }
 
+func (x *GetSessionDetailResponse) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *GetSessionDetailResponse) GetRuntime() *ProviderRuntimeBoundary {
+	if x != nil {
+		return x.Runtime
+	}
+	return nil
+}
+
 type GetSessionExportStatsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionName   string                 `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
@@ -1441,7 +1737,7 @@ type GetSessionExportStatsRequest struct {
 
 func (x *GetSessionExportStatsRequest) Reset() {
 	*x = GetSessionExportStatsRequest{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[16]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1453,7 +1749,7 @@ func (x *GetSessionExportStatsRequest) String() string {
 func (*GetSessionExportStatsRequest) ProtoMessage() {}
 
 func (x *GetSessionExportStatsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[16]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1466,7 +1762,7 @@ func (x *GetSessionExportStatsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSessionExportStatsRequest.ProtoReflect.Descriptor instead.
 func (*GetSessionExportStatsRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{16}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *GetSessionExportStatsRequest) GetSessionName() string {
@@ -1494,7 +1790,7 @@ type GetSessionExportStatsResponse struct {
 
 func (x *GetSessionExportStatsResponse) Reset() {
 	*x = GetSessionExportStatsResponse{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[17]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1506,7 +1802,7 @@ func (x *GetSessionExportStatsResponse) String() string {
 func (*GetSessionExportStatsResponse) ProtoMessage() {}
 
 func (x *GetSessionExportStatsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[17]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1519,7 +1815,7 @@ func (x *GetSessionExportStatsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSessionExportStatsResponse.ProtoReflect.Descriptor instead.
 func (*GetSessionExportStatsResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{17}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *GetSessionExportStatsResponse) GetSessionName() string {
@@ -1610,7 +1906,7 @@ type ExportSessionRequest struct {
 
 func (x *ExportSessionRequest) Reset() {
 	*x = ExportSessionRequest{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[18]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1622,7 +1918,7 @@ func (x *ExportSessionRequest) String() string {
 func (*ExportSessionRequest) ProtoMessage() {}
 
 func (x *ExportSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[18]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1635,7 +1931,7 @@ func (x *ExportSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportSessionRequest.ProtoReflect.Descriptor instead.
 func (*ExportSessionRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{18}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ExportSessionRequest) GetSessionName() string {
@@ -1717,7 +2013,7 @@ type ExportSessionResponse struct {
 
 func (x *ExportSessionResponse) Reset() {
 	*x = ExportSessionResponse{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[19]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1729,7 +2025,7 @@ func (x *ExportSessionResponse) String() string {
 func (*ExportSessionResponse) ProtoMessage() {}
 
 func (x *ExportSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[19]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1742,7 +2038,7 @@ func (x *ExportSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportSessionResponse.ProtoReflect.Descriptor instead.
 func (*ExportSessionResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{19}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ExportSessionResponse) GetBody() []byte {
@@ -1760,7 +2056,7 @@ type TriggerScanRequest struct {
 
 func (x *TriggerScanRequest) Reset() {
 	*x = TriggerScanRequest{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[20]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1772,7 +2068,7 @@ func (x *TriggerScanRequest) String() string {
 func (*TriggerScanRequest) ProtoMessage() {}
 
 func (x *TriggerScanRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[20]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1785,7 +2081,7 @@ func (x *TriggerScanRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerScanRequest.ProtoReflect.Descriptor instead.
 func (*TriggerScanRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{20}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{24}
 }
 
 type TriggerScanResponse struct {
@@ -1798,7 +2094,7 @@ type TriggerScanResponse struct {
 
 func (x *TriggerScanResponse) Reset() {
 	*x = TriggerScanResponse{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[21]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1810,7 +2106,7 @@ func (x *TriggerScanResponse) String() string {
 func (*TriggerScanResponse) ProtoMessage() {}
 
 func (x *TriggerScanResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[21]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1823,7 +2119,7 @@ func (x *TriggerScanResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerScanResponse.ProtoReflect.Descriptor instead.
 func (*TriggerScanResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{21}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *TriggerScanResponse) GetAdoptedCount() int32 {
@@ -1848,7 +2144,7 @@ type ReloadDaemonRequest struct {
 
 func (x *ReloadDaemonRequest) Reset() {
 	*x = ReloadDaemonRequest{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[22]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1860,7 +2156,7 @@ func (x *ReloadDaemonRequest) String() string {
 func (*ReloadDaemonRequest) ProtoMessage() {}
 
 func (x *ReloadDaemonRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[22]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1873,7 +2169,7 @@ func (x *ReloadDaemonRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReloadDaemonRequest.ProtoReflect.Descriptor instead.
 func (*ReloadDaemonRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{22}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{26}
 }
 
 type ReloadDaemonResponse struct {
@@ -1887,7 +2183,7 @@ type ReloadDaemonResponse struct {
 
 func (x *ReloadDaemonResponse) Reset() {
 	*x = ReloadDaemonResponse{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[23]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1899,7 +2195,7 @@ func (x *ReloadDaemonResponse) String() string {
 func (*ReloadDaemonResponse) ProtoMessage() {}
 
 func (x *ReloadDaemonResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[23]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1912,7 +2208,7 @@ func (x *ReloadDaemonResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReloadDaemonResponse.ProtoReflect.Descriptor instead.
 func (*ReloadDaemonResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{23}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *ReloadDaemonResponse) GetActiveSessions() int32 {
@@ -1944,7 +2240,7 @@ type SubscribeRegistryRequest struct {
 
 func (x *SubscribeRegistryRequest) Reset() {
 	*x = SubscribeRegistryRequest{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[24]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1956,7 +2252,7 @@ func (x *SubscribeRegistryRequest) String() string {
 func (*SubscribeRegistryRequest) ProtoMessage() {}
 
 func (x *SubscribeRegistryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[24]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1969,7 +2265,7 @@ func (x *SubscribeRegistryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscribeRegistryRequest.ProtoReflect.Descriptor instead.
 func (*SubscribeRegistryRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{24}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{28}
 }
 
 type SubscribeRegistryResponse struct {
@@ -1991,7 +2287,7 @@ type SubscribeRegistryResponse struct {
 
 func (x *SubscribeRegistryResponse) Reset() {
 	*x = SubscribeRegistryResponse{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[25]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2003,7 +2299,7 @@ func (x *SubscribeRegistryResponse) String() string {
 func (*SubscribeRegistryResponse) ProtoMessage() {}
 
 func (x *SubscribeRegistryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[25]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2016,7 +2312,7 @@ func (x *SubscribeRegistryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscribeRegistryResponse.ProtoReflect.Descriptor instead.
 func (*SubscribeRegistryResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{25}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *SubscribeRegistryResponse) GetKind() SubscribeRegistryResponse_Kind {
@@ -2104,7 +2400,7 @@ type GetProviderStatsRequest struct {
 
 func (x *GetProviderStatsRequest) Reset() {
 	*x = GetProviderStatsRequest{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[26]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2116,7 +2412,7 @@ func (x *GetProviderStatsRequest) String() string {
 func (*GetProviderStatsRequest) ProtoMessage() {}
 
 func (x *GetProviderStatsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[26]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2129,7 +2425,7 @@ func (x *GetProviderStatsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetProviderStatsRequest.ProtoReflect.Descriptor instead.
 func (*GetProviderStatsRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{26}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{30}
 }
 
 type SubscribeProviderStatsRequest struct {
@@ -2140,7 +2436,7 @@ type SubscribeProviderStatsRequest struct {
 
 func (x *SubscribeProviderStatsRequest) Reset() {
 	*x = SubscribeProviderStatsRequest{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[27]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2152,7 +2448,7 @@ func (x *SubscribeProviderStatsRequest) String() string {
 func (*SubscribeProviderStatsRequest) ProtoMessage() {}
 
 func (x *SubscribeProviderStatsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[27]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2165,7 +2461,7 @@ func (x *SubscribeProviderStatsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscribeProviderStatsRequest.ProtoReflect.Descriptor instead.
 func (*SubscribeProviderStatsRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{27}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{31}
 }
 
 type ProviderStats struct {
@@ -2189,7 +2485,7 @@ type ProviderStats struct {
 
 func (x *ProviderStats) Reset() {
 	*x = ProviderStats{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[28]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2201,7 +2497,7 @@ func (x *ProviderStats) String() string {
 func (*ProviderStats) ProtoMessage() {}
 
 func (x *ProviderStats) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[28]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2214,7 +2510,7 @@ func (x *ProviderStats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProviderStats.ProtoReflect.Descriptor instead.
 func (*ProviderStats) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{28}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ProviderStats) GetProvider() string {
@@ -2318,7 +2614,7 @@ type GetProviderStatsResponse struct {
 
 func (x *GetProviderStatsResponse) Reset() {
 	*x = GetProviderStatsResponse{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[29]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2330,7 +2626,7 @@ func (x *GetProviderStatsResponse) String() string {
 func (*GetProviderStatsResponse) ProtoMessage() {}
 
 func (x *GetProviderStatsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[29]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2343,7 +2639,7 @@ func (x *GetProviderStatsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetProviderStatsResponse.ProtoReflect.Descriptor instead.
 func (*GetProviderStatsResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{29}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *GetProviderStatsResponse) GetProviders() []*ProviderStats {
@@ -2370,7 +2666,7 @@ type ProviderStatsEvent struct {
 
 func (x *ProviderStatsEvent) Reset() {
 	*x = ProviderStatsEvent{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[30]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2382,7 +2678,7 @@ func (x *ProviderStatsEvent) String() string {
 func (*ProviderStatsEvent) ProtoMessage() {}
 
 func (x *ProviderStatsEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[30]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2395,7 +2691,7 @@ func (x *ProviderStatsEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProviderStatsEvent.ProtoReflect.Descriptor instead.
 func (*ProviderStatsEvent) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{30}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *ProviderStatsEvent) GetStats() *ProviderStats {
@@ -2422,7 +2718,7 @@ type RenameSessionRequest struct {
 
 func (x *RenameSessionRequest) Reset() {
 	*x = RenameSessionRequest{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[31]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2434,7 +2730,7 @@ func (x *RenameSessionRequest) String() string {
 func (*RenameSessionRequest) ProtoMessage() {}
 
 func (x *RenameSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[31]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2447,7 +2743,7 @@ func (x *RenameSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenameSessionRequest.ProtoReflect.Descriptor instead.
 func (*RenameSessionRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{31}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *RenameSessionRequest) GetOldName() string {
@@ -2472,7 +2768,7 @@ type RenameSessionResponse struct {
 
 func (x *RenameSessionResponse) Reset() {
 	*x = RenameSessionResponse{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[32]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2484,7 +2780,7 @@ func (x *RenameSessionResponse) String() string {
 func (*RenameSessionResponse) ProtoMessage() {}
 
 func (x *RenameSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[32]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2497,7 +2793,7 @@ func (x *RenameSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenameSessionResponse.ProtoReflect.Descriptor instead.
 func (*RenameSessionResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{32}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{36}
 }
 
 type DeleteSessionRequest struct {
@@ -2509,7 +2805,7 @@ type DeleteSessionRequest struct {
 
 func (x *DeleteSessionRequest) Reset() {
 	*x = DeleteSessionRequest{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[33]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2521,7 +2817,7 @@ func (x *DeleteSessionRequest) String() string {
 func (*DeleteSessionRequest) ProtoMessage() {}
 
 func (x *DeleteSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[33]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2534,7 +2830,7 @@ func (x *DeleteSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteSessionRequest.ProtoReflect.Descriptor instead.
 func (*DeleteSessionRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{33}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *DeleteSessionRequest) GetName() string {
@@ -2552,7 +2848,7 @@ type DeleteSessionResponse struct {
 
 func (x *DeleteSessionResponse) Reset() {
 	*x = DeleteSessionResponse{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[34]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2564,7 +2860,7 @@ func (x *DeleteSessionResponse) String() string {
 func (*DeleteSessionResponse) ProtoMessage() {}
 
 func (x *DeleteSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[34]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2577,7 +2873,7 @@ func (x *DeleteSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteSessionResponse.ProtoReflect.Descriptor instead.
 func (*DeleteSessionResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{34}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{38}
 }
 
 type UpdateSessionMetadataRequest struct {
@@ -2590,7 +2886,7 @@ type UpdateSessionMetadataRequest struct {
 
 func (x *UpdateSessionMetadataRequest) Reset() {
 	*x = UpdateSessionMetadataRequest{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[35]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2602,7 +2898,7 @@ func (x *UpdateSessionMetadataRequest) String() string {
 func (*UpdateSessionMetadataRequest) ProtoMessage() {}
 
 func (x *UpdateSessionMetadataRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[35]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2615,7 +2911,7 @@ func (x *UpdateSessionMetadataRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateSessionMetadataRequest.ProtoReflect.Descriptor instead.
 func (*UpdateSessionMetadataRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{35}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *UpdateSessionMetadataRequest) GetName() string {
@@ -2640,7 +2936,7 @@ type UpdateSessionMetadataResponse struct {
 
 func (x *UpdateSessionMetadataResponse) Reset() {
 	*x = UpdateSessionMetadataResponse{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[36]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2652,7 +2948,7 @@ func (x *UpdateSessionMetadataResponse) String() string {
 func (*UpdateSessionMetadataResponse) ProtoMessage() {}
 
 func (x *UpdateSessionMetadataResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[36]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2665,7 +2961,7 @@ func (x *UpdateSessionMetadataResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateSessionMetadataResponse.ProtoReflect.Descriptor instead.
 func (*UpdateSessionMetadataResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{36}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{40}
 }
 
 type Settings struct {
@@ -2680,7 +2976,7 @@ type Settings struct {
 
 func (x *Settings) Reset() {
 	*x = Settings{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[37]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2692,7 +2988,7 @@ func (x *Settings) String() string {
 func (*Settings) ProtoMessage() {}
 
 func (x *Settings) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[37]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2705,7 +3001,7 @@ func (x *Settings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Settings.ProtoReflect.Descriptor instead.
 func (*Settings) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{37}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *Settings) GetModel() string {
@@ -2750,7 +3046,7 @@ type UpdateSessionSettingsRequest struct {
 
 func (x *UpdateSessionSettingsRequest) Reset() {
 	*x = UpdateSessionSettingsRequest{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[38]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2762,7 +3058,7 @@ func (x *UpdateSessionSettingsRequest) String() string {
 func (*UpdateSessionSettingsRequest) ProtoMessage() {}
 
 func (x *UpdateSessionSettingsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[38]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2775,7 +3071,7 @@ func (x *UpdateSessionSettingsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateSessionSettingsRequest.ProtoReflect.Descriptor instead.
 func (*UpdateSessionSettingsRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{38}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *UpdateSessionSettingsRequest) GetName() string {
@@ -2807,7 +3103,7 @@ type UpdateSessionSettingsResponse struct {
 
 func (x *UpdateSessionSettingsResponse) Reset() {
 	*x = UpdateSessionSettingsResponse{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[39]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2819,7 +3115,7 @@ func (x *UpdateSessionSettingsResponse) String() string {
 func (*UpdateSessionSettingsResponse) ProtoMessage() {}
 
 func (x *UpdateSessionSettingsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[39]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2832,7 +3128,7 @@ func (x *UpdateSessionSettingsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateSessionSettingsResponse.ProtoReflect.Descriptor instead.
 func (*UpdateSessionSettingsResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{39}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{43}
 }
 
 type GlobalDefaults struct {
@@ -2844,7 +3140,7 @@ type GlobalDefaults struct {
 
 func (x *GlobalDefaults) Reset() {
 	*x = GlobalDefaults{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[40]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2856,7 +3152,7 @@ func (x *GlobalDefaults) String() string {
 func (*GlobalDefaults) ProtoMessage() {}
 
 func (x *GlobalDefaults) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[40]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2869,7 +3165,7 @@ func (x *GlobalDefaults) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GlobalDefaults.ProtoReflect.Descriptor instead.
 func (*GlobalDefaults) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{40}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *GlobalDefaults) GetRemoteControl() bool {
@@ -2889,7 +3185,7 @@ type UpdateGlobalSettingsRequest struct {
 
 func (x *UpdateGlobalSettingsRequest) Reset() {
 	*x = UpdateGlobalSettingsRequest{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[41]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2901,7 +3197,7 @@ func (x *UpdateGlobalSettingsRequest) String() string {
 func (*UpdateGlobalSettingsRequest) ProtoMessage() {}
 
 func (x *UpdateGlobalSettingsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[41]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2914,7 +3210,7 @@ func (x *UpdateGlobalSettingsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateGlobalSettingsRequest.ProtoReflect.Descriptor instead.
 func (*UpdateGlobalSettingsRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{41}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *UpdateGlobalSettingsRequest) GetDefaults() *GlobalDefaults {
@@ -2939,7 +3235,7 @@ type UpdateGlobalSettingsResponse struct {
 
 func (x *UpdateGlobalSettingsResponse) Reset() {
 	*x = UpdateGlobalSettingsResponse{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[42]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2951,7 +3247,7 @@ func (x *UpdateGlobalSettingsResponse) String() string {
 func (*UpdateGlobalSettingsResponse) ProtoMessage() {}
 
 func (x *UpdateGlobalSettingsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[42]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2964,7 +3260,7 @@ func (x *UpdateGlobalSettingsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateGlobalSettingsResponse.ProtoReflect.Descriptor instead.
 func (*UpdateGlobalSettingsResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{42}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{46}
 }
 
 type ConfigControlOption struct {
@@ -2978,7 +3274,7 @@ type ConfigControlOption struct {
 
 func (x *ConfigControlOption) Reset() {
 	*x = ConfigControlOption{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[43]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2990,7 +3286,7 @@ func (x *ConfigControlOption) String() string {
 func (*ConfigControlOption) ProtoMessage() {}
 
 func (x *ConfigControlOption) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[43]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3003,7 +3299,7 @@ func (x *ConfigControlOption) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigControlOption.ProtoReflect.Descriptor instead.
 func (*ConfigControlOption) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{43}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *ConfigControlOption) GetValue() string {
@@ -3045,7 +3341,7 @@ type ConfigControl struct {
 
 func (x *ConfigControl) Reset() {
 	*x = ConfigControl{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[44]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3057,7 +3353,7 @@ func (x *ConfigControl) String() string {
 func (*ConfigControl) ProtoMessage() {}
 
 func (x *ConfigControl) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[44]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3070,7 +3366,7 @@ func (x *ConfigControl) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigControl.ProtoReflect.Descriptor instead.
 func (*ConfigControl) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{44}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *ConfigControl) GetKey() string {
@@ -3151,7 +3447,7 @@ type ListConfigControlsRequest struct {
 
 func (x *ListConfigControlsRequest) Reset() {
 	*x = ListConfigControlsRequest{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[45]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3163,7 +3459,7 @@ func (x *ListConfigControlsRequest) String() string {
 func (*ListConfigControlsRequest) ProtoMessage() {}
 
 func (x *ListConfigControlsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[45]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3176,7 +3472,7 @@ func (x *ListConfigControlsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListConfigControlsRequest.ProtoReflect.Descriptor instead.
 func (*ListConfigControlsRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{45}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{49}
 }
 
 type ListConfigControlsResponse struct {
@@ -3188,7 +3484,7 @@ type ListConfigControlsResponse struct {
 
 func (x *ListConfigControlsResponse) Reset() {
 	*x = ListConfigControlsResponse{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[46]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3200,7 +3496,7 @@ func (x *ListConfigControlsResponse) String() string {
 func (*ListConfigControlsResponse) ProtoMessage() {}
 
 func (x *ListConfigControlsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[46]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3213,7 +3509,7 @@ func (x *ListConfigControlsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListConfigControlsResponse.ProtoReflect.Descriptor instead.
 func (*ListConfigControlsResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{46}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *ListConfigControlsResponse) GetControls() []*ConfigControl {
@@ -3233,7 +3529,7 @@ type UpdateConfigControlRequest struct {
 
 func (x *UpdateConfigControlRequest) Reset() {
 	*x = UpdateConfigControlRequest{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[47]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3245,7 +3541,7 @@ func (x *UpdateConfigControlRequest) String() string {
 func (*UpdateConfigControlRequest) ProtoMessage() {}
 
 func (x *UpdateConfigControlRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[47]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3258,7 +3554,7 @@ func (x *UpdateConfigControlRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateConfigControlRequest.ProtoReflect.Descriptor instead.
 func (*UpdateConfigControlRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{47}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *UpdateConfigControlRequest) GetKey() string {
@@ -3284,7 +3580,7 @@ type UpdateConfigControlResponse struct {
 
 func (x *UpdateConfigControlResponse) Reset() {
 	*x = UpdateConfigControlResponse{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[48]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3296,7 +3592,7 @@ func (x *UpdateConfigControlResponse) String() string {
 func (*UpdateConfigControlResponse) ProtoMessage() {}
 
 func (x *UpdateConfigControlResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[48]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3309,7 +3605,7 @@ func (x *UpdateConfigControlResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateConfigControlResponse.ProtoReflect.Descriptor instead.
 func (*UpdateConfigControlResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{48}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *UpdateConfigControlResponse) GetControl() *ConfigControl {
@@ -3330,7 +3626,7 @@ type StartRemoteSessionRequest struct {
 
 func (x *StartRemoteSessionRequest) Reset() {
 	*x = StartRemoteSessionRequest{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[49]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3342,7 +3638,7 @@ func (x *StartRemoteSessionRequest) String() string {
 func (*StartRemoteSessionRequest) ProtoMessage() {}
 
 func (x *StartRemoteSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[49]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3355,7 +3651,7 @@ func (x *StartRemoteSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartRemoteSessionRequest.ProtoReflect.Descriptor instead.
 func (*StartRemoteSessionRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{49}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *StartRemoteSessionRequest) GetSessionName() string {
@@ -3390,7 +3686,7 @@ type StartRemoteSessionResponse struct {
 
 func (x *StartRemoteSessionResponse) Reset() {
 	*x = StartRemoteSessionResponse{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[50]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3402,7 +3698,7 @@ func (x *StartRemoteSessionResponse) String() string {
 func (*StartRemoteSessionResponse) ProtoMessage() {}
 
 func (x *StartRemoteSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[50]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3415,7 +3711,7 @@ func (x *StartRemoteSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartRemoteSessionResponse.ProtoReflect.Descriptor instead.
 func (*StartRemoteSessionResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{50}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *StartRemoteSessionResponse) GetSessionName() string {
@@ -3451,7 +3747,7 @@ type Bridge struct {
 
 func (x *Bridge) Reset() {
 	*x = Bridge{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[51]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3463,7 +3759,7 @@ func (x *Bridge) String() string {
 func (*Bridge) ProtoMessage() {}
 
 func (x *Bridge) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[51]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3476,7 +3772,7 @@ func (x *Bridge) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Bridge.ProtoReflect.Descriptor instead.
 func (*Bridge) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{51}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *Bridge) GetSessionId() string {
@@ -3515,7 +3811,7 @@ type ListBridgesRequest struct {
 
 func (x *ListBridgesRequest) Reset() {
 	*x = ListBridgesRequest{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[52]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3527,7 +3823,7 @@ func (x *ListBridgesRequest) String() string {
 func (*ListBridgesRequest) ProtoMessage() {}
 
 func (x *ListBridgesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[52]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3540,7 +3836,7 @@ func (x *ListBridgesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBridgesRequest.ProtoReflect.Descriptor instead.
 func (*ListBridgesRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{52}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{56}
 }
 
 type ListBridgesResponse struct {
@@ -3552,7 +3848,7 @@ type ListBridgesResponse struct {
 
 func (x *ListBridgesResponse) Reset() {
 	*x = ListBridgesResponse{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[53]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3564,7 +3860,7 @@ func (x *ListBridgesResponse) String() string {
 func (*ListBridgesResponse) ProtoMessage() {}
 
 func (x *ListBridgesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[53]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3577,7 +3873,7 @@ func (x *ListBridgesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBridgesResponse.ProtoReflect.Descriptor instead.
 func (*ListBridgesResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{53}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *ListBridgesResponse) GetBridges() []*Bridge {
@@ -3591,14 +3887,16 @@ type TailTranscriptRequest struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	SessionId string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	// start_at_offset = 0 streams future lines only.
-	StartAtOffset int64 `protobuf:"varint,2,opt,name=start_at_offset,json=startAtOffset,proto3" json:"start_at_offset,omitempty"`
+	StartAtOffset int64  `protobuf:"varint,2,opt,name=start_at_offset,json=startAtOffset,proto3" json:"start_at_offset,omitempty"`
+	Provider      string `protobuf:"bytes,3,opt,name=provider,proto3" json:"provider,omitempty"`
+	SessionName   string `protobuf:"bytes,4,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TailTranscriptRequest) Reset() {
 	*x = TailTranscriptRequest{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[54]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3610,7 +3908,7 @@ func (x *TailTranscriptRequest) String() string {
 func (*TailTranscriptRequest) ProtoMessage() {}
 
 func (x *TailTranscriptRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[54]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3623,7 +3921,7 @@ func (x *TailTranscriptRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TailTranscriptRequest.ProtoReflect.Descriptor instead.
 func (*TailTranscriptRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{54}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *TailTranscriptRequest) GetSessionId() string {
@@ -3640,6 +3938,20 @@ func (x *TailTranscriptRequest) GetStartAtOffset() int64 {
 	return 0
 }
 
+func (x *TailTranscriptRequest) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *TailTranscriptRequest) GetSessionName() string {
+	if x != nil {
+		return x.SessionName
+	}
+	return ""
+}
+
 type TailTranscriptResponse struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	ByteOffset int64                  `protobuf:"varint,1,opt,name=byte_offset,json=byteOffset,proto3" json:"byte_offset,omitempty"`
@@ -3647,14 +3959,17 @@ type TailTranscriptResponse struct {
 	Role       string                 `protobuf:"bytes,3,opt,name=role,proto3" json:"role,omitempty"`
 	Text       string                 `protobuf:"bytes,4,opt,name=text,proto3" json:"text,omitempty"`
 	// Unix nanoseconds. Avoids pulling in google.protobuf.Timestamp for one field.
-	TimestampNanos int64 `protobuf:"varint,5,opt,name=timestamp_nanos,json=timestampNanos,proto3" json:"timestamp_nanos,omitempty"`
+	TimestampNanos int64  `protobuf:"varint,5,opt,name=timestamp_nanos,json=timestampNanos,proto3" json:"timestamp_nanos,omitempty"`
+	Provider       string `protobuf:"bytes,6,opt,name=provider,proto3" json:"provider,omitempty"`
+	SessionId      string `protobuf:"bytes,7,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	SessionName    string `protobuf:"bytes,8,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
 
 func (x *TailTranscriptResponse) Reset() {
 	*x = TailTranscriptResponse{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[55]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3666,7 +3981,7 @@ func (x *TailTranscriptResponse) String() string {
 func (*TailTranscriptResponse) ProtoMessage() {}
 
 func (x *TailTranscriptResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[55]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3679,7 +3994,7 @@ func (x *TailTranscriptResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TailTranscriptResponse.ProtoReflect.Descriptor instead.
 func (*TailTranscriptResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{55}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *TailTranscriptResponse) GetByteOffset() int64 {
@@ -3717,17 +4032,40 @@ func (x *TailTranscriptResponse) GetTimestampNanos() int64 {
 	return 0
 }
 
+func (x *TailTranscriptResponse) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *TailTranscriptResponse) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *TailTranscriptResponse) GetSessionName() string {
+	if x != nil {
+		return x.SessionName
+	}
+	return ""
+}
+
 type SendToSessionRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	Text          string                 `protobuf:"bytes,2,opt,name=text,proto3" json:"text,omitempty"`
+	Provider      string                 `protobuf:"bytes,3,opt,name=provider,proto3" json:"provider,omitempty"`
+	SessionName   string                 `protobuf:"bytes,4,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SendToSessionRequest) Reset() {
 	*x = SendToSessionRequest{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[56]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3739,7 +4077,7 @@ func (x *SendToSessionRequest) String() string {
 func (*SendToSessionRequest) ProtoMessage() {}
 
 func (x *SendToSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[56]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3752,7 +4090,7 @@ func (x *SendToSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendToSessionRequest.ProtoReflect.Descriptor instead.
 func (*SendToSessionRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{56}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *SendToSessionRequest) GetSessionId() string {
@@ -3769,6 +4107,20 @@ func (x *SendToSessionRequest) GetText() string {
 	return ""
 }
 
+func (x *SendToSessionRequest) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *SendToSessionRequest) GetSessionName() string {
+	if x != nil {
+		return x.SessionName
+	}
+	return ""
+}
+
 type SendToSessionResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	BytesWritten  int32                  `protobuf:"varint,1,opt,name=bytes_written,json=bytesWritten,proto3" json:"bytes_written,omitempty"`
@@ -3779,7 +4131,7 @@ type SendToSessionResponse struct {
 
 func (x *SendToSessionResponse) Reset() {
 	*x = SendToSessionResponse{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[57]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3791,7 +4143,7 @@ func (x *SendToSessionResponse) String() string {
 func (*SendToSessionResponse) ProtoMessage() {}
 
 func (x *SendToSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[57]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3804,7 +4156,7 @@ func (x *SendToSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendToSessionResponse.ProtoReflect.Descriptor instead.
 func (*SendToSessionResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{57}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *SendToSessionResponse) GetBytesWritten() int32 {
@@ -3830,7 +4182,7 @@ type ProbeContextUsageRequest struct {
 
 func (x *ProbeContextUsageRequest) Reset() {
 	*x = ProbeContextUsageRequest{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[58]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3842,7 +4194,7 @@ func (x *ProbeContextUsageRequest) String() string {
 func (*ProbeContextUsageRequest) ProtoMessage() {}
 
 func (x *ProbeContextUsageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[58]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3855,7 +4207,7 @@ func (x *ProbeContextUsageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeContextUsageRequest.ProtoReflect.Descriptor instead.
 func (*ProbeContextUsageRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{58}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *ProbeContextUsageRequest) GetSessionName() string {
@@ -3877,7 +4229,7 @@ type ContextUsageCategory struct {
 
 func (x *ContextUsageCategory) Reset() {
 	*x = ContextUsageCategory{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[59]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3889,7 +4241,7 @@ func (x *ContextUsageCategory) String() string {
 func (*ContextUsageCategory) ProtoMessage() {}
 
 func (x *ContextUsageCategory) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[59]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3902,7 +4254,7 @@ func (x *ContextUsageCategory) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ContextUsageCategory.ProtoReflect.Descriptor instead.
 func (*ContextUsageCategory) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{59}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *ContextUsageCategory) GetName() string {
@@ -3948,7 +4300,7 @@ type ProbeContextUsageResponse struct {
 
 func (x *ProbeContextUsageResponse) Reset() {
 	*x = ProbeContextUsageResponse{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[60]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3960,7 +4312,7 @@ func (x *ProbeContextUsageResponse) String() string {
 func (*ProbeContextUsageResponse) ProtoMessage() {}
 
 func (x *ProbeContextUsageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[60]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3973,7 +4325,7 @@ func (x *ProbeContextUsageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeContextUsageResponse.ProtoReflect.Descriptor instead.
 func (*ProbeContextUsageResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{60}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *ProbeContextUsageResponse) GetSessionName() string {
@@ -4037,7 +4389,7 @@ type CompactStrippers struct {
 
 func (x *CompactStrippers) Reset() {
 	*x = CompactStrippers{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[61]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4049,7 +4401,7 @@ func (x *CompactStrippers) String() string {
 func (*CompactStrippers) ProtoMessage() {}
 
 func (x *CompactStrippers) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[61]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4062,7 +4414,7 @@ func (x *CompactStrippers) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactStrippers.ProtoReflect.Descriptor instead.
 func (*CompactStrippers) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{61}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *CompactStrippers) GetThinking() bool {
@@ -4109,7 +4461,7 @@ type CompactRunRequest struct {
 
 func (x *CompactRunRequest) Reset() {
 	*x = CompactRunRequest{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[62]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4121,7 +4473,7 @@ func (x *CompactRunRequest) String() string {
 func (*CompactRunRequest) ProtoMessage() {}
 
 func (x *CompactRunRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[62]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4134,7 +4486,7 @@ func (x *CompactRunRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactRunRequest.ProtoReflect.Descriptor instead.
 func (*CompactRunRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{62}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *CompactRunRequest) GetSessionName() string {
@@ -4215,7 +4567,7 @@ type CompactUpfront struct {
 
 func (x *CompactUpfront) Reset() {
 	*x = CompactUpfront{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[63]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4227,7 +4579,7 @@ func (x *CompactUpfront) String() string {
 func (*CompactUpfront) ProtoMessage() {}
 
 func (x *CompactUpfront) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[63]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4240,7 +4592,7 @@ func (x *CompactUpfront) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactUpfront.ProtoReflect.Descriptor instead.
 func (*CompactUpfront) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{63}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *CompactUpfront) GetSessionName() string {
@@ -4361,7 +4713,7 @@ type CompactIteration struct {
 
 func (x *CompactIteration) Reset() {
 	*x = CompactIteration{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[64]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4373,7 +4725,7 @@ func (x *CompactIteration) String() string {
 func (*CompactIteration) ProtoMessage() {}
 
 func (x *CompactIteration) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[64]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4386,7 +4738,7 @@ func (x *CompactIteration) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactIteration.ProtoReflect.Descriptor instead.
 func (*CompactIteration) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{64}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *CompactIteration) GetIteration() int32 {
@@ -4487,7 +4839,7 @@ type CompactApplyMutation struct {
 
 func (x *CompactApplyMutation) Reset() {
 	*x = CompactApplyMutation{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[65]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4499,7 +4851,7 @@ func (x *CompactApplyMutation) String() string {
 func (*CompactApplyMutation) ProtoMessage() {}
 
 func (x *CompactApplyMutation) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[65]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4512,7 +4864,7 @@ func (x *CompactApplyMutation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactApplyMutation.ProtoReflect.Descriptor instead.
 func (*CompactApplyMutation) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{65}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *CompactApplyMutation) GetBoundaryUuid() string {
@@ -4572,7 +4924,7 @@ type CompactFinal struct {
 
 func (x *CompactFinal) Reset() {
 	*x = CompactFinal{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[66]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4584,7 +4936,7 @@ func (x *CompactFinal) String() string {
 func (*CompactFinal) ProtoMessage() {}
 
 func (x *CompactFinal) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[66]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4597,7 +4949,7 @@ func (x *CompactFinal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactFinal.ProtoReflect.Descriptor instead.
 func (*CompactFinal) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{66}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *CompactFinal) GetBaselineTail() int32 {
@@ -4664,7 +5016,7 @@ type CompactEvent struct {
 
 func (x *CompactEvent) Reset() {
 	*x = CompactEvent{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[67]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4676,7 +5028,7 @@ func (x *CompactEvent) String() string {
 func (*CompactEvent) ProtoMessage() {}
 
 func (x *CompactEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[67]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4689,7 +5041,7 @@ func (x *CompactEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactEvent.ProtoReflect.Descriptor instead.
 func (*CompactEvent) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{67}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *CompactEvent) GetSequence() int32 {
@@ -4750,7 +5102,7 @@ type CompactUndoRequest struct {
 
 func (x *CompactUndoRequest) Reset() {
 	*x = CompactUndoRequest{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[68]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4762,7 +5114,7 @@ func (x *CompactUndoRequest) String() string {
 func (*CompactUndoRequest) ProtoMessage() {}
 
 func (x *CompactUndoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[68]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4775,7 +5127,7 @@ func (x *CompactUndoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactUndoRequest.ProtoReflect.Descriptor instead.
 func (*CompactUndoRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{68}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *CompactUndoRequest) GetSessionName() string {
@@ -4804,7 +5156,7 @@ type CompactUndoResponse struct {
 
 func (x *CompactUndoResponse) Reset() {
 	*x = CompactUndoResponse{}
-	mi := &file_clyde_v1_daemon_proto_msgTypes[69]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4816,7 +5168,7 @@ func (x *CompactUndoResponse) String() string {
 func (*CompactUndoResponse) ProtoMessage() {}
 
 func (x *CompactUndoResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_proto_msgTypes[69]
+	mi := &file_clyde_v1_daemon_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4829,7 +5181,7 @@ func (x *CompactUndoResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactUndoResponse.ProtoReflect.Descriptor instead.
 func (*CompactUndoResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{69}
+	return file_clyde_v1_daemon_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *CompactUndoResponse) GetSessionName() string {
@@ -4942,7 +5294,30 @@ const file_clyde_v1_daemon_proto_rawDesc = "" +
 	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x1d\n" +
 	"\n" +
 	"wrapper_id\x18\x02 \x01(\tR\twrapperId\"\x15\n" +
-	"\x13ListSessionsRequest\"\x95\t\n" +
+	"\x13ListSessionsRequest\"T\n" +
+	"\x17ProviderSessionIdentity\x12\x1a\n" +
+	"\bprovider\x18\x01 \x01(\tR\bprovider\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\"\xfb\x01\n" +
+	"\x16SessionHistoryBoundary\x12;\n" +
+	"\acurrent\x18\x01 \x01(\v2!.clyde.v1.ProviderSessionIdentityR\acurrent\x12=\n" +
+	"\bprevious\x18\x02 \x03(\v2!.clyde.v1.ProviderSessionIdentityR\bprevious\x12)\n" +
+	"\x10primary_artifact\x18\x03 \x01(\tR\x0fprimaryArtifact\x12\x1a\n" +
+	"\breadable\x18\x04 \x01(\bR\breadable\x12\x1e\n" +
+	"\n" +
+	"exportable\x18\x05 \x01(\bR\n" +
+	"exportable\"\x90\x02\n" +
+	"\x13LiveSessionBoundary\x12;\n" +
+	"\acurrent\x18\x01 \x01(\v2!.clyde.v1.ProviderSessionIdentityR\acurrent\x12#\n" +
+	"\rtail_readable\x18\x02 \x01(\bR\ftailReadable\x12%\n" +
+	"\x0einput_writable\x18\x03 \x01(\bR\rinputWritable\x12%\n" +
+	"\x0eremote_control\x18\x04 \x01(\bR\rremoteControl\x12*\n" +
+	"\x11bridge_session_id\x18\x05 \x01(\tR\x0fbridgeSessionId\x12\x1d\n" +
+	"\n" +
+	"bridge_url\x18\x06 \x01(\tR\tbridgeUrl\"\x88\x01\n" +
+	"\x17ProviderRuntimeBoundary\x12:\n" +
+	"\ahistory\x18\x01 \x01(\v2 .clyde.v1.SessionHistoryBoundaryR\ahistory\x121\n" +
+	"\x04live\x18\x02 \x01(\v2\x1d.clyde.v1.LiveSessionBoundaryR\x04live\"\xee\t\n" +
 	"\x0eSessionSummary\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12#\n" +
 	"\rmetadata_name\x18\x02 \x01(\tR\fmetadataName\x12\x1d\n" +
@@ -4973,7 +5348,9 @@ const file_clyde_v1_daemon_proto_rawDesc = "" +
 	"\x12context_percentage\x18\x19 \x01(\x05R\x11contextPercentage\x126\n" +
 	"\x17context_messages_tokens\x18\x1a \x01(\x05R\x15contextMessagesTokens\x120\n" +
 	"\x14context_usage_loaded\x18\x1b \x01(\bR\x12contextUsageLoaded\x120\n" +
-	"\x14context_usage_status\x18\x1c \x01(\tR\x12contextUsageStatus\"\x80\x01\n" +
+	"\x14context_usage_status\x18\x1c \x01(\tR\x12contextUsageStatus\x12\x1a\n" +
+	"\bprovider\x18\x1d \x01(\tR\bprovider\x12;\n" +
+	"\aruntime\x18\x1e \x01(\v2!.clyde.v1.ProviderRuntimeBoundaryR\aruntime\"\x80\x01\n" +
 	"\x14ListSessionsResponse\x124\n" +
 	"\bsessions\x18\x01 \x03(\v2\x18.clyde.v1.SessionSummaryR\bsessions\x122\n" +
 	"\x15global_remote_control\x18\x02 \x01(\bR\x13globalRemoteControl\"`\n" +
@@ -4985,7 +5362,7 @@ const file_clyde_v1_daemon_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\x05R\x05count\"<\n" +
 	"\x17GetSessionDetailRequest\x12!\n" +
-	"\fsession_name\x18\x01 \x01(\tR\vsessionName\"\xcf\x04\n" +
+	"\fsession_name\x18\x01 \x01(\tR\vsessionName\"\xa8\x05\n" +
 	"\x18GetSessionDetailResponse\x12!\n" +
 	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x14\n" +
 	"\x05model\x18\x02 \x01(\tR\x05model\x12@\n" +
@@ -4999,7 +5376,9 @@ const file_clyde_v1_daemon_proto_rawDesc = "" +
 	"\x17last_pre_compact_tokens\x18\n" +
 	" \x01(\x05R\x14lastPreCompactTokens\x122\n" +
 	"\x15transcript_size_bytes\x18\v \x01(\x03R\x13transcriptSizeBytes\x12.\n" +
-	"\x13last_activity_nanos\x18\f \x01(\x03R\x11lastActivityNanos\"A\n" +
+	"\x13last_activity_nanos\x18\f \x01(\x03R\x11lastActivityNanos\x12\x1a\n" +
+	"\bprovider\x18\r \x01(\tR\bprovider\x12;\n" +
+	"\aruntime\x18\x0e \x01(\v2!.clyde.v1.ProviderRuntimeBoundaryR\aruntime\"A\n" +
 	"\x1cGetSessionExportStatsRequest\x12!\n" +
 	"\fsession_name\x18\x01 \x01(\tR\vsessionName\"\xc7\x03\n" +
 	"\x1dGetSessionExportStatsResponse\x12!\n" +
@@ -5163,22 +5542,30 @@ const file_clyde_v1_daemon_proto_rawDesc = "" +
 	"\x03url\x18\x04 \x01(\tR\x03url\"\x14\n" +
 	"\x12ListBridgesRequest\"A\n" +
 	"\x13ListBridgesResponse\x12*\n" +
-	"\abridges\x18\x01 \x03(\v2\x10.clyde.v1.BridgeR\abridges\"^\n" +
+	"\abridges\x18\x01 \x03(\v2\x10.clyde.v1.BridgeR\abridges\"\x9d\x01\n" +
 	"\x15TailTranscriptRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12&\n" +
-	"\x0fstart_at_offset\x18\x02 \x01(\x03R\rstartAtOffset\"\xa7\x01\n" +
+	"\x0fstart_at_offset\x18\x02 \x01(\x03R\rstartAtOffset\x12\x1a\n" +
+	"\bprovider\x18\x03 \x01(\tR\bprovider\x12!\n" +
+	"\fsession_name\x18\x04 \x01(\tR\vsessionName\"\x85\x02\n" +
 	"\x16TailTranscriptResponse\x12\x1f\n" +
 	"\vbyte_offset\x18\x01 \x01(\x03R\n" +
 	"byteOffset\x12\x1b\n" +
 	"\traw_jsonl\x18\x02 \x01(\tR\brawJsonl\x12\x12\n" +
 	"\x04role\x18\x03 \x01(\tR\x04role\x12\x12\n" +
 	"\x04text\x18\x04 \x01(\tR\x04text\x12'\n" +
-	"\x0ftimestamp_nanos\x18\x05 \x01(\x03R\x0etimestampNanos\"I\n" +
+	"\x0ftimestamp_nanos\x18\x05 \x01(\x03R\x0etimestampNanos\x12\x1a\n" +
+	"\bprovider\x18\x06 \x01(\tR\bprovider\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\a \x01(\tR\tsessionId\x12!\n" +
+	"\fsession_name\x18\b \x01(\tR\vsessionName\"\x88\x01\n" +
 	"\x14SendToSessionRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x12\n" +
-	"\x04text\x18\x02 \x01(\tR\x04text\"Z\n" +
+	"\x04text\x18\x02 \x01(\tR\x04text\x12\x1a\n" +
+	"\bprovider\x18\x03 \x01(\tR\bprovider\x12!\n" +
+	"\fsession_name\x18\x04 \x01(\tR\vsessionName\"Z\n" +
 	"\x15SendToSessionResponse\x12#\n" +
 	"\rbytes_written\x18\x01 \x01(\x05R\fbytesWritten\x12\x1c\n" +
 	"\tdelivered\x18\x02 \x01(\bR\tdelivered\"=\n" +
@@ -5368,7 +5755,7 @@ func file_clyde_v1_daemon_proto_rawDescGZIP() []byte {
 }
 
 var file_clyde_v1_daemon_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_clyde_v1_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 70)
+var file_clyde_v1_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 74)
 var file_clyde_v1_daemon_proto_goTypes = []any{
 	(SessionExportFormat)(0),                    // 0: clyde.v1.SessionExportFormat
 	(SessionExportWhitespaceCompression)(0),     // 1: clyde.v1.SessionExportWhitespaceCompression
@@ -5386,156 +5773,167 @@ var file_clyde_v1_daemon_proto_goTypes = []any{
 	(*ListActiveSessionsResponse)(nil),          // 13: clyde.v1.ListActiveSessionsResponse
 	(*ActiveSession)(nil),                       // 14: clyde.v1.ActiveSession
 	(*ListSessionsRequest)(nil),                 // 15: clyde.v1.ListSessionsRequest
-	(*SessionSummary)(nil),                      // 16: clyde.v1.SessionSummary
-	(*ListSessionsResponse)(nil),                // 17: clyde.v1.ListSessionsResponse
-	(*DetailMessage)(nil),                       // 18: clyde.v1.DetailMessage
-	(*ToolUse)(nil),                             // 19: clyde.v1.ToolUse
-	(*GetSessionDetailRequest)(nil),             // 20: clyde.v1.GetSessionDetailRequest
-	(*GetSessionDetailResponse)(nil),            // 21: clyde.v1.GetSessionDetailResponse
-	(*GetSessionExportStatsRequest)(nil),        // 22: clyde.v1.GetSessionExportStatsRequest
-	(*GetSessionExportStatsResponse)(nil),       // 23: clyde.v1.GetSessionExportStatsResponse
-	(*ExportSessionRequest)(nil),                // 24: clyde.v1.ExportSessionRequest
-	(*ExportSessionResponse)(nil),               // 25: clyde.v1.ExportSessionResponse
-	(*TriggerScanRequest)(nil),                  // 26: clyde.v1.TriggerScanRequest
-	(*TriggerScanResponse)(nil),                 // 27: clyde.v1.TriggerScanResponse
-	(*ReloadDaemonRequest)(nil),                 // 28: clyde.v1.ReloadDaemonRequest
-	(*ReloadDaemonResponse)(nil),                // 29: clyde.v1.ReloadDaemonResponse
-	(*SubscribeRegistryRequest)(nil),            // 30: clyde.v1.SubscribeRegistryRequest
-	(*SubscribeRegistryResponse)(nil),           // 31: clyde.v1.SubscribeRegistryResponse
-	(*GetProviderStatsRequest)(nil),             // 32: clyde.v1.GetProviderStatsRequest
-	(*SubscribeProviderStatsRequest)(nil),       // 33: clyde.v1.SubscribeProviderStatsRequest
-	(*ProviderStats)(nil),                       // 34: clyde.v1.ProviderStats
-	(*GetProviderStatsResponse)(nil),            // 35: clyde.v1.GetProviderStatsResponse
-	(*ProviderStatsEvent)(nil),                  // 36: clyde.v1.ProviderStatsEvent
-	(*RenameSessionRequest)(nil),                // 37: clyde.v1.RenameSessionRequest
-	(*RenameSessionResponse)(nil),               // 38: clyde.v1.RenameSessionResponse
-	(*DeleteSessionRequest)(nil),                // 39: clyde.v1.DeleteSessionRequest
-	(*DeleteSessionResponse)(nil),               // 40: clyde.v1.DeleteSessionResponse
-	(*UpdateSessionMetadataRequest)(nil),        // 41: clyde.v1.UpdateSessionMetadataRequest
-	(*UpdateSessionMetadataResponse)(nil),       // 42: clyde.v1.UpdateSessionMetadataResponse
-	(*Settings)(nil),                            // 43: clyde.v1.Settings
-	(*UpdateSessionSettingsRequest)(nil),        // 44: clyde.v1.UpdateSessionSettingsRequest
-	(*UpdateSessionSettingsResponse)(nil),       // 45: clyde.v1.UpdateSessionSettingsResponse
-	(*GlobalDefaults)(nil),                      // 46: clyde.v1.GlobalDefaults
-	(*UpdateGlobalSettingsRequest)(nil),         // 47: clyde.v1.UpdateGlobalSettingsRequest
-	(*UpdateGlobalSettingsResponse)(nil),        // 48: clyde.v1.UpdateGlobalSettingsResponse
-	(*ConfigControlOption)(nil),                 // 49: clyde.v1.ConfigControlOption
-	(*ConfigControl)(nil),                       // 50: clyde.v1.ConfigControl
-	(*ListConfigControlsRequest)(nil),           // 51: clyde.v1.ListConfigControlsRequest
-	(*ListConfigControlsResponse)(nil),          // 52: clyde.v1.ListConfigControlsResponse
-	(*UpdateConfigControlRequest)(nil),          // 53: clyde.v1.UpdateConfigControlRequest
-	(*UpdateConfigControlResponse)(nil),         // 54: clyde.v1.UpdateConfigControlResponse
-	(*StartRemoteSessionRequest)(nil),           // 55: clyde.v1.StartRemoteSessionRequest
-	(*StartRemoteSessionResponse)(nil),          // 56: clyde.v1.StartRemoteSessionResponse
-	(*Bridge)(nil),                              // 57: clyde.v1.Bridge
-	(*ListBridgesRequest)(nil),                  // 58: clyde.v1.ListBridgesRequest
-	(*ListBridgesResponse)(nil),                 // 59: clyde.v1.ListBridgesResponse
-	(*TailTranscriptRequest)(nil),               // 60: clyde.v1.TailTranscriptRequest
-	(*TailTranscriptResponse)(nil),              // 61: clyde.v1.TailTranscriptResponse
-	(*SendToSessionRequest)(nil),                // 62: clyde.v1.SendToSessionRequest
-	(*SendToSessionResponse)(nil),               // 63: clyde.v1.SendToSessionResponse
-	(*ProbeContextUsageRequest)(nil),            // 64: clyde.v1.ProbeContextUsageRequest
-	(*ContextUsageCategory)(nil),                // 65: clyde.v1.ContextUsageCategory
-	(*ProbeContextUsageResponse)(nil),           // 66: clyde.v1.ProbeContextUsageResponse
-	(*CompactStrippers)(nil),                    // 67: clyde.v1.CompactStrippers
-	(*CompactRunRequest)(nil),                   // 68: clyde.v1.CompactRunRequest
-	(*CompactUpfront)(nil),                      // 69: clyde.v1.CompactUpfront
-	(*CompactIteration)(nil),                    // 70: clyde.v1.CompactIteration
-	(*CompactApplyMutation)(nil),                // 71: clyde.v1.CompactApplyMutation
-	(*CompactFinal)(nil),                        // 72: clyde.v1.CompactFinal
-	(*CompactEvent)(nil),                        // 73: clyde.v1.CompactEvent
-	(*CompactUndoRequest)(nil),                  // 74: clyde.v1.CompactUndoRequest
-	(*CompactUndoResponse)(nil),                 // 75: clyde.v1.CompactUndoResponse
+	(*ProviderSessionIdentity)(nil),             // 16: clyde.v1.ProviderSessionIdentity
+	(*SessionHistoryBoundary)(nil),              // 17: clyde.v1.SessionHistoryBoundary
+	(*LiveSessionBoundary)(nil),                 // 18: clyde.v1.LiveSessionBoundary
+	(*ProviderRuntimeBoundary)(nil),             // 19: clyde.v1.ProviderRuntimeBoundary
+	(*SessionSummary)(nil),                      // 20: clyde.v1.SessionSummary
+	(*ListSessionsResponse)(nil),                // 21: clyde.v1.ListSessionsResponse
+	(*DetailMessage)(nil),                       // 22: clyde.v1.DetailMessage
+	(*ToolUse)(nil),                             // 23: clyde.v1.ToolUse
+	(*GetSessionDetailRequest)(nil),             // 24: clyde.v1.GetSessionDetailRequest
+	(*GetSessionDetailResponse)(nil),            // 25: clyde.v1.GetSessionDetailResponse
+	(*GetSessionExportStatsRequest)(nil),        // 26: clyde.v1.GetSessionExportStatsRequest
+	(*GetSessionExportStatsResponse)(nil),       // 27: clyde.v1.GetSessionExportStatsResponse
+	(*ExportSessionRequest)(nil),                // 28: clyde.v1.ExportSessionRequest
+	(*ExportSessionResponse)(nil),               // 29: clyde.v1.ExportSessionResponse
+	(*TriggerScanRequest)(nil),                  // 30: clyde.v1.TriggerScanRequest
+	(*TriggerScanResponse)(nil),                 // 31: clyde.v1.TriggerScanResponse
+	(*ReloadDaemonRequest)(nil),                 // 32: clyde.v1.ReloadDaemonRequest
+	(*ReloadDaemonResponse)(nil),                // 33: clyde.v1.ReloadDaemonResponse
+	(*SubscribeRegistryRequest)(nil),            // 34: clyde.v1.SubscribeRegistryRequest
+	(*SubscribeRegistryResponse)(nil),           // 35: clyde.v1.SubscribeRegistryResponse
+	(*GetProviderStatsRequest)(nil),             // 36: clyde.v1.GetProviderStatsRequest
+	(*SubscribeProviderStatsRequest)(nil),       // 37: clyde.v1.SubscribeProviderStatsRequest
+	(*ProviderStats)(nil),                       // 38: clyde.v1.ProviderStats
+	(*GetProviderStatsResponse)(nil),            // 39: clyde.v1.GetProviderStatsResponse
+	(*ProviderStatsEvent)(nil),                  // 40: clyde.v1.ProviderStatsEvent
+	(*RenameSessionRequest)(nil),                // 41: clyde.v1.RenameSessionRequest
+	(*RenameSessionResponse)(nil),               // 42: clyde.v1.RenameSessionResponse
+	(*DeleteSessionRequest)(nil),                // 43: clyde.v1.DeleteSessionRequest
+	(*DeleteSessionResponse)(nil),               // 44: clyde.v1.DeleteSessionResponse
+	(*UpdateSessionMetadataRequest)(nil),        // 45: clyde.v1.UpdateSessionMetadataRequest
+	(*UpdateSessionMetadataResponse)(nil),       // 46: clyde.v1.UpdateSessionMetadataResponse
+	(*Settings)(nil),                            // 47: clyde.v1.Settings
+	(*UpdateSessionSettingsRequest)(nil),        // 48: clyde.v1.UpdateSessionSettingsRequest
+	(*UpdateSessionSettingsResponse)(nil),       // 49: clyde.v1.UpdateSessionSettingsResponse
+	(*GlobalDefaults)(nil),                      // 50: clyde.v1.GlobalDefaults
+	(*UpdateGlobalSettingsRequest)(nil),         // 51: clyde.v1.UpdateGlobalSettingsRequest
+	(*UpdateGlobalSettingsResponse)(nil),        // 52: clyde.v1.UpdateGlobalSettingsResponse
+	(*ConfigControlOption)(nil),                 // 53: clyde.v1.ConfigControlOption
+	(*ConfigControl)(nil),                       // 54: clyde.v1.ConfigControl
+	(*ListConfigControlsRequest)(nil),           // 55: clyde.v1.ListConfigControlsRequest
+	(*ListConfigControlsResponse)(nil),          // 56: clyde.v1.ListConfigControlsResponse
+	(*UpdateConfigControlRequest)(nil),          // 57: clyde.v1.UpdateConfigControlRequest
+	(*UpdateConfigControlResponse)(nil),         // 58: clyde.v1.UpdateConfigControlResponse
+	(*StartRemoteSessionRequest)(nil),           // 59: clyde.v1.StartRemoteSessionRequest
+	(*StartRemoteSessionResponse)(nil),          // 60: clyde.v1.StartRemoteSessionResponse
+	(*Bridge)(nil),                              // 61: clyde.v1.Bridge
+	(*ListBridgesRequest)(nil),                  // 62: clyde.v1.ListBridgesRequest
+	(*ListBridgesResponse)(nil),                 // 63: clyde.v1.ListBridgesResponse
+	(*TailTranscriptRequest)(nil),               // 64: clyde.v1.TailTranscriptRequest
+	(*TailTranscriptResponse)(nil),              // 65: clyde.v1.TailTranscriptResponse
+	(*SendToSessionRequest)(nil),                // 66: clyde.v1.SendToSessionRequest
+	(*SendToSessionResponse)(nil),               // 67: clyde.v1.SendToSessionResponse
+	(*ProbeContextUsageRequest)(nil),            // 68: clyde.v1.ProbeContextUsageRequest
+	(*ContextUsageCategory)(nil),                // 69: clyde.v1.ContextUsageCategory
+	(*ProbeContextUsageResponse)(nil),           // 70: clyde.v1.ProbeContextUsageResponse
+	(*CompactStrippers)(nil),                    // 71: clyde.v1.CompactStrippers
+	(*CompactRunRequest)(nil),                   // 72: clyde.v1.CompactRunRequest
+	(*CompactUpfront)(nil),                      // 73: clyde.v1.CompactUpfront
+	(*CompactIteration)(nil),                    // 74: clyde.v1.CompactIteration
+	(*CompactApplyMutation)(nil),                // 75: clyde.v1.CompactApplyMutation
+	(*CompactFinal)(nil),                        // 76: clyde.v1.CompactFinal
+	(*CompactEvent)(nil),                        // 77: clyde.v1.CompactEvent
+	(*CompactUndoRequest)(nil),                  // 78: clyde.v1.CompactUndoRequest
+	(*CompactUndoResponse)(nil),                 // 79: clyde.v1.CompactUndoResponse
 }
 var file_clyde_v1_daemon_proto_depIdxs = []int32{
 	14, // 0: clyde.v1.ListActiveSessionsResponse.sessions:type_name -> clyde.v1.ActiveSession
-	57, // 1: clyde.v1.SessionSummary.bridge:type_name -> clyde.v1.Bridge
-	16, // 2: clyde.v1.ListSessionsResponse.sessions:type_name -> clyde.v1.SessionSummary
-	18, // 3: clyde.v1.GetSessionDetailResponse.recent_messages:type_name -> clyde.v1.DetailMessage
-	18, // 4: clyde.v1.GetSessionDetailResponse.all_messages:type_name -> clyde.v1.DetailMessage
-	19, // 5: clyde.v1.GetSessionDetailResponse.tools:type_name -> clyde.v1.ToolUse
-	0,  // 6: clyde.v1.ExportSessionRequest.format:type_name -> clyde.v1.SessionExportFormat
-	1,  // 7: clyde.v1.ExportSessionRequest.whitespace_compression:type_name -> clyde.v1.SessionExportWhitespaceCompression
-	3,  // 8: clyde.v1.SubscribeRegistryResponse.kind:type_name -> clyde.v1.SubscribeRegistryResponse.Kind
-	16, // 9: clyde.v1.SubscribeRegistryResponse.session_summary:type_name -> clyde.v1.SessionSummary
-	34, // 10: clyde.v1.GetProviderStatsResponse.providers:type_name -> clyde.v1.ProviderStats
-	34, // 11: clyde.v1.ProviderStatsEvent.stats:type_name -> clyde.v1.ProviderStats
-	43, // 12: clyde.v1.UpdateSessionSettingsRequest.settings:type_name -> clyde.v1.Settings
-	46, // 13: clyde.v1.UpdateGlobalSettingsRequest.defaults:type_name -> clyde.v1.GlobalDefaults
-	2,  // 14: clyde.v1.ConfigControl.type:type_name -> clyde.v1.ConfigControlType
-	49, // 15: clyde.v1.ConfigControl.options:type_name -> clyde.v1.ConfigControlOption
-	50, // 16: clyde.v1.ListConfigControlsResponse.controls:type_name -> clyde.v1.ConfigControl
-	50, // 17: clyde.v1.UpdateConfigControlResponse.control:type_name -> clyde.v1.ConfigControl
-	4,  // 18: clyde.v1.StartRemoteSessionResponse.launch_state:type_name -> clyde.v1.StartRemoteSessionResponse.LaunchState
-	57, // 19: clyde.v1.ListBridgesResponse.bridges:type_name -> clyde.v1.Bridge
-	65, // 20: clyde.v1.ProbeContextUsageResponse.categories:type_name -> clyde.v1.ContextUsageCategory
-	67, // 21: clyde.v1.CompactRunRequest.strippers:type_name -> clyde.v1.CompactStrippers
-	5,  // 22: clyde.v1.CompactEvent.kind:type_name -> clyde.v1.CompactEvent.Kind
-	69, // 23: clyde.v1.CompactEvent.upfront:type_name -> clyde.v1.CompactUpfront
-	70, // 24: clyde.v1.CompactEvent.iteration:type_name -> clyde.v1.CompactIteration
-	72, // 25: clyde.v1.CompactEvent.final:type_name -> clyde.v1.CompactFinal
-	71, // 26: clyde.v1.CompactEvent.apply_mutation:type_name -> clyde.v1.CompactApplyMutation
-	6,  // 27: clyde.v1.ClydeService.AcquireSession:input_type -> clyde.v1.AcquireSessionRequest
-	8,  // 28: clyde.v1.ClydeService.ReleaseSession:input_type -> clyde.v1.ReleaseSessionRequest
-	10, // 29: clyde.v1.ClydeService.HookEvent:input_type -> clyde.v1.HookEventRequest
-	12, // 30: clyde.v1.ClydeService.ListActiveSessions:input_type -> clyde.v1.ListActiveSessionsRequest
-	15, // 31: clyde.v1.ClydeService.ListSessions:input_type -> clyde.v1.ListSessionsRequest
-	20, // 32: clyde.v1.ClydeService.GetSessionDetail:input_type -> clyde.v1.GetSessionDetailRequest
-	22, // 33: clyde.v1.ClydeService.GetSessionExportStats:input_type -> clyde.v1.GetSessionExportStatsRequest
-	24, // 34: clyde.v1.ClydeService.ExportSession:input_type -> clyde.v1.ExportSessionRequest
-	26, // 35: clyde.v1.ClydeService.TriggerScan:input_type -> clyde.v1.TriggerScanRequest
-	28, // 36: clyde.v1.ClydeService.ReloadDaemon:input_type -> clyde.v1.ReloadDaemonRequest
-	30, // 37: clyde.v1.ClydeService.SubscribeRegistry:input_type -> clyde.v1.SubscribeRegistryRequest
-	32, // 38: clyde.v1.ClydeService.GetProviderStats:input_type -> clyde.v1.GetProviderStatsRequest
-	33, // 39: clyde.v1.ClydeService.SubscribeProviderStats:input_type -> clyde.v1.SubscribeProviderStatsRequest
-	37, // 40: clyde.v1.ClydeService.RenameSession:input_type -> clyde.v1.RenameSessionRequest
-	39, // 41: clyde.v1.ClydeService.DeleteSession:input_type -> clyde.v1.DeleteSessionRequest
-	41, // 42: clyde.v1.ClydeService.UpdateSessionMetadata:input_type -> clyde.v1.UpdateSessionMetadataRequest
-	44, // 43: clyde.v1.ClydeService.UpdateSessionSettings:input_type -> clyde.v1.UpdateSessionSettingsRequest
-	47, // 44: clyde.v1.ClydeService.UpdateGlobalSettings:input_type -> clyde.v1.UpdateGlobalSettingsRequest
-	51, // 45: clyde.v1.ClydeService.ListConfigControls:input_type -> clyde.v1.ListConfigControlsRequest
-	53, // 46: clyde.v1.ClydeService.UpdateConfigControl:input_type -> clyde.v1.UpdateConfigControlRequest
-	55, // 47: clyde.v1.ClydeService.StartRemoteSession:input_type -> clyde.v1.StartRemoteSessionRequest
-	58, // 48: clyde.v1.ClydeService.ListBridges:input_type -> clyde.v1.ListBridgesRequest
-	60, // 49: clyde.v1.ClydeService.TailTranscript:input_type -> clyde.v1.TailTranscriptRequest
-	62, // 50: clyde.v1.ClydeService.SendToSession:input_type -> clyde.v1.SendToSessionRequest
-	68, // 51: clyde.v1.ClydeService.CompactPreview:input_type -> clyde.v1.CompactRunRequest
-	68, // 52: clyde.v1.ClydeService.CompactApply:input_type -> clyde.v1.CompactRunRequest
-	74, // 53: clyde.v1.ClydeService.CompactUndo:input_type -> clyde.v1.CompactUndoRequest
-	64, // 54: clyde.v1.ClydeService.ProbeContextUsage:input_type -> clyde.v1.ProbeContextUsageRequest
-	7,  // 55: clyde.v1.ClydeService.AcquireSession:output_type -> clyde.v1.AcquireSessionResponse
-	9,  // 56: clyde.v1.ClydeService.ReleaseSession:output_type -> clyde.v1.ReleaseSessionResponse
-	11, // 57: clyde.v1.ClydeService.HookEvent:output_type -> clyde.v1.HookEventResponse
-	13, // 58: clyde.v1.ClydeService.ListActiveSessions:output_type -> clyde.v1.ListActiveSessionsResponse
-	17, // 59: clyde.v1.ClydeService.ListSessions:output_type -> clyde.v1.ListSessionsResponse
-	21, // 60: clyde.v1.ClydeService.GetSessionDetail:output_type -> clyde.v1.GetSessionDetailResponse
-	23, // 61: clyde.v1.ClydeService.GetSessionExportStats:output_type -> clyde.v1.GetSessionExportStatsResponse
-	25, // 62: clyde.v1.ClydeService.ExportSession:output_type -> clyde.v1.ExportSessionResponse
-	27, // 63: clyde.v1.ClydeService.TriggerScan:output_type -> clyde.v1.TriggerScanResponse
-	29, // 64: clyde.v1.ClydeService.ReloadDaemon:output_type -> clyde.v1.ReloadDaemonResponse
-	31, // 65: clyde.v1.ClydeService.SubscribeRegistry:output_type -> clyde.v1.SubscribeRegistryResponse
-	35, // 66: clyde.v1.ClydeService.GetProviderStats:output_type -> clyde.v1.GetProviderStatsResponse
-	36, // 67: clyde.v1.ClydeService.SubscribeProviderStats:output_type -> clyde.v1.ProviderStatsEvent
-	38, // 68: clyde.v1.ClydeService.RenameSession:output_type -> clyde.v1.RenameSessionResponse
-	40, // 69: clyde.v1.ClydeService.DeleteSession:output_type -> clyde.v1.DeleteSessionResponse
-	42, // 70: clyde.v1.ClydeService.UpdateSessionMetadata:output_type -> clyde.v1.UpdateSessionMetadataResponse
-	45, // 71: clyde.v1.ClydeService.UpdateSessionSettings:output_type -> clyde.v1.UpdateSessionSettingsResponse
-	48, // 72: clyde.v1.ClydeService.UpdateGlobalSettings:output_type -> clyde.v1.UpdateGlobalSettingsResponse
-	52, // 73: clyde.v1.ClydeService.ListConfigControls:output_type -> clyde.v1.ListConfigControlsResponse
-	54, // 74: clyde.v1.ClydeService.UpdateConfigControl:output_type -> clyde.v1.UpdateConfigControlResponse
-	56, // 75: clyde.v1.ClydeService.StartRemoteSession:output_type -> clyde.v1.StartRemoteSessionResponse
-	59, // 76: clyde.v1.ClydeService.ListBridges:output_type -> clyde.v1.ListBridgesResponse
-	61, // 77: clyde.v1.ClydeService.TailTranscript:output_type -> clyde.v1.TailTranscriptResponse
-	63, // 78: clyde.v1.ClydeService.SendToSession:output_type -> clyde.v1.SendToSessionResponse
-	73, // 79: clyde.v1.ClydeService.CompactPreview:output_type -> clyde.v1.CompactEvent
-	73, // 80: clyde.v1.ClydeService.CompactApply:output_type -> clyde.v1.CompactEvent
-	75, // 81: clyde.v1.ClydeService.CompactUndo:output_type -> clyde.v1.CompactUndoResponse
-	66, // 82: clyde.v1.ClydeService.ProbeContextUsage:output_type -> clyde.v1.ProbeContextUsageResponse
-	55, // [55:83] is the sub-list for method output_type
-	27, // [27:55] is the sub-list for method input_type
-	27, // [27:27] is the sub-list for extension type_name
-	27, // [27:27] is the sub-list for extension extendee
-	0,  // [0:27] is the sub-list for field type_name
+	16, // 1: clyde.v1.SessionHistoryBoundary.current:type_name -> clyde.v1.ProviderSessionIdentity
+	16, // 2: clyde.v1.SessionHistoryBoundary.previous:type_name -> clyde.v1.ProviderSessionIdentity
+	16, // 3: clyde.v1.LiveSessionBoundary.current:type_name -> clyde.v1.ProviderSessionIdentity
+	17, // 4: clyde.v1.ProviderRuntimeBoundary.history:type_name -> clyde.v1.SessionHistoryBoundary
+	18, // 5: clyde.v1.ProviderRuntimeBoundary.live:type_name -> clyde.v1.LiveSessionBoundary
+	61, // 6: clyde.v1.SessionSummary.bridge:type_name -> clyde.v1.Bridge
+	19, // 7: clyde.v1.SessionSummary.runtime:type_name -> clyde.v1.ProviderRuntimeBoundary
+	20, // 8: clyde.v1.ListSessionsResponse.sessions:type_name -> clyde.v1.SessionSummary
+	22, // 9: clyde.v1.GetSessionDetailResponse.recent_messages:type_name -> clyde.v1.DetailMessage
+	22, // 10: clyde.v1.GetSessionDetailResponse.all_messages:type_name -> clyde.v1.DetailMessage
+	23, // 11: clyde.v1.GetSessionDetailResponse.tools:type_name -> clyde.v1.ToolUse
+	19, // 12: clyde.v1.GetSessionDetailResponse.runtime:type_name -> clyde.v1.ProviderRuntimeBoundary
+	0,  // 13: clyde.v1.ExportSessionRequest.format:type_name -> clyde.v1.SessionExportFormat
+	1,  // 14: clyde.v1.ExportSessionRequest.whitespace_compression:type_name -> clyde.v1.SessionExportWhitespaceCompression
+	3,  // 15: clyde.v1.SubscribeRegistryResponse.kind:type_name -> clyde.v1.SubscribeRegistryResponse.Kind
+	20, // 16: clyde.v1.SubscribeRegistryResponse.session_summary:type_name -> clyde.v1.SessionSummary
+	38, // 17: clyde.v1.GetProviderStatsResponse.providers:type_name -> clyde.v1.ProviderStats
+	38, // 18: clyde.v1.ProviderStatsEvent.stats:type_name -> clyde.v1.ProviderStats
+	47, // 19: clyde.v1.UpdateSessionSettingsRequest.settings:type_name -> clyde.v1.Settings
+	50, // 20: clyde.v1.UpdateGlobalSettingsRequest.defaults:type_name -> clyde.v1.GlobalDefaults
+	2,  // 21: clyde.v1.ConfigControl.type:type_name -> clyde.v1.ConfigControlType
+	53, // 22: clyde.v1.ConfigControl.options:type_name -> clyde.v1.ConfigControlOption
+	54, // 23: clyde.v1.ListConfigControlsResponse.controls:type_name -> clyde.v1.ConfigControl
+	54, // 24: clyde.v1.UpdateConfigControlResponse.control:type_name -> clyde.v1.ConfigControl
+	4,  // 25: clyde.v1.StartRemoteSessionResponse.launch_state:type_name -> clyde.v1.StartRemoteSessionResponse.LaunchState
+	61, // 26: clyde.v1.ListBridgesResponse.bridges:type_name -> clyde.v1.Bridge
+	69, // 27: clyde.v1.ProbeContextUsageResponse.categories:type_name -> clyde.v1.ContextUsageCategory
+	71, // 28: clyde.v1.CompactRunRequest.strippers:type_name -> clyde.v1.CompactStrippers
+	5,  // 29: clyde.v1.CompactEvent.kind:type_name -> clyde.v1.CompactEvent.Kind
+	73, // 30: clyde.v1.CompactEvent.upfront:type_name -> clyde.v1.CompactUpfront
+	74, // 31: clyde.v1.CompactEvent.iteration:type_name -> clyde.v1.CompactIteration
+	76, // 32: clyde.v1.CompactEvent.final:type_name -> clyde.v1.CompactFinal
+	75, // 33: clyde.v1.CompactEvent.apply_mutation:type_name -> clyde.v1.CompactApplyMutation
+	6,  // 34: clyde.v1.ClydeService.AcquireSession:input_type -> clyde.v1.AcquireSessionRequest
+	8,  // 35: clyde.v1.ClydeService.ReleaseSession:input_type -> clyde.v1.ReleaseSessionRequest
+	10, // 36: clyde.v1.ClydeService.HookEvent:input_type -> clyde.v1.HookEventRequest
+	12, // 37: clyde.v1.ClydeService.ListActiveSessions:input_type -> clyde.v1.ListActiveSessionsRequest
+	15, // 38: clyde.v1.ClydeService.ListSessions:input_type -> clyde.v1.ListSessionsRequest
+	24, // 39: clyde.v1.ClydeService.GetSessionDetail:input_type -> clyde.v1.GetSessionDetailRequest
+	26, // 40: clyde.v1.ClydeService.GetSessionExportStats:input_type -> clyde.v1.GetSessionExportStatsRequest
+	28, // 41: clyde.v1.ClydeService.ExportSession:input_type -> clyde.v1.ExportSessionRequest
+	30, // 42: clyde.v1.ClydeService.TriggerScan:input_type -> clyde.v1.TriggerScanRequest
+	32, // 43: clyde.v1.ClydeService.ReloadDaemon:input_type -> clyde.v1.ReloadDaemonRequest
+	34, // 44: clyde.v1.ClydeService.SubscribeRegistry:input_type -> clyde.v1.SubscribeRegistryRequest
+	36, // 45: clyde.v1.ClydeService.GetProviderStats:input_type -> clyde.v1.GetProviderStatsRequest
+	37, // 46: clyde.v1.ClydeService.SubscribeProviderStats:input_type -> clyde.v1.SubscribeProviderStatsRequest
+	41, // 47: clyde.v1.ClydeService.RenameSession:input_type -> clyde.v1.RenameSessionRequest
+	43, // 48: clyde.v1.ClydeService.DeleteSession:input_type -> clyde.v1.DeleteSessionRequest
+	45, // 49: clyde.v1.ClydeService.UpdateSessionMetadata:input_type -> clyde.v1.UpdateSessionMetadataRequest
+	48, // 50: clyde.v1.ClydeService.UpdateSessionSettings:input_type -> clyde.v1.UpdateSessionSettingsRequest
+	51, // 51: clyde.v1.ClydeService.UpdateGlobalSettings:input_type -> clyde.v1.UpdateGlobalSettingsRequest
+	55, // 52: clyde.v1.ClydeService.ListConfigControls:input_type -> clyde.v1.ListConfigControlsRequest
+	57, // 53: clyde.v1.ClydeService.UpdateConfigControl:input_type -> clyde.v1.UpdateConfigControlRequest
+	59, // 54: clyde.v1.ClydeService.StartRemoteSession:input_type -> clyde.v1.StartRemoteSessionRequest
+	62, // 55: clyde.v1.ClydeService.ListBridges:input_type -> clyde.v1.ListBridgesRequest
+	64, // 56: clyde.v1.ClydeService.TailTranscript:input_type -> clyde.v1.TailTranscriptRequest
+	66, // 57: clyde.v1.ClydeService.SendToSession:input_type -> clyde.v1.SendToSessionRequest
+	72, // 58: clyde.v1.ClydeService.CompactPreview:input_type -> clyde.v1.CompactRunRequest
+	72, // 59: clyde.v1.ClydeService.CompactApply:input_type -> clyde.v1.CompactRunRequest
+	78, // 60: clyde.v1.ClydeService.CompactUndo:input_type -> clyde.v1.CompactUndoRequest
+	68, // 61: clyde.v1.ClydeService.ProbeContextUsage:input_type -> clyde.v1.ProbeContextUsageRequest
+	7,  // 62: clyde.v1.ClydeService.AcquireSession:output_type -> clyde.v1.AcquireSessionResponse
+	9,  // 63: clyde.v1.ClydeService.ReleaseSession:output_type -> clyde.v1.ReleaseSessionResponse
+	11, // 64: clyde.v1.ClydeService.HookEvent:output_type -> clyde.v1.HookEventResponse
+	13, // 65: clyde.v1.ClydeService.ListActiveSessions:output_type -> clyde.v1.ListActiveSessionsResponse
+	21, // 66: clyde.v1.ClydeService.ListSessions:output_type -> clyde.v1.ListSessionsResponse
+	25, // 67: clyde.v1.ClydeService.GetSessionDetail:output_type -> clyde.v1.GetSessionDetailResponse
+	27, // 68: clyde.v1.ClydeService.GetSessionExportStats:output_type -> clyde.v1.GetSessionExportStatsResponse
+	29, // 69: clyde.v1.ClydeService.ExportSession:output_type -> clyde.v1.ExportSessionResponse
+	31, // 70: clyde.v1.ClydeService.TriggerScan:output_type -> clyde.v1.TriggerScanResponse
+	33, // 71: clyde.v1.ClydeService.ReloadDaemon:output_type -> clyde.v1.ReloadDaemonResponse
+	35, // 72: clyde.v1.ClydeService.SubscribeRegistry:output_type -> clyde.v1.SubscribeRegistryResponse
+	39, // 73: clyde.v1.ClydeService.GetProviderStats:output_type -> clyde.v1.GetProviderStatsResponse
+	40, // 74: clyde.v1.ClydeService.SubscribeProviderStats:output_type -> clyde.v1.ProviderStatsEvent
+	42, // 75: clyde.v1.ClydeService.RenameSession:output_type -> clyde.v1.RenameSessionResponse
+	44, // 76: clyde.v1.ClydeService.DeleteSession:output_type -> clyde.v1.DeleteSessionResponse
+	46, // 77: clyde.v1.ClydeService.UpdateSessionMetadata:output_type -> clyde.v1.UpdateSessionMetadataResponse
+	49, // 78: clyde.v1.ClydeService.UpdateSessionSettings:output_type -> clyde.v1.UpdateSessionSettingsResponse
+	52, // 79: clyde.v1.ClydeService.UpdateGlobalSettings:output_type -> clyde.v1.UpdateGlobalSettingsResponse
+	56, // 80: clyde.v1.ClydeService.ListConfigControls:output_type -> clyde.v1.ListConfigControlsResponse
+	58, // 81: clyde.v1.ClydeService.UpdateConfigControl:output_type -> clyde.v1.UpdateConfigControlResponse
+	60, // 82: clyde.v1.ClydeService.StartRemoteSession:output_type -> clyde.v1.StartRemoteSessionResponse
+	63, // 83: clyde.v1.ClydeService.ListBridges:output_type -> clyde.v1.ListBridgesResponse
+	65, // 84: clyde.v1.ClydeService.TailTranscript:output_type -> clyde.v1.TailTranscriptResponse
+	67, // 85: clyde.v1.ClydeService.SendToSession:output_type -> clyde.v1.SendToSessionResponse
+	77, // 86: clyde.v1.ClydeService.CompactPreview:output_type -> clyde.v1.CompactEvent
+	77, // 87: clyde.v1.ClydeService.CompactApply:output_type -> clyde.v1.CompactEvent
+	79, // 88: clyde.v1.ClydeService.CompactUndo:output_type -> clyde.v1.CompactUndoResponse
+	70, // 89: clyde.v1.ClydeService.ProbeContextUsage:output_type -> clyde.v1.ProbeContextUsageResponse
+	62, // [62:90] is the sub-list for method output_type
+	34, // [34:62] is the sub-list for method input_type
+	34, // [34:34] is the sub-list for extension type_name
+	34, // [34:34] is the sub-list for extension extendee
+	0,  // [0:34] is the sub-list for field type_name
 }
 
 func init() { file_clyde_v1_daemon_proto_init() }
@@ -5549,7 +5947,7 @@ func file_clyde_v1_daemon_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_clyde_v1_daemon_proto_rawDesc), len(file_clyde_v1_daemon_proto_rawDesc)),
 			NumEnums:      6,
-			NumMessages:   70,
+			NumMessages:   74,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

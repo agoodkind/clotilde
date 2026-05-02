@@ -1,11 +1,11 @@
 // Package ui implements the Clyde terminal user interface.
 //
 // The panel renders three regions stacked top to bottom: a header
-// strip with the session name and bridge URL, a scrolling message
-// buffer fed by the daemon's TailTranscript stream, and a single line
-// input that posts user messages back via SendToSession. Bottom stick
-// scroll keeps the latest message visible while the user is at the
-// end; manual scrolling pauses the auto follow until the user hits
+// strip with the session name and optional live URL, a scrolling
+// message buffer fed by a daemon live-session stream, and a single
+// line input that posts user messages back via the daemon. Bottom
+// stick scroll keeps the latest message visible while the user is at
+// the end; manual scrolling pauses the auto follow until the user hits
 // End again.
 package ui
 
@@ -20,7 +20,7 @@ import (
 type SidecarPanel struct {
 	SessionName string
 	SessionID   string
-	BridgeURL   string
+	LiveURL     string
 	Buffer      []SidecarLine
 	BufferLimit int
 	Input       *TextInput
@@ -55,7 +55,7 @@ func NewSidecarPanel(name, sessionID, bridgeURL string) *SidecarPanel {
 	return &SidecarPanel{
 		SessionName: name,
 		SessionID:   sessionID,
-		BridgeURL:   bridgeURL,
+		LiveURL:     bridgeURL,
 		BufferLimit: 500,
 		Input:       in,
 		auto:        true,
@@ -95,8 +95,8 @@ func (p *SidecarPanel) drawHeader(scr tcell.Screen, r Rect) {
 	fillRow(scr, r.X, r.Y, r.W, StyleHeaderBar)
 	left := fmt.Sprintf(" sidecar: %s ", p.SessionName)
 	drawString(scr, r.X, r.Y, StyleHeaderBar.Bold(true), left, r.W)
-	if p.BridgeURL != "" {
-		bridge := "  bridge: " + p.BridgeURL
+	if p.LiveURL != "" {
+		bridge := "  url: " + p.LiveURL
 		x := r.X + runeCount(left)
 		drawString(scr, x, r.Y, StyleHeaderBar, bridge, r.W-(x-r.X))
 	}
