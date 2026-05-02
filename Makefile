@@ -185,31 +185,12 @@ mitm-launcher-vscode: build install
 
 mitm-launchers: mitm-launcher-codex-desktop mitm-launcher-claude-desktop mitm-launcher-vscode
 
-# wire-snapshot-check diffs every committed reference snapshot under
-# research/<upstream>/snapshots/latest/ against the live capture. When
-# reference-v2.toml exists it uses SnapshotV2; otherwise it keeps the
-# legacy v1 reference.toml path. Fails when any upstream has drifted.
-# Run this in CI after capturing fresh transcripts.
+# wire-snapshot-check diffs the current local capture store against the
+# user-local XDG baseline for each upstream. Baselines are created and
+# refreshed by the daemon-owned MITM flow, not by committed repo files.
 wire-snapshot-check: build
 	@for upstream in codex-cli codex-desktop claude-code claude-desktop; do \
-		snapshot_flags=""; \
-		live_ref_name="reference.toml"; \
-		ref="research/$$upstream/snapshots/latest/reference.toml"; \
-		if [ -f "research/$$upstream/snapshots/latest/reference-v2.toml" ]; then \
-			ref="research/$$upstream/snapshots/latest/reference-v2.toml"; \
-			snapshot_flags="--v2"; \
-			live_ref_name="reference-v2.toml"; \
-		fi; \
-		[ -f "$$ref" ] || continue; \
-		live="$$(ls -t ~/.local/state/clyde/mitm/$$upstream 2>/dev/null | head -1)"; \
-		if [ -z "$$live" ]; then \
-			echo "no live capture for $$upstream; skipping"; \
-			continue; \
-		fi; \
-		live_transcript="$$HOME/.local/state/clyde/mitm/$$upstream/$$live/capture.jsonl"; \
-		live_ref="$$HOME/.local/state/clyde/mitm/$$upstream/$$live/$$live_ref_name"; \
-		"$(CLYDE_DEV_RUN)" mitm snapshot $$snapshot_flags --upstream $$upstream --output-dir "$$HOME/.local/state/clyde/mitm/$$upstream/$$live" "$$live_transcript" >/dev/null && \
-		"$(CLYDE_DEV_RUN)" mitm diff "$$ref" "$$live_ref" || exit 1; \
+		"$(CLYDE_DEV_RUN)" mitm drift-check --upstream $$upstream || exit 1; \
 	done
 	@echo "✓ Wire snapshot parity clean"
 

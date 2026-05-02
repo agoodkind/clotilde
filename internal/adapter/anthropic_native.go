@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
+	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
@@ -54,10 +55,19 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
-	if model.Backend != BackendAnthropic && model.Backend != BackendClaude {
+	nativeClaudeModel := isNativeClaudeModelID(req.Model)
+	if !nativeClaudeModel && model.Backend != BackendAnthropic && model.Backend != BackendClaude {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "model does not resolve to the anthropic backend")
 		return
 	}
+	if nativeClaudeModel && model.Backend != BackendAnthropic && model.Backend != BackendClaude {
+		model = ResolvedModel{
+			Alias:       strings.TrimSpace(req.Model),
+			Backend:     BackendClaude,
+			ClaudeModel: strings.TrimSpace(req.Model),
+		}
+	}
+	req.Model = anthropicIngressWireModel(req.Model, model)
 
 	attrs := []slog.Attr{
 		slog.String("request_id", reqID),
@@ -102,6 +112,17 @@ func (s *Server) handleAnthropicCountTokens(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeAnthropicError(w, http.StatusNotImplemented, "not_supported_error", "/v1/messages/count_tokens is not implemented yet on the adapter Anthropic ingress")
+}
+
+func isNativeClaudeModelID(model string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "claude-")
+}
+
+func anthropicIngressWireModel(requested string, model ResolvedModel) string {
+	if isNativeClaudeModelID(requested) {
+		return anthropicbackend.StripContextSuffix(requested)
+	}
+	return anthropicbackend.StripContextSuffix(model.ClaudeModel)
 }
 
 func anthropicIngressResolvedModel(model ResolvedModel) adaptermodel.ResolvedModel {

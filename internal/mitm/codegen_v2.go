@@ -12,9 +12,9 @@ import (
 
 // GenerateWireFlavors writes wire_flavors_gen.go for the given v2
 // snapshot. Each captured flavor becomes a typed WireFlavor value the
-// adapter's request_builder can consume directly. The CI gate
-// (`make wire-snapshot-check`) ensures the file stays in sync with the
-// committed reference.
+// adapter's request_builder can consume directly. The local
+// `wire-snapshot-check` gate ensures the file stays in sync with the
+// current user-local baseline.
 //
 // Compared to v1's GenerateWireConstants, v2 emits:
 //   - one WireFlavor per observed caller flavor
@@ -101,10 +101,9 @@ type WireFlavor struct {
 
 `)
 
-	flavorVarNames := make([]string, 0, len(snap.Flavors))
-	for _, flavor := range snap.Flavors {
-		varName := flavorVarName(flavor.Slug)
-		flavorVarNames = append(flavorVarNames, varName)
+	flavorVarNames := uniqueFlavorVarNames(snap.Flavors)
+	for i, flavor := range snap.Flavors {
+		varName := flavorVarNames[i]
 		emitFlavorVar(&b, varName, flavor)
 	}
 
@@ -118,6 +117,21 @@ type WireFlavor struct {
 	b.WriteString("}\n")
 
 	return b.String()
+}
+
+func uniqueFlavorVarNames(flavors []FlavorShape) []string {
+	out := make([]string, 0, len(flavors))
+	seen := make(map[string]int, len(flavors))
+	for _, flavor := range flavors {
+		base := flavorVarName(flavor.Slug)
+		seen[base]++
+		if seen[base] == 1 {
+			out = append(out, base)
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s%d", base, seen[base]))
+	}
+	return out
 }
 
 func emitFlavorVar(b *strings.Builder, varName string, flavor FlavorShape) {

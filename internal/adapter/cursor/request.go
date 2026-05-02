@@ -16,6 +16,7 @@ type Request struct {
 	User            string
 	RequestID       string
 	ConversationID  string
+	GenerationID    string
 	WorkspacePath   string
 	NormalizedModel string
 	Metadata        map[string]json.RawMessage
@@ -46,10 +47,18 @@ type Request struct {
 // request without changing the underlying request payload.
 func TranslateRequest(req adapteropenai.ChatRequest) Request {
 	translated := Request{
-		OpenAI:          req,
-		User:            strings.TrimSpace(req.User),
-		RequestID:       metadataString(req.Metadata, "cursorRequestId"),
-		ConversationID:  metadataString(req.Metadata, "cursorConversationId"),
+		OpenAI:         req,
+		User:           strings.TrimSpace(req.User),
+		RequestID:      metadataString(req.Metadata, "cursorRequestId"),
+		ConversationID: metadataString(req.Metadata, "cursorConversationId"),
+		GenerationID: metadataString(req.Metadata,
+			"cursorGenerationId",
+			"cursor_generation_id",
+			"generationId",
+			"generation_id",
+			"requestId",
+			"request_id",
+		),
 		WorkspacePath:   workspacePath(req),
 		NormalizedModel: NormalizeModelAlias(req.Model),
 		Metadata:        metadataMap(req.Metadata),

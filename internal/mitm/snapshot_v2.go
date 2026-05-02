@@ -1,11 +1,8 @@
 package mitm
 
 import (
-	"bufio"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -19,6 +16,7 @@ import (
 type SnapshotV2Options struct {
 	UpstreamName    string
 	UpstreamVersion string
+	ProviderFilter  string
 	// MaxBodyDepth caps recursion when walking nested body fields.
 	// Default 3.
 	MaxBodyDepth int
@@ -61,7 +59,7 @@ func ExtractSnapshotV2(path string, opts SnapshotV2Options) (SnapshotV2, error) 
 	if opts.EnumThreshold <= 0 {
 		opts.EnumThreshold = defaultEnumThreshold
 	}
-	rawLines, records, err := readCaptureRecordsRaw(path)
+	rawLines, records, err := readCaptureRecordsRaw(path, opts.ProviderFilter)
 	if err != nil {
 		return SnapshotV2{}, err
 	}
@@ -98,41 +96,6 @@ func LoadSnapshotV2TOML(path string) (SnapshotV2, error) {
 		return SnapshotV2{}, err
 	}
 	return snap, nil
-}
-
-// readCaptureRecordsRaw returns both the typed CaptureRecord values
-// AND the original raw line bytes. The v2 extractor needs the raw
-// bodies (which the typed schema does not expose for HTTP records
-// in summary mode) to walk nested sub-shapes.
-func readCaptureRecordsRaw(path string) ([][]byte, []CaptureRecord, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-	var rawLines [][]byte
-	var records []CaptureRecord
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		var rec CaptureRecord
-		if err := json.Unmarshal(line, &rec); err != nil {
-			continue
-		}
-		// Copy line bytes since scanner reuses the buffer.
-		copied := make([]byte, len(line))
-		copy(copied, line)
-		rawLines = append(rawLines, copied)
-		records = append(records, rec)
-	}
-	if err := scanner.Err(); err != nil && !errors.Is(err, io.EOF) {
-		return nil, nil, err
-	}
-	return rawLines, records, nil
 }
 
 // rawRequest pairs a parsed JSON map of one captured request with
@@ -487,12 +450,12 @@ func newFieldAcc() *v2FieldAcc {
 	}
 }
 
-func (a *v2FieldAcc) observe(value any, depth int) {
+func (a *v2FieldAcc) observe(name string, value any, depth int) {
 	a.count++
 	kind := classifyKind(value)
 	a.kindCounts[kind]++
 	if a.sample == "" {
-		a.sample = sampleValue(value)
+		a.sample = sampleValue(name, value)
 	}
 	if depth <= 0 {
 		return
@@ -505,7 +468,7 @@ func (a *v2FieldAcc) observe(value any, depth int) {
 				child = newFieldAcc()
 				a.subAcc[k] = child
 			}
-			child.observe(sub, depth-1)
+			child.observe(k, sub, depth-1)
 		}
 	case []any:
 		for _, item := range v {
@@ -519,7 +482,7 @@ func (a *v2FieldAcc) observe(value any, depth int) {
 							child = newFieldAcc()
 							a.itemSubAcc[k] = child
 						}
-						child.observe(sub, depth-1)
+						child.observe(k, sub, depth-1)
 					}
 				}
 			}
@@ -558,6 +521,13 @@ func (a *v2FieldAcc) materialize(name string, totalRecords int) V2Field {
 }
 
 func walkBodyTopLevel(body any, dst map[string]*v2FieldAcc, maxDepth int) {
+	if raw, ok := body.(string); ok {
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+			return
+		}
+		body = parsed
+	}
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return
@@ -588,7 +558,7 @@ func walkBodyTopLevel(body any, dst map[string]*v2FieldAcc, maxDepth int) {
 			acc = newFieldAcc()
 			dst[name] = acc
 		}
-		acc.observe(value, maxDepth-1)
+		acc.observe(name, value, maxDepth-1)
 	}
 }
 
@@ -610,7 +580,10 @@ func classifyKind(v any) V2FieldKind {
 	return V2FieldKindUnknown
 }
 
-func sampleValue(v any) string {
+func sampleValue(fieldName string, v any) string {
+	if shouldRedactBodySample(fieldName) {
+		return "<redacted>"
+	}
 	switch x := v.(type) {
 	case string:
 		if len(x) > 200 {
@@ -624,6 +597,16 @@ func sampleValue(v any) string {
 	default:
 		return fmt.Sprintf("%v", v)
 	}
+}
+
+func shouldRedactBodySample(fieldName string) bool {
+	name := strings.ToLower(fieldName)
+	for _, marker := range []string{"api_key", "authorization", "password", "secret", "token", "account_uuid", "device_id", "session_id", "user_id"} {
+		if strings.Contains(name, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func dominantKind(counts map[V2FieldKind]int) V2FieldKind {

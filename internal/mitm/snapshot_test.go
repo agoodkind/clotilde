@@ -136,6 +136,52 @@ func TestSnapshotTOMLRoundTrip(t *testing.T) {
 	}
 }
 
+func TestExtractSnapshotFiltersByProvider(t *testing.T) {
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, "capture.jsonl")
+	mustWriteLines(t, transcript, []map[string]any{
+		{
+			"provider": "claude",
+			"kind":     "http_request",
+			"t":        1700000000,
+			"url":      "https://api.anthropic.com/v1/messages",
+		},
+		{
+			"provider": "codex",
+			"kind":     "ws_start",
+			"t":        1700000001,
+			"url":      "wss://chatgpt.com/backend-api/codex/responses",
+			"request_headers": map[string]string{
+				"originator":  "codex_exec",
+				"openai-beta": "responses_websockets=2026-02-06",
+			},
+		},
+		{
+			"provider":    "codex",
+			"kind":        "ws_msg",
+			"t":           1700000002,
+			"url":         "wss://chatgpt.com/backend-api/codex/responses",
+			"from_client": true,
+			"text":        `{"type":"response.create","model":"gpt-5.4","input":[]}`,
+		},
+	})
+
+	snap, err := ExtractSnapshot(transcript, SnapshotOptions{
+		UpstreamName:    "codex-cli",
+		UpstreamVersion: "test-fixture",
+		ProviderFilter:  "codex",
+	})
+	if err != nil {
+		t.Fatalf("ExtractSnapshot: %v", err)
+	}
+	if snap.Upstream.Name != "codex-cli" {
+		t.Fatalf("name=%q want codex-cli", snap.Upstream.Name)
+	}
+	if snap.Constants.Originator != "codex_exec" {
+		t.Fatalf("originator=%q want codex_exec", snap.Constants.Originator)
+	}
+}
+
 func mustWriteLines(t *testing.T, path string, records []map[string]any) {
 	t.Helper()
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)

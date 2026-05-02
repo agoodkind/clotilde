@@ -44,4 +44,11 @@ type Result struct {
 	// UpstreamResponseID is the provider-native response id when the
 	// upstream exposes one. It is logged for cross-layer correlation.
 	UpstreamResponseID string
+	// ToolCallCount is the number of assistant tool calls emitted by
+	// the provider in this response. It lets the dispatcher distinguish
+	// plain text stops from tool-call turns during finalization.
+	ToolCallCount int
+	// HasSubagentToolCall reports whether this response emitted a
+	// Cursor subagent/spawn_agent tool call.
+	HasSubagentToolCall bool
 }

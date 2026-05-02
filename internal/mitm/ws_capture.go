@@ -36,7 +36,7 @@ func isWebsocketUpgrade(r *http.Request) bool {
 //
 // On error at any stage we close both ends and emit a ws_end record
 // with the error message in the close field.
-func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, upstream string) {
+func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider string, upstream string) {
 	cfg := p.config()
 
 	// Build the upstream URL in ws scheme.
@@ -98,6 +98,7 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, upstream
 	corr := correlation.FromHTTPHeader(r.Header, r.Header.Get(correlation.HeaderRequestID))
 
 	startEvent := map[string]any{
+		"provider":         provider,
 		"kind":             "ws_start",
 		"t":                time.Now().Unix(),
 		"url":              upstreamURL,
@@ -143,6 +144,7 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, upstream
 				text = string(payload)
 			}
 			ev := map[string]any{
+				"provider":    provider,
 				"kind":        "ws_msg",
 				"t":           time.Now().Unix(),
 				"url":         upstreamURL,
@@ -168,6 +170,7 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, upstream
 	<-closeChan
 
 	endEvent := map[string]any{
+		"provider": provider,
 		"kind":     "ws_end",
 		"t":        time.Now().Unix(),
 		"url":      upstreamURL,
@@ -180,6 +183,7 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, upstream
 	if err := appendCapture(captureDir, endEvent); err != nil {
 		p.log.Warn("mitm.ws.capture_end_failed", "err", err)
 	}
+	queueBaselineRefresh(cfg, provider, p.log)
 	p.log.Info("mitm.ws.closed", "url", upstreamURL, "messages", messageCount)
 }
 

@@ -31,6 +31,8 @@ type RequestEvent struct {
 	CacheReadTokens            int
 	CacheCreationTokens        int
 	DerivedCacheCreationTokens int
+	ToolCallCount              int
+	HasSubagentToolCall        bool
 	CostMicrocents             int64
 	DurationMs                 int64
 	Err                        string
@@ -288,6 +290,8 @@ func LogTerminal(log *slog.Logger, ctx context.Context, sink RequestEventSink, e
 		slog.Int("cache_read_tokens", ev.CacheReadTokens),
 		slog.Int("cache_creation_tokens", ev.CacheCreationTokens),
 		slog.Int("derived_cache_creation_tokens", ev.DerivedCacheCreationTokens),
+		slog.Int("tool_call_count", ev.ToolCallCount),
+		slog.Bool("has_subagent_tool_call", ev.HasSubagentToolCall),
 		slog.Int64("cost_microcents", ev.CostMicrocents),
 		slog.Int64("duration_ms", ev.DurationMs),
 		slog.String("error", ev.Err),

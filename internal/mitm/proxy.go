@@ -97,7 +97,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if isWebsocketUpgrade(r) {
-		p.handleWebsocket(w, r, upstream)
+		p.handleWebsocket(w, r, provider, upstream)
 		return
 	}
 
@@ -205,6 +205,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	if err := appendCapture(cfg.CaptureDir, event); err != nil {
 		p.log.Warn("mitm.capture.append_failed", "capture_dir", cfg.CaptureDir, "err", err)
 	}
+	queueBaselineRefresh(cfg, provider, p.log)
 }
 
 func classifyRoute(path string) (provider string, upstream string) {

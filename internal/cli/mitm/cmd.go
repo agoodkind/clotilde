@@ -61,7 +61,7 @@ func newCodegenCmd(f *cli.Factory) *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "codegen <reference.toml>",
-		Short: "Generate wire_constants_gen.go (v1) or wire_flavors_gen.go (v2) from a committed reference snapshot",
+		Short: "Generate wire_constants_gen.go (v1) or wire_flavors_gen.go (v2) from a baseline snapshot",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Auto-detect v2 by sniffing the file. v2 has a top-level
@@ -74,7 +74,7 @@ func newCodegenCmd(f *cli.Factory) *cobra.Command {
 				out, err := mitmpkg.GenerateWireFlavors(snap, mitmpkg.CodegenOptions{
 					PackageName: pkg,
 					OutputDir:   outputDir,
-					UpstreamRef: args[0],
+					UpstreamRef: mitmpkg.BaselineSourceLabel(args[0]),
 				})
 				if err != nil {
 					return err
@@ -89,7 +89,7 @@ func newCodegenCmd(f *cli.Factory) *cobra.Command {
 			out, err := mitmpkg.GenerateWireConstants(snap, mitmpkg.CodegenOptions{
 				PackageName: pkg,
 				OutputDir:   outputDir,
-				UpstreamRef: args[0],
+				UpstreamRef: mitmpkg.BaselineSourceLabel(args[0]),
 			})
 			if err != nil {
 				return err
@@ -104,9 +104,8 @@ func newCodegenCmd(f *cli.Factory) *cobra.Command {
 	return cmd
 }
 
-// newDriftCheckCmd performs a single capture/snapshot/diff cycle for
-// one upstream and exits non-zero on divergence. Suitable for CI or
-// for a scheduled cron task to surface upstream wire drift.
+// newDriftCheckCmd compares the current local capture store against
+// the rolling user-local baseline and exits non-zero on divergence.
 func newDriftCheckCmd(f *cli.Factory) *cobra.Command {
 	var (
 		upstream      string
@@ -121,10 +120,11 @@ func newDriftCheckCmd(f *cli.Factory) *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "drift-check",
-		Short: "Capture, snapshot, diff, append to drift log, exit non-zero on drift",
-		Long: `Capture one upstream session, extract a snapshot, diff against
-the committed reference, append the structured outcome to the drift
-log, and exit non-zero on divergence. Suitable for cron / CI.
+		Short: "Diff the current local capture store against the local baseline",
+		Long: `Read the current local MITM capture store, extract a candidate
+snapshot, diff against the user-local baseline, append the structured
+outcome to the drift log, and exit non-zero on divergence. Suitable
+for cron / CI.
 
 Auto-detects v1 vs v2 reference shape. Body-key and User-Agent
 filters apply only to v2.`,
@@ -137,6 +137,13 @@ filters apply only to v2.`,
 			}
 			if driftLogPath == "" {
 				driftLogPath = defaultDriftLogPath(upstream)
+			}
+			if referencePath == "" {
+				var err error
+				referencePath, err = mitmpkg.FindBaselineReference(mitmpkg.DefaultBaselineRoot(), upstream)
+				if err != nil {
+					return err
+				}
 			}
 			ctx, cancel := context.WithCancel(cmd.Context())
 			defer cancel()
@@ -163,7 +170,7 @@ filters apply only to v2.`,
 		},
 	}
 	cmd.Flags().StringVar(&upstream, "upstream", "", "upstream name")
-	cmd.Flags().StringVar(&referencePath, "reference", "", "path to the committed reference.toml")
+	cmd.Flags().StringVar(&referencePath, "reference", "", "path to a baseline reference.toml (default: XDG_STATE_HOME/clyde/mitm-baselines/<upstream>/reference-v2.toml or reference.toml)")
 	cmd.Flags().StringVar(&captureRoot, "capture-dir", "", "root directory for transcripts")
 	cmd.Flags().StringVar(&caCert, "ca-cert", "", "path to mitmproxy CA cert")
 	cmd.Flags().StringVar(&driftLogPath, "drift-log", "", "path for the structured drift JSONL log (default: ~/.local/state/clyde/mitm-drift/<upstream>.jsonl)")
@@ -172,7 +179,6 @@ filters apply only to v2.`,
 	cmd.Flags().StringSliceVar(&requireKeys, "require-body-key", nil, "v2 only: require these top-level body keys")
 	cmd.Flags().StringSliceVar(&forbidKeys, "forbid-body-key", nil, "v2 only: drop records that contain any of these keys")
 	_ = cmd.MarkFlagRequired("upstream")
-	_ = cmd.MarkFlagRequired("reference")
 	return cmd
 }
 
@@ -306,19 +312,12 @@ func newSnapshotCmd(f *cli.Factory) *cobra.Command {
 			if outputDir == "" {
 				outputDir = filepath.Dir(args[0])
 			}
+			path, err := writeSnapshot(args[0], outputDir, upstream, version, useV2, includeUA, excludeUA, requireKeys, forbidKeys)
+			if err != nil {
+				return err
+			}
 			if useV2 {
-				snap, err := mitmpkg.ExtractSnapshotV2(args[0], mitmpkg.SnapshotV2Options{
-					UpstreamName:               upstream,
-					UpstreamVersion:            version,
-					IncludeUserAgentSubstrings: includeUA,
-					ExcludeUserAgentSubstrings: excludeUA,
-					RequireBodyKeys:            requireKeys,
-					ForbidBodyKeys:             forbidKeys,
-				})
-				if err != nil {
-					return err
-				}
-				path, err := mitmpkg.WriteSnapshotV2TOML(snap, outputDir)
+				snap, err := mitmpkg.LoadSnapshotV2TOML(path)
 				if err != nil {
 					return err
 				}
@@ -329,17 +328,6 @@ func newSnapshotCmd(f *cli.Factory) *cobra.Command {
 						fl.RecordCount, len(fl.Headers), len(fl.Body.Fields)))
 				}
 				return nil
-			}
-			snap, err := mitmpkg.ExtractSnapshot(args[0], mitmpkg.SnapshotOptions{
-				UpstreamName:    upstream,
-				UpstreamVersion: version,
-			})
-			if err != nil {
-				return err
-			}
-			path, err := mitmpkg.WriteSnapshotTOML(snap, outputDir)
-			if err != nil {
-				return err
 			}
 			fmt.Fprintln(out(f), "reference:", path)
 			return nil
@@ -357,10 +345,47 @@ func newSnapshotCmd(f *cli.Factory) *cobra.Command {
 	return cmd
 }
 
+func writeSnapshot(
+	transcriptPath string,
+	outputDir string,
+	upstream string,
+	version string,
+	useV2 bool,
+	includeUA []string,
+	excludeUA []string,
+	requireKeys []string,
+	forbidKeys []string,
+) (string, error) {
+	if useV2 {
+		snap, err := mitmpkg.ExtractSnapshotV2(transcriptPath, mitmpkg.SnapshotV2Options{
+			UpstreamName:               upstream,
+			UpstreamVersion:            version,
+			ProviderFilter:             mitmpkg.ProviderForUpstream(upstream),
+			IncludeUserAgentSubstrings: includeUA,
+			ExcludeUserAgentSubstrings: excludeUA,
+			RequireBodyKeys:            requireKeys,
+			ForbidBodyKeys:             forbidKeys,
+		})
+		if err != nil {
+			return "", err
+		}
+		return mitmpkg.WriteSnapshotV2TOML(snap, outputDir)
+	}
+	snap, err := mitmpkg.ExtractSnapshot(transcriptPath, mitmpkg.SnapshotOptions{
+		UpstreamName:    upstream,
+		UpstreamVersion: version,
+		ProviderFilter:  mitmpkg.ProviderForUpstream(upstream),
+	})
+	if err != nil {
+		return "", err
+	}
+	return mitmpkg.WriteSnapshotTOML(snap, outputDir)
+}
+
 func newDiffCmd(f *cli.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "diff <reference.toml> <candidate.toml>",
-		Short: "Diff a candidate snapshot against a committed reference",
+		Short: "Diff a candidate snapshot against a local baseline or explicit reference",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if isV2Snapshot(args[0]) {

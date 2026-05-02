@@ -2,6 +2,7 @@ package codex
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -51,6 +52,25 @@ func TestParseSSEMapsIncompleteResponseToLengthFinishReason(t *testing.T) {
 	}
 	if res.FinishReason != "length" {
 		t.Fatalf("finish_reason=%q want length", res.FinishReason)
+	}
+}
+
+func TestParseSSEMapsContextWindowFailureToTypedError(t *testing.T) {
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.failed",
+		`data: {"type":"response.failed","error":{"message":"Your input exceeds the context window of this model. Please adjust your input and try again."}}`,
+		"",
+	}, "\n") + "\n")
+	_, _, err := collectSSE(stream)
+	if err == nil {
+		t.Fatalf("ParseSSE error = nil, want context window error")
+	}
+	var contextErr *ContextWindowError
+	if !errors.As(err, &contextErr) {
+		t.Fatalf("ParseSSE error type = %T, want ContextWindowError", err)
+	}
+	if contextErr.Error() != "Your input exceeds the context window of this model. Please adjust your input and try again." {
+		t.Fatalf("context error = %q", contextErr.Error())
 	}
 }
 
@@ -164,6 +184,33 @@ func TestParseSSEEmitsToolCallDeltas(t *testing.T) {
 	}
 	if deltas[1].Function.Arguments != `{"path":"out.md"}` {
 		t.Fatalf("second args=%q", deltas[1].Function.Arguments)
+	}
+}
+
+func TestParseSSETracksSubagentToolCalls(t *testing.T) {
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.output_item.added",
+		`data: {"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"spawn_agent","arguments":""}}`,
+		"",
+		"event: response.function_call_arguments.delta",
+		`data: {"item_id":"fc_1","delta":"{\"prompt\":\"inspect\",\"run_in_background\":true}"}`,
+		"",
+		"event: response.completed",
+		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","status":"completed","usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}},"sequence_number":10}`,
+		"",
+	}, "\n") + "\n")
+	_, res, err := parseSSEChunksForTest(stream)
+	if err != nil {
+		t.Fatalf("ParseSSE: %v", err)
+	}
+	if res.FinishReason != "tool_calls" {
+		t.Fatalf("finish_reason=%q want tool_calls", res.FinishReason)
+	}
+	if res.ToolCallCount != 1 {
+		t.Fatalf("tool_call_count=%d want 1", res.ToolCallCount)
+	}
+	if !res.HasSubagentToolCall {
+		t.Fatalf("HasSubagentToolCall=false want true")
 	}
 }
 

@@ -90,6 +90,10 @@ func BoundaryLogAttrs(req Request, rawModel string, toolNames []string) []slog.A
 	if req.RequestID != "" {
 		attrs = append(attrs, slog.String("cursor_request_id", req.RequestID))
 	}
+	if req.GenerationID != "" {
+		attrs = append(attrs, slog.String("cursor_generation_id", req.GenerationID))
+	}
+	attrs = append(attrs, slog.Bool("cursor_generation_id_present", req.GenerationID != ""))
 
 	return attrs
 }

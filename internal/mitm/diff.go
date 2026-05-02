@@ -6,9 +6,10 @@ import (
 )
 
 // DiffSnapshots compares two snapshots for parity. The first is the
-// committed reference; the second is the just-captured (or just-built)
-// snapshot to validate. Use this for the "current capture vs
-// reference" path. The Mismatches list calls out fields that
+// local baseline or explicit reference; the second is the
+// just-captured (or just-built) snapshot to validate. Use this for
+// the "current capture vs baseline" path. The Mismatches list calls
+// out fields that
 // disagree, Missing flags constants present in the reference but
 // absent in the candidate, and Extra flags fields the candidate
 // adds.

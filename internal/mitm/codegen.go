@@ -22,8 +22,8 @@ type CodegenOptions struct {
 
 // GenerateWireConstants writes wire_constants_gen.go for the given
 // snapshot. The file declares constants the adapter's request_builder
-// can import directly. CI gate (`make wire-snapshot-check`) ensures
-// the file stays in sync with the committed reference.
+// can import directly. The local `wire-snapshot-check` gate ensures
+// the file stays in sync with the current user-local baseline.
 //
 // The generated file is gofmt'd before write so reviewing the diff
 // surfaces real semantic changes rather than formatting churn.

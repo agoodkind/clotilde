@@ -52,6 +52,7 @@ func TestAttrsIncludesCorrelationFields(t *testing.T) {
 		RequestID:            "req-3",
 		CursorRequestID:      "cursor-req",
 		CursorConversationID: "cursor-conv",
+		CursorGenerationID:   "cursor-gen",
 		UpstreamRequestID:    "upstream-req",
 		UpstreamResponseID:   "upstream-resp",
 	}
@@ -63,6 +64,7 @@ func TestAttrsIncludesCorrelationFields(t *testing.T) {
 		"request_id",
 		"cursor_request_id",
 		"cursor_conversation_id",
+		"cursor_generation_id",
 		"upstream_request_id",
 		"upstream_response_id",
 	} {

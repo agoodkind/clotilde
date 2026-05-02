@@ -192,12 +192,10 @@ func oauthLoop() daemonsvc.ExtraLoop {
 	}
 }
 
-// driftLoop returns a daemonsvc.ExtraLoop that periodically runs
-// mitm.RunDriftCheck for each configured upstream. Disabled by
-// default; enable via [mitm.drift] enabled = true in the global
-// config. Electron upstreams (claude-desktop, codex-desktop, vscode)
-// are skipped automatically because RunDriftCheck cannot drive an
-// interactive UI headlessly.
+// driftLoop returns a daemonsvc.ExtraLoop that periodically refreshes
+// local MITM baselines from the daemon-owned capture store. Disabled
+// by default; enable via [mitm.drift] enabled = true in the global
+// config.
 func driftLoop() daemonsvc.ExtraLoop {
 	return func(log *slog.Logger) func() {
 		cfg, err := config.LoadGlobalOrDefault()
@@ -232,13 +230,13 @@ func driftLoop() daemonsvc.ExtraLoop {
 		go func() {
 			ticker := time.NewTicker(interval)
 			defer ticker.Stop()
-			runDriftTick(ctx, log, dcfg, upstreams)
+			runDriftTick(ctx, log, cfg.MITM, dcfg, upstreams)
 			for {
 				select {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					runDriftTick(ctx, log, dcfg, upstreams)
+					runDriftTick(ctx, log, cfg.MITM, dcfg, upstreams)
 				}
 			}
 		}()
@@ -261,6 +259,7 @@ type driftTickSummary struct {
 func runDriftTick(
 	ctx context.Context,
 	log *slog.Logger,
+	mcfg config.MITMConfig,
 	dcfg config.MITMDriftConfig,
 	upstreams []string,
 ) {
@@ -270,21 +269,16 @@ func runDriftTick(
 	}
 	tickStarted := time.Now()
 	summary := driftTickSummary{}
+	captureRoot := strings.TrimSpace(dcfg.CaptureRoot)
+	if captureRoot == "" {
+		captureRoot = strings.TrimSpace(mcfg.CaptureDir)
+	}
 	for _, upstream := range upstreams {
 		entry := dcfg.Upstreams[upstream]
-		if strings.TrimSpace(entry.Reference) == "" {
-			log.LogAttrs(ctx, slog.LevelWarn, "mitm.drift.upstream_skipped_no_reference",
-				slog.String("component", "mitm-drift"),
-				slog.String("upstream", upstream),
-			)
-			summary.skipped = append(summary.skipped, upstream)
-			continue
-		}
-		outcome, err := mitm.RunDriftCheck(ctx, mitm.DriftCheckOptions{
+		outcome, err := mitm.RefreshBaseline(ctx, mitm.BaselineRefreshOptions{
 			Upstream:        upstream,
+			CaptureRoot:     captureRoot,
 			Reference:       entry.Reference,
-			CaptureRoot:     dcfg.CaptureRoot,
-			CACertPath:      dcfg.CACertPath,
 			DriftLogPath:    filepath.Join(logDir, upstream+".jsonl"),
 			IncludeUA:       entry.IncludeUA,
 			ExcludeUA:       entry.ExcludeUA,

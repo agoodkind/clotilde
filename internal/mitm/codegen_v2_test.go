@@ -54,6 +54,17 @@ func TestGenerateWireFlavorsEmitsTypedFlavors(t *testing.T) {
 					{Name: "anthropic-beta", Classification: V2HeaderClassConstant, Presence: V2HeaderPresenceRequired, ObservedValues: []string{"oauth-2025-04-20"}, OccurrenceRate: 1.0},
 				},
 			},
+			{
+				Slug:        "claude-code-interactive-deadbeef",
+				RecordCount: 1,
+				Signature: V2Signature{
+					UserAgent: "claude-cli/2.1.123 (external, sdk-cli)",
+					BodyKeys:  []string{"messages", "model"},
+				},
+				Headers: []V2Header{
+					{Name: "user-agent", Classification: V2HeaderClassConstant, Presence: V2HeaderPresenceRequired, ObservedValues: []string{"claude-cli/2.1.123 (external, sdk-cli)"}, OccurrenceRate: 1.0},
+				},
+			},
 		},
 	}
 
@@ -79,6 +90,7 @@ func TestGenerateWireFlavorsEmitsTypedFlavors(t *testing.T) {
 		"type WireHeader struct",
 		"type WireFlavor struct",
 		"WireFlavorClaudeCodeInteractive",
+		"WireFlavorClaudeCodeInteractive2",
 		"WireFlavorClaudeCodeProbe",
 		"var WireFlavors = []WireFlavor{",
 		`"claude-cli/2.1.121 (external, cli)"`,

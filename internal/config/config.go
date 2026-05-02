@@ -686,12 +686,11 @@ type MITMConfig struct {
 	Drift          MITMDriftConfig `json:"drift,omitzero" toml:"drift,omitempty"`
 }
 
-// MITMDriftConfig configures the daemon-driven drift watchdog. When
-// Enabled, the daemon spawns a goroutine that runs drift-check
-// against every entry in Upstreams every Interval. Each upstream
-// captures one fresh transcript through the launch profile, snapshots
-// it, diffs it against Reference, and appends a structured outcome
-// to per-upstream JSONL logs under DriftLogDir.
+// MITMDriftConfig configures daemon-owned baseline refresh and drift
+// reporting. When Enabled, the daemon periodically reads the current
+// local capture store, refreshes each upstream baseline, and appends
+// drift outcomes to per-upstream JSONL logs under DriftLogDir before
+// accepting a changed baseline.
 type MITMDriftConfig struct {
 	Enabled     bool                            `json:"enabled,omitempty" toml:"enabled,omitempty"`
 	Interval    time.Duration                   `json:"interval,omitempty" toml:"interval,omitempty"`
@@ -701,9 +700,10 @@ type MITMDriftConfig struct {
 	Upstreams   map[string]MITMDriftUpstreamCfg `json:"upstreams,omitempty" toml:"upstreams,omitempty"`
 }
 
-// MITMDriftUpstreamCfg configures one upstream's drift run. Reference
-// is required; the rest are optional filters that match the
-// snapshot/diff CLI flags.
+// MITMDriftUpstreamCfg configures one upstream's daemon-owned baseline
+// refresh. Reference is optional; when empty the daemon uses the
+// default XDG baseline path for the upstream. The remaining fields
+// match the snapshot/diff CLI filters.
 type MITMDriftUpstreamCfg struct {
 	Reference       string   `json:"reference" toml:"reference"`
 	IncludeUA       []string `json:"includeUa,omitempty" toml:"include_ua,omitempty"`

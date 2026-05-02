@@ -80,7 +80,7 @@ func (p *providerStreamWriter) finalizeStream(result adapterprovider.Result, inc
 	if err := p.Flush(); err != nil {
 		return err
 	}
-	finishReason := normalizedProviderFinishReason(result.FinishReason)
+	finishReason := normalizedProviderFinishReason(result)
 	finishChunk := adapteropenai.StreamChunk{
 		ID:      p.reqID,
 		Object:  "chat.completion.chunk",
@@ -111,6 +111,20 @@ func (p *providerStreamWriter) finalizeStream(result adapterprovider.Result, inc
 		}); err != nil {
 			return err
 		}
+	}
+	return p.sse.WriteStreamDone()
+}
+
+func (p *providerStreamWriter) writeStreamError(kind, message string) error {
+	return p.writeStreamErrorBody(adapteropenai.ErrorBody{Message: message, Type: kind, Code: kind})
+}
+
+func (p *providerStreamWriter) writeStreamErrorBody(body adapteropenai.ErrorBody) error {
+	if p == nil || p.sse == nil {
+		return nil
+	}
+	if err := p.sse.EmitStreamError(body); err != nil {
+		return err
 	}
 	return p.sse.WriteStreamDone()
 }
@@ -154,8 +168,11 @@ func (p *providerStreamWriter) createdUnix() int64 {
 	return 0
 }
 
-func normalizedProviderFinishReason(finishReason string) string {
-	finishReason = strings.TrimSpace(finishReason)
+func normalizedProviderFinishReason(result adapterprovider.Result) string {
+	finishReason := strings.TrimSpace(result.FinishReason)
+	if result.ToolCallCount > 0 && finishReason != "length" && finishReason != "content_filter" {
+		return "tool_calls"
+	}
 	if finishReason == "" {
 		return defaultProviderFinishReason
 	}

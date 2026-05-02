@@ -67,6 +67,16 @@ func (s *Server) dispatchAnthropicProviderStream(
 	}
 	_, runErr := s.anthropicProvider.Execute(ctx, resolvedReq, streamWriter)
 	if runErr != nil {
+		if streamWriter.headersWritten {
+			if err := streamWriter.writeStreamError("upstream_error", runErr.Error()); err != nil {
+				s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_write_failed",
+					slog.String("backend", "anthropic"),
+					slog.String("request_id", reqID),
+					slog.Any("err", err),
+				)
+			}
+			return nil
+		}
 		writeAnthropicProviderError(w, runErr)
 		return nil
 	}

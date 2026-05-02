@@ -1,11 +1,8 @@
 package mitm
 
 import (
-	"bufio"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -21,13 +18,14 @@ import (
 type SnapshotOptions struct {
 	UpstreamName    string
 	UpstreamVersion string
+	ProviderFilter  string
 }
 
 // ExtractSnapshot reads a JSONL transcript at path and returns the
 // typed Snapshot summarizing its wire shape. Returns an error when
 // the file is unreadable or contains no ws_start records.
 func ExtractSnapshot(path string, opts SnapshotOptions) (Snapshot, error) {
-	records, err := readCaptureRecords(path)
+	records, err := readCaptureRecordsFiltered(path, opts.ProviderFilter)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -64,35 +62,9 @@ func LoadSnapshotTOML(path string) (Snapshot, error) {
 	return snap, nil
 }
 
-// readCaptureRecords parses the JSONL file at path into typed
-// CaptureRecord values. Lines that fail to parse are skipped with a
-// best-effort policy: capture files written by mitmproxy or the
-// dump.py addon may carry trailing blank lines or partial records
-// when interrupted. We do not error on a partial trailer.
-func readCaptureRecords(path string) ([]CaptureRecord, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-	var out []CaptureRecord
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		var rec CaptureRecord
-		if err := json.Unmarshal(line, &rec); err != nil {
-			continue
-		}
-		out = append(out, rec)
-	}
-	if err := scanner.Err(); err != nil && !errors.Is(err, io.EOF) {
-		return nil, err
-	}
-	return out, nil
+func readCaptureRecordsFiltered(path string, providerFilter string) ([]CaptureRecord, error) {
+	_, records, err := readCaptureRecordsRaw(path, providerFilter)
+	return records, err
 }
 
 func buildSnapshot(records []CaptureRecord, opts SnapshotOptions) (Snapshot, error) {

@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -64,6 +65,7 @@ func (s *Server) dispatchCodexProviderStream(
 
 	result, runErr := s.codexProvider.Execute(ctx, resolvedReq, writer)
 	if runErr != nil {
+		status, errorBody := codexProviderErrorResponse(runErr)
 		adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
 			Stage:      adapterruntime.RequestStageFailed,
 			Provider:   "codex_direct",
@@ -75,7 +77,17 @@ func (s *Server) dispatchCodexProviderStream(
 			DurationMs: time.Since(started).Milliseconds(),
 			Err:        runErr.Error(),
 		})
-		writeError(w, http.StatusBadGateway, "upstream_error", runErr.Error())
+		if writer.headersWritten {
+			if err := writer.writeStreamErrorBody(errorBody); err != nil {
+				s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_write_failed",
+					slog.String("backend", "codex"),
+					slog.String("request_id", reqID),
+					slog.Any("err", err),
+				)
+			}
+			return
+		}
+		writeJSON(w, status, ErrorResponse{Error: errorBody})
 		return
 	}
 	corr := correlation.FromContext(ctx).WithUpstreamResponseID(result.UpstreamResponseID)
@@ -85,7 +97,7 @@ func (s *Server) dispatchCodexProviderStream(
 		usage.MaxTokens = model.Context
 	}
 	result.Usage = usage
-	finishReason := normalizedProviderFinishReason(result.FinishReason)
+	finishReason := normalizedProviderFinishReason(result)
 	if err := writer.finalizeStream(result, req.StreamOptions != nil && req.StreamOptions.IncludeUsage); err != nil {
 		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_finalize_error",
 			slog.String("backend", "codex"),
@@ -108,8 +120,11 @@ func (s *Server) dispatchCodexProviderStream(
 		slog.Bool("stream", true),
 		slog.String("backend", "codex"),
 		slog.String("provider_path", "provider"),
+		slog.String("finish_reason", finishReason),
 		slog.Bool("reasoning_signaled", result.ReasoningSignaled),
 		slog.Bool("reasoning_visible", result.ReasoningVisible),
+		slog.Int("tool_call_count", result.ToolCallCount),
+		slog.Bool("has_subagent_tool_call", result.HasSubagentToolCall),
 	}
 	completedAttrs = append(completedAttrs, corr.Attrs()...)
 	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.completed", completedAttrs...)
@@ -127,6 +142,8 @@ func (s *Server) dispatchCodexProviderStream(
 		CacheReadTokens:            usage.CachedTokens(),
 		CacheCreationTokens:        0,
 		DerivedCacheCreationTokens: result.DerivedCacheCreationTokens,
+		ToolCallCount:              result.ToolCallCount,
+		HasSubagentToolCall:        result.HasSubagentToolCall,
 		DurationMs:                 time.Since(started).Milliseconds(),
 		Correlation:                corr,
 	})
@@ -144,6 +161,7 @@ func (s *Server) dispatchCodexProviderCollect(
 	collector := newProviderCollectorWriter()
 	result, runErr := s.codexProvider.Execute(ctx, resolvedReq, collector)
 	if runErr != nil {
+		status, errorBody := codexProviderErrorResponse(runErr)
 		adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
 			Stage:      adapterruntime.RequestStageFailed,
 			Provider:   "codex_direct",
@@ -155,17 +173,19 @@ func (s *Server) dispatchCodexProviderCollect(
 			DurationMs: time.Since(started).Milliseconds(),
 			Err:        runErr.Error(),
 		})
-		writeError(w, http.StatusBadGateway, "upstream_error", runErr.Error())
+		writeJSON(w, status, ErrorResponse{Error: errorBody})
 		return
 	}
 	corr := correlation.FromContext(ctx).WithUpstreamResponseID(result.UpstreamResponseID)
 	ctx = correlation.WithContext(ctx, corr)
 	runResult := adaptercodex.RunResult{
 		Usage:                      result.Usage,
-		FinishReason:               result.FinishReason,
+		FinishReason:               normalizedProviderFinishReason(result),
 		ReasoningSignaled:          result.ReasoningSignaled,
 		ReasoningVisible:           result.ReasoningVisible,
 		DerivedCacheCreationTokens: result.DerivedCacheCreationTokens,
+		ToolCallCount:              result.ToolCallCount,
+		HasSubagentToolCall:        result.HasSubagentToolCall,
 	}
 	merged := adaptercodex.MergeEvents(reqID, model.Alias, systemFingerprint, collector.events, runResult)
 	usage := result.Usage
@@ -176,6 +196,7 @@ func (s *Server) dispatchCodexProviderCollect(
 		merged.Usage.MaxTokens = usage.MaxTokens
 	}
 	writeJSON(w, http.StatusOK, merged)
+	finishReason := normalizedProviderFinishReason(result)
 	completedAttrs := []slog.Attr{
 		slog.String("request_id", reqID),
 		slog.String("model", model.Alias),
@@ -188,8 +209,11 @@ func (s *Server) dispatchCodexProviderCollect(
 		slog.Bool("stream", false),
 		slog.String("backend", "codex"),
 		slog.String("provider_path", "provider"),
+		slog.String("finish_reason", finishReason),
 		slog.Bool("reasoning_signaled", result.ReasoningSignaled),
 		slog.Bool("reasoning_visible", result.ReasoningVisible),
+		slog.Int("tool_call_count", result.ToolCallCount),
+		slog.Bool("has_subagent_tool_call", result.HasSubagentToolCall),
 	}
 	completedAttrs = append(completedAttrs, corr.Attrs()...)
 	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.completed", completedAttrs...)
@@ -201,13 +225,32 @@ func (s *Server) dispatchCodexProviderCollect(
 		Alias:                      model.Alias,
 		ModelID:                    model.Alias,
 		Stream:                     false,
-		FinishReason:               result.FinishReason,
+		FinishReason:               finishReason,
 		TokensIn:                   usage.PromptTokens,
 		TokensOut:                  usage.CompletionTokens,
 		CacheReadTokens:            usage.CachedTokens(),
 		CacheCreationTokens:        0,
 		DerivedCacheCreationTokens: result.DerivedCacheCreationTokens,
+		ToolCallCount:              result.ToolCallCount,
+		HasSubagentToolCall:        result.HasSubagentToolCall,
 		DurationMs:                 time.Since(started).Milliseconds(),
 		Correlation:                corr,
 	})
+}
+
+func codexProviderErrorResponse(err error) (int, ErrorBody) {
+	var contextErr *adaptercodex.ContextWindowError
+	if errors.As(err, &contextErr) {
+		return http.StatusBadRequest, ErrorBody{
+			Message: contextErr.Error(),
+			Type:    "invalid_request_error",
+			Code:    "context_length_exceeded",
+			Param:   "input",
+		}
+	}
+	return http.StatusBadGateway, ErrorBody{
+		Message: err.Error(),
+		Type:    "upstream_error",
+		Code:    "upstream_error",
+	}
 }

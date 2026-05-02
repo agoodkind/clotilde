@@ -398,7 +398,7 @@ func RepairApplyPatchInput(input string) string {
 		return input
 	}
 	out := make([]string, 0, len(lines))
-	for i := 0; i < len(lines); i++ {
+	for i := range lines {
 		line := lines[i]
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "*** Update File: ") && i+1 < len(lines) {

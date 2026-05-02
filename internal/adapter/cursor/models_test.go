@@ -123,6 +123,24 @@ func TestRequestPathUsesCursorMetadata(t *testing.T) {
 	}
 }
 
+func TestTranslateRequestExtractsGenerationID(t *testing.T) {
+	t.Parallel()
+
+	req := adapteropenai.ChatRequest{
+		Model:    "gpt-5.5",
+		Messages: []adapteropenai.ChatMessage{{Role: "user", Content: []byte(`"hi"`)}},
+		Metadata: []byte(`{
+			"cursorConversationId":"conv-1",
+			"generation_id":"gen-1"
+		}`),
+	}
+
+	got := TranslateRequest(req)
+	if got.GenerationID != "gen-1" {
+		t.Fatalf("GenerationID=%q want gen-1", got.GenerationID)
+	}
+}
+
 func TestRequestPathFallsBackToObservedPromptMarkers(t *testing.T) {
 	req := TranslateRequest(adapteropenai.ChatRequest{
 		Model: "gpt-5.4",

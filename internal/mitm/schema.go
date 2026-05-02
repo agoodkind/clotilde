@@ -28,6 +28,11 @@ type CaptureRecord struct {
 	Kind CaptureRecordKind `json:"kind"`
 	T    int64             `json:"t,omitempty"`
 	URL  string            `json:"url,omitempty"`
+	// Provider names the routed upstream family that produced this
+	// record (for example "claude" or "codex"). Always-on capture
+	// files can mix multiple providers, so baseline refresh must be
+	// able to filter by this field.
+	Provider string `json:"provider,omitempty"`
 
 	TraceID              string `json:"trace_id,omitempty"`
 	SpanID               string `json:"span_id,omitempty"`

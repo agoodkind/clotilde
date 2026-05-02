@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"strconv"
 	"strings"
 
@@ -88,6 +89,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reqID := newRequestID()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.log.LogAttrs(r.Context(), slog.LevelError, "adapter.chat.panic",
+				slog.String("request_id", reqID),
+				slog.Any("err", recovered),
+				slog.String("stack", string(debug.Stack())),
+			)
+			writeError(w, http.StatusInternalServerError, "internal_error", "adapter panic while handling chat request")
+		}
+	}()
 	corr := correlation.FromHTTPHeader(r.Header, reqID)
 	corr.SetHTTPHeaders(w.Header())
 	ctx := correlation.WithContext(r.Context(), corr)
@@ -227,6 +238,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	cursorReq := adaptercursor.TranslateRequest(req)
 	corr = corr.WithCursor(cursorReq.RequestID, cursorReq.ConversationID)
+	if cursorReq.GenerationID != "" {
+		corr = corr.WithCursorGenerationID(cursorReq.GenerationID)
+	}
 	ctx = correlation.WithContext(ctx, corr)
 	r = r.WithContext(ctx)
 	req.Model = cursorReq.NormalizedModel
@@ -324,6 +338,18 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.chat.received",
 		attrs...,
 	)
+	if cursorReq.HasSubagentTool && cursorReq.GenerationID == "" {
+		missingAttrs := []slog.Attr{
+			slog.String("request_id", reqID),
+			slog.String("cursor_conversation_id", cursorReq.ConversationID),
+			slog.String("cursor_request_path", string(cursorReq.PathKind)),
+			slog.Bool("has_subagent_tool", true),
+			slog.Any("metadata_keys", discovery.MetadataKeys),
+			slog.Any("header_names", HeaderNames(r.Header)),
+		}
+		missingAttrs = append(missingAttrs, corr.Attrs()...)
+		s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.cursor.generation_id_missing", missingAttrs...)
+	}
 
 	if perr := s.preflightChat(r.Context(), &req, model, reqID); perr != nil {
 		writeJSON(w, perr.code, ErrorResponse{Error: perr.body})

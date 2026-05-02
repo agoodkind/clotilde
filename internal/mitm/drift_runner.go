@@ -6,16 +6,17 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 )
 
-// DriftCheckOptions configures one drift run. The Reference path's
-// snapshot version (v1 vs v2) is auto-detected. UA / body-key filters
-// apply only to v2.
+// DriftCheckOptions configures one compare-only drift run against the
+// current local capture store. The Reference path's snapshot version
+// (v1 vs v2) is auto-detected. UA / body-key filters apply only to v2.
 type DriftCheckOptions struct {
 	Upstream        string
 	Reference       string
 	CaptureRoot     string
-	CACertPath      string
+	CACertPath      string // kept for backward-compatible CLI/config shape; compare-only drift does not capture
 	DriftLogPath    string
 	IncludeUA       []string
 	ExcludeUA       []string
@@ -24,8 +25,9 @@ type DriftCheckOptions struct {
 	Log             *slog.Logger
 }
 
-// RunDriftCheck performs the full capture + snapshot + diff cycle for
-// one upstream and appends the structured outcome to DriftLogPath.
+// RunDriftCheck performs the snapshot + diff cycle for one upstream
+// using the current local capture store and appends the structured
+// outcome to DriftLogPath.
 // Returns the outcome and a non-nil error on infrastructure failure.
 // The outcome's Diverged field reports whether the snapshots
 // disagreed; callers may want to escalate divergence separately from
@@ -34,45 +36,39 @@ func RunDriftCheck(ctx context.Context, opts DriftCheckOptions) (DriftOutcome, e
 	if opts.Log == nil {
 		opts.Log = slog.Default()
 	}
-	profile, err := LookupLaunchProfile(opts.Upstream)
-	if err != nil {
-		return DriftOutcome{}, fmt.Errorf("lookup profile: %w", err)
-	}
-	if profile.IsElectron {
-		return DriftOutcome{}, fmt.Errorf("upstream %s is Electron; cannot run drift headlessly", opts.Upstream)
-	}
 	if strings.TrimSpace(opts.Reference) == "" {
 		return DriftOutcome{}, fmt.Errorf("reference path is required")
 	}
 	if strings.TrimSpace(opts.DriftLogPath) == "" {
 		return DriftOutcome{}, fmt.Errorf("drift log path is required")
 	}
-	result, err := RunCaptureSession(ctx, CaptureSessionOptions{
-		Profile:     profile,
-		CaptureRoot: opts.CaptureRoot,
-		CACertPath:  opts.CACertPath,
-		Log:         opts.Log,
-	})
-	if err != nil {
-		return DriftOutcome{}, fmt.Errorf("capture: %w", err)
+	captureRoot := strings.TrimSpace(opts.CaptureRoot)
+	if captureRoot == "" {
+		captureRoot = DefaultCaptureRoot()
 	}
+	transcriptPath, err := ResolveTranscriptPath(captureRoot, opts.Upstream)
+	if err != nil {
+		return DriftOutcome{}, err
+	}
+	startedAt := time.Now().UTC()
 
 	outcome := DriftOutcome{
 		Upstream:       opts.Upstream,
 		ReferencePath:  opts.Reference,
-		TranscriptPath: result.TranscriptPath,
-		StartedAt:      result.StartedAt,
+		TranscriptPath: transcriptPath,
+		StartedAt:      startedAt,
 	}
 
-	versionTag := "live-" + result.StartedAt.Format("20060102T150405")
+	versionTag := "live-" + startedAt.Format("20060102T150405")
 	if isV2SnapshotFile(opts.Reference) {
 		ref, err := LoadSnapshotV2TOML(opts.Reference)
 		if err != nil {
 			return outcome, fmt.Errorf("load v2 reference: %w", err)
 		}
-		cand, err := ExtractSnapshotV2(result.TranscriptPath, SnapshotV2Options{
+		cand, err := ExtractSnapshotV2(transcriptPath, SnapshotV2Options{
 			UpstreamName:               opts.Upstream,
 			UpstreamVersion:            versionTag,
+			ProviderFilter:             ProviderForUpstream(opts.Upstream),
 			IncludeUserAgentSubstrings: opts.IncludeUA,
 			ExcludeUserAgentSubstrings: opts.ExcludeUA,
 			RequireBodyKeys:            opts.RequireBodyKeys,
@@ -89,9 +85,10 @@ func RunDriftCheck(ctx context.Context, opts DriftCheckOptions) (DriftOutcome, e
 		if err != nil {
 			return outcome, fmt.Errorf("load reference: %w", err)
 		}
-		cand, err := ExtractSnapshot(result.TranscriptPath, SnapshotOptions{
+		cand, err := ExtractSnapshot(transcriptPath, SnapshotOptions{
 			UpstreamName:    opts.Upstream,
 			UpstreamVersion: versionTag,
+			ProviderFilter:  ProviderForUpstream(opts.Upstream),
 		})
 		if err != nil {
 			return outcome, fmt.Errorf("extract: %w", err)

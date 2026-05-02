@@ -20,6 +20,7 @@ const (
 	HeaderParentSpanID         = "x-clyde-parent-span-id"
 	HeaderCursorRequestID      = "x-cursor-request-id"
 	HeaderCursorConversationID = "x-cursor-conversation-id"
+	HeaderCursorGenerationID   = "x-cursor-generation-id"
 	HeaderUpstreamRequestID    = "x-upstream-request-id"
 	HeaderUpstreamResponseID   = "x-upstream-response-id"
 	HeaderTraceparent          = "traceparent"
@@ -36,6 +37,7 @@ type Context struct {
 	RequestID            string
 	CursorRequestID      string
 	CursorConversationID string
+	CursorGenerationID   string
 	UpstreamRequestID    string
 	UpstreamResponseID   string
 }
@@ -72,6 +74,7 @@ func FromHTTPHeader(header http.Header, requestID string) Context {
 	}
 	corr.CursorRequestID = strings.TrimSpace(header.Get(HeaderCursorRequestID))
 	corr.CursorConversationID = strings.TrimSpace(header.Get(HeaderCursorConversationID))
+	corr.CursorGenerationID = strings.TrimSpace(header.Get(HeaderCursorGenerationID))
 	corr.UpstreamRequestID = strings.TrimSpace(header.Get(HeaderUpstreamRequestID))
 	corr.UpstreamResponseID = strings.TrimSpace(header.Get(HeaderUpstreamResponseID))
 	return corr
@@ -111,8 +114,19 @@ func (c Context) WithRequestID(requestID string) Context {
 }
 
 func (c Context) WithCursor(requestID, conversationID string) Context {
-	c.CursorRequestID = strings.TrimSpace(requestID)
-	c.CursorConversationID = strings.TrimSpace(conversationID)
+	if requestID = strings.TrimSpace(requestID); requestID != "" {
+		c.CursorRequestID = requestID
+	}
+	if conversationID = strings.TrimSpace(conversationID); conversationID != "" {
+		c.CursorConversationID = conversationID
+	}
+	return c
+}
+
+func (c Context) WithCursorGenerationID(generationID string) Context {
+	if generationID = strings.TrimSpace(generationID); generationID != "" {
+		c.CursorGenerationID = generationID
+	}
 	return c
 }
 
@@ -168,6 +182,9 @@ func (c Context) Attrs() []slog.Attr {
 	if c.CursorConversationID != "" {
 		attrs = append(attrs, slog.String("cursor_conversation_id", c.CursorConversationID))
 	}
+	if c.CursorGenerationID != "" {
+		attrs = append(attrs, slog.String("cursor_generation_id", c.CursorGenerationID))
+	}
 	if c.UpstreamRequestID != "" {
 		attrs = append(attrs, slog.String("upstream_request_id", c.UpstreamRequestID))
 	}
@@ -211,6 +228,9 @@ func (c Context) HTTPHeaders() http.Header {
 	if c.CursorConversationID != "" {
 		header.Set(HeaderCursorConversationID, c.CursorConversationID)
 	}
+	if c.CursorGenerationID != "" {
+		header.Set(HeaderCursorGenerationID, c.CursorGenerationID)
+	}
 	if c.UpstreamRequestID != "" {
 		header.Set(HeaderUpstreamRequestID, c.UpstreamRequestID)
 	}
@@ -244,6 +264,7 @@ func (c Context) Metadata() metadata.MD {
 	setMetadata(values, HeaderParentSpanID, string(c.ParentSpanID))
 	setMetadata(values, HeaderCursorRequestID, c.CursorRequestID)
 	setMetadata(values, HeaderCursorConversationID, c.CursorConversationID)
+	setMetadata(values, HeaderCursorGenerationID, c.CursorGenerationID)
 	setMetadata(values, HeaderUpstreamRequestID, c.UpstreamRequestID)
 	setMetadata(values, HeaderUpstreamResponseID, c.UpstreamResponseID)
 	if traceparent := c.Traceparent(); traceparent != "" {
@@ -302,6 +323,7 @@ func fromMetadata(md metadata.MD) Context {
 	}
 	corr.CursorRequestID = firstMetadata(md, HeaderCursorRequestID)
 	corr.CursorConversationID = firstMetadata(md, HeaderCursorConversationID)
+	corr.CursorGenerationID = firstMetadata(md, HeaderCursorGenerationID)
 	corr.UpstreamRequestID = firstMetadata(md, HeaderUpstreamRequestID)
 	corr.UpstreamResponseID = firstMetadata(md, HeaderUpstreamResponseID)
 	return corr

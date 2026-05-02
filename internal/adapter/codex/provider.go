@@ -148,6 +148,8 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		ReasoningVisible:           runResult.ReasoningVisible,
 		DerivedCacheCreationTokens: runResult.DerivedCacheCreationTokens,
 		UpstreamResponseID:         runResult.ResponseID,
+		ToolCallCount:              runResult.ToolCallCount,
+		HasSubagentToolCall:        runResult.HasSubagentToolCall,
 	}, nil
 }
 

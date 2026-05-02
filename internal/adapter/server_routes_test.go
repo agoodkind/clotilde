@@ -193,7 +193,7 @@ func TestAnthropicMessagesRouteUsesNativeIngress(t *testing.T) {
 			if !req.NativeIngress {
 				t.Fatalf("NativeIngress = false, want true")
 			}
-			if got := req.Request.Model; got != "clyde-haiku-4-5" {
+			if got := req.Request.Model; got != "claude-haiku-4-5-20251001" {
 				t.Fatalf("prepared model = %q", got)
 			}
 			if len(req.Request.Messages) != 1 || len(req.Request.Messages[0].Content) != 1 {
@@ -227,6 +227,50 @@ func TestAnthropicMessagesRouteUsesNativeIngress(t *testing.T) {
 	}
 	if strings.Contains(body, `"chat.completion"`) {
 		t.Fatalf("body unexpectedly contains OpenAI envelope: %s", body)
+	}
+}
+
+func TestAnthropicMessagesRoutePreservesNativeClaudeModelID(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Enabled = true
+	cfg.FallbackShunt = "local"
+	cfg.Shunts = map[string]config.AdapterShunt{
+		"local": {
+			BaseURL: "http://localhost:1234",
+			Model:   "local-model",
+		},
+	}
+	srv, err := New(cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	srv.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{}, anthropic.ProviderOptions{
+		ExecutePrepared: func(_ context.Context, req anthropic.PreparedRequest, writer adapterprovider.EventWriter) (adapterprovider.Result, error) {
+			if !req.NativeIngress {
+				t.Fatalf("NativeIngress = false, want true")
+			}
+			if got := req.Request.Model; got != "claude-opus-4-7" {
+				t.Fatalf("prepared model = %q", got)
+			}
+			nativeWriter, ok := writer.(*nativeAnthropicJSONWriter)
+			if !ok {
+				t.Fatalf("writer type = %T, want *nativeAnthropicJSONWriter", writer)
+			}
+			body := []byte(`{"id":"msg_123","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"claude-opus-4-7","stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":2}}`)
+			if err := nativeWriter.capture(http.StatusOK, http.Header{"Content-Type": {"application/json"}}, body); err != nil {
+				t.Fatalf("capture: %v", err)
+			}
+			return adapterprovider.Result{}, nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-opus-4-7","messages":[{"role":"user","content":"hello"}],"max_tokens":32}`))
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 }
 

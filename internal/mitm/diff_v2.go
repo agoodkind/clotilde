@@ -107,8 +107,8 @@ func (r DiffReportV2) SummaryString() string {
 }
 
 // DiffSnapshotsV2 compares two v2 snapshots. The first argument is
-// the committed reference; the second is the candidate observed in
-// the latest capture.
+// the local baseline or explicit reference; the second is the
+// candidate observed in the latest capture.
 func DiffSnapshotsV2(reference, candidate SnapshotV2) DiffReportV2 {
 	report := DiffReportV2{Upstream: reference.Upstream.Name}
 

@@ -27,6 +27,22 @@ type RunResult struct {
 	DerivedCacheCreationTokens int
 	ResponseID                 string
 	OutputItems                []map[string]any
+	ToolCallCount              int
+	HasSubagentToolCall        bool
+}
+
+// ContextWindowError reports an upstream Codex over-context rejection.
+// The adapter maps this to OpenAI's context_length_exceeded shape so
+// Cursor can run its normal compaction/retry flow.
+type ContextWindowError struct {
+	Message string
+}
+
+func (e *ContextWindowError) Error() string {
+	if e == nil || strings.TrimSpace(e.Message) == "" {
+		return "codex input exceeds context window"
+	}
+	return e.Message
 }
 
 func NewRunResult(finishReason string) RunResult {
@@ -258,6 +274,10 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 			Type:   "function",
 		}
 		nextToolIndex++
+		out.ToolCallCount = max(out.ToolCallCount, nextToolIndex)
+		if name == "Subagent" || name == "spawn_agent" {
+			out.HasSubagentToolCall = true
+		}
 		if itemID != "" {
 			toolCallsByItemID[itemID] = state
 		}
@@ -323,6 +343,9 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 					}
 					if state.Name == "" && name != "" {
 						state.Name = InboundToolName(name)
+					}
+					if state.Name == "Subagent" || state.NativeName == "spawn_agent" {
+						out.HasSubagentToolCall = true
 					}
 					if eventNameLocal == "response.output_item.done" && item != nil {
 						completed := item.cloneMap()
@@ -393,6 +416,9 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 						cursorName = "ApplyPatch"
 					}
 					state, created := getToolState(itemID, callID, cursorName)
+					if state.Name == "Subagent" || name == "spawn_agent" {
+						out.HasSubagentToolCall = true
+					}
 					if created {
 						if err := emitToolCall(state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
 							return out, err
@@ -518,7 +544,7 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 				if raw.Error != nil && raw.Error.Message != "" {
 					msg = raw.Error.Message
 				}
-				return out, fmt.Errorf("%s", msg)
+				return out, codexResponseFailedError(msg)
 			}
 			continue
 		}
@@ -536,6 +562,27 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 	out.ReasoningSignaled = reasoningSignaled
 	out.ReasoningVisible = reasoningVisible
 	return out, nil
+}
+
+func codexResponseFailedError(message string) error {
+	if isCodexContextWindowMessage(message) {
+		return &ContextWindowError{Message: strings.TrimSpace(message)}
+	}
+	return fmt.Errorf("%s", message)
+}
+
+func isCodexContextWindowMessage(message string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	switch {
+	case strings.Contains(normalized, "exceeds the context window"):
+		return true
+	case strings.Contains(normalized, "context_length_exceeded"):
+		return true
+	case strings.Contains(normalized, "maximum context length"):
+		return true
+	default:
+		return false
+	}
 }
 
 func (item transportItem) string(key string) string {

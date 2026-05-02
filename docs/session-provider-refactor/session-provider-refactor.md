@@ -46,11 +46,13 @@ The repo currently mixes three layers that should be separate:
    `sessionId`, `transcriptPath`, `previousSessionIds`, `settings.json`,
    SessionStart hook adoption, remote control persistence
 
-The current risk is not just that some fields are named after Claude. The
-deeper problem is that orchestration above the provider layer still knows
-Claude-only follow-through. The current `cmd/root.go` path still knows that a
-new Claude session with remote control enabled requires a post-launch Claude
-settings persistence step. That means the provider boundary is not yet real.
+The initial risk was not just that some fields were named after Claude. The
+deeper problem was that orchestration above the provider layer knew
+Claude-only follow-through. The current branch has moved start and resume
+through `internal/session/lifecycle`, and `internal/claude` now owns
+remote-control persistence after Claude launch. The remaining work is to make
+the persisted session row, discovery, settings, cleanup, and non-Claude
+capability behavior fully provider-neutral.
 
 ## Before / Current / After
 
@@ -76,10 +78,11 @@ end
 subgraph currentState [Current]
     CmdCurrent["cmd/root.go"]
     SessionCurrent["internal/session (partly generic)"]
-    ClaudeCurrent["internal/claude helpers"]
-    CmdCurrent --> SessionCurrent
-    CmdCurrent --> ClaudeCurrent
-    CmdCurrent -->|"still knows remoteControl persistence"| ClaudeCurrent
+    LifecycleCurrent["internal/session/lifecycle"]
+    ClaudeCurrent["internal/claude lifecycle"]
+    CmdCurrent -->|"generic start/resume request"| LifecycleCurrent
+    LifecycleCurrent --> SessionCurrent
+    LifecycleCurrent --> ClaudeCurrent
     SessionCurrent -->|"provider/id abstractions starting to exist"| ClaudeCurrent
 end
 
@@ -174,34 +177,18 @@ also lives here or in a Claude-owned provider package.
 
 ### `cmd/root.go`
 
-The current leak is the best example of what still needs to move down:
+The first lifecycle slice has landed. `cmd/root.go` now calls
+`sessionlifecycle.Default(...).StartInteractive(...)` for new sessions and
+`sessionlifecycle.ForSession(...).ResumeInteractive(...)` for resume. The
+Claude-specific post-launch remote-control persistence now lives under
+`internal/claude`.
 
-```988:1006:cmd/root.go
-err = claude.StartNewInteractive(env, "", workDir, enableRemoteControl, sessionID)
-if err != nil {
-    return err
-}
-sess, gerr := store.Get(name)
-if gerr == nil && sess != nil {
-    if enableRemoteControl {
-        if err := claude.PersistRemoteControlSetting(store, name); err != nil {
-            // ...
-        } else {
-            // ...
-        }
-    }
-}
-```
+Remaining caution:
 
-The file no longer writes Claude settings directly, which is an improvement, but
-it still knows:
-
-- the feature is `remoteControl`
-- it is a Claude session setting
-- it requires post-launch persistence
-- the relevant helper is `claude.PersistRemoteControlSetting(...)`
-
-That orchestration belongs below the provider boundary.
+- `cmd/root.go` can still pass generic launch options such as
+  `EnableRemoteControl`, so the next slices should keep those options as
+  capability-aware requests rather than letting `cmd/` learn provider-specific
+  settings formats or persistence rules again.
 
 ## Target Architecture
 
@@ -364,8 +351,11 @@ Scope:
 
 Exit criteria:
 
-- `cmd/root.go` does not mention Claude-only persistence steps
-- `cmd/root.go` does not know about `remoteControl` as a Claude settings detail
+- [x] `cmd/root.go` does not mention Claude-only persistence steps.
+- [x] `internal/claude` owns the current remote-control persistence
+      follow-through.
+- [ ] Keep future generic launch options capability-aware so `cmd/root.go`
+      does not regain knowledge of Claude settings semantics.
 
 ### Phase 3. Finish Provider-Scoped Discovery
 
@@ -460,22 +450,22 @@ These need to be answered deliberately as we work through the slices:
 
 ## Immediate Next Slice
 
-The first concrete cleanup to make now is small and high leverage:
+The first concrete cleanup, moving Claude-only post-launch remote-control
+persistence out of `cmd/root.go`, has landed.
 
-1. remove the Claude-only post-launch remote-control persistence from
-   `cmd/root.go`
-2. move that follow-through fully into `internal/claude`
-3. keep `cmd/root.go` at the level of generic launch intent plus generic
-   post-launch Clyde behavior
+The next concrete cleanup should keep the same direction:
 
-That slice is a good litmus test. If it feels awkward to push down, the
-boundary is still not defined clearly enough.
+1. finish the provider-neutral identity and persisted-session model in
+   `internal/session`
+2. make discovery and adoption consume that same identity vocabulary
+3. move provider-specific settings and artifact cleanup behind provider-owned
+   contracts
 
 ## Related References
 
 - Existing Codex session MVP plan:
   `/Users/agoodkind/.cursor/plans/codex_session_plan_17b2ca73.plan.md`
-- Existing adapter refactor execution plan:
-  [`adapter-refactor.md`](./adapter-refactor.md)
-- Existing adapter refactor history:
-  [`adapter-refactor-history.md`](./adapter-refactor-history.md)
+- Adapter refactor execution plan:
+  [`adapter-refactor.md`](../adapter-refactor/adapter-refactor.md)
+- Adapter refactor completed-task memory:
+  [`adapter-refactor-history.md`](../adapter-refactor/adapter-refactor-history.md)
