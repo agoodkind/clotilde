@@ -12,8 +12,8 @@ import (
 
 // Backend names the kind of worker that fulfils a request.
 const (
-	BackendClaude = "claude"
-	BackendShunt  = "shunt"
+	BackendClaude              = "claude"
+	BackendPassthroughOverride = "passthrough_override"
 	// BackendAnthropic routes the request directly at the configured
 	// messages URL. Auth uses the token from the keychain (the
 	// internal/adapter/oauth package handles credentials;
@@ -55,7 +55,8 @@ const (
 type ResolvedModel struct {
 	// Alias is the public name the client sent.
 	Alias string
-	// Backend is one of BackendClaude / BackendShunt / BackendAnthropic / BackendCodex.
+	// Backend is one of BackendClaude / BackendPassthroughOverride /
+	// BackendAnthropic / BackendCodex.
 	Backend string
 	// ClaudeModel names the real Claude snapshot. May carry a
 	// context-window wire suffix (e.g. "[1m]");
@@ -91,12 +92,14 @@ type ResolvedModel struct {
 	// SupportsVision mirrors the family toml after NewRegistry
 	// validation (nil disallowed at load time).
 	SupportsVision bool
-	// Shunt names an entry inside AdapterConfig.Shunts. Only set
-	// when Backend is BackendShunt and the alias uses a named shunt.
-	Shunt string
+	// PassthroughOverride names an entry inside
+	// AdapterConfig.PassthroughOverrides. Only set when Backend is
+	// BackendPassthroughOverride and the alias uses a named passthrough
+	// override.
+	PassthroughOverride string
 	// OpenAICompatPassthrough carries a directly configured upstream
 	// endpoint for unknown-model passthrough. Only set when Backend is
-	// BackendShunt and Shunt is empty.
+	// BackendPassthroughOverride and PassthroughOverride is empty.
 	OpenAICompatPassthrough config.AdapterOpenAICompatPassthrough
 	// FamilySlug is the cfg.Families key this alias was generated
 	// from. Empty for user-supplied [adapter.models.<name>] entries
@@ -110,17 +113,17 @@ type ResolvedModel struct {
 // NewRegistry rejects an AdapterConfig that omits families,
 // client_identity fields, or default_model.
 type Registry struct {
-	models             map[string]ResolvedModel
-	shunts             map[string]config.AdapterShunt
-	def                string
-	openAICompat       config.AdapterOpenAICompatPassthrough
-	codexEnabled       bool
-	codexPrefix        []string
-	codexNativeRouting string
-	codexNativeShunt   string
-	codexModels        map[string]ResolvedModel
-	nativeCodexModels  map[string]ResolvedModel
-	nativeAdvertised   map[string]bool
+	models                         map[string]ResolvedModel
+	passthroughOverrides           map[string]config.AdapterPassthroughOverride
+	def                            string
+	openAICompat                   config.AdapterOpenAICompatPassthrough
+	codexEnabled                   bool
+	codexPrefix                    []string
+	codexNativeRouting             string
+	codexNativePassthroughOverride string
+	codexModels                    map[string]ResolvedModel
+	nativeCodexModels              map[string]ResolvedModel
+	nativeAdvertised               map[string]bool
 }
 
 // NewRegistry builds the registry from a loaded AdapterConfig. It
@@ -206,17 +209,17 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 	}
 
 	r := &Registry{
-		models:             models,
-		shunts:             map[string]config.AdapterShunt{},
-		def:                cfg.DefaultModel,
-		openAICompat:       cfg.OpenAICompatPassthrough,
-		codexEnabled:       cfg.Codex.Enabled,
-		codexPrefix:        append([]string(nil), cfg.Codex.ModelPrefixes...),
-		codexNativeRouting: strings.ToLower(strings.TrimSpace(cfg.Codex.NativeModelRouting)),
-		codexNativeShunt:   strings.ToLower(strings.TrimSpace(cfg.Codex.NativeModelShunt)),
-		codexModels:        map[string]ResolvedModel{},
-		nativeCodexModels:  map[string]ResolvedModel{},
-		nativeAdvertised:   map[string]bool{},
+		models:                         models,
+		passthroughOverrides:           map[string]config.AdapterPassthroughOverride{},
+		def:                            cfg.DefaultModel,
+		openAICompat:                   cfg.OpenAICompatPassthrough,
+		codexEnabled:                   cfg.Codex.Enabled,
+		codexPrefix:                    append([]string(nil), cfg.Codex.ModelPrefixes...),
+		codexNativeRouting:             strings.ToLower(strings.TrimSpace(cfg.Codex.NativeModelRouting)),
+		codexNativePassthroughOverride: strings.ToLower(strings.TrimSpace(cfg.Codex.NativeModelPassthroughOverride)),
+		codexModels:                    map[string]ResolvedModel{},
+		nativeCodexModels:              map[string]ResolvedModel{},
+		nativeAdvertised:               map[string]bool{},
 	}
 	if r.codexNativeRouting == "" {
 		if r.codexEnabled {
@@ -226,16 +229,16 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 		}
 	}
 	switch r.codexNativeRouting {
-	case "off", "codex", "shunt":
+	case "off", "codex", BackendPassthroughOverride:
 	default:
-		return nil, fmt.Errorf("adapter: [adapter.codex].native_model_routing must be one of: off, codex, shunt")
+		return nil, fmt.Errorf("adapter: [adapter.codex].native_model_routing must be one of: off, codex, passthrough_override")
 	}
-	if r.codexNativeRouting == "shunt" {
-		if r.codexNativeShunt == "" {
-			return nil, fmt.Errorf("adapter: [adapter.codex].native_model_shunt is required when native_model_routing = \"shunt\"")
+	if r.codexNativeRouting == BackendPassthroughOverride {
+		if r.codexNativePassthroughOverride == "" {
+			return nil, fmt.Errorf("adapter: [adapter.codex].native_model_passthrough_override is required when native_model_routing = \"passthrough_override\"")
 		}
-		if _, ok := cfg.Shunts[r.codexNativeShunt]; !ok {
-			return nil, fmt.Errorf("adapter: [adapter.codex].native_model_shunt %q not found in [adapter.shunts]", r.codexNativeShunt)
+		if _, ok := cfg.PassthroughOverrides[r.codexNativePassthroughOverride]; !ok {
+			return nil, fmt.Errorf("adapter: [adapter.codex].native_model_passthrough_override %q not found in [adapter.passthrough_overrides]", r.codexNativePassthroughOverride)
 		}
 	}
 	if len(r.codexPrefix) == 0 {
@@ -248,8 +251,8 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 		}
 		r.models[strings.ToLower(name)] = resolveFromConfig(name, m)
 	}
-	for name, s := range cfg.Shunts {
-		r.shunts[strings.ToLower(name)] = s
+	for name, s := range cfg.PassthroughOverrides {
+		r.passthroughOverrides[strings.ToLower(name)] = s
 	}
 	for _, model := range cfg.Codex.Models {
 		if err := addCodexModelAliases(r.codexModels, model); err != nil {
@@ -507,20 +510,20 @@ func addNativeCodexModelAlias(out map[string]ResolvedModel, alias string, cfg co
 func resolveFromConfig(alias string, m config.AdapterModel) ResolvedModel {
 	backend := m.Backend
 	if backend == "" {
-		if m.Shunt != "" {
-			backend = BackendShunt
+		if m.PassthroughOverride != "" {
+			backend = BackendPassthroughOverride
 		} else {
 			backend = BackendClaude
 		}
 	}
 	out := ResolvedModel{
-		Alias:           alias,
-		Backend:         backend,
-		ClaudeModel:     m.Model,
-		Context:         m.Context,
-		ObservedContext: m.ObservedContext,
-		Efforts:         m.Efforts,
-		Shunt:           m.Shunt,
+		Alias:               alias,
+		Backend:             backend,
+		ClaudeModel:         m.Model,
+		Context:             m.Context,
+		ObservedContext:     m.ObservedContext,
+		Efforts:             m.Efforts,
+		PassthroughOverride: m.PassthroughOverride,
 	}
 	return out
 }
@@ -626,15 +629,15 @@ func (r *Registry) Resolve(alias, reqEffort string) (ResolvedModel, string, erro
 		switch r.codexNativeRouting {
 		case "codex":
 			return r.resolveNativeCodexModel(alias, reqEffort)
-		case "shunt":
-			if _, ok := r.shunts[r.codexNativeShunt]; ok {
+		case BackendPassthroughOverride:
+			if _, ok := r.passthroughOverrides[r.codexNativePassthroughOverride]; ok {
 				return ResolvedModel{
-					Alias:   alias,
-					Backend: BackendShunt,
-					Shunt:   r.codexNativeShunt,
+					Alias:               alias,
+					Backend:             BackendPassthroughOverride,
+					PassthroughOverride: r.codexNativePassthroughOverride,
 				}, "", nil
 			}
-			return ResolvedModel{}, "", fmt.Errorf("native model shunt %q is not configured", r.codexNativeShunt)
+			return ResolvedModel{}, "", fmt.Errorf("native model passthrough override %q is not configured", r.codexNativePassthroughOverride)
 		default:
 			return ResolvedModel{}, "", fmt.Errorf(
 				"unknown model %q (native model routing is off; configure [adapter.models.%q] or [adapter.codex].native_model_routing)",
@@ -679,7 +682,7 @@ func (r *Registry) Resolve(alias, reqEffort string) (ResolvedModel, string, erro
 	if r.openAICompat.BaseURL != "" {
 		return ResolvedModel{
 			Alias:                   alias,
-			Backend:                 BackendShunt,
+			Backend:                 BackendPassthroughOverride,
 			OpenAICompatPassthrough: r.openAICompat,
 		}, "", nil
 	}
@@ -738,9 +741,9 @@ func resolveConfiguredModel(m ResolvedModel, reqEffort string) (ResolvedModel, s
 	return m, effort, nil
 }
 
-// Shunt returns the shunt config for a named entry.
-func (r *Registry) Shunt(name string) (config.AdapterShunt, bool) {
-	s, ok := r.shunts[strings.ToLower(name)]
+// PassthroughOverride returns the passthrough override config for a named entry.
+func (r *Registry) PassthroughOverride(name string) (config.AdapterPassthroughOverride, bool) {
+	s, ok := r.passthroughOverrides[strings.ToLower(name)]
 	return s, ok
 }
 

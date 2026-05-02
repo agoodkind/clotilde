@@ -22,6 +22,7 @@ type Reasoning struct {
 
 type RunResult struct {
 	Usage                      adapteropenai.Usage
+	UsageTelemetry             CodexUsageTelemetry
 	FinishReason               string
 	ReasoningSignaled          bool
 	ReasoningVisible           bool
@@ -68,24 +69,51 @@ func (r *RunResult) SetFinishReason(finishReason string) {
 }
 
 type completedResponse struct {
-	Response struct {
-		ID                string `json:"id"`
-		Status            string `json:"status"`
-		IncompleteDetails struct {
-			Reason string `json:"reason"`
-		} `json:"incomplete_details"`
-		Usage struct {
-			InputTokens        int `json:"input_tokens"`
-			OutputTokens       int `json:"output_tokens"`
-			TotalTokens        int `json:"total_tokens"`
-			InputTokensDetails struct {
-				CachedTokens int `json:"cached_tokens"`
-			} `json:"input_tokens_details"`
-			OutputTokensDetails struct {
-				ReasoningTokens int `json:"reasoning_tokens"`
-			} `json:"output_tokens_details"`
-		} `json:"usage"`
-	} `json:"response"`
+	Response completedResponseBody `json:"response"`
+}
+
+type completedResponseBody struct {
+	ID                string                    `json:"id"`
+	Status            string                    `json:"status"`
+	IncompleteDetails completedIncompleteDetail `json:"incomplete_details"`
+	Usage             *completedUsage           `json:"usage"`
+}
+
+type completedIncompleteDetail struct {
+	Reason string `json:"reason"`
+}
+
+// completedUsage mirrors the OpenAI Responses `response.completed`
+// usage shape parsed by Codex at
+// research/codex/codex-rs/codex-api/src/sse/responses.rs.
+type completedUsage struct {
+	InputTokens         int                           `json:"input_tokens"`
+	InputTokensDetails  *completedInputTokensDetails  `json:"input_tokens_details"`
+	OutputTokens        int                           `json:"output_tokens"`
+	OutputTokensDetails *completedOutputTokensDetails `json:"output_tokens_details"`
+	TotalTokens         int                           `json:"total_tokens"`
+}
+
+type completedInputTokensDetails struct {
+	CachedTokens int `json:"cached_tokens"`
+}
+
+type completedOutputTokensDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
+}
+
+// CodexUsageTelemetry is the provider-owned diagnostic view of Codex
+// Responses usage. The boolean fields intentionally distinguish an
+// explicitly present zero from omitted/null details.
+type CodexUsageTelemetry struct {
+	UsagePresent               bool
+	InputTokens                int
+	OutputTokens               int
+	TotalTokens                int
+	InputTokensDetailsPresent  bool
+	CachedTokens               int
+	OutputTokensDetailsPresent bool
+	ReasoningOutputTokens      int
 }
 
 // Mirrors the observed Responses SSE envelope from
@@ -532,6 +560,7 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 						out.ResponseID = responseID
 					}
 					out.Usage = mapUsage(c)
+					out.UsageTelemetry = usageTelemetry(c)
 					if out.FinishReason != "tool_calls" {
 						out.SetFinishReason(finishreason.FromCodexResponse(c.Response.Status, c.Response.IncompleteDetails.Reason))
 					}
@@ -648,13 +677,17 @@ func (item transportItem) cloneMap() map[string]any {
 }
 
 func mapUsage(c completedResponse) adapteropenai.Usage {
-	u := adapteropenai.Usage{
-		PromptTokens:     c.Response.Usage.InputTokens,
-		CompletionTokens: c.Response.Usage.OutputTokens,
-		TotalTokens:      c.Response.Usage.TotalTokens,
+	if c.Response.Usage == nil {
+		return adapteropenai.Usage{}
 	}
-	if ct := c.Response.Usage.InputTokensDetails.CachedTokens; ct > 0 {
-		u.PromptTokensDetails = &adapteropenai.PromptTokensDetails{CachedTokens: ct}
+	usage := c.Response.Usage
+	u := adapteropenai.Usage{
+		PromptTokens:     usage.InputTokens,
+		CompletionTokens: usage.OutputTokens,
+		TotalTokens:      usage.TotalTokens,
+	}
+	if usage.InputTokensDetails != nil {
+		u.PromptTokensDetails = &adapteropenai.PromptTokensDetails{CachedTokens: usage.InputTokensDetails.CachedTokens}
 	}
 	return u
 }
@@ -664,6 +697,28 @@ func reasoningTokensFromEvent(raw transportStreamEvent) int {
 		return 0
 	}
 	return raw.Response.Usage.OutputTokensDetails.ReasoningTokens
+}
+
+func usageTelemetry(c completedResponse) CodexUsageTelemetry {
+	if c.Response.Usage == nil {
+		return CodexUsageTelemetry{}
+	}
+	usage := c.Response.Usage
+	out := CodexUsageTelemetry{
+		UsagePresent: true,
+		InputTokens:  usage.InputTokens,
+		OutputTokens: usage.OutputTokens,
+		TotalTokens:  usage.TotalTokens,
+	}
+	if usage.InputTokensDetails != nil {
+		out.InputTokensDetailsPresent = true
+		out.CachedTokens = usage.InputTokensDetails.CachedTokens
+	}
+	if usage.OutputTokensDetails != nil {
+		out.OutputTokensDetailsPresent = true
+		out.ReasoningOutputTokens = usage.OutputTokensDetails.ReasoningTokens
+	}
+	return out
 }
 
 func rawString(m map[string]any, key string) string {

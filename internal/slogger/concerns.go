@@ -45,29 +45,29 @@ const (
 	ConcernProviderMITMWire            = "providers.mitm.wire"
 	ConcernProviderMITMErrors          = "providers.mitm.errors"
 
-	ConcernAdapterHTTPIngress       = "adapter.http.ingress"
-	ConcernAdapterHTTPEgress        = "adapter.http.egress"
-	ConcernAdapterHTTPRaw           = "adapter.http.raw"
-	ConcernAdapterHTTPErrors        = "adapter.http.errors"
-	ConcernAdapterModelsCatalog     = "adapter.models.catalog"
-	ConcernAdapterModelsResolve     = "adapter.models.resolve"
-	ConcernAdapterModelsCursor      = "adapter.models.cursor"
-	ConcernAdapterChatDiscovery     = "adapter.chat.discovery"
-	ConcernAdapterChatPreflight     = "adapter.chat.preflight"
-	ConcernAdapterChatDispatch      = "adapter.chat.dispatch"
-	ConcernAdapterChatRender        = "adapter.chat.render"
-	ConcernAdapterProviderCodex     = "adapter.providers.codex.request"
-	ConcernAdapterProviderCodexWS   = "adapter.providers.codex.websocket"
-	ConcernAdapterProviderCodexSess = "adapter.providers.codex.session-reuse"
-	ConcernAdapterProviderCodexResp = "adapter.providers.codex.responses"
-	ConcernAdapterProviderCodexErr  = "adapter.providers.codex.errors"
-	ConcernAdapterProviderAnthReq   = "adapter.providers.anthropic.request"
-	ConcernAdapterProviderAnthSSE   = "adapter.providers.anthropic.sse"
-	ConcernAdapterProviderAnthOAuth = "adapter.providers.anthropic.oauth"
-	ConcernAdapterProviderAnthErr   = "adapter.providers.anthropic.errors"
-	ConcernAdapterProviderShuntReq  = "adapter.providers.shunt.request"
-	ConcernAdapterProviderShuntCoer = "adapter.providers.shunt.coercion"
-	ConcernAdapterProviderShuntErr  = "adapter.providers.shunt.errors"
+	ConcernAdapterHTTPIngress             = "adapter.http.ingress"
+	ConcernAdapterHTTPEgress              = "adapter.http.egress"
+	ConcernAdapterHTTPRaw                 = "adapter.http.raw"
+	ConcernAdapterHTTPErrors              = "adapter.http.errors"
+	ConcernAdapterModelsCatalog           = "adapter.models.catalog"
+	ConcernAdapterModelsResolve           = "adapter.models.resolve"
+	ConcernAdapterModelsCursor            = "adapter.models.cursor"
+	ConcernAdapterChatDiscovery           = "adapter.chat.discovery"
+	ConcernAdapterChatPreflight           = "adapter.chat.preflight"
+	ConcernAdapterChatDispatch            = "adapter.chat.dispatch"
+	ConcernAdapterChatRender              = "adapter.chat.render"
+	ConcernAdapterProviderCodex           = "adapter.providers.codex.request"
+	ConcernAdapterProviderCodexWS         = "adapter.providers.codex.websocket"
+	ConcernAdapterProviderCodexSess       = "adapter.providers.codex.session-reuse"
+	ConcernAdapterProviderCodexResp       = "adapter.providers.codex.responses"
+	ConcernAdapterProviderCodexErr        = "adapter.providers.codex.errors"
+	ConcernAdapterProviderAnthReq         = "adapter.providers.anthropic.request"
+	ConcernAdapterProviderAnthSSE         = "adapter.providers.anthropic.sse"
+	ConcernAdapterProviderAnthOAuth       = "adapter.providers.anthropic.oauth"
+	ConcernAdapterProviderAnthErr         = "adapter.providers.anthropic.errors"
+	ConcernAdapterProviderPassthroughReq  = "adapter.providers.passthrough_override.request"
+	ConcernAdapterProviderPassthroughCoer = "adapter.providers.passthrough_override.coercion"
+	ConcernAdapterProviderPassthroughErr  = "adapter.providers.passthrough_override.errors"
 
 	ConcernDaemonRPCRequests       = "daemon.rpc.requests"
 	ConcernDaemonRPCStreams        = "daemon.rpc.streams"
@@ -127,29 +127,29 @@ var concernPaths = map[string]string{
 	ConcernProviderMITMWire:            "providers/mitm/wire.jsonl",
 	ConcernProviderMITMErrors:          "providers/mitm/errors.jsonl",
 
-	ConcernAdapterHTTPIngress:       "adapter/http/ingress.jsonl",
-	ConcernAdapterHTTPEgress:        "adapter/http/egress.jsonl",
-	ConcernAdapterHTTPRaw:           "adapter/http/raw.jsonl",
-	ConcernAdapterHTTPErrors:        "adapter/http/errors.jsonl",
-	ConcernAdapterModelsCatalog:     "adapter/models/catalog.jsonl",
-	ConcernAdapterModelsResolve:     "adapter/models/resolve.jsonl",
-	ConcernAdapterModelsCursor:      "adapter/models/cursor.jsonl",
-	ConcernAdapterChatDiscovery:     "adapter/chat/discovery.jsonl",
-	ConcernAdapterChatPreflight:     "adapter/chat/preflight.jsonl",
-	ConcernAdapterChatDispatch:      "adapter/chat/dispatch.jsonl",
-	ConcernAdapterChatRender:        "adapter/chat/render.jsonl",
-	ConcernAdapterProviderCodex:     "adapter/providers/codex/request.jsonl",
-	ConcernAdapterProviderCodexWS:   "adapter/providers/codex/websocket.jsonl",
-	ConcernAdapterProviderCodexSess: "adapter/providers/codex/session-reuse.jsonl",
-	ConcernAdapterProviderCodexResp: "adapter/providers/codex/responses.jsonl",
-	ConcernAdapterProviderCodexErr:  "adapter/providers/codex/errors.jsonl",
-	ConcernAdapterProviderAnthReq:   "adapter/providers/anthropic/request.jsonl",
-	ConcernAdapterProviderAnthSSE:   "adapter/providers/anthropic/sse.jsonl",
-	ConcernAdapterProviderAnthOAuth: "adapter/providers/anthropic/oauth.jsonl",
-	ConcernAdapterProviderAnthErr:   "adapter/providers/anthropic/errors.jsonl",
-	ConcernAdapterProviderShuntReq:  "adapter/providers/shunt/request.jsonl",
-	ConcernAdapterProviderShuntCoer: "adapter/providers/shunt/coercion.jsonl",
-	ConcernAdapterProviderShuntErr:  "adapter/providers/shunt/errors.jsonl",
+	ConcernAdapterHTTPIngress:             "adapter/http/ingress.jsonl",
+	ConcernAdapterHTTPEgress:              "adapter/http/egress.jsonl",
+	ConcernAdapterHTTPRaw:                 "adapter/http/raw.jsonl",
+	ConcernAdapterHTTPErrors:              "adapter/http/errors.jsonl",
+	ConcernAdapterModelsCatalog:           "adapter/models/catalog.jsonl",
+	ConcernAdapterModelsResolve:           "adapter/models/resolve.jsonl",
+	ConcernAdapterModelsCursor:            "adapter/models/cursor.jsonl",
+	ConcernAdapterChatDiscovery:           "adapter/chat/discovery.jsonl",
+	ConcernAdapterChatPreflight:           "adapter/chat/preflight.jsonl",
+	ConcernAdapterChatDispatch:            "adapter/chat/dispatch.jsonl",
+	ConcernAdapterChatRender:              "adapter/chat/render.jsonl",
+	ConcernAdapterProviderCodex:           "adapter/providers/codex/request.jsonl",
+	ConcernAdapterProviderCodexWS:         "adapter/providers/codex/websocket.jsonl",
+	ConcernAdapterProviderCodexSess:       "adapter/providers/codex/session-reuse.jsonl",
+	ConcernAdapterProviderCodexResp:       "adapter/providers/codex/responses.jsonl",
+	ConcernAdapterProviderCodexErr:        "adapter/providers/codex/errors.jsonl",
+	ConcernAdapterProviderAnthReq:         "adapter/providers/anthropic/request.jsonl",
+	ConcernAdapterProviderAnthSSE:         "adapter/providers/anthropic/sse.jsonl",
+	ConcernAdapterProviderAnthOAuth:       "adapter/providers/anthropic/oauth.jsonl",
+	ConcernAdapterProviderAnthErr:         "adapter/providers/anthropic/errors.jsonl",
+	ConcernAdapterProviderPassthroughReq:  "adapter/providers/passthrough_override/request.jsonl",
+	ConcernAdapterProviderPassthroughCoer: "adapter/providers/passthrough_override/coercion.jsonl",
+	ConcernAdapterProviderPassthroughErr:  "adapter/providers/passthrough_override/errors.jsonl",
 
 	ConcernDaemonRPCRequests:       "daemon/rpc/requests.jsonl",
 	ConcernDaemonRPCStreams:        "daemon/rpc/streams.jsonl",
@@ -214,7 +214,7 @@ var eventConcernRules = []eventConcernRule{
 	{"adapter.anthropic.error", ConcernAdapterProviderAnthErr},
 	{"adapter.anthropic.sse", ConcernAdapterProviderAnthSSE},
 	{"adapter.anthropic.", ConcernAdapterProviderAnthReq},
-	{"adapter.shunt.", ConcernAdapterProviderShuntReq},
+	{"adapter.passthrough_override.", ConcernAdapterProviderPassthroughReq},
 	{"adapter.notice.", ConcernAdapterHTTPErrors},
 	{"adapter listening", ConcernProcessDaemonListeners},
 

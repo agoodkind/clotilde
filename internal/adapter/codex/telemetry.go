@@ -33,6 +33,21 @@ type TransportTelemetry struct {
 	ContextWindowError       bool
 }
 
+type CodexUsageLogContext struct {
+	RequestID          string
+	CursorRequestID    string
+	Correlation        correlation.Context
+	Alias              string
+	UpstreamModel      string
+	Transport          string
+	ServiceTier        string
+	PromptCacheKey     string
+	PreviousResponseID string
+	ResponseID         string
+	ConversationID     string
+	WebsocketWarmup    bool
+}
+
 func LogTransportPrepared(ctx context.Context, log *slog.Logger, telemetry TransportTelemetry) {
 	if log == nil {
 		log = slog.Default()
@@ -65,4 +80,37 @@ func LogTransportPrepared(ctx context.Context, log *slog.Logger, telemetry Trans
 	}
 	attrs = append(attrs, telemetry.Correlation.Attrs()...)
 	log.LogAttrs(ctx, slog.LevelInfo, "adapter.codex.transport.prepared", attrs...)
+}
+
+func LogUsageTelemetry(ctx context.Context, log *slog.Logger, usage CodexUsageTelemetry, meta CodexUsageLogContext) {
+	if log == nil {
+		log = slog.Default()
+	}
+	attrs := []slog.Attr{
+		slog.String("component", "adapter"),
+		slog.String("subcomponent", "codex"),
+		slog.String("request_id", meta.RequestID),
+		slog.String("cursor_request_id", meta.CursorRequestID),
+		slog.String("alias", meta.Alias),
+		slog.String("model", meta.UpstreamModel),
+		slog.String("transport", meta.Transport),
+		slog.String("service_tier", meta.ServiceTier),
+		slog.String("response_id", meta.ResponseID),
+		slog.String("conversation_id", meta.ConversationID),
+		slog.Bool("websocket_warmup", meta.WebsocketWarmup),
+		slog.Bool("has_prompt_cache_key", meta.PromptCacheKey != ""),
+		slog.Int("prompt_cache_key_bytes", len(meta.PromptCacheKey)),
+		slog.Bool("has_previous_response_id", meta.PreviousResponseID != ""),
+		slog.Bool("usage_present", usage.UsagePresent),
+		slog.Int("input_tokens", usage.InputTokens),
+		slog.Int("output_tokens", usage.OutputTokens),
+		slog.Int("total_tokens", usage.TotalTokens),
+		slog.Bool("input_tokens_details_present", usage.InputTokensDetailsPresent),
+		slog.Int("cached_tokens", usage.CachedTokens),
+		slog.Bool("explicit_zero_cached_tokens", usage.InputTokensDetailsPresent && usage.CachedTokens == 0),
+		slog.Bool("output_tokens_details_present", usage.OutputTokensDetailsPresent),
+		slog.Int("reasoning_output_tokens", usage.ReasoningOutputTokens),
+	}
+	attrs = append(attrs, meta.Correlation.Attrs()...)
+	log.LogAttrs(ctx, slog.LevelInfo, "adapter.codex.usage.completed", attrs...)
 }

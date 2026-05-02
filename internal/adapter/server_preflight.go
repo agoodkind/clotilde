@@ -118,7 +118,7 @@ func requestHasImageContent(req *ChatRequest) bool {
 }
 
 func (s *Server) validateVision(ctx context.Context, req *ChatRequest, model ResolvedModel, reqID string) *preflightError {
-	if model.Backend == BackendShunt {
+	if model.Backend == BackendPassthroughOverride {
 		return nil
 	}
 	if !requestHasImageContent(req) {

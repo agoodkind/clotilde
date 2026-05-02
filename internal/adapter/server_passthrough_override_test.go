@@ -68,7 +68,7 @@ func TestRedactedHeaders(t *testing.T) {
 	}
 }
 
-func TestShuntPassthroughWrapsMalformedUpstreamError(t *testing.T) {
+func TestPassthroughOverrideWrapsMalformedUpstreamError(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {
 			t.Fatalf("upstream path = %q", r.URL.Path)
@@ -79,7 +79,7 @@ func TestShuntPassthroughWrapsMalformedUpstreamError(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	srv := newShuntPassthroughTestServer(t, upstream.URL+"/v1")
+	srv := newPassthroughOverrideTestServer(t, upstream.URL+"/v1")
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"local-model","messages":[{"role":"user","content":"hello"}]}`))
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, req)
@@ -94,7 +94,7 @@ func TestShuntPassthroughWrapsMalformedUpstreamError(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal response: %v; body=%s", err, rec.Body.String())
 	}
-	if out.Error.Type != "upstream_error" || out.Error.Code != "upstream_failed" {
+	if out.Error.Type != "server_error" || out.Error.Code != "upstream_failed" {
 		t.Fatalf("error = %+v", out.Error)
 	}
 	if !strings.Contains(out.Error.Message, "local backend failed") {
@@ -102,7 +102,7 @@ func TestShuntPassthroughWrapsMalformedUpstreamError(t *testing.T) {
 	}
 }
 
-func TestShuntPassthroughPreservesOpenAIErrorEnvelope(t *testing.T) {
+func TestPassthroughOverridePreservesOpenAIErrorEnvelope(t *testing.T) {
 	const upstreamBody = `{"error":{"message":"rate limit from upstream","type":"rate_limit_error","code":"rate_limit_exceeded","param":"model"}}`
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -111,7 +111,7 @@ func TestShuntPassthroughPreservesOpenAIErrorEnvelope(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	srv := newShuntPassthroughTestServer(t, upstream.URL+"/v1")
+	srv := newPassthroughOverrideTestServer(t, upstream.URL+"/v1")
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"local-model","messages":[{"role":"user","content":"hello"}]}`))
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, req)
@@ -124,7 +124,7 @@ func TestShuntPassthroughPreservesOpenAIErrorEnvelope(t *testing.T) {
 	}
 }
 
-func newShuntPassthroughTestServer(t *testing.T, baseURL string) *Server {
+func newPassthroughOverrideTestServer(t *testing.T, baseURL string) *Server {
 	t.Helper()
 	cfg := baseConfig()
 	cfg.Enabled = true

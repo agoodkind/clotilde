@@ -44,7 +44,7 @@ type ResolvedModelView struct {
 }
 
 // ErrUnresolvedProvider signals that the model alias resolved to a
-// backend the resolver does not support (today: shunt or fallback).
+// backend the resolver does not support (today: passthrough_override or fallback).
 // The dispatcher must fall back to its legacy path or reject the
 // request explicitly.
 var ErrUnresolvedProvider = errors.New("resolver: alias does not map to a known provider")

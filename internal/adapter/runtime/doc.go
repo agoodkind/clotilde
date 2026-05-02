@@ -3,6 +3,6 @@
 // OpenAI-compatible stream/completion response shaping.
 //
 // The package intentionally keeps these concerns separate from transport
-// handlers so Anthropic, Codex, and shunt paths share behavior
+// handlers so Anthropic, Codex, and passthrough_override paths share behavior
 // without drifting.
 package runtime

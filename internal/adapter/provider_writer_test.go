@@ -85,7 +85,20 @@ func TestCodexProviderErrorResponseMapsGenericProviderError(t *testing.T) {
 	if status != http.StatusBadGateway {
 		t.Fatalf("status=%d want %d", status, http.StatusBadGateway)
 	}
-	if body.Type != "upstream_error" || body.Code != "upstream_failed" || body.Param != "" {
+	if body.Type != "server_error" || body.Code != "upstream_failed" || body.Param != "" {
+		t.Fatalf("body=%+v", body)
+	}
+	if body.Message != "codex websocket read failed" {
+		t.Fatalf("message=%q", body.Message)
+	}
+}
+
+func TestAdapterErrUpstreamFailedUsesOpenAICompatibleServerError(t *testing.T) {
+	t.Parallel()
+
+	body := adapterErrUpstreamFailed("codex", "codex websocket read failed", errors.New("boom")).openAIErrorBody()
+
+	if body.Type != "server_error" || body.Code != "upstream_failed" || body.Param != "" {
 		t.Fatalf("body=%+v", body)
 	}
 	if body.Message != "codex websocket read failed" {

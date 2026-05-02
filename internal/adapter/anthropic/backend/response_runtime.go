@@ -298,12 +298,12 @@ func CollectResponse(
 			escalate,
 			func(status int, code, msg string) error {
 				d.WriteErrorJSON(w, status, adapteropenai.ErrorResponse{
-					Error: adapteropenai.ErrorBody{Message: msg, Type: code},
+					Error: adapteropenai.ErrorBody{Message: msg, Type: "server_error", Code: code},
 				})
 				return nil
 			},
 			http.StatusBadGateway,
-			"upstream_error",
+			"upstream_failed",
 			errMsg,
 		)
 	}
@@ -595,13 +595,13 @@ func usageWithContextWindow(u adapteropenai.Usage, contextWindow int) adapterope
 //   - retryable + 429 -> rate_limit_error
 //   - retryable + 5xx -> server_error
 //   - retryable + transport -> server_error (no upstream status)
-//   - fatal -> upstream_error
+//   - fatal -> server_error
 //
 // Message preserves the human-readable upstream text so users still
 // see the friendly rate-limit body when one was available.
 func buildErrorBodyForUpstream(ue *anthropic.UpstreamError) adapteropenai.ErrorBody {
 	if ue == nil {
-		return adapteropenai.ErrorBody{Type: "upstream_error", Message: "anthropic upstream error"}
+		return adapteropenai.ErrorBody{Type: "server_error", Code: "upstream_failed", Message: "anthropic upstream error"}
 	}
 	body := adapteropenai.ErrorBody{Message: ue.Error()}
 	switch {
@@ -612,7 +612,7 @@ func buildErrorBodyForUpstream(ue *anthropic.UpstreamError) adapteropenai.ErrorB
 		body.Type = "server_error"
 		body.Code = "upstream_unavailable"
 	default:
-		body.Type = "upstream_error"
+		body.Type = "server_error"
 		body.Code = "upstream_failed"
 	}
 	return body

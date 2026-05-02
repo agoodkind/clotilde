@@ -80,6 +80,21 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 		Expect(cfg.Adapter.OpenAICompatPassthrough.APIKeyEnv).To(Equal("OPENAI_API_KEY"))
 	})
 
+	It("loads passthrough override upstreams", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[adapter.passthrough_overrides.local]\nbase_url = \"http://localhost:1234/v1\"\napi_key_env = \"LOCAL_API_KEY\"\nmodel = \"local-model\"\n"), 0o644)).To(Succeed())
+
+		cfg, err := config.LoadGlobalOrDefault()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.Adapter.PassthroughOverrides["local"].BaseURL).To(Equal("http://localhost:1234/v1"))
+		Expect(cfg.Adapter.PassthroughOverrides["local"].APIKeyEnv).To(Equal("LOCAL_API_KEY"))
+		Expect(cfg.Adapter.PassthroughOverrides["local"].Model).To(Equal("local-model"))
+	})
+
 	It("ignores legacy global config.json", func() {
 		tmpDir := GinkgoT().TempDir()
 		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)

@@ -53,3 +53,75 @@ func TestLogTransportPreparedIncludesParityFields(t *testing.T) {
 		}
 	}
 }
+
+func TestLogUsageTelemetryDistinguishesExplicitZeroCachedTokens(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	LogUsageTelemetry(context.Background(), log, CodexUsageTelemetry{
+		UsagePresent:               true,
+		InputTokens:                100,
+		OutputTokens:               8,
+		TotalTokens:                108,
+		InputTokensDetailsPresent:  true,
+		CachedTokens:               0,
+		OutputTokensDetailsPresent: true,
+		ReasoningOutputTokens:      0,
+	}, CodexUsageLogContext{
+		RequestID:          "req-1",
+		CursorRequestID:    "cursor-1",
+		Alias:              "clyde-codex-5.5-high",
+		UpstreamModel:      "gpt-5.5",
+		Transport:          "responses_websocket",
+		ServiceTier:        "priority",
+		PromptCacheKey:     "cursor:conv-123",
+		PreviousResponseID: "resp-prev",
+		ResponseID:         "resp-1",
+		ConversationID:     "cursor:conv-123",
+	})
+
+	out := buf.String()
+	for _, want := range []string{
+		`"usage_present":true`,
+		`"input_tokens_details_present":true`,
+		`"cached_tokens":0`,
+		`"explicit_zero_cached_tokens":true`,
+		`"has_prompt_cache_key":true`,
+		`"has_previous_response_id":true`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("log output missing %q in %s", want, out)
+		}
+	}
+}
+
+func TestLogUsageTelemetryDistinguishesOmittedInputTokenDetails(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	LogUsageTelemetry(context.Background(), log, CodexUsageTelemetry{
+		UsagePresent: true,
+		InputTokens:  100,
+		OutputTokens: 8,
+		TotalTokens:  108,
+	}, CodexUsageLogContext{
+		RequestID:     "req-1",
+		Alias:         "clyde-codex-5.5-high",
+		UpstreamModel: "gpt-5.5",
+		Transport:     "responses_websocket",
+		ResponseID:    "resp-1",
+	})
+
+	out := buf.String()
+	for _, want := range []string{
+		`"usage_present":true`,
+		`"input_tokens_details_present":false`,
+		`"cached_tokens":0`,
+		`"explicit_zero_cached_tokens":false`,
+		`"has_prompt_cache_key":false`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("log output missing %q in %s", want, out)
+		}
+	}
+}

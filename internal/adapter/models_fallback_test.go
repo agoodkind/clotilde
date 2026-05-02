@@ -494,14 +494,47 @@ func TestResolveUnknownModelUsesOpenAICompatPassthrough(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if m.Backend != BackendShunt {
-		t.Fatalf("backend = %q want %q", m.Backend, BackendShunt)
+	if m.Backend != BackendPassthroughOverride {
+		t.Fatalf("backend = %q want %q", m.Backend, BackendPassthroughOverride)
 	}
-	if m.Shunt != "" {
-		t.Fatalf("Shunt = %q want empty for direct passthrough", m.Shunt)
+	if m.PassthroughOverride != "" {
+		t.Fatalf("PassthroughOverride = %q want empty for direct passthrough", m.PassthroughOverride)
 	}
 	if m.OpenAICompatPassthrough.BaseURL != "http://[::1]:1234/v1" {
 		t.Fatalf("passthrough base_url = %q", m.OpenAICompatPassthrough.BaseURL)
+	}
+	if effort != "" {
+		t.Fatalf("effort = %q want empty", effort)
+	}
+}
+
+func TestResolveConfiguredModelUsesPassthroughOverride(t *testing.T) {
+	cfg := baseConfig()
+	cfg.PassthroughOverrides = map[string]config.AdapterPassthroughOverride{
+		"local": {
+			BaseURL: "http://localhost:1234/v1",
+			Model:   "local-model",
+		},
+	}
+	cfg.Models = map[string]config.AdapterModel{
+		"gpt-local": {
+			PassthroughOverride: "local",
+		},
+	}
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	m, effort, err := r.Resolve("gpt-local", "")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if m.Backend != BackendPassthroughOverride {
+		t.Fatalf("backend = %q want %q", m.Backend, BackendPassthroughOverride)
+	}
+	if m.PassthroughOverride != "local" {
+		t.Fatalf("PassthroughOverride = %q want local", m.PassthroughOverride)
 	}
 	if effort != "" {
 		t.Fatalf("effort = %q want empty", effort)

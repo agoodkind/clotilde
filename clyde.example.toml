@@ -79,6 +79,19 @@ api_key = ""
 api_key_env = ""
 model = ""
 
+# Optional: route specific model aliases to named passthrough overrides.
+# Use backend = "passthrough_override" when you want the model entry to
+# be explicit even if passthrough_override is present.
+# [adapter.passthrough_overrides.local]
+# base_url = "http://localhost:1234/v1"
+# api_key = ""
+# api_key_env = ""
+# model = "local-model"
+#
+# [adapter.models.gpt-local]
+# backend = "passthrough_override"
+# passthrough_override = "local"
+
 [adapter.oauth]
 token_url = "https://REDACTED-OAUTH-HOST/v1/oauth/token"
 messages_url = "https://REDACTED-UPSTREAM/v1/messages"

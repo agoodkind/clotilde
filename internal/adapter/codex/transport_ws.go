@@ -15,6 +15,7 @@ import (
 	"github.com/gorilla/websocket"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/slogger"
 )
 
 type ResponseCreateClientMetadata map[string]string
@@ -233,6 +234,22 @@ func writeAndParseWebsocketRequest(
 	}
 	synthetic := streamWebsocketAsSyntheticSSE(conn)
 	result, err := ParseSSEEvents(synthetic, emit)
+	if err == nil || strings.TrimSpace(result.ResponseID) != "" || result.UsageTelemetry.UsagePresent {
+		LogUsageTelemetry(ctx, cfg.Log, result.UsageTelemetry, CodexUsageLogContext{
+			RequestID:          cfg.RequestID,
+			CursorRequestID:    cfg.CursorRequestID,
+			Correlation:        cfg.Correlation,
+			Alias:              cfg.Alias,
+			UpstreamModel:      payload.Model,
+			Transport:          "responses_websocket",
+			ServiceTier:        payload.ServiceTier,
+			PromptCacheKey:     payload.PromptCacheKey,
+			PreviousResponseID: payload.PreviousResponseID,
+			ResponseID:         result.ResponseID,
+			ConversationID:     cfg.ConversationID,
+			WebsocketWarmup:    warmup,
+		})
+	}
 	if strings.TrimSpace(result.ResponseID) != "" {
 		corr := cfg.Correlation.WithUpstreamResponseID(result.ResponseID)
 		attrs := []slog.Attr{
@@ -256,6 +273,10 @@ func writeAndParseWebsocketRequest(
 // what the wire receives, so corruption between BuildRequest and the
 // websocket write is observable in the JSONL feed.
 func logWebsocketFrame(ctx context.Context, cfg WebsocketTransportConfig, payload ResponseCreateWsRequest, frame []byte, warmup bool) {
+	if !warmup {
+		summary := summarizeFinalResponseCreateFrame(cfg, payload, frame)
+		logCodexEventWithConcern(ctx, slog.LevelInfo, "adapter.codex.response_create_frame.summary", slogger.ConcernAdapterProviderCodexWS, summary.toSlogAttrs())
+	}
 	mode, maxBytes := cfg.BodyLog.Resolve()
 	if mode == BodyLogOff {
 		return

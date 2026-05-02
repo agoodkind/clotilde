@@ -3,10 +3,10 @@ package adapter
 import adaptermodel "goodkind.io/clyde/internal/adapter/model"
 
 const (
-	BackendClaude    = adaptermodel.BackendClaude
-	BackendShunt     = adaptermodel.BackendShunt
-	BackendAnthropic = adaptermodel.BackendAnthropic
-	BackendCodex     = adaptermodel.BackendCodex
+	BackendClaude              = adaptermodel.BackendClaude
+	BackendPassthroughOverride = adaptermodel.BackendPassthroughOverride
+	BackendAnthropic           = adaptermodel.BackendAnthropic
+	BackendCodex               = adaptermodel.BackendCodex
 
 	EffortLow    = adaptermodel.EffortLow
 	EffortMedium = adaptermodel.EffortMedium

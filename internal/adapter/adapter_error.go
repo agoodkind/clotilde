@@ -223,7 +223,7 @@ func (e *adapterError) applyDefaults() {
 		e.AnthropicType = "api_error"
 	case adapterErrorUpstreamFailed:
 		e.HTTPStatus = http.StatusBadGateway
-		e.OpenAIType = "upstream_error"
+		e.OpenAIType = "server_error"
 		e.OpenAICode = "upstream_failed"
 		e.AnthropicType = "api_error"
 	case adapterErrorTimeout:

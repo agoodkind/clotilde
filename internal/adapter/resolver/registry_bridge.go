@@ -56,7 +56,7 @@ func (a *ModelRegistryAdapter) Resolve(alias, reqEffort string) (ResolvedModelVi
 
 // backendToProvider maps the existing model.Backend* constants to the
 // resolver's narrower ProviderID enum. Backends that the resolver does
-// not represent (claude, shunt, fallback) map to ProviderUnknown so
+// not represent (claude, passthrough_override, fallback) map to ProviderUnknown so
 // the dispatcher can route them through their legacy paths.
 func backendToProvider(backend string) ProviderID {
 	switch backend {

@@ -16,15 +16,15 @@ func providerName(model ResolvedModel, path string) string {
 			return "openai-codex-app"
 		}
 		return "openai-codex"
-	case BackendShunt:
+	case BackendPassthroughOverride:
 		if strings.TrimSpace(model.OpenAICompatPassthrough.BaseURL) != "" {
 			return "openai-compat-passthrough"
 		}
-		name := strings.TrimSpace(model.Shunt)
+		name := strings.TrimSpace(model.PassthroughOverride)
 		if name == "" {
-			return "shunt-unknown"
+			return "passthrough-override-unknown"
 		}
-		return "shunt-" + name
+		return "passthrough-override-" + name
 	default:
 		return "claude-cli"
 	}

@@ -156,3 +156,131 @@ func TestSummarizeWsRequestPreservesPreviousResponseFlag(t *testing.T) {
 		t.Errorf("prompt_cache_key=%q want cursor:conv-x", s.PromptCacheKey)
 	}
 }
+
+func TestSummarizeFinalResponseCreateFrameCapturesPromptMarkersAndShape(t *testing.T) {
+	instructions := strings.Join([]string{
+		"cursor system rules",
+		"<cursor_mode>agent</cursor_mode>",
+		"You are Codex, a coding agent based on GPT-5.",
+		"vivid inner life as Codex",
+	}, "\n\n")
+	payload := ResponseCreateWsRequest{
+		Type:         "response.create",
+		Model:        "gpt-5.4",
+		Instructions: instructions,
+		Input: []map[string]any{
+			{"type": "message", "role": "developer"},
+			{"type": "message", "role": "user"},
+			{"type": "function_call", "name": "shell_command"},
+		},
+		Tools: []any{
+			map[string]any{"type": "function", "name": "shell_command"},
+			map[string]any{"type": "local_shell"},
+		},
+		PromptCacheKey:     "cursor:conv-x",
+		PreviousResponseID: "resp-prev",
+		ServiceTier:        "priority",
+	}
+	frame, err := MarshalResponseCreateWsRequest(payload)
+	if err != nil {
+		t.Fatalf("marshal frame: %v", err)
+	}
+
+	summary := summarizeFinalResponseCreateFrame(WebsocketTransportConfig{
+		RequestID:       "req-123",
+		CursorRequestID: "cursor-req-123",
+		Alias:           "clyde-gpt-5.4-1m-medium",
+	}, payload, frame)
+
+	if summary.RequestID != "req-123" || summary.CursorRequestID != "cursor-req-123" {
+		t.Fatalf("request ids not preserved: %#v", summary)
+	}
+	if summary.Alias != "clyde-gpt-5.4-1m-medium" || summary.Model != "gpt-5.4" {
+		t.Fatalf("model metadata not preserved: %#v", summary)
+	}
+	if summary.InstructionsLength != len(instructions) {
+		t.Fatalf("instructions_length=%d want %d", summary.InstructionsLength, len(instructions))
+	}
+	if summary.InstructionsSHA256 != sha256StringHex(instructions) {
+		t.Fatalf("instructions_sha256=%q want %q", summary.InstructionsSHA256, sha256StringHex(instructions))
+	}
+	if summary.FrameBytes != len(frame) || summary.FrameSHA256 != sha256Hex(frame) {
+		t.Fatalf("frame fingerprint mismatch: %#v", summary)
+	}
+	if !summary.CursorSystemPromptPresent {
+		t.Fatalf("cursor system prompt marker should be present")
+	}
+	if !summary.ClydeCursorModePresent {
+		t.Fatalf("clyde cursor mode marker should be present")
+	}
+	if !summary.OldClydePersonalityPromptPresent {
+		t.Fatalf("old Clyde personality marker should be present")
+	}
+	if !summary.CodexBasePromptPresent {
+		t.Fatalf("Codex base prompt marker should be present")
+	}
+	if summary.InputCount != 3 || summary.ToolCount != 2 {
+		t.Fatalf("counts = input:%d tools:%d", summary.InputCount, summary.ToolCount)
+	}
+	if summary.InputTypeCounts["message"] != 2 || summary.InputTypeCounts["function_call"] != 1 {
+		t.Fatalf("input type counts: %#v", summary.InputTypeCounts)
+	}
+	if summary.InputRoleCounts["developer"] != 1 || summary.InputRoleCounts["user"] != 1 {
+		t.Fatalf("input role counts: %#v", summary.InputRoleCounts)
+	}
+	if got := strings.Join(summary.ToolNames, ","); got != "local_shell,shell_command" {
+		t.Fatalf("tool names=%q", got)
+	}
+	if !summary.PreviousResponseIDPresent {
+		t.Fatalf("previous_response_id_present should be true")
+	}
+}
+
+func TestLogWebsocketFrameSummaryDoesNotRequireBodyLogging(t *testing.T) {
+	dir := t.TempDir()
+	sinkPath := filepath.Join(dir, "codex.jsonl")
+	t.Setenv("CLYDE_CODEX_LOG_PATH", sinkPath)
+	codexFileLoggerOnce = sync.Once{}
+	codexFileLogger = nil
+	t.Cleanup(func() {
+		codexFileLoggerOnce = sync.Once{}
+		codexFileLogger = nil
+	})
+
+	payload := ResponseCreateWsRequest{
+		Type:         "response.create",
+		Model:        "gpt-5.4",
+		Instructions: "cursor system rules",
+		Input:        []map[string]any{{"type": "message", "role": "user"}},
+		Tools:        []any{map[string]any{"type": "function", "name": "shell_command"}},
+	}
+	frame, err := MarshalResponseCreateWsRequest(payload)
+	if err != nil {
+		t.Fatalf("marshal frame: %v", err)
+	}
+
+	logWebsocketFrame(context.Background(), WebsocketTransportConfig{
+		RequestID:       "req-summary",
+		CursorRequestID: "cursor-req-summary",
+		Alias:           "clyde-gpt-5.4-1m-medium",
+		BodyLog:         BodyLogConfig{Mode: BodyLogOff},
+	}, payload, frame, false)
+
+	got, err := os.ReadFile(sinkPath)
+	if err != nil {
+		t.Fatalf("read sink: %v", err)
+	}
+	text := string(got)
+	if !strings.Contains(text, "adapter.codex.response_create_frame.summary") {
+		t.Fatalf("sink missing summary event: %s", text)
+	}
+	if !strings.Contains(text, `"concern":"adapter.providers.codex.websocket"`) {
+		t.Fatalf("sink missing websocket concern: %s", text)
+	}
+	if !strings.Contains(text, `"instructions_sha256":"`+sha256StringHex(payload.Instructions)+`"`) {
+		t.Fatalf("sink missing instructions fingerprint: %s", text)
+	}
+	if strings.Contains(text, `"body":`) || strings.Contains(text, "cursor system rules") {
+		t.Fatalf("summary should not include raw body or instructions: %s", text)
+	}
+}

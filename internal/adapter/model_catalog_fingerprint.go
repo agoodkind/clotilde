@@ -9,38 +9,38 @@ import (
 )
 
 type modelCatalogFingerprintRow struct {
-	Alias           string
-	Backend         string
-	ClaudeModel     string
-	Context         int
-	MaxOutputTokens int
-	Efforts         string
-	Effort          string
-	ThinkingModes   string
-	Thinking        string
-	SupportsTools   bool
-	SupportsVision  bool
-	Shunt           string
-	FamilySlug      string
+	Alias               string
+	Backend             string
+	ClaudeModel         string
+	Context             int
+	MaxOutputTokens     int
+	Efforts             string
+	Effort              string
+	ThinkingModes       string
+	Thinking            string
+	SupportsTools       bool
+	SupportsVision      bool
+	PassthroughOverride string
+	FamilySlug          string
 }
 
 func modelCatalogFingerprint(models []ResolvedModel) string {
 	rows := make([]modelCatalogFingerprintRow, 0, len(models))
 	for _, m := range models {
 		rows = append(rows, modelCatalogFingerprintRow{
-			Alias:           m.Alias,
-			Backend:         m.Backend,
-			ClaudeModel:     m.ClaudeModel,
-			Context:         m.Context,
-			MaxOutputTokens: m.MaxOutputTokens,
-			Efforts:         sortedJoined(m.Efforts),
-			Effort:          m.Effort,
-			ThinkingModes:   sortedJoined(m.ThinkingModes),
-			Thinking:        m.Thinking,
-			SupportsTools:   m.SupportsTools,
-			SupportsVision:  m.SupportsVision,
-			Shunt:           m.Shunt,
-			FamilySlug:      m.FamilySlug,
+			Alias:               m.Alias,
+			Backend:             m.Backend,
+			ClaudeModel:         m.ClaudeModel,
+			Context:             m.Context,
+			MaxOutputTokens:     m.MaxOutputTokens,
+			Efforts:             sortedJoined(m.Efforts),
+			Effort:              m.Effort,
+			ThinkingModes:       sortedJoined(m.ThinkingModes),
+			Thinking:            m.Thinking,
+			SupportsTools:       m.SupportsTools,
+			SupportsVision:      m.SupportsVision,
+			PassthroughOverride: m.PassthroughOverride,
+			FamilySlug:          m.FamilySlug,
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool {
@@ -61,7 +61,7 @@ func modelCatalogFingerprint(models []ResolvedModel) string {
 			row.Thinking,
 			row.SupportsTools,
 			row.SupportsVision,
-			row.Shunt,
+			row.PassthroughOverride,
 			row.FamilySlug,
 		)
 	}

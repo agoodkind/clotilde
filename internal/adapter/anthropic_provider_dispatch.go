@@ -185,7 +185,7 @@ func (s *Server) executeAnthropicPreparedCollect(
 	if dispatcher.finalResponse == nil {
 		return adapterprovider.Result{}, &anthropic.ExecuteError{
 			Status:  http.StatusBadGateway,
-			Code:    "upstream_error",
+			Code:    "upstream_failed",
 			Message: "anthropic provider collect path produced no final response",
 		}
 	}
@@ -282,7 +282,9 @@ func anthropicProviderAdapterError(err error) *adapterError {
 	if errors.As(err, &execErr) {
 		aerr := adapterErrUpstreamFailed("anthropic", execErr.Message, execErr)
 		aerr.HTTPStatus = execErr.Status
-		aerr.OpenAIType = execErr.Code
+		if execErr.Code != "upstream_failed" {
+			aerr.OpenAIType = execErr.Code
+		}
 		aerr.OpenAICode = execErr.Code
 		aerr.AnthropicType = anthropicErrorType(execErr.Status, execErr.Code)
 		return aerr

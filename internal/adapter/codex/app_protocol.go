@@ -198,11 +198,15 @@ type RPCReasoningTextDeltaNotification struct {
 }
 
 type RPCThreadTokenUsageUpdatedNotification struct {
+	ThreadID   string              `json:"threadId"`
+	TurnID     string              `json:"turnId"`
 	TokenUsage RPCThreadTokenUsage `json:"tokenUsage"`
 }
 
 type RPCThreadTokenUsage struct {
-	Last RPCTokenUsage `json:"last"`
+	Total              RPCTokenUsage `json:"total"`
+	Last               RPCTokenUsage `json:"last"`
+	ModelContextWindow *int          `json:"modelContextWindow"`
 }
 
 type RPCTokenUsage struct {

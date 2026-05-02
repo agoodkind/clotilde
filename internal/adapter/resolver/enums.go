@@ -2,7 +2,7 @@ package resolver
 
 // ProviderID is the typed enum naming the upstream provider that the
 // resolved request will be dispatched to. The set is intentionally
-// narrow. Shunt and fallback paths are handled by the dispatcher
+// narrow. PassthroughOverride and fallback paths are handled by the dispatcher
 // directly today and do not flow through the provider registry.
 type ProviderID string
 

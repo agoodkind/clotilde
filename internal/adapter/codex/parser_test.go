@@ -55,6 +55,114 @@ func TestParseSSEMapsIncompleteResponseToLengthFinishReason(t *testing.T) {
 	}
 }
 
+func TestParseSSEUsageTelemetryNonzeroCachedTokens(t *testing.T) {
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.completed",
+		`data: {"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":64},"output_tokens":8,"output_tokens_details":{"reasoning_tokens":3},"total_tokens":108}}}`,
+		"",
+	}, "\n") + "\n")
+	_, res, err := collectSSE(stream)
+	if err != nil {
+		t.Fatalf("ParseSSE: %v", err)
+	}
+	if res.Usage.PromptTokens != 100 || res.Usage.CompletionTokens != 8 || res.Usage.TotalTokens != 108 {
+		t.Fatalf("usage=%+v", res.Usage)
+	}
+	if res.Usage.PromptTokensDetails == nil || res.Usage.PromptTokensDetails.CachedTokens != 64 {
+		t.Fatalf("prompt token details=%+v want cached_tokens=64", res.Usage.PromptTokensDetails)
+	}
+	if !res.UsageTelemetry.UsagePresent || !res.UsageTelemetry.InputTokensDetailsPresent {
+		t.Fatalf("usage telemetry missing presence bits: %+v", res.UsageTelemetry)
+	}
+	if res.UsageTelemetry.CachedTokens != 64 || res.UsageTelemetry.ReasoningOutputTokens != 3 {
+		t.Fatalf("usage telemetry=%+v", res.UsageTelemetry)
+	}
+	if !res.UsageTelemetry.OutputTokensDetailsPresent {
+		t.Fatalf("expected output_tokens_details_present")
+	}
+}
+
+func TestParseSSEUsageTelemetryExplicitZeroCachedTokens(t *testing.T) {
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.completed",
+		`data: {"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":0},"output_tokens":8,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":108}}}`,
+		"",
+	}, "\n") + "\n")
+	_, res, err := collectSSE(stream)
+	if err != nil {
+		t.Fatalf("ParseSSE: %v", err)
+	}
+	if res.Usage.PromptTokensDetails == nil {
+		t.Fatalf("explicit zero cached_tokens should preserve prompt token details")
+	}
+	if res.Usage.PromptTokensDetails.CachedTokens != 0 {
+		t.Fatalf("cached_tokens=%d want 0", res.Usage.PromptTokensDetails.CachedTokens)
+	}
+	if !res.UsageTelemetry.InputTokensDetailsPresent || res.UsageTelemetry.CachedTokens != 0 {
+		t.Fatalf("usage telemetry=%+v want explicit zero details", res.UsageTelemetry)
+	}
+}
+
+func TestParseSSEUsageTelemetryOmittedInputTokenDetails(t *testing.T) {
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.completed",
+		`data: {"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":100,"output_tokens":8,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":108}}}`,
+		"",
+	}, "\n") + "\n")
+	_, res, err := collectSSE(stream)
+	if err != nil {
+		t.Fatalf("ParseSSE: %v", err)
+	}
+	if res.Usage.PromptTokensDetails != nil {
+		t.Fatalf("omitted input_tokens_details should not synthesize prompt details: %+v", res.Usage.PromptTokensDetails)
+	}
+	if !res.UsageTelemetry.UsagePresent {
+		t.Fatalf("usage_present=false want true")
+	}
+	if res.UsageTelemetry.InputTokensDetailsPresent {
+		t.Fatalf("input_tokens_details_present=true want false")
+	}
+	if res.UsageTelemetry.CachedTokens != 0 {
+		t.Fatalf("cached_tokens=%d want 0", res.UsageTelemetry.CachedTokens)
+	}
+}
+
+func TestParseSSEUsageTelemetryNullDetails(t *testing.T) {
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.completed",
+		`data: {"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":100,"input_tokens_details":null,"output_tokens":8,"output_tokens_details":null,"total_tokens":108}}}`,
+		"",
+	}, "\n") + "\n")
+	_, res, err := collectSSE(stream)
+	if err != nil {
+		t.Fatalf("ParseSSE: %v", err)
+	}
+	if res.Usage.PromptTokensDetails != nil {
+		t.Fatalf("null input_tokens_details should not synthesize prompt details: %+v", res.Usage.PromptTokensDetails)
+	}
+	if res.UsageTelemetry.InputTokensDetailsPresent || res.UsageTelemetry.OutputTokensDetailsPresent {
+		t.Fatalf("details presence should be false for null details: %+v", res.UsageTelemetry)
+	}
+}
+
+func TestParseSSEUsageTelemetryOmittedUsage(t *testing.T) {
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.completed",
+		`data: {"type":"response.completed","response":{"id":"resp_1"}}`,
+		"",
+	}, "\n") + "\n")
+	_, res, err := collectSSE(stream)
+	if err != nil {
+		t.Fatalf("ParseSSE: %v", err)
+	}
+	if res.UsageTelemetry.UsagePresent {
+		t.Fatalf("usage_present=true want false")
+	}
+	if res.Usage.PromptTokens != 0 || res.Usage.CompletionTokens != 0 || res.Usage.TotalTokens != 0 {
+		t.Fatalf("usage=%+v want zero value", res.Usage)
+	}
+}
+
 func TestParseSSEMapsContextWindowFailureToTypedError(t *testing.T) {
 	stream := strings.NewReader(strings.Join([]string{
 		"event: response.failed",

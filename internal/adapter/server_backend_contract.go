@@ -21,11 +21,11 @@ func (s *Server) applyBackendOverride(w http.ResponseWriter, r *http.Request, re
 
 	original := model.Backend
 	switch override {
-	case BackendAnthropic, BackendShunt, BackendCodex:
+	case BackendAnthropic, BackendPassthroughOverride, BackendCodex:
 		model.Backend = override
 	default:
 		s.respondAdapterError(w, r, newAdapterError(adapterErrorUnsupportedBackend,
-			"X-Clyde-Backend must be one of: anthropic, shunt, codex"))
+			"X-Clyde-Backend must be one of: anthropic, passthrough_override, codex"))
 		return model, false
 	}
 
@@ -66,8 +66,8 @@ func (s *Server) dispatchResolvedChat(
 	attrs = append(attrs, correlation.AttrsFromContext(r.Context())...)
 	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.backend.dispatching", attrs...)
 	switch model.Backend {
-	case BackendShunt:
-		s.forwardShunt(w, r, model, body)
+	case BackendPassthroughOverride:
+		s.forwardPassthroughOverride(w, r, model, body)
 		return
 	case BackendAnthropic:
 		if s.anthropicProvider == nil {
@@ -109,7 +109,7 @@ func (s *Server) dispatchResolvedChat(
 		return
 	default:
 		err := newAdapterError(adapterErrorUnsupportedBackend,
-			"model resolved to unsupported backend "+model.Backend+"; configure anthropic, codex, or shunt explicitly")
+			"model resolved to unsupported backend "+model.Backend+"; configure anthropic, codex, or passthrough_override explicitly")
 		err.Backend = model.Backend
 		err.ModelAlias = req.Model
 		s.respondAdapterError(w, r, err)

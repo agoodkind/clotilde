@@ -289,7 +289,7 @@ This ensures complete cleanup even after multiple `/clear` operations (and `/com
 The daemon optionally hosts an OpenAI Chat Completions v1 HTTP surface under
 `internal/adapter/`. Incoming `model` strings resolve through the model
 registry and typed resolver before dispatching to Anthropic OAuth, Codex
-websocket, configured shunts, or other provider-owned backends. Streaming and
+websocket, configured passthrough overrides, or other provider-owned backends. Streaming and
 non-streaming paths exist; tool calling, images, embeddings policy, and
 provider-specific finish/error mapping are enforced in the dispatcher and
 provider packages. Current adapter planning and research live in
@@ -322,6 +322,19 @@ Important Cursor/Codex facts agents should not rediscover:
   open an upstream Codex turn when Clyde can already tell the request exceeds
   the resolved model budget; return a Cursor-compatible context-length error
   shape instead.
+- Final upstream Codex websocket `response.create` frames emit the info-level
+  summary event `adapter.codex.response_create_frame.summary` to the
+  `adapter.providers.codex.websocket` concern. Use it to verify the exact
+  post-`BuildRequest` shape without raw body dumps: key fields include
+  `request_id`, `cursor_request_id`, `conversation_id`, correlation attrs,
+  `model`, `alias`, `transport`, `instructions_length`,
+  `instructions_sha256`, `frame_sha256`,
+  `cursor_system_prompt_present`, `clyde_cursor_mode_present`,
+  `old_clyde_personality_prompt_present`, `codex_base_prompt_present`,
+  `input_count`, `tool_count`, `input_type_counts`, `input_role_counts`,
+  `tool_names`, `prompt_cache_key`, and
+  `previous_response_id_present`. Raw/truncated bodies remain behind the
+  existing `codex.responses.request` debug event and `logging.body` mode.
 - GPT/Codex model aliases, effort tiers, context budgets, safe budgets, and
   advertised/native alias exposure should become fully config-driven. Avoid
   adding new hard-coded model facts to the registry unless you also file or

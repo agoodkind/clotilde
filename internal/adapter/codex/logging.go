@@ -6,14 +6,18 @@ package codex
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
 	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/slogger"
 )
 
 // BodyLogConfig controls how much of the outbound Codex request bytes
@@ -178,12 +182,16 @@ func (e requestEvent) toSlogAttrs() []slog.Attr {
 // daemon configures to fan out to clyde-daemon.jsonl) and the
 // dedicated codex.jsonl sink. The dedicated file is best effort.
 func logCodexEvent(ctx context.Context, level slog.Level, event string, attrs []slog.Attr) {
+	logCodexEventWithConcern(ctx, level, event, slogger.ConcernAdapterProviderCodex, attrs)
+}
+
+func logCodexEventWithConcern(ctx context.Context, level slog.Level, event, concern string, attrs []slog.Attr) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	slog.Default().LogAttrs(ctx, level, event, attrs...)
+	slogger.WithConcern(slog.Default(), concern).LogAttrs(ctx, level, event, attrs...)
 	if l := dedicatedCodexLogger(); l != nil {
-		l.LogAttrs(ctx, level, event, attrs...)
+		slogger.WithConcern(l, concern).LogAttrs(ctx, level, event, attrs...)
 	}
 }
 
@@ -250,6 +258,213 @@ func summarizeWsRequest(payload ResponseCreateWsRequest) *codexBodySummary {
 		Stream:             payload.Stream,
 		ServiceTier:        payload.ServiceTier,
 	}
+}
+
+type responseCreateFrameSummary struct {
+	Subcomponent                     string
+	Transport                        string
+	RequestID                        string
+	CursorRequestID                  string
+	ConversationID                   string
+	Correlation                      correlation.Context
+	Alias                            string
+	Model                            string
+	FrameBytes                       int
+	FrameSHA256                      string
+	InstructionsLength               int
+	InstructionsSHA256               string
+	CursorSystemPromptPresent        bool
+	ClydeCursorModePresent           bool
+	OldClydePersonalityPromptPresent bool
+	CodexBasePromptPresent           bool
+	InputCount                       int
+	ToolCount                        int
+	InputTypeCounts                  map[string]int
+	InputRoleCounts                  map[string]int
+	ToolNames                        []string
+	PromptCacheKey                   string
+	PreviousResponseIDPresent        bool
+	ServiceTier                      string
+}
+
+func (s responseCreateFrameSummary) toSlogAttrs() []slog.Attr {
+	attrs := []slog.Attr{
+		slog.String("subcomponent", s.Subcomponent),
+		slog.String("transport", s.Transport),
+		slog.Int("frame_bytes", s.FrameBytes),
+		slog.String("frame_sha256", s.FrameSHA256),
+		slog.Int("instructions_length", s.InstructionsLength),
+		slog.Bool("cursor_system_prompt_present", s.CursorSystemPromptPresent),
+		slog.Bool("clyde_cursor_mode_present", s.ClydeCursorModePresent),
+		slog.Bool("old_clyde_personality_prompt_present", s.OldClydePersonalityPromptPresent),
+		slog.Bool("codex_base_prompt_present", s.CodexBasePromptPresent),
+		slog.Int("input_count", s.InputCount),
+		slog.Int("tool_count", s.ToolCount),
+	}
+	if s.RequestID != "" {
+		attrs = append(attrs, slog.String("request_id", s.RequestID))
+	}
+	if s.CursorRequestID != "" {
+		attrs = append(attrs, slog.String("cursor_request_id", s.CursorRequestID))
+	}
+	if s.ConversationID != "" {
+		attrs = append(attrs, slog.String("conversation_id", s.ConversationID))
+	}
+	attrs = append(attrs, s.Correlation.Attrs()...)
+	if s.Alias != "" {
+		attrs = append(attrs, slog.String("alias", s.Alias))
+	}
+	if s.Model != "" {
+		attrs = append(attrs, slog.String("model", s.Model))
+	}
+	if s.InstructionsSHA256 != "" {
+		attrs = append(attrs, slog.String("instructions_sha256", s.InstructionsSHA256))
+	}
+	if len(s.InputTypeCounts) > 0 {
+		attrs = append(attrs, slog.Attr{Key: "input_type_counts", Value: slog.GroupValue(intMapAttrs(s.InputTypeCounts)...)})
+	}
+	if len(s.InputRoleCounts) > 0 {
+		attrs = append(attrs, slog.Attr{Key: "input_role_counts", Value: slog.GroupValue(intMapAttrs(s.InputRoleCounts)...)})
+	}
+	if len(s.ToolNames) > 0 {
+		attrs = append(attrs, slog.Any("tool_names", s.ToolNames))
+	}
+	if s.PromptCacheKey != "" {
+		attrs = append(attrs, slog.String("prompt_cache_key", s.PromptCacheKey))
+	}
+	if s.PreviousResponseIDPresent {
+		attrs = append(attrs, slog.Bool("previous_response_id_present", true))
+	}
+	if s.ServiceTier != "" {
+		attrs = append(attrs, slog.String("service_tier", s.ServiceTier))
+	}
+	return attrs
+}
+
+func summarizeFinalResponseCreateFrame(cfg WebsocketTransportConfig, payload ResponseCreateWsRequest, frame []byte) responseCreateFrameSummary {
+	markers := detectInstructionMarkers(payload.Instructions)
+	return responseCreateFrameSummary{
+		Subcomponent:                     "codex",
+		Transport:                        "responses_websocket",
+		RequestID:                        cfg.RequestID,
+		CursorRequestID:                  cfg.CursorRequestID,
+		ConversationID:                   cfg.ConversationID,
+		Correlation:                      cfg.Correlation,
+		Alias:                            cfg.Alias,
+		Model:                            payload.Model,
+		FrameBytes:                       len(frame),
+		FrameSHA256:                      sha256Hex(frame),
+		InstructionsLength:               len(payload.Instructions),
+		InstructionsSHA256:               sha256StringHex(payload.Instructions),
+		CursorSystemPromptPresent:        markers.CursorSystemPromptPresent,
+		ClydeCursorModePresent:           markers.ClydeCursorModePresent,
+		OldClydePersonalityPromptPresent: markers.OldClydePersonalityPromptPresent,
+		CodexBasePromptPresent:           markers.CodexBasePromptPresent,
+		InputCount:                       len(payload.Input),
+		ToolCount:                        len(payload.Tools),
+		InputTypeCounts:                  countInputStrings(payload.Input, "type"),
+		InputRoleCounts:                  countInputStrings(payload.Input, "role"),
+		ToolNames:                        responseCreateToolNames(payload.Tools),
+		PromptCacheKey:                   payload.PromptCacheKey,
+		PreviousResponseIDPresent:        strings.TrimSpace(payload.PreviousResponseID) != "",
+		ServiceTier:                      payload.ServiceTier,
+	}
+}
+
+type instructionMarkerSummary struct {
+	CursorSystemPromptPresent        bool
+	ClydeCursorModePresent           bool
+	OldClydePersonalityPromptPresent bool
+	CodexBasePromptPresent           bool
+}
+
+func detectInstructionMarkers(instructions string) instructionMarkerSummary {
+	trimmed := strings.TrimSpace(instructions)
+	lower := strings.ToLower(trimmed)
+	return instructionMarkerSummary{
+		CursorSystemPromptPresent: containsAny(lower,
+			"cursor system",
+			"cursor-provided system",
+			"you are an ai coding assistant",
+			"you are a powerful agentic ai coding assistant",
+			"you are an agent - please keep going",
+		),
+		ClydeCursorModePresent: strings.Contains(trimmed, "<cursor_mode>"),
+		OldClydePersonalityPromptPresent: containsAny(trimmed,
+			"vivid inner life as Codex",
+			"warm and upbeat",
+			"another subjectivity, not a mirror",
+		),
+		CodexBasePromptPresent: containsAny(trimmed,
+			"You are Codex, a coding agent based on GPT-5",
+			"As an expert coding agent, your primary focus is writing code",
+		),
+	}
+}
+
+func countInputStrings(input []map[string]any, key string) map[string]int {
+	counts := make(map[string]int)
+	for _, item := range input {
+		value := mapString(item, key)
+		if value == "" {
+			continue
+		}
+		counts[value]++
+	}
+	return counts
+}
+
+func responseCreateToolNames(tools []any) []string {
+	seen := make(map[string]bool)
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		m, _ := tool.(map[string]any)
+		name := mapString(m, "name")
+		if name == "" {
+			name = mapString(m, "type")
+		}
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func intMapAttrs(values map[string]int) []slog.Attr {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	attrs := make([]slog.Attr, 0, len(keys))
+	for _, key := range keys {
+		attrs = append(attrs, slog.Int(key, values[key]))
+	}
+	return attrs
+}
+
+func sha256StringHex(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	return sha256Hex([]byte(value))
+}
+
+func sha256Hex(value []byte) string {
+	sum := sha256.Sum256(value)
+	return hex.EncodeToString(sum[:])
+}
+
+func containsAny(haystack string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(haystack, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 // applyBodyMode returns (body string, body_b64 string, truncated bool)

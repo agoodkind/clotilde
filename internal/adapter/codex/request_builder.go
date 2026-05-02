@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	adaptercontent "goodkind.io/clyde/internal/adapter/content"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
@@ -19,7 +18,6 @@ import (
 // Defaults are sensible for production: real wall clock, real working
 // directory, and the user's $SHELL when set.
 var (
-	NowFunc     = time.Now
 	GetwdFn     = os.Getwd
 	ShellNameFn = defaultShellName
 )
@@ -31,30 +29,6 @@ func defaultShellName() string {
 	}
 	parts := strings.Split(shell, "/")
 	return parts[len(parts)-1]
-}
-
-func EnvironmentContextText(workspacePath string) (string, bool) {
-	cwd := strings.TrimSpace(workspacePath)
-	if cwd == "" {
-		var err error
-		cwd, err = GetwdFn()
-		if err != nil {
-			return "", false
-		}
-	}
-	now := NowFunc()
-	return strings.TrimSpace(fmt.Sprintf(`
-<environment_context>
-  <cwd>%s</cwd>
-  <shell>%s</shell>
-  <current_date>%s</current_date>
-  <timezone>%s</timezone>
-</environment_context>`,
-		cwd,
-		ShellNameFn(),
-		now.Format("2006-01-02"),
-		now.Format("-07:00 MST"),
-	)), true
 }
 
 func MessageContent(role, textType, text string) map[string]any {
@@ -131,43 +105,19 @@ func codexContentFromParts(parts []adaptercontent.Part, textType string) []map[s
 
 func BuildRequest(req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort string) HTTPTransportRequest {
 	cursorReq := adaptercursor.TranslateRequest(req)
-	promptContext := adaptercursor.CodexPromptContext(cursorReq, nil, "")
 	input := make([]map[string]any, 0, len(req.Messages))
 	systemSections := make([]string, 0, 8)
-	contextualUserSections := make([]string, 0, 4)
 	toolCallNames := make(map[string]string)
 	modelName := strings.TrimSpace(model.ClaudeModel)
 	if modelName == "" {
 		modelName = model.Alias
 	}
 	shellMode := ShellToolModeForModel(model)
-	lastUserIdx := -1
-	for i, msg := range req.Messages {
-		if strings.EqualFold(msg.Role, "user") {
-			lastUserIdx = i
-		}
-	}
 	workspacePath := cursorReq.WorkspacePath
-	environmentText, hasEnvironment := EnvironmentContextText(workspacePath)
-	if hasEnvironment {
-		contextualUserSections = append(contextualUserSections, environmentText)
-	}
-	buildContextual := func() []map[string]any {
-		promptContext = adaptercursor.CodexPromptContext(cursorReq, systemSections, strings.Join(contextualUserSections, "\n\n"))
-		contextual := make([]map[string]any, 0, 2)
-		if len(promptContext.DeveloperSections) > 0 {
-			contextual = append(contextual, MessageContent("developer", "input_text", strings.Join(promptContext.DeveloperSections, "\n\n")))
-		}
-		if len(promptContext.UserSections) > 0 {
-			contextual = append(contextual, MessageContent("user", "input_text", strings.Join(promptContext.UserSections, "\n\n")))
-		}
-		return contextual
-	}
-	if rawInput, ok := inputFromResponsesInput(req.Input, shellMode, workspacePath, &systemSections, buildContextual); ok {
+	if rawInput, ok := inputFromResponsesInput(req.Input, shellMode, workspacePath, &systemSections); ok {
 		input = rawInput
 	} else {
-		insertedContext := false
-		for idx, msg := range req.Messages {
+		for _, msg := range req.Messages {
 			text := strings.TrimSpace(SanitizeForUpstreamCache(adaptercontent.FlattenRaw(msg.Content)))
 			switch strings.ToLower(msg.Role) {
 			case "system", "developer":
@@ -201,31 +151,13 @@ func BuildRequest(req adapteropenai.ChatRequest, model adaptermodel.ResolvedMode
 					input = append(input, MessageContent("user", "input_text", "tool: "+text))
 				}
 			default:
-				if !insertedContext && idx == lastUserIdx {
-					if contextual := buildContextual(); len(contextual) > 0 {
-						input = append(input, contextual...)
-					}
-					insertedContext = true
-				}
 				if content := codexContentFromRaw(msg.Content, "input_text"); len(content) > 0 {
 					input = append(input, MessageContentItems("user", content))
 				}
 			}
 		}
-		if !insertedContext {
-			if contextual := buildContextual(); len(contextual) > 0 {
-				input = append(input, contextual...)
-			}
-		}
 	}
-	instructions := BaseInstructions(modelName)
-	if strings.TrimSpace(promptContext.InstructionPrefix) != "" {
-		if instructions == "" {
-			instructions = promptContext.InstructionPrefix
-		} else {
-			instructions = promptContext.InstructionPrefix + "\n\n" + instructions
-		}
-	}
+	instructions := strings.TrimSpace(strings.Join(systemSections, "\n\n"))
 	if len(input) == 0 {
 		input = append(input, MessageContent("user", "input_text", " "))
 	}
@@ -550,7 +482,6 @@ func inputFromResponsesInput(
 	shellMode string,
 	workspacePath string,
 	developerSections *[]string,
-	buildContextual func() []map[string]any,
 ) ([]map[string]any, bool) {
 	if len(raw) == 0 {
 		return nil, false
@@ -559,16 +490,9 @@ func inputFromResponsesInput(
 	if err := json.Unmarshal(raw, &items); err != nil || len(items) == 0 {
 		return nil, false
 	}
-	lastUserIdx := -1
-	for i, item := range items {
-		if strings.EqualFold(mapString(item, "role"), "user") {
-			lastUserIdx = i
-		}
-	}
-	input := make([]map[string]any, 0, len(items)+2)
+	input := make([]map[string]any, 0, len(items))
 	toolCallNames := make(map[string]string)
-	insertedContext := false
-	for idx, item := range items {
+	for _, item := range items {
 		role := strings.ToLower(mapString(item, "role"))
 		itemType := strings.TrimSpace(mapString(item, "type"))
 		switch {
@@ -577,12 +501,6 @@ func inputFromResponsesInput(
 				*developerSections = append(*developerSections, text)
 			}
 		case role == "user":
-			if !insertedContext && idx == lastUserIdx {
-				if contextual := buildContextual(); len(contextual) > 0 {
-					input = append(input, contextual...)
-				}
-				insertedContext = true
-			}
 			if content := codexContentFromAny(item["content"], "input_text"); len(content) > 0 {
 				input = append(input, MessageContentItems("user", content))
 			}
@@ -626,11 +544,6 @@ func inputFromResponsesInput(
 			if output != "" {
 				input = append(input, CustomToolCallOutputItem(callID, output))
 			}
-		}
-	}
-	if !insertedContext {
-		if contextual := buildContextual(); len(contextual) > 0 {
-			input = append(input, contextual...)
 		}
 	}
 	return input, len(input) > 0

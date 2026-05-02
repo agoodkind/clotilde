@@ -52,13 +52,13 @@ func TestBuildErrorBodyForUpstreamMapsClassToType(t *testing.T) {
 			wantCode: "upstream_unavailable",
 		},
 		{
-			name: "fatal_400_is_upstream_error",
+			name: "fatal_400_is_server_error",
 			ue: &anthropic.UpstreamError{
 				Classification: anthropic.Classify(&http.Response{StatusCode: http.StatusBadRequest, Header: http.Header{}}, nil),
 				Status:         http.StatusBadRequest,
 				Message:        "bad request",
 			},
-			wantType: "upstream_error",
+			wantType: "server_error",
 			wantCode: "upstream_failed",
 		},
 	}
@@ -83,8 +83,8 @@ func TestBuildErrorBodyForUpstreamMapsClassToType(t *testing.T) {
 
 func TestBuildErrorBodyForUpstreamNilSafe(t *testing.T) {
 	got := buildErrorBodyForUpstream(nil)
-	if got.Type != "upstream_error" {
-		t.Fatalf("nil UpstreamError must yield upstream_error type; got %q", got.Type)
+	if got.Type != "server_error" || got.Code != "upstream_failed" {
+		t.Fatalf("nil UpstreamError error body = %+v, want server_error/upstream_failed", got)
 	}
 	if got.Message == "" {
 		t.Fatalf("nil UpstreamError must still produce a non-empty message")

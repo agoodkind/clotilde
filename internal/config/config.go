@@ -166,11 +166,9 @@ type AdapterConfig struct {
 	// Keys are the public (OpenAI style or real Claude) aliases the
 	// client sends. Values name the backend and its tuning knobs.
 	Models map[string]AdapterModel `json:"models,omitempty" toml:"models,omitempty"`
-	// Shunts lets users forward specific aliases to an upstream
-	// OpenAI compatible endpoint. Useful for the blunt gpt-4o pass
-	// through so local tools keep working even when the user wants
-	// real OpenAI for a given alias.
-	Shunts map[string]AdapterShunt `json:"shunts,omitempty" toml:"shunts,omitempty"`
+	// PassthroughOverrides lets users forward specific aliases to an
+	// upstream OpenAI-compatible endpoint.
+	PassthroughOverrides map[string]AdapterPassthroughOverride `json:"passthroughOverrides,omitempty" toml:"passthrough_overrides,omitempty"`
 	// OpenAICompatPassthrough forwards otherwise-unknown model aliases
 	// to a directly configured OpenAI-compatible upstream. Empty
 	// BaseURL disables passthrough and unknown aliases 400.
@@ -190,7 +188,8 @@ type AdapterConfig struct {
 	ClientIdentity AdapterClientIdentity `json:"clientIdentity,omitzero" toml:"client_identity,omitempty"`
 	// Logprobs configures per-backend handling of the OpenAI
 	// logprobs / top_logprobs request fields. Anthropic does not
-	// emit logprobs and `claude -p` does not either; shunts may.
+	// emit logprobs and `claude -p` does not either; OpenAI-compatible
+	// passthrough routes may.
 	// There is no compiled-in default. When either backend key is
 	// set, NewRegistry requires both keys and rejects unknown values.
 	Logprobs AdapterLogprobs `json:"logprobs,omitzero" toml:"logprobs,omitempty"`
@@ -232,11 +231,12 @@ type AdapterCodex struct {
 	// NativeModelRouting controls how native OpenAI/Codex-looking model
 	// IDs such as gpt-* and o* are handled when they are not declared in
 	// [adapter.models]. Empty and "off" reject them as unknown models.
-	// "codex" routes through the direct Codex backend. "shunt" routes to
-	// NativeModelShunt.
+	// "codex" routes through the direct Codex backend.
+	// "passthrough_override" routes to NativeModelPassthroughOverride.
 	NativeModelRouting string `json:"nativeModelRouting,omitempty" toml:"native_model_routing,omitempty"`
-	// NativeModelShunt is used when NativeModelRouting is "shunt".
-	NativeModelShunt string `json:"nativeModelShunt,omitempty" toml:"native_model_shunt,omitempty"`
+	// NativeModelPassthroughOverride is used when NativeModelRouting is
+	// "passthrough_override".
+	NativeModelPassthroughOverride string `json:"nativeModelPassthroughOverride,omitempty" toml:"native_model_passthrough_override,omitempty"`
 	// Models declares the Codex-backed model catalog that Clyde
 	// advertises and resolves for first-party clyde-* aliases.
 	Models []AdapterCodexModel `json:"models,omitempty" toml:"models,omitempty"`
@@ -454,11 +454,11 @@ type AdapterModelContext struct {
 }
 
 // AdapterModel describes one backend the adapter can route to.
-// Backend is either "claude" or "shunt". For claude backends, Model
-// names the real Claude model passed through via --model. Context
-// sets the advertised context window. Efforts names the allowed
-// reasoning effort tiers for this model. The first entry is the
-// default when the request does not specify one.
+// Backend is either "claude" or "passthrough_override". For claude
+// backends, Model names the real Claude model passed through via
+// --model. Context sets the advertised context window. Efforts names
+// the allowed reasoning effort tiers for this model. The first entry
+// is the default when the request does not specify one.
 type AdapterModel struct {
 	Backend string `json:"backend,omitempty" toml:"backend,omitempty"`
 	Model   string `json:"model,omitempty" toml:"model,omitempty"`
@@ -468,12 +468,14 @@ type AdapterModel struct {
 	// advertised context. Zero means use Context.
 	ObservedContext int      `json:"observedContext,omitempty" toml:"observed_context,omitempty"`
 	Efforts         []string `json:"efforts,omitempty" toml:"efforts,omitempty"`
-	// Shunt names an entry in AdapterConfig.Shunts for backend "shunt".
-	Shunt string `json:"shunt,omitempty" toml:"shunt,omitempty"`
+	// PassthroughOverride names an entry in
+	// AdapterConfig.PassthroughOverrides for backend
+	// "passthrough_override".
+	PassthroughOverride string `json:"passthroughOverride,omitempty" toml:"passthrough_override,omitempty"`
 }
 
-// AdapterShunt points to an upstream OpenAI compatible endpoint.
-type AdapterShunt struct {
+// AdapterPassthroughOverride points to an upstream OpenAI-compatible endpoint.
+type AdapterPassthroughOverride struct {
 	BaseURL string `json:"baseUrl,omitempty" toml:"base_url,omitempty"`
 	APIKey  string `json:"apiKey,omitempty" toml:"api_key,omitempty"`
 	// APIKeyEnv lets the user keep the secret out of the config

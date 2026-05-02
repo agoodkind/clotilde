@@ -290,7 +290,7 @@ func codexProviderErrorResponse(err error) (int, ErrorBody) {
 	}
 	return http.StatusBadGateway, ErrorBody{
 		Message: err.Error(),
-		Type:    "upstream_error",
+		Type:    "server_error",
 		Code:    "upstream_failed",
 	}
 }

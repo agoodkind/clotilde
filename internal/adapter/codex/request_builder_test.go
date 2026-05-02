@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
@@ -396,18 +395,6 @@ func TestBuildCodexRequestPreservesFlexServiceTier(t *testing.T) {
 }
 
 func TestBuildCodexRequestReplaysAssistantTurnsAsOutputText(t *testing.T) {
-	oldNow := NowFunc
-	oldGetwd := GetwdFn
-	oldShell := ShellNameFn
-	NowFunc = func() time.Time { return time.Date(2026, 4, 25, 9, 0, 0, 0, time.FixedZone("PDT", -7*3600)) }
-	GetwdFn = func() (string, error) { return "/repo", nil }
-	ShellNameFn = func() string { return "zsh" }
-	defer func() {
-		NowFunc = oldNow
-		GetwdFn = oldGetwd
-		ShellNameFn = oldShell
-	}()
-
 	req := ChatRequest{
 		Messages: []ChatMessage{
 			{
@@ -424,42 +411,20 @@ func TestBuildCodexRequestReplaysAssistantTurnsAsOutputText(t *testing.T) {
 
 	out := BuildRequest(req, model, "")
 	foundOutput := false
-	foundPermissions := false
-	foundEnvironment := false
 	for _, item := range out.Input {
-		switch {
-		case codexInputContentType(item) == "output_text":
+		if codexInputContentType(item) == "output_text" {
 			foundOutput = true
-		case strings.Contains(codexInputContentText(item), "<permissions_instructions>"):
-			foundPermissions = true
-		case strings.Contains(codexInputContentText(item), "<environment_context>"):
-			foundEnvironment = true
+		}
+		if strings.Contains(codexInputContentText(item), "<permissions_instructions>") || strings.Contains(codexInputContentText(item), "<environment_context>") {
+			t.Fatalf("unexpected Clyde-injected context: %#v", out.Input)
 		}
 	}
 	if !foundOutput {
 		t.Fatalf("expected assistant output_text in %#v", out.Input)
 	}
-	if !foundPermissions {
-		t.Fatalf("expected permissions context in %#v", out.Input)
-	}
-	if !foundEnvironment {
-		t.Fatalf("expected environment context in %#v", out.Input)
-	}
 }
 
-func TestBuildCodexRequestInjectsContextBeforeFinalUserTurn(t *testing.T) {
-	oldNow := NowFunc
-	oldGetwd := GetwdFn
-	oldShell := ShellNameFn
-	NowFunc = func() time.Time { return time.Date(2026, 4, 25, 9, 0, 0, 0, time.FixedZone("PDT", -7*3600)) }
-	GetwdFn = func() (string, error) { return "/repo", nil }
-	ShellNameFn = func() string { return "zsh" }
-	defer func() {
-		NowFunc = oldNow
-		GetwdFn = oldGetwd
-		ShellNameFn = oldShell
-	}()
-
+func TestBuildCodexRequestForwardsCursorInstructionsBeforeFinalUserTurn(t *testing.T) {
 	req := ChatRequest{
 		Messages: []ChatMessage{
 			{Role: "system", Content: mustRaw(`"system rules"`)},
@@ -476,22 +441,17 @@ func TestBuildCodexRequestInjectsContextBeforeFinalUserTurn(t *testing.T) {
 	if got, _ := out.Input[1]["role"].(string); got != "assistant" {
 		t.Fatalf("role[1]=%q want assistant", got)
 	}
-	if got, _ := out.Input[2]["role"].(string); got != "developer" {
-		t.Fatalf("role[2]=%q want developer", got)
+	if got, _ := out.Input[2]["role"].(string); got != "user" {
+		t.Fatalf("role[2]=%q want final user", got)
 	}
-	if got, _ := out.Input[3]["role"].(string); got != "user" {
-		t.Fatalf("role[3]=%q want user env", got)
+	if out.Instructions != "system rules" {
+		t.Fatalf("instructions=%q want Cursor-provided system rules", out.Instructions)
 	}
-	if got, _ := out.Input[4]["role"].(string); got != "user" {
-		t.Fatalf("role[5]=%q want final user", got)
+	if strings.Contains(out.Instructions, "<permissions_instructions>") || strings.Contains(out.Instructions, "<tool_calling_instructions>") || strings.Contains(out.Instructions, "<environment_context>") {
+		t.Fatalf("instructions contain Clyde-injected prompt material: %q", out.Instructions)
 	}
-	devContent := codexInputContentText(out.Input[2])
-	if !strings.Contains(devContent, "<permissions_instructions>") || !strings.Contains(devContent, "<tool_calling_instructions>") || !strings.Contains(devContent, "system rules") {
-		t.Fatalf("developer_context=%q", devContent)
-	}
-	content := codexInputContentText(out.Input[3])
-	if !strings.Contains(content, "<environment_context>") || !strings.Contains(content, "<cwd>/repo</cwd>") {
-		t.Fatalf("environment_context=%q", content)
+	if content := codexInputContentText(out.Input[2]); content != "write the file" {
+		t.Fatalf("final user content=%q", content)
 	}
 }
 
@@ -571,20 +531,54 @@ func TestBuildCodexRequestPreservesResponsesInputImageParts(t *testing.T) {
 	}
 }
 
-func TestBuildCodexRequestUsesCatalogBaseInstructions(t *testing.T) {
+func TestBuildCodexRequestDoesNotInjectClydePrompts(t *testing.T) {
 	req := ChatRequest{
 		Messages: []ChatMessage{{Role: "user", Content: mustRaw(`"hello"`)}},
 	}
 	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
-	if !strings.Contains(out.Instructions, "Agent Mode") {
-		t.Fatalf("instructions missing agent mode prefix")
+	if out.Instructions != "" {
+		t.Fatalf("instructions=%q want empty without Cursor-provided instructions", out.Instructions)
 	}
-	if !strings.Contains(out.Instructions, "You are Codex, a coding agent") {
-		t.Fatalf("instructions did not come from catalog")
+	for _, item := range out.Input {
+		if item["role"] == "developer" {
+			t.Fatalf("unexpected Clyde developer context: %v", item)
+		}
 	}
 }
 
-func TestBuildCodexRequestUsesPlanModeInstructionPrefix(t *testing.T) {
+func TestBuildCodexRequestForwardsCursorProvidedDeveloperContentAsInstructions(t *testing.T) {
+	req := ChatRequest{
+		Messages: []ChatMessage{
+			{Role: "system", Content: mustRaw(`"cursor system rules"`)},
+			{Role: "developer", Content: mustRaw(`"cursor developer rules"`)},
+			{Role: "user", Content: mustRaw(`"hello"`)},
+		},
+	}
+	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	var developerText strings.Builder
+	for _, item := range out.Input {
+		if item["role"] != "developer" {
+			continue
+		}
+		for _, part := range codexInputContentParts(item) {
+			if text, _ := part["text"].(string); text != "" {
+				developerText.WriteString(text)
+			}
+		}
+	}
+	gotDeveloperText := developerText.String()
+	if gotDeveloperText != "" {
+		t.Fatalf("unexpected duplicated developer context=%q", gotDeveloperText)
+	}
+	if !strings.Contains(out.Instructions, "cursor system rules") || !strings.Contains(out.Instructions, "cursor developer rules") {
+		t.Fatalf("instructions=%q", out.Instructions)
+	}
+	if strings.Contains(out.Instructions, "<permissions_instructions>") || strings.Contains(out.Instructions, "<environment_context>") {
+		t.Fatalf("instructions contain Clyde-injected prompt material: %q", out.Instructions)
+	}
+}
+
+func TestBuildCodexRequestDoesNotInjectPlanModeInstructionPrefix(t *testing.T) {
 	req := ChatRequest{
 		Tools: []Tool{{
 			Type: "function",
@@ -595,11 +589,8 @@ func TestBuildCodexRequestUsesPlanModeInstructionPrefix(t *testing.T) {
 		Messages: []ChatMessage{{Role: "user", Content: mustRaw(`"draft the plan"`)}},
 	}
 	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
-	if !strings.Contains(out.Instructions, "Plan Mode") {
-		t.Fatalf("instructions missing plan mode prefix: %q", out.Instructions)
-	}
-	if !strings.Contains(out.Instructions, "Only edit markdown files") {
-		t.Fatalf("instructions missing plan mode guardrail: %q", out.Instructions)
+	if strings.Contains(out.Instructions, "Plan Mode") || strings.Contains(out.Instructions, "Only edit markdown files") {
+		t.Fatalf("instructions still contain Clyde plan mode prefix: %q", out.Instructions)
 	}
 }
 
@@ -897,12 +888,12 @@ func TestBuildCodexRequestPreservesResponsesInputToolHistory(t *testing.T) {
 	}
 
 	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"}, "")
-	var sawDeveloper, sawGlobCall, sawGlobOutput, sawShellCommand, sawShellOutput bool
+	var sawGlobCall, sawGlobOutput, sawShellCommand, sawShellOutput bool
 	for _, item := range out.Input {
 		switch codexItemTypeString(item) {
 		case "message":
-			if item["role"] == "developer" && strings.Contains(codexInputContentText(item), "system rules") {
-				sawDeveloper = true
+			if item["role"] == "developer" {
+				t.Fatalf("unexpected duplicated developer context in input: %v", item)
 			}
 		case "function_call":
 			switch item["call_id"] {
@@ -929,8 +920,11 @@ func TestBuildCodexRequestPreservesResponsesInputToolHistory(t *testing.T) {
 			}
 		}
 	}
-	if !sawDeveloper || !sawGlobCall || !sawGlobOutput || !sawShellCommand || !sawShellOutput {
-		t.Fatalf("developer=%v glob_call=%v glob_output=%v shell_call=%v shell_output=%v input=%v", sawDeveloper, sawGlobCall, sawGlobOutput, sawShellCommand, sawShellOutput, out.Input)
+	if out.Instructions != "system rules" {
+		t.Fatalf("instructions=%q want Cursor-provided system rules", out.Instructions)
+	}
+	if !sawGlobCall || !sawGlobOutput || !sawShellCommand || !sawShellOutput {
+		t.Fatalf("glob_call=%v glob_output=%v shell_call=%v shell_output=%v input=%v", sawGlobCall, sawGlobOutput, sawShellCommand, sawShellOutput, out.Input)
 	}
 }
 
@@ -969,18 +963,6 @@ func TestBuildCodexRequestUsesStablePromptCacheKeyFromMetadata(t *testing.T) {
 }
 
 func TestBuildCodexRequestFromCapturedWriteReplay(t *testing.T) {
-	oldNow := NowFunc
-	oldGetwd := GetwdFn
-	oldShell := ShellNameFn
-	NowFunc = func() time.Time { return time.Date(2026, 4, 25, 9, 0, 0, 0, time.FixedZone("PDT", -7*3600)) }
-	GetwdFn = func() (string, error) { return "/Users/agoodkind/Sites/clyde-dev/clyde", nil }
-	ShellNameFn = func() string { return "zsh" }
-	defer func() {
-		NowFunc = oldNow
-		GetwdFn = oldGetwd
-		ShellNameFn = oldShell
-	}()
-
 	raw, err := os.ReadFile("../testdata/codex_write_answer_request.json")
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
@@ -996,19 +978,11 @@ func TestBuildCodexRequestFromCapturedWriteReplay(t *testing.T) {
 	if out.PromptCache == "" {
 		t.Fatalf("expected prompt cache key")
 	}
-	foundPermissions := false
-	foundEnvironment := false
 	for _, item := range out.Input {
 		text := codexInputContentText(item)
-		if strings.Contains(text, "<permissions_instructions>") {
-			foundPermissions = true
+		if strings.Contains(text, "<permissions_instructions>") || strings.Contains(text, "<environment_context>") {
+			t.Fatalf("unexpected Clyde-injected context: %q", text)
 		}
-		if strings.Contains(text, "<environment_context>") {
-			foundEnvironment = true
-		}
-	}
-	if !foundPermissions || !foundEnvironment {
-		t.Fatalf("missing contextual blocks permissions=%v environment=%v", foundPermissions, foundEnvironment)
 	}
 }
 
