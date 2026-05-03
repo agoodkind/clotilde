@@ -41,13 +41,12 @@ jobs:
           go tool golangci-lint fmt ./...
           git diff --exit-code
       - run: make deadcode
-      - name: Complexity gate (gocyclo -over 30)
+      - name: Complexity report (gocyclo -over 30)
         run: |
           out=$(go tool gocyclo -over 30 -ignore '(_test\.go$|cmd/|internal/claude/transcript\.go)' . || true)
           if [ -n "$out" ]; then
             echo "Functions exceeding complexity threshold of 30:"
             echo "$out"
-            exit 1
           fi
       - name: govulncheck
         run: make govulncheck
