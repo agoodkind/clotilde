@@ -2,139 +2,132 @@
 package oauth
 
 import (
-	"bytes"
-	"encoding/json"
-	"errors"
+	"context"
 	"fmt"
-	"io"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
+
+	"goodkind.io/clyde/internal/claude"
 )
 
-// readCredentials returns the parsed Tokens from whichever store is
-// available. macOS prefers Keychain when keychainService is non-empty;
-// on read failure we fall through to ~/.claude/.credentials.json.
-func readCredentials(dir, keychainService string) (*Tokens, error) {
-	if runtime.GOOS == "darwin" && keychainService != "" {
-		if t, err := readKeychain(keychainService); err == nil && t != nil {
-			return t, nil
+func readCredentialCandidates(ctx context.Context, dir, keychainService string) []claude.OAuthCredentialReadResult {
+	return claude.ReadOAuthCredentialCandidates(ctx, claude.OAuthCredentialReadOptions{
+		CredentialsDir:  dir,
+		KeychainService: keychainService,
+		Now:             oauthClock.Now(),
+	})
+}
+
+func selectCredentialCandidate(results []claude.OAuthCredentialReadResult) (*selectedCredential, error) {
+	summaries := claude.SummarizeOAuthCredentialResults(results)
+	var selected *claude.OAuthCredentialReadResult
+	for i := range results {
+		candidate := &results[i]
+		if !candidateUsable(candidate) {
+			continue
+		}
+		if selected == nil || credentialCandidateBetter(candidate, selected) {
+			selected = candidate
 		}
 	}
-	return readCredentialsFile(filepath.Join(dir, ".credentials.json"))
-}
-
-func readKeychain(keychainService string) (*Tokens, error) {
-	log := oauthLog.Logger()
-	cmd := exec.Command("security", "find-generic-password",
-		"-s", keychainService, "-w")
-	cmd.Stderr = io.Discard
-	out, err := cmd.Output()
-	if err != nil {
-		log.Warn("oauth.keychain.read_failed",
-			"subcomponent", "oauth",
-			"keychain_service_present", keychainService != "",
-			"err", err.Error(),
-		)
-		return nil, fmt.Errorf("security find-generic-password: %w", err)
-	}
-	out = bytes.TrimSpace(out)
-	return parseCredentialsBlob(out)
-}
-
-func readCredentialsFile(path string) (*Tokens, error) {
-	log := oauthLog.Logger()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+	if selected == nil {
+		return nil, &OAuthCredentialError{
+			Message:   "no usable claudeAiOauth credentials found; run `claude /login`",
+			Summaries: summaries,
 		}
-		log.Warn("oauth.store_file.read_failed",
-			"subcomponent", "oauth",
-			"path", path,
-			"err", err.Error(),
-		)
-		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
-	return parseCredentialsBlob(data)
+	return &selectedCredential{
+		Source:    selected.Source,
+		Tokens:    selected.Tokens.Clone(),
+		Metadata:  selected.Metadata,
+		Summaries: summaries,
+	}, nil
 }
 
-func parseCredentialsBlob(data []byte) (*Tokens, error) {
-	var doc credentialsDoc
-	if err := json.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("unmarshal credentials: %w", err)
+func selectRefreshableCredential(results []claude.OAuthCredentialReadResult) (*selectedCredential, error) {
+	summaries := claude.SummarizeOAuthCredentialResults(results)
+	var selected *claude.OAuthCredentialReadResult
+	for i := range results {
+		candidate := &results[i]
+		if !candidateRefreshable(candidate) {
+			continue
+		}
+		if selected == nil || credentialCandidateBetter(candidate, selected) {
+			selected = candidate
+		}
 	}
-	return doc.ClaudeAIOauth, nil
+	if selected == nil {
+		return nil, &OAuthCredentialError{
+			Message:   "no refreshable claudeAiOauth credentials found; run `claude /login`",
+			Summaries: summaries,
+		}
+	}
+	return &selectedCredential{
+		Source:    selected.Source,
+		Tokens:    selected.Tokens.Clone(),
+		Metadata:  selected.Metadata,
+		Summaries: summaries,
+	}, nil
 }
 
-// writeCredentials updates the on-disk credentials file with new
-// claudeAiOauth tokens, preserving any other top-level keys (mcpOAuth
-// etc) that the CLI might have written. We do not write to keychain
-// directly; the next `claude` CLI invocation will detect the file
-// mtime change and resync (per the CLI's own
-// invalidateOAuthCacheIfDiskChanged logic).
-func writeCredentials(dir string, tokens *Tokens) error {
-	log := oauthLog.Logger()
-	credsPath := filepath.Join(dir, ".credentials.json")
-
-	merged := map[string]json.RawMessage{}
-	if existing, err := os.ReadFile(credsPath); err == nil {
-		_ = json.Unmarshal(existing, &merged)
+func writeCredentials(ctx context.Context, dir string, tokens *Tokens) error {
+	if err := claude.WriteOAuthCredentialsFile(ctx, dir, tokens); err != nil {
+		return err
 	}
-
-	encoded, err := json.Marshal(tokens)
-	if err != nil {
-		log.Warn("oauth.store.marshal_payload_failed",
-			"subcomponent", "oauth",
-			"store_dir", dir,
-			"payload_present", tokens != nil,
-			"err", err.Error(),
-		)
-		return fmt.Errorf("marshal tokens: %w", err)
-	}
-	merged["claudeAiOauth"] = encoded
-
-	out, err := json.MarshalIndent(merged, "", "  ")
-	if err != nil {
-		log.Warn("oauth.store.marshal_merged_failed",
-			"subcomponent", "oauth",
-			"store_dir", dir,
-			"entry_count", len(merged),
-			"err", err.Error(),
-		)
-		return fmt.Errorf("marshal merged credentials: %w", err)
-	}
-
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		log.Warn("oauth.store.mkdir_failed",
-			"subcomponent", "oauth",
-			"store_dir", dir,
-			"err", err.Error(),
-		)
-		return fmt.Errorf("mkdir credentials dir: %w", err)
-	}
-	tmp := credsPath + ".tmp"
-	if err := os.WriteFile(tmp, out, 0o600); err != nil {
-		log.Warn("oauth.store.temp_write_failed",
-			"subcomponent", "oauth",
-			"path", tmp,
-			"output_bytes", len(out),
-			"err", err.Error(),
-		)
-		return fmt.Errorf("write temp credentials: %w", err)
-	}
-	if err := os.Rename(tmp, credsPath); err != nil {
-		log.Warn("oauth.store.rename_failed",
-			"subcomponent", "oauth",
-			"tmp_path", tmp,
-			"path", credsPath,
-			"err", err.Error(),
-		)
-		return fmt.Errorf("rename temp credentials: %w", err)
-	}
+	oauthLog.Logger().InfoContext(ctx, "oauth.credentials.refreshed_file_written",
+		"subcomponent", "oauth",
+		"credential_source", claude.OAuthCredentialSourceFile,
+		"expires_at_ms", tokens.ExpiresAt,
+	)
 	return nil
+}
+
+func snapshotForCredential(selected *selectedCredential) credentialSnapshot {
+	if selected == nil {
+		return credentialSnapshot{}
+	}
+	return credentialSnapshot{
+		Source:              selected.Source,
+		Fingerprint:         selected.Metadata.Fingerprint,
+		ExpiresAt:           selected.Metadata.ExpiresAt,
+		RefreshTokenPresent: selected.Metadata.RefreshTokenPresent,
+		FileMtime:           selected.Metadata.FileMtime,
+	}
+}
+
+func summariesAsStrings(summaries []claude.OAuthCredentialSummary) []string {
+	values := make([]string, 0, len(summaries))
+	for _, summary := range summaries {
+		values = append(values, fmt.Sprintf("%s:present=%t:access=%t:refresh=%t:expired=%t:error=%s",
+			summary.Source,
+			summary.Present,
+			summary.AccessTokenPresent,
+			summary.RefreshTokenPresent,
+			summary.Expired,
+			summary.ParseError,
+		))
+	}
+	return values
+}
+
+func candidateUsable(candidate *claude.OAuthCredentialReadResult) bool {
+	return candidate != nil && candidate.Err == nil && candidate.Tokens != nil && candidate.Metadata.AccessTokenPresent
+}
+
+func candidateRefreshable(candidate *claude.OAuthCredentialReadResult) bool {
+	return candidateUsable(candidate) && candidate.Metadata.RefreshTokenPresent
+}
+
+func credentialCandidateBetter(candidate, selected *claude.OAuthCredentialReadResult) bool {
+	if candidate.Metadata.Expired != selected.Metadata.Expired {
+		return !candidate.Metadata.Expired
+	}
+	if candidate.Metadata.RefreshTokenPresent != selected.Metadata.RefreshTokenPresent {
+		return candidate.Metadata.RefreshTokenPresent
+	}
+	if candidate.Source != selected.Source {
+		return candidate.Source == claude.OAuthCredentialSourceKeychain
+	}
+	return candidate.Metadata.ExpiresAt > selected.Metadata.ExpiresAt
 }
 
 func coalesce(s ...string) string {

@@ -2,29 +2,54 @@
 package oauth
 
 import (
-	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
+
+	"goodkind.io/clyde/internal/claude"
 )
 
 // refreshSafetyWindow is how far before expiresAt we proactively refresh.
 const refreshSafetyWindow = 30 * time.Second
 
-// Tokens is the credential document layout. Field tags use the
-// camelCase keys the CLI persists; we accept extra fields silently.
-type Tokens struct {
-	AccessToken      string   `json:"accessToken"`
-	RefreshToken     string   `json:"refreshToken"`
-	ExpiresAt        int64    `json:"expiresAt"`
-	Scopes           []string `json:"scopes,omitempty"`
-	SubscriptionType string   `json:"subscriptionType,omitempty"`
-	RateLimitTier    string   `json:"rateLimitTier,omitempty"`
+// Tokens is the Claude Code OAuth credential payload used by the adapter.
+type Tokens = claude.OAuthTokens
+
+type credentialSnapshot struct {
+	Source              claude.OAuthCredentialSource
+	Fingerprint         string
+	ExpiresAt           int64
+	RefreshTokenPresent bool
+	FileMtime           int64
 }
 
-// credentialsDoc is the wrapper the CLI stores in keychain or
-// .credentials.json. Other top level keys (mcpOAuth,
-// organizationUuid, ...) are tolerated.
-type credentialsDoc struct {
-	ClaudeAIOauth *Tokens `json:"claudeAiOauth,omitempty"`
-	// Catch all so we don't drop fields when writing back.
-	Raw map[string]json.RawMessage `json:"-"`
+type selectedCredential struct {
+	Source    claude.OAuthCredentialSource
+	Tokens    *Tokens
+	Metadata  claude.OAuthCredentialMetadata
+	Summaries []claude.OAuthCredentialSummary
+}
+
+// OAuthCredentialError describes an unusable local Claude OAuth credential set.
+type OAuthCredentialError struct {
+	Message   string
+	Summaries []claude.OAuthCredentialSummary
+}
+
+func (e *OAuthCredentialError) Error() string {
+	parts := make([]string, 0, len(e.Summaries))
+	for _, summary := range e.Summaries {
+		parts = append(parts, fmt.Sprintf("%s present=%t access_token_present=%t refresh_token_present=%t expired=%t parse_error=%q",
+			summary.Source,
+			summary.Present,
+			summary.AccessTokenPresent,
+			summary.RefreshTokenPresent,
+			summary.Expired,
+			summary.ParseError,
+		))
+	}
+	if len(parts) == 0 {
+		return e.Message
+	}
+	return e.Message + ": " + strings.Join(parts, "; ")
 }
