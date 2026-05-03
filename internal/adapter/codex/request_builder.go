@@ -137,6 +137,13 @@ func BuildRequestWithConfig(req adapteropenai.ChatRequest, model adaptermodel.Re
 		}
 	}
 	instructions := strings.TrimSpace(strings.Join(systemSections, "\n\n"))
+	if base := strings.TrimSpace(model.Instructions); base != "" {
+		if instructions == "" {
+			instructions = base
+		} else {
+			instructions = base + "\n\n" + instructions
+		}
+	}
 	if len(input) == 0 {
 		input = append(input, MessageContent("user", "input_text", " "))
 	}

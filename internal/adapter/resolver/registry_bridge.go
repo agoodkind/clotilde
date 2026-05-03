@@ -50,6 +50,7 @@ func (a *ModelRegistryAdapter) Resolve(alias, reqEffort string) (ResolvedModelVi
 		Context:         resolved.Context,
 		MaxOutputTokens: resolved.MaxOutputTokens,
 		Thinking:        resolved.Thinking,
+		Instructions:    resolved.Instructions,
 		Efforts:         resolved.Efforts,
 	}, nil
 }

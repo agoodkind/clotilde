@@ -40,6 +40,13 @@ func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, model adap
 		return anthropic.Request{}, err
 	}
 	callerSystem := stripSystemPrefix(tr.System, cfg.SystemPromptPrefix)
+	if instr := strings.TrimSpace(model.Instructions); instr != "" {
+		if callerSystem == "" {
+			callerSystem = instr
+		} else {
+			callerSystem = instr + "\n\n" + callerSystem
+		}
+	}
 	if instr := strings.TrimSpace(cfg.JSONSystemPrompt); instr != "" {
 		if callerSystem == "" {
 			callerSystem = instr

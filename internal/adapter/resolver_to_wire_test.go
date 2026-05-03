@@ -23,6 +23,9 @@ import (
 // exercises both providers.
 func resolverToWireConfig() config.AdapterConfig {
 	cfg := modelMatrixConfig()
+	family := cfg.Families["opus-4-7"]
+	family.Instructions = "family base instructions"
+	cfg.Families["opus-4-7"] = family
 	// DirectOAuth must be true so the registry rewrites BackendClaude
 	// models to BackendAnthropic; otherwise the resolver returns
 	// ErrUnresolvedProvider and the test never reaches the wire.
@@ -38,14 +41,10 @@ func resolverToWireConfig() config.AdapterConfig {
 	}
 	cfg.Codex.Enabled = true
 	cfg.Codex.AuthFile = "~/.codex/auth.json"
-	cfg.Codex.Models = append(cfg.Codex.Models, config.AdapterCodexModel{
-		AliasPrefix: "gpt-5.4",
-		Model:       "gpt-5.4",
-		Efforts:     []string{EffortMedium, EffortHigh},
-		Contexts: []config.AdapterCodexModelContext{
-			{Tokens: 1000000},
-		},
-	})
+	if len(cfg.Codex.Models) > 0 {
+		cfg.Codex.Models[0].Instructions = "model base instructions"
+		cfg.Codex.Models[0].Efforts = []string{EffortMedium, EffortHigh}
+	}
 	return cfg
 }
 
@@ -131,8 +130,9 @@ func TestResolverToAnthropicWirePropagatesEffort(t *testing.T) {
 	server := newAnthropicWireServer(t)
 
 	cases := []struct {
-		alias      string
-		wantEffort string
+		alias            string
+		wantEffort       string
+		wantInstructions string
 	}{
 		{alias: "clyde-opus-4.7-medium-thinking", wantEffort: "medium"},
 		{alias: "clyde-opus-4.7-high-thinking", wantEffort: "high"},
@@ -159,6 +159,33 @@ func TestResolverToAnthropicWirePropagatesEffort(t *testing.T) {
 	}
 }
 
+func TestResolverToAnthropicWirePropagatesInstructions(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewRegistry(resolverToWireConfig())
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	bridge := adapterresolver.NewModelRegistryAdapter(registry)
+	server := newAnthropicWireServer(t)
+
+	cursorReq := buildCursorRequest("clyde-opus-4.7-medium")
+	resolved, err := adapterresolver.Resolve(cursorReq, bridge)
+	if err != nil {
+		t.Fatalf("resolver.Resolve: %v", err)
+	}
+	prepared, err := server.prepareAnthropicProviderRequest(context.Background(), resolved, "req-instructions")
+	if err != nil {
+		t.Fatalf("prepareAnthropicProviderRequest: %v", err)
+	}
+	if len(prepared.Request.SystemBlocks) < 3 {
+		t.Fatalf("SystemBlocks len = %d want at least 3", len(prepared.Request.SystemBlocks))
+	}
+	if got := prepared.Request.SystemBlocks[2].Text; got != "family base instructions\n\ncaller system instructions" {
+		t.Fatalf("SystemBlocks[2].Text = %q want family instructions prepended", got)
+	}
+}
+
 // TestResolverToCodexWirePropagatesEffort is the parallel of the
 // Anthropic test for the Codex provider. It locks in that the Effort
 // resolved from a clyde-gpt alias reaches codex.HTTPTransportRequest
@@ -174,11 +201,20 @@ func TestResolverToCodexWirePropagatesEffort(t *testing.T) {
 	bridge := adapterresolver.NewModelRegistryAdapter(registry)
 
 	cases := []struct {
-		alias      string
-		wantEffort string
+		alias            string
+		wantEffort       string
+		wantInstructions string
 	}{
-		{alias: "gpt-5.4-medium", wantEffort: "medium"},
-		{alias: "gpt-5.4-high", wantEffort: "high"},
+		{
+			alias:            "gpt-5.4-medium",
+			wantEffort:       "medium",
+			wantInstructions: "model base instructions\n\ncaller system instructions",
+		},
+		{
+			alias:            "gpt-5.4-high",
+			wantEffort:       "high",
+			wantInstructions: "model base instructions\n\ncaller system instructions",
+		},
 	}
 
 	for _, tc := range cases {
@@ -196,6 +232,9 @@ func TestResolverToCodexWirePropagatesEffort(t *testing.T) {
 			if built.Reasoning.Effort != tc.wantEffort {
 				t.Fatalf("Reasoning.Effort = %q want %q", built.Reasoning.Effort, tc.wantEffort)
 			}
+			if built.Instructions != tc.wantInstructions {
+				t.Fatalf("Instructions = %q want %q", built.Instructions, tc.wantInstructions)
+			}
 		})
 	}
 }
@@ -208,6 +247,9 @@ func buildCursorRequest(alias string) adaptercursor.Request {
 	return adaptercursor.TranslateRequest(adapteropenai.ChatRequest{
 		Model: alias,
 		Messages: []adapteropenai.ChatMessage{{
+			Role:    "system",
+			Content: json.RawMessage(`"caller system instructions"`),
+		}, {
 			Role:    "user",
 			Content: json.RawMessage(`"Say ok."`),
 		}},
@@ -249,5 +291,6 @@ func codexResolvedModelForTest(req adapterresolver.ResolvedRequest) adaptermodel
 		Efforts:         req.Efforts,
 		MaxOutputTokens: req.ContextBudget.OutputTokens,
 		FamilySlug:      req.Family,
+		Instructions:    req.Instructions,
 	}
 }

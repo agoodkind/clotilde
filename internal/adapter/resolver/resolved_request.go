@@ -49,6 +49,10 @@ type ResolvedRequest struct {
 	// populate the upstream wire request. Empty means leave thinking
 	// unset on the upstream call.
 	Thinking string
+	// Instructions carries any provider-neutral model instructions the
+	// resolver lifted from the resolved model data. Providers map this
+	// into their native instruction or system field shapes.
+	Instructions string
 	// Efforts is the list of allowed effort tiers the family declared
 	// for this alias. Per-provider request builders gate output_config
 	// (and equivalents) on this being non-empty.

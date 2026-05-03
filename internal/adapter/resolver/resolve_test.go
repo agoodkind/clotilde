@@ -56,6 +56,7 @@ func TestResolveBuildsTypedRequest(t *testing.T) {
 		Effort:          EffortHigh,
 		Context:         200000,
 		MaxOutputTokens: 16384,
+		Instructions:    "follow repo conventions",
 	}
 	got, err := Resolve(cursorReq, stubRegistry{view: view})
 	if err != nil {
@@ -84,6 +85,9 @@ func TestResolveBuildsTypedRequest(t *testing.T) {
 	}
 	if got.OpenAI.Model != "gpt-5.3-codex" {
 		t.Errorf("OpenAI.Model = %q, want gpt-5.3-codex", got.OpenAI.Model)
+	}
+	if got.Instructions != "follow repo conventions" {
+		t.Errorf("Instructions = %q, want follow repo conventions", got.Instructions)
 	}
 }
 

@@ -188,6 +188,7 @@ func resolvedModelFromRequest(req adapterresolver.ResolvedRequest) adaptermodel.
 		Effort:          req.Effort.String(),
 		MaxOutputTokens: req.ContextBudget.OutputTokens,
 		FamilySlug:      req.Family,
+		Instructions:    req.Instructions,
 	}
 }
 

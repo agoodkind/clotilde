@@ -55,6 +55,9 @@ model_prefixes = ["gpt-", "o"]
 [[adapter.codex.models]]
 alias_prefix = "gpt-5.4"
 model = "gpt-5.4"
+# Optional: prepend a shared developer instruction file before any caller
+# system message. Paths resolve relative to this config.toml.
+# instructions_file = "prompts/gpt-5.4.md"
 efforts = ["low", "medium", "high", "xhigh"]
 max_output_tokens = 128000
 contexts = [
@@ -147,6 +150,9 @@ contexts = [
 # the account. Verified 2026-04-18.
 [adapter.families.opus-4-7]
 model = "claude-opus-4-7"
+# Optional: prepend a shared developer instruction file before any caller
+# system message. Paths resolve relative to this config.toml.
+# instructions_file = "prompts/opus-4-7.md"
 supports_tools = true
 supports_vision = true
 efforts = ["low", "medium", "high", "max"]

@@ -248,11 +248,13 @@ type AdapterCodex struct {
 }
 
 type AdapterCodexModel struct {
-	AliasPrefix     string                     `json:"aliasPrefix,omitempty" toml:"alias_prefix,omitempty"`
-	Model           string                     `json:"model,omitempty" toml:"model,omitempty"`
-	Efforts         []string                   `json:"efforts,omitempty" toml:"efforts,omitempty"`
-	MaxOutputTokens int                        `json:"maxOutputTokens,omitempty" toml:"max_output_tokens,omitempty"`
-	Contexts        []AdapterCodexModelContext `json:"contexts,omitempty" toml:"contexts,omitempty"`
+	AliasPrefix      string                     `json:"aliasPrefix,omitempty" toml:"alias_prefix,omitempty"`
+	Model            string                     `json:"model,omitempty" toml:"model,omitempty"`
+	InstructionsFile string                     `json:"instructionsFile,omitempty" toml:"instructions_file,omitempty"`
+	Instructions     string                     `json:"-" toml:"-"`
+	Efforts          []string                   `json:"efforts,omitempty" toml:"efforts,omitempty"`
+	MaxOutputTokens  int                        `json:"maxOutputTokens,omitempty" toml:"max_output_tokens,omitempty"`
+	Contexts         []AdapterCodexModelContext `json:"contexts,omitempty" toml:"contexts,omitempty"`
 }
 
 type AdapterCodexModelContext struct {
@@ -413,6 +415,14 @@ type AdapterFamily struct {
 	// Contexts entries may add a wire
 	// suffix (e.g. "[1m]") when calling /v1/messages.
 	Model string `json:"model,omitempty" toml:"model,omitempty"`
+	// InstructionsFile points at a markdown file whose verbatim contents
+	// are loaded once during config parsing and copied onto expanded
+	// registry aliases. Relative paths resolve from the declaring
+	// config.toml directory.
+	InstructionsFile string `json:"instructionsFile,omitempty" toml:"instructions_file,omitempty"`
+	// Instructions carries the loaded file contents for registry
+	// construction. It is not serialized back to disk.
+	Instructions string `json:"-" toml:"-"`
 	// Efforts enumerates effort tiers the wire API accepts for this
 	// family. Empty means the server rejects effort on this family
 	// (the registry will refuse caller-supplied effort with 400).
@@ -467,7 +477,14 @@ type AdapterModelContext struct {
 type AdapterModel struct {
 	Backend string `json:"backend,omitempty" toml:"backend,omitempty"`
 	Model   string `json:"model,omitempty" toml:"model,omitempty"`
-	Context int    `json:"context,omitempty" toml:"context,omitempty"`
+	// InstructionsFile points at a markdown file whose verbatim contents
+	// are loaded once during config parsing. Relative paths resolve from
+	// the declaring config.toml directory.
+	InstructionsFile string `json:"instructionsFile,omitempty" toml:"instructions_file,omitempty"`
+	// Instructions carries the loaded file contents for registry
+	// construction. It is not serialized back to disk.
+	Instructions string `json:"-" toml:"-"`
+	Context      int    `json:"context,omitempty" toml:"context,omitempty"`
 	// ObservedContext is the provider-specific context window Clyde
 	// should surface for capability reports when it differs from the
 	// advertised context. Zero means use Context.

@@ -42,6 +42,16 @@ func loadConfig(dir string) (*Config, error) {
 			)
 			return nil, fmt.Errorf("failed to parse %s: %w", tomlPath, err)
 		}
+		if err := hydrateAdapterInstructionFiles(&cfg, tomlPath); err != nil {
+			log.Warn("config.load.instructions_failed",
+				"component", "config",
+				"subcomponent", "load",
+				"path", tomlPath,
+				"format", "toml",
+				"err", err,
+			)
+			return nil, fmt.Errorf("invalid %s: %w", tomlPath, err)
+		}
 		if err := applyLoggingDefaultsAndValidate(&cfg); err != nil {
 			log.Warn("config.load.validate_failed",
 				"component", "config",
@@ -64,13 +74,68 @@ func loadConfig(dir string) (*Config, error) {
 	return nil, os.ErrNotExist
 }
 
+func hydrateAdapterInstructionFiles(cfg *Config, configPath string) error {
+	if cfg == nil {
+		return nil
+	}
+	configDir := filepath.Dir(configPath)
+	for name, model := range cfg.Adapter.Models {
+		contents, err := loadInstructionFile(configDir, model.InstructionsFile)
+		if err != nil {
+			return fmt.Errorf("adapter.models.%s.instructions_file: %w", name, err)
+		}
+		model.Instructions = contents
+		cfg.Adapter.Models[name] = model
+	}
+	for name, family := range cfg.Adapter.Families {
+		contents, err := loadInstructionFile(configDir, family.InstructionsFile)
+		if err != nil {
+			return fmt.Errorf("adapter.families.%s.instructions_file: %w", name, err)
+		}
+		family.Instructions = contents
+		cfg.Adapter.Families[name] = family
+	}
+	for i, model := range cfg.Adapter.Codex.Models {
+		contents, err := loadInstructionFile(configDir, model.InstructionsFile)
+		if err != nil {
+			aliasPrefix := strings.TrimSpace(model.AliasPrefix)
+			if aliasPrefix == "" {
+				aliasPrefix = fmt.Sprintf("#%d", i)
+			}
+			return fmt.Errorf("adapter.codex.models.%s.instructions_file: %w", aliasPrefix, err)
+		}
+		model.Instructions = contents
+		cfg.Adapter.Codex.Models[i] = model
+	}
+	return nil
+}
+
+func loadInstructionFile(configDir string, configuredPath string) (string, error) {
+	trimmedPath := strings.TrimSpace(configuredPath)
+	if trimmedPath == "" {
+		return "", nil
+	}
+	resolvedPath := trimmedPath
+	if !filepath.IsAbs(resolvedPath) {
+		resolvedPath = filepath.Join(configDir, resolvedPath)
+	}
+	contents, err := os.ReadFile(resolvedPath)
+	if err != nil {
+		return "", fmt.Errorf("read %q: %w", resolvedPath, err)
+	}
+	if len(contents) == 0 {
+		return "", fmt.Errorf("read %q: file is empty", resolvedPath)
+	}
+	return string(contents), nil
+}
+
 // LoadGlobalOrDefault loads the global ~/.config/clyde/ config.
 // Returns empty config if config.toml does not exist.
 func LoadGlobalOrDefault() (*Config, error) {
 	globalDir := filepath.Dir(GlobalConfigPath()) // ~/.config/clyde/
 	cfg, err := loadConfig(globalDir)
 	if err != nil {
-		if os.IsNotExist(err) || strings.Contains(err.Error(), "no such file") {
+		if os.IsNotExist(err) {
 			return NewConfigWithDefaults(), nil
 		}
 		return nil, err

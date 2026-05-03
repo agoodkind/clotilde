@@ -252,6 +252,28 @@ func TestBuildRequestThinkingDisabledHasNoDisplay(t *testing.T) {
 	}
 }
 
+func TestBuildRequestAddsModelInstructionsBeforeCallerSystem(t *testing.T) {
+	req := requestBuilderChatRequest()
+	cfg := requestBuilderConfig()
+	model := adaptermodel.ResolvedModel{
+		Alias:           "clyde-opus-4-7",
+		ClaudeModel:     "claude-opus-4-7",
+		MaxOutputTokens: 32000,
+		Instructions:    "model base instructions",
+	}
+
+	out, err := BuildRequest(context.Background(), req, model, "", cfg, "req-test")
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	if len(out.SystemBlocks) != 3 {
+		t.Fatalf("SystemBlocks len = %d want 3", len(out.SystemBlocks))
+	}
+	if got := out.SystemBlocks[2].Text; got != "model base instructions" {
+		t.Fatalf("caller system block = %q want model instructions prepended", got)
+	}
+}
+
 func TestBuildRequestAddsJSONPromptWithoutDuplicatingPrefix(t *testing.T) {
 	req := requestBuilderChatRequest()
 	cfg := requestBuilderConfig()

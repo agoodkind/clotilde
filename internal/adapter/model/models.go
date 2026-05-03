@@ -63,6 +63,9 @@ type ResolvedModel struct {
 	// oauth_handler.stripContextSuffix removes it before the wire
 	// call.
 	ClaudeModel string
+	// Instructions carries model-specific developer instructions loaded
+	// from config. The registry preserves the file contents verbatim.
+	Instructions string
 	// Context is the advertised context window in tokens. Purely
 	// informational; the upstream enforces the real limit.
 	Context int
@@ -371,6 +374,7 @@ func generateFamilyAliases(out map[string]ResolvedModel, slug string, f config.A
 			base := ResolvedModel{
 				Backend:         BackendClaude,
 				ClaudeModel:     f.Model + ctx.WireSuffix,
+				Instructions:    f.Instructions,
 				Context:         ctx.Tokens,
 				Efforts:         []string{eff},
 				Effort:          eff,
@@ -391,6 +395,7 @@ func generateFamilyAliases(out map[string]ResolvedModel, slug string, f config.A
 		out[buildAlias(family, ctx.AliasSuffix, "", false)] = ResolvedModel{
 			Backend:         BackendClaude,
 			ClaudeModel:     f.Model + ctx.WireSuffix,
+			Instructions:    f.Instructions,
 			Context:         ctx.Tokens,
 			Efforts:         f.Efforts,
 			ThinkingModes:   f.ThinkingModes,
@@ -438,6 +443,7 @@ func addCodexModelAliases(out map[string]ResolvedModel, cfg config.AdapterCodexM
 				Alias:           alias,
 				Backend:         BackendCodex,
 				ClaudeModel:     cfg.Model,
+				Instructions:    cfg.Instructions,
 				Context:         ctx.Tokens,
 				ObservedContext: ctx.ObservedTokens,
 				Efforts:         []string{effort},
@@ -452,6 +458,7 @@ func addCodexModelAliases(out map[string]ResolvedModel, cfg config.AdapterCodexM
 			Alias:           alias,
 			Backend:         BackendCodex,
 			ClaudeModel:     cfg.Model,
+			Instructions:    cfg.Instructions,
 			Context:         ctx.Tokens,
 			ObservedContext: ctx.ObservedTokens,
 			Efforts:         cfg.Efforts,
@@ -497,6 +504,7 @@ func addNativeCodexModelAlias(out map[string]ResolvedModel, alias string, cfg co
 		Alias:           alias,
 		Backend:         BackendCodex,
 		ClaudeModel:     cfg.Model,
+		Instructions:    cfg.Instructions,
 		Context:         ctx.Tokens,
 		ObservedContext: ctx.ObservedTokens,
 		Efforts:         cfg.Efforts,
@@ -520,6 +528,7 @@ func resolveFromConfig(alias string, m config.AdapterModel) ResolvedModel {
 		Alias:               alias,
 		Backend:             backend,
 		ClaudeModel:         m.Model,
+		Instructions:        m.Instructions,
 		Context:             m.Context,
 		ObservedContext:     m.ObservedContext,
 		Efforts:             m.Efforts,

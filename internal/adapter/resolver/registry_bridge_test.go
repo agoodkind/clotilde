@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
+	"goodkind.io/clyde/internal/config"
 )
 
 func TestBackendToProviderMapping(t *testing.T) {
@@ -33,5 +34,58 @@ func TestModelRegistryAdapterNilInner(t *testing.T) {
 	var nilAdapter *ModelRegistryAdapter
 	if _, err := nilAdapter.Resolve("anything", ""); err == nil {
 		t.Fatal("expected error from nil adapter, got nil")
+	}
+}
+
+func boolPtr(value bool) *bool {
+	return &value
+}
+
+func TestModelRegistryAdapterPreservesInstructions(t *testing.T) {
+	cfg := config.AdapterConfig{
+		DefaultModel: "clyde-haiku-4.5",
+		ClientIdentity: config.AdapterClientIdentity{
+			SystemPromptPrefix:      "prefix",
+			StainlessPackageVersion: "test",
+			StainlessRuntime:        "go",
+			StainlessRuntimeVersion: "1.0",
+			CCVersion:               "1.0.0",
+			CCEntrypoint:            "test",
+		},
+		Families: map[string]config.AdapterFamily{
+			"haiku-4-5": {
+				AliasPrefix:     "haiku-4.5",
+				Model:           "claude-haiku-4-5-20251001",
+				Efforts:         []string{"medium"},
+				ThinkingModes:   []string{"default"},
+				MaxOutputTokens: 16000,
+				SupportsTools:   boolPtr(true),
+				SupportsVision:  boolPtr(true),
+				Contexts: []config.AdapterModelContext{{
+					Tokens: 200000,
+				}},
+			},
+		},
+		Models: map[string]config.AdapterModel{
+			"custom-model": {
+				Backend:      adaptermodel.BackendAnthropic,
+				Model:        "claude-custom",
+				Instructions: "follow repo conventions",
+				Context:      200000,
+				Efforts:      []string{"medium"},
+			},
+		},
+	}
+	registry, err := adaptermodel.NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	adapter := NewModelRegistryAdapter(registry)
+	got, err := adapter.Resolve("custom-model", "medium")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got.Instructions != "follow repo conventions" {
+		t.Fatalf("Instructions = %q want %q", got.Instructions, "follow repo conventions")
 	}
 }

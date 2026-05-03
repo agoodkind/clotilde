@@ -122,10 +122,11 @@ func TestCodexRequestIDFallsBackToCursorID(t *testing.T) {
 
 func TestResolvedModelFromRequestPopulatesCodexFields(t *testing.T) {
 	req := adapterresolver.ResolvedRequest{
-		Provider: adapterresolver.ProviderCodex,
-		Family:   "gpt-5",
-		Model:    "gpt-5.3-codex",
-		Effort:   adapterresolver.EffortHigh,
+		Provider:     adapterresolver.ProviderCodex,
+		Family:       "gpt-5",
+		Model:        "gpt-5.3-codex",
+		Effort:       adapterresolver.EffortHigh,
+		Instructions: "model base instructions",
 		ContextBudget: adapterresolver.ContextBudget{
 			InputTokens:  200000,
 			OutputTokens: 16384,
@@ -149,5 +150,8 @@ func TestResolvedModelFromRequestPopulatesCodexFields(t *testing.T) {
 	}
 	if rm.FamilySlug != "gpt-5" {
 		t.Errorf("FamilySlug = %q", rm.FamilySlug)
+	}
+	if rm.Instructions != "model base instructions" {
+		t.Errorf("Instructions = %q", rm.Instructions)
 	}
 }

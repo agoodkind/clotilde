@@ -152,6 +152,71 @@ func testCodexModels() []config.AdapterCodexModel {
 	}
 }
 
+func TestNewRegistryPropagatesInstructionsFromConfig(t *testing.T) {
+	cfg := modelMatrixConfig()
+	cfg.Models = map[string]config.AdapterModel{
+		"custom-model": {
+			Model:        "claude-custom",
+			Instructions: "model prompt",
+		},
+	}
+	cfg.Families["opus-4-7"] = config.AdapterFamily{
+		AliasPrefix:     "opus-4.7",
+		Model:           "claude-opus-4-7",
+		Instructions:    "family prompt",
+		Efforts:         []string{EffortMedium},
+		ThinkingModes:   []string{ThinkingDefault, ThinkingEnabled, ThinkingDisabled},
+		MaxOutputTokens: 128000,
+		SupportsTools:   &testBoolTrue,
+		SupportsVision:  &testBoolTrue,
+		Contexts: []config.AdapterModelContext{
+			{Tokens: 200000},
+		},
+	}
+	cfg.Codex.Models = []config.AdapterCodexModel{{
+		AliasPrefix:     "gpt-5.4",
+		Model:           "gpt-5.4",
+		Instructions:    "codex prompt",
+		Efforts:         []string{EffortMedium},
+		MaxOutputTokens: 128000,
+		Contexts: []config.AdapterCodexModelContext{{
+			Tokens:                  1000000,
+			ObservedTokens:          272000,
+			AliasSuffix:             "1m",
+			AdvertisedNativeAliases: []string{"gpt-5.4"},
+		}},
+	}}
+
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	familyModel, _, err := r.Resolve("clyde-opus-4.7-medium", "")
+	if err != nil {
+		t.Fatalf("Resolve family: %v", err)
+	}
+	if familyModel.Instructions != "family prompt" {
+		t.Fatalf("family instructions = %q want family prompt", familyModel.Instructions)
+	}
+
+	configuredModel, _, err := r.Resolve("custom-model", "")
+	if err != nil {
+		t.Fatalf("Resolve configured model: %v", err)
+	}
+	if configuredModel.Instructions != "model prompt" {
+		t.Fatalf("configured model instructions = %q want model prompt", configuredModel.Instructions)
+	}
+
+	codexModel, _, err := r.Resolve("clyde-gpt-5.4-1m-medium", "")
+	if err != nil {
+		t.Fatalf("Resolve codex model: %v", err)
+	}
+	if codexModel.Instructions != "codex prompt" {
+		t.Fatalf("codex instructions = %q want codex prompt", codexModel.Instructions)
+	}
+}
+
 func TestResolveRoutesCodexModelPrefixes(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Codex.Enabled = true

@@ -331,6 +331,7 @@ func anthropicResolvedModelFromRequest(req adapterresolver.ResolvedRequest) adap
 		MaxOutputTokens: req.ContextBudget.OutputTokens,
 		FamilySlug:      req.Family,
 		Thinking:        req.Thinking,
+		Instructions:    req.Instructions,
 	}
 }
 

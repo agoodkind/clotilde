@@ -494,7 +494,7 @@ func TestBuildCodexRequestForwardsCursorInstructionsBeforeFinalUserTurn(t *testi
 		},
 	}
 
-	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4", Instructions: "model base instructions"}, "")
 	if got, _ := out.Input[0]["role"].(string); got != "user" {
 		t.Fatalf("role[0]=%q want user", got)
 	}
@@ -504,8 +504,8 @@ func TestBuildCodexRequestForwardsCursorInstructionsBeforeFinalUserTurn(t *testi
 	if got, _ := out.Input[2]["role"].(string); got != "user" {
 		t.Fatalf("role[2]=%q want final user", got)
 	}
-	if out.Instructions != "system rules" {
-		t.Fatalf("instructions=%q want Cursor-provided system rules", out.Instructions)
+	if out.Instructions != "model base instructions\n\nsystem rules" {
+		t.Fatalf("instructions=%q want model instructions before caller rules", out.Instructions)
 	}
 	if strings.Contains(out.Instructions, "<permissions_instructions>") || strings.Contains(out.Instructions, "<tool_calling_instructions>") || strings.Contains(out.Instructions, "<environment_context>") {
 		t.Fatalf("instructions contain Clyde-injected prompt material: %q", out.Instructions)
@@ -603,6 +603,19 @@ func TestBuildCodexRequestDoesNotInjectClydePrompts(t *testing.T) {
 		if item["role"] == "developer" {
 			t.Fatalf("unexpected Clyde developer context: %v", item)
 		}
+	}
+}
+
+func TestBuildCodexRequestPrependsModelInstructions(t *testing.T) {
+	req := ChatRequest{
+		Messages: []ChatMessage{
+			{Role: "system", Content: mustRaw(`"caller system rules"`)},
+			{Role: "user", Content: mustRaw(`"hello"`)},
+		},
+	}
+	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4", Instructions: "model base instructions"}, "")
+	if out.Instructions != "model base instructions\n\ncaller system rules" {
+		t.Fatalf("instructions=%q", out.Instructions)
 	}
 }
 
