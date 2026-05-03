@@ -1,210 +1,88 @@
 # Clyde
 
-Clyde is a thick wrapper around Claude Code and Codex.
+Clyde is a local Go CLI and long-running daemon for routing, observing, and managing LLM work from developer tools. It provides an OpenAI-compatible HTTP adapter for clients such as Cursor, keeps a Clyde-owned index of provider sessions, and wraps live sessions so they can be launched, resumed, compacted, inspected, and remotely controlled from one local command surface.
 
-It keeps human-readable session names, adds append-only compaction, and
-provides a daemon-backed dashboard for managing Claude sessions without
-patching the Claude binary.
+## Command Surface
 
-## Current Surface
+The `cmd/clyde` entrypoint registers these Clyde commands:
 
-The current CLI surface is intentionally small:
-
-- `clyde` opens the TUI dashboard when stdin and stdout are TTYs.
-- `clyde resume <name|uuid>` resolves a Clyde session name to its Claude
-  session UUID and runs `claude --resume <uuid>`.
-- `clyde compact ...` performs append-only transcript compaction.
-- `clyde daemon` runs the background daemon used by the dashboard,
-  adapter, OAuth refresh, and pruning loops.
-- `clyde hook sessionstart` is the SessionStart hook entrypoint used by
-  Claude Code.
-- `clyde mcp` runs the MCP stdio server for session search, list, and
-  context lookups.
-
-`clyde -r <name>` and `clyde --resume <name>` are rewritten to
-`clyde resume <name>`.
-
-Unknown commands are forwarded to the real `claude` binary. This keeps
-Claude-native workflows available without Clyde re-implementing them.
-
-## Why Clyde Exists
-
-- Clyde keeps a stable name to UUID mapping under `.claude/clyde/` so you
-  can resume work by a human-readable session name.
-- Clyde stores per-session `settings.json` files and reuses them on
-  resume, which avoids cross-session settings leakage from Claude's global
-  settings file.
-- Clyde adds append-only compaction, so compaction can preserve original
-  transcript lines on disk while injecting a synthetic recap boundary.
-- Clyde provides a dashboard and daemon for rename, delete, transcript
-  view, remote control, sidecar tail/send, and related session
-  management.
-- Clyde exposes an MCP server so Claude can search and inspect session
-  data in chat.
-
-## Installation
-
-### Download Binary
-
-```bash
-# Linux (amd64)
-curl -fsSL https://goodkind.io/clyde/releases/latest/download/clyde_linux_amd64.tar.gz | tar xz -C ~/.local/bin
-
-# Linux (arm64)
-curl -fsSL https://goodkind.io/clyde/releases/latest/download/clyde_linux_arm64.tar.gz | tar xz -C ~/.local/bin
-
-# macOS (Apple Silicon)
-curl -fsSL https://goodkind.io/clyde/releases/latest/download/clyde_darwin_arm64.tar.gz | tar xz -C ~/.local/bin
-
-# macOS (Intel)
-curl -fsSL https://goodkind.io/clyde/releases/latest/download/clyde_darwin_amd64.tar.gz | tar xz -C ~/.local/bin
+```text
+clyde
+clyde compact ...
+clyde daemon ...
+clyde hook sessionstart
+clyde mcp
+clyde resume <name|uuid>
 ```
 
-### `mise`
+Argument routing also handles these forms:
 
-```bash
-mise use github:agoodkind/clyde
+- `clyde -r <name>` and `clyde --resume <name>` run `clyde resume <name>`.
+- Bare `clyde -r`, `clyde --resume`, and `clyde resume` open the dashboard.
+- `clyde <existing-directory>` opens the dashboard scoped to that workspace.
+- `clyde exec ...`, `clyde api ...`, `clyde -p ...`, and `clyde --print ...` forward to the real `claude` binary.
+- Unknown commands are passed to Cobra first, then forwarded to the real `claude` binary when Cobra reports an unknown command.
+
+## OpenAI-Compatible Adapter
+
+`clyde daemon` can host the adapter HTTP server. The adapter routes requests through the configured model registry and provider backends.
+
+The HTTP server registers these routes:
+
+```text
+/healthz
+/v1/models
+/v1/chat/completions
+/v1/completions
+/v1/messages
+/v1/messages/count_tokens
+/
 ```
 
-### `go install`
+The adapter configuration lives in the global Clyde config:
 
-```bash
-go install goodkind.io/clyde@latest
+```text
+~/.config/clyde/config.toml
 ```
 
-### Build From Source
+`clyde.example.toml` contains the repository's reference config shape for these adapter sections:
 
-```bash
-git clone https://goodkind.io/clyde
-cd clyde
-make build
-make install  # installs the signed clyde binary to ~/.local/bin/clyde
+```text
+[adapter]
+[adapter.codex]
+[adapter.openai_compat_passthrough]
+[adapter.oauth]
+[adapter.client_identity]
+[adapter.logprobs]
+[adapter.families.<family>]
 ```
 
-`make install` is a development convenience target. Release tarballs
-still install a standalone binary by extraction and do not depend on a
-repo checkout.
-
-## Quick Start
-
-### 1. Register the SessionStart Hook
+Common daemon commands:
 
 ```bash
-make install-hook
+clyde daemon
+clyde daemon reload
 ```
 
-This adds `clyde hook sessionstart` to Claude Code's `SessionStart` hook
-configuration in `~/.claude/settings.json`.
+The adapter host defaults to loopback. Use `localhost` or `[::1]` for local adapter URLs.
 
-### 2. Create or Continue Sessions in Claude
+## Session Management
 
-Create new work in Claude itself, for example:
+Clyde stores session metadata in a Clyde-owned project directory and a global session index. The dashboard and `resume` command use that store to resolve session names and provider session IDs.
 
-```bash
-claude -n auth-feature
-```
-
-Or resume an existing session directly in Claude if that is already part
-of your workflow.
-
-### 3. Open the Dashboard
+The dashboard opens with:
 
 ```bash
 clyde
 ```
 
-The dashboard is the main user-facing surface. It is a read-mostly TUI
-for browsing sessions and driving daemon-backed actions such as resume,
-rename, delete, transcript viewing, remote-control toggle, bridge
-listing, and sidecar tail/send.
-
-### 4. Resume by Name
+A workspace-scoped dashboard opens with:
 
 ```bash
-clyde resume auth-feature
+clyde /path/to/workspace
 ```
 
-If Clyde cannot resolve the name in its own store, it forwards the raw
-argument to Claude so Claude-native sessions still work.
-
-## Session Layout
-
-Each named session lives under `.claude/clyde/sessions/<name>/`.
-
-Typical files:
-
-- `metadata.json` stores the Clyde session name, current Claude session
-  UUID, transcript path, timestamps, and cleanup metadata such as
-  `previousSessionIds`.
-- `settings.json` stores the per-session Claude settings that Clyde
-  passes back to Claude on resume.
-
-Project-scoped Clyde data lives under `.claude/clyde/`. Add that path to
-your `.gitignore`.
-
-## Data Locations
-
-Clyde follows XDG directories for global state and keeps project-local
-session metadata beside the project.
-
-| Data | Default location | Override |
-| --- | --- | --- |
-| Project session metadata and settings | `<project>/.claude/clyde/` | project root |
-| Global session index | `~/.local/share/clyde/sessions/` | `XDG_DATA_HOME` |
-| Global config | `~/.config/clyde/config.toml` | `XDG_CONFIG_HOME` |
-| Search result cache | `~/.cache/clyde/search-results/` | `XDG_CACHE_HOME` |
-| Logs, MITM captures, compaction backups, context cache | `~/.local/state/clyde/` | `XDG_STATE_HOME` |
-| Daemon socket and live session runtime files | `$TMPDIR/clyde-<uid>/` on macOS, or `$XDG_RUNTIME_DIR/clyde/` when set | `XDG_RUNTIME_DIR` |
-
-The dashboard and daemon treat `.claude/clyde/` and the XDG locations as
-Clyde-owned.
-
-## Hooks and Lifecycle
-
-`make install-hook` registers a single SessionStart hook:
-
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "clyde hook sessionstart"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-The hook handles:
-
-- new session startup
-- resume flows
-- `/clear` session UUID rotation
-- defensive `/compact` UUID updates if Claude changes that behavior later
-
-The hook is also what injects stored session context into Claude when a
-session has context in metadata.
-
-## Commands
-
-### `clyde`
-
-Opens the TUI dashboard when stdin and stdout are TTYs.
-
-When stdin is not a TTY, Clyde forwards to the real `claude` binary
-instead of trying to draw the dashboard into a pipe.
-
-### `clyde resume <name|uuid>`
-
-Resolves a Clyde-managed session by name, UUID, display name, or fuzzy
-match, then shells out to `claude --resume <uuid>`.
-
-Examples:
+A named session resumes with:
 
 ```bash
 clyde resume auth-feature
@@ -212,61 +90,165 @@ clyde --resume auth-feature
 clyde -r auth-feature
 ```
 
-### `clyde compact <session> [target]`
+For Claude Code sessions, the provider runtime launches the real `claude` binary with the resolved session ID and session settings when available. Clyde also forwards Claude-native invocations through the real `claude` binary when the arguments are not Clyde-owned commands.
 
-Runs append-only compaction against a session transcript.
+The SessionStart hook command is:
+
+```text
+clyde hook sessionstart
+```
+
+The hook is installed with:
+
+```bash
+make install-hook
+```
+
+The hook lets Clyde register session metadata during Claude Code startup, resume, clear, and compact hook events.
+
+## Compaction
+
+`clyde compact` works on a session transcript. It appends a compact boundary and a synthetic follow-up message while keeping the original transcript lines on disk.
 
 Examples:
 
 ```bash
 clyde compact my-session
-clyde compact my-session --tools --thinking
 clyde compact my-session 200k
-clyde compact my-session --apply
+clyde compact my-session --tools --thinking
+clyde compact my-session --target 200k --apply
 clyde compact my-session --undo
+clyde compact my-session --list-backups
 ```
 
-By default, `compact` previews changes. Use `--apply` to mutate the
-transcript.
+By default, `clyde compact` previews the plan. `--apply` appends the compact boundary and synthetic message. `--undo` restores the most recent applied backup for that session.
 
-### `clyde daemon`
+Useful flags:
 
-Starts the background daemon. This command is primarily for managed or
-internal use.
+- `--tools` strips tool-use and tool-result content.
+- `--thinking` drops thinking and redacted-thinking content.
+- `--images` replaces image blocks with text placeholders.
+- `--chat` drops older chat turns while preserving the required trailing turn shape.
+- `--all` enables all compactable content classes.
+- `--type` accepts `tools`, `thinking`, `images`, `chat`, and `all` as a CSV list.
+- `--target` sets a token target such as `200k`, `120000`, or `1.2m`.
+- `--refresh` forces a fresh context probe.
+- `--summarize=false` skips the recap step during `--apply`.
 
-Useful subcommand:
+## MITM Capture Proxy
+
+Clyde includes a local MITM capture proxy for provider request observability. The proxy listens on IPv6 loopback, routes supported provider traffic to upstream services, and writes append-only capture records to `capture.jsonl` under the configured capture directory.
+
+MITM configuration lives in the global Clyde config under `[mitm]`:
+
+```toml
+[mitm]
+enabled_default = true
+providers = "both"
+body_mode = "summary"
+capture_dir = "~/.local/state/clyde/mitm"
+```
+
+The supported `providers` values are `both`, `claude`, and `codex`. The supported `body_mode` values are `summary`, `raw`, and `off`.
+
+When MITM is enabled for Claude, Clyde's Claude passthrough path injects `ANTHROPIC_BASE_URL` so forwarded Claude traffic uses the local proxy. The daemon also starts a daemon-owned MITM listener when `[mitm].enabled_default` is true.
+
+The MITM package also owns launch profiles for supported upstream clients and daemon-owned baseline drift checks configured under `[mitm.drift]`.
+
+## Remote Control Harness
+
+Clyde includes a daemon-owned remote control harness for live LLM sessions. It is the runtime layer that lets Clyde start a session, keep track of its provider-owned identity, stream live state to clients, and deliver user input back into the running provider process.
+
+The harness exposes provider-neutral live-session RPCs. Clients such as the dashboard ask the daemon to start, list, stream, send to, foreground, or stop a live session. The daemon then routes those requests to the provider-specific runtime instead of letting clients inspect provider files, sockets, or process details directly.
+
+For Claude sessions, Clyde launches Claude through its wrapper with remote control enabled. The wrapper runs Claude inside a PTY, creates a per-session Unix injection socket, keeps local terminal input and output working for foreground sessions, and writes daemon-sent text into Claude's PTY stdin as if the user had typed it. Daemon-owned headless Claude sessions use the same injection path without attaching local terminal IO.
+
+For Codex live sessions, the daemon owns the live runtime directly and stores the active runtime record in memory. The same live-session RPC surface sends turns, streams events, and stops Codex sessions through the provider runtime.
+
+Foreground handoff is part of the harness. When a user opens a daemon-owned live session in an interactive terminal, the daemon issues a short-lived foreground lease, suspends the background runtime when the provider needs that, and restores the daemon-owned live state after the foreground process exits when restoration is supported.
+
+Runtime files for live sessions, including Claude injection sockets, live session state, and foreground handoff data, live under the daemon runtime directory listed below.
+
+## Installation
+
+### Build From Source
 
 ```bash
+git clone https://goodkind.io/clyde
+cd clyde
+make build
+make install
+```
+
+`make install` copies the signed development binary to:
+
+```text
+~/.local/bin/clyde
+```
+
+### Install Hook
+
+```bash
+make install-hook
+```
+
+### macOS LaunchAgent
+
+```bash
+make install-launch-agent
+```
+
+The LaunchAgent runs the installed binary at `~/.local/bin/clyde`.
+
+## Quick Start
+
+```bash
+make build
+make install
+make install-hook
+clyde
+```
+
+For adapter and MITM setup, create or edit the global config, copy the relevant adapter sections from `clyde.example.toml`, add any `[mitm]` settings for local capture, then start or reload the daemon:
+
+```bash
+mkdir -p ~/.config/clyde
+$EDITOR ~/.config/clyde/config.toml
 clyde daemon reload
 ```
 
-### `clyde hook sessionstart`
+If no daemon is running, start one with:
 
-Internal SessionStart hook entrypoint. Claude invokes this through the
-hook configuration installed by `make install-hook`.
+```bash
+clyde daemon
+```
 
-### `clyde mcp`
+## Data Locations
 
-Internal MCP stdio server entrypoint used for in-chat session search,
-list, and context lookup.
+Clyde keeps project session metadata beside the workspace and global runtime data in XDG locations.
 
-## Remote Control
+Data locations:
 
-Remote control is exposed through the dashboard rather than a standalone
-CLI verb.
+- Project session metadata and settings: `<project>/.claude/clyde/`.
+- Global session index: `~/.local/share/clyde/sessions/`, or `XDG_DATA_HOME`.
+- Global config: `~/.config/clyde/config.toml`, or `XDG_CONFIG_HOME`.
+- Logs, compaction backups, context cache, adapter logs, and MITM captures: `~/.local/state/clyde/`, or `XDG_STATE_HOME`.
+- Daemon socket and live session runtime files: `$TMPDIR/clyde-<uid>/` on macOS, or `$XDG_RUNTIME_DIR/clyde/` when set.
 
-The feature is built from three pieces:
+Add project-local Clyde state to `.gitignore`:
 
-- the Claude wrapper can run Claude inside a PTY and accept daemon-fed
-  input over a per-session Unix socket
-- the daemon watches bridge state, tails transcripts, and forwards
-  messages into the running session
-- the dashboard shows RC status, bridge actions, and the Sidecar tab for
-  transcript tail and send
+```gitignore
+.claude/clyde/
+```
 
 ## Development
 
-Requirements: Go 1.25+, Make
+Requirements:
+
+- Go 1.26.2 or newer.
+- Make.
+
+Common targets:
 
 ```bash
 make build         # compile and signing-check without leaving a repo-local clyde binary
@@ -279,33 +261,24 @@ make deadcode      # check for unreachable functions
 make install       # copy the signed binary to ~/.local/bin/clyde
 ```
 
-Recommended setup:
+Recommended local setup:
 
 ```bash
 make setup-hooks
 make install-hook
 ```
 
-If you want the managed macOS daemon LaunchAgent:
-
-```bash
-make install-launch-agent
-```
-
-On macOS, grant Full Disk Access to the stable installed binary path:
+On macOS, grant Full Disk Access to the installed binary path when using daemon-managed discovery, transcripts, or remote control:
 
 ```text
 ~/.local/bin/clyde
 ```
 
-The LaunchAgent runs that installed binary directly, so rebuilding and
-reinstalling keeps the same path and code-signing identity.
+## About the Name
 
-`make lint` expects `golangci-lint` v2.x, for example:
+Clyde is a short ASCII project name that stays easy to type.
 
-```bash
-curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b "$(go env GOPATH)/bin"
-```
+Built with [Claude Code](https://claude.ai/code).
 
 ## License
 

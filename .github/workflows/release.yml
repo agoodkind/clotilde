@@ -1,6 +1,13 @@
 name: Release
 
 on:
+  workflow_dispatch:
+    inputs:
+      snapshot:
+        description: "Run a non-publishing snapshot release"
+        required: true
+        default: true
+        type: boolean
   push:
     tags:
       - "v*"
@@ -10,6 +17,7 @@ permissions:
 
 jobs:
   release:
+    name: Release
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -23,23 +31,26 @@ jobs:
 
       - run: make test
 
-      - uses: 1password/load-secrets-action/configure@v3
-        with:
-          service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-
-      - uses: 1password/load-secrets-action@v3
-        with:
-          export-env: true
-        env:
-          MACOS_SIGN_P12: op://CI/macOS Release Signing and Notarization CI/macos_sign_p12_single
-          MACOS_SIGN_PASSWORD: op://CI/macOS Release Signing and Notarization CI/MACOS_SIGN_PASSWORD
-          MACOS_NOTARY_KEY: op://CI/macOS Release Signing and Notarization CI/MACOS_NOTARY_KEY
-          MACOS_NOTARY_KEY_ID: op://CI/macOS Release Signing and Notarization CI/MACOS_NOTARY_KEY_ID
-          MACOS_NOTARY_ISSUER_ID: op://CI/macOS Release Signing and Notarization CI/MACOS_NOTARY_ISSUER_ID
-
       - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
-          args: release --clean
+          install-only: true
+
+      - run: goreleaser check
+
+      - name: Run snapshot release
+        if: github.event_name == 'workflow_dispatch' && inputs.snapshot
+        run: goreleaser release --snapshot --clean --skip=publish --skip=notarize
+
+      - name: Publish release
+        if: github.event_name == 'push'
+        run: goreleaser release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_SIGNING_CERTIFICATE: ${{ secrets.MACOS_SIGNING_CERTIFICATE }}
+          MACOS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_SIGNING_CERTIFICATE_PASSWORD }}
