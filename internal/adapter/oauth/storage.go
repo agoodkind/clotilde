@@ -6,20 +6,20 @@ import (
 	"fmt"
 	"strings"
 
-	"goodkind.io/clyde/internal/claude"
+	"goodkind.io/clyde/internal/claude/oauthcredentials"
 )
 
-func readCredentialCandidates(ctx context.Context, dir, keychainService string) []claude.OAuthCredentialReadResult {
-	return claude.ReadOAuthCredentialCandidates(ctx, claude.OAuthCredentialReadOptions{
+func readCredentialCandidates(ctx context.Context, dir, keychainService string) []oauthcredentials.ReadResult {
+	return oauthcredentials.ReadCandidates(ctx, oauthcredentials.ReadOptions{
 		CredentialsDir:  dir,
 		KeychainService: keychainService,
 		Now:             oauthClock.Now(),
 	})
 }
 
-func selectCredentialCandidate(results []claude.OAuthCredentialReadResult) (*selectedCredential, error) {
-	summaries := claude.SummarizeOAuthCredentialResults(results)
-	var selected *claude.OAuthCredentialReadResult
+func selectCredentialCandidate(results []oauthcredentials.ReadResult) (*selectedCredential, error) {
+	summaries := oauthcredentials.Summarize(results)
+	var selected *oauthcredentials.ReadResult
 	for i := range results {
 		candidate := &results[i]
 		if !candidateUsable(candidate) {
@@ -43,9 +43,9 @@ func selectCredentialCandidate(results []claude.OAuthCredentialReadResult) (*sel
 	}, nil
 }
 
-func selectRefreshableCredential(results []claude.OAuthCredentialReadResult) (*selectedCredential, error) {
-	summaries := claude.SummarizeOAuthCredentialResults(results)
-	var selected *claude.OAuthCredentialReadResult
+func selectRefreshableCredential(results []oauthcredentials.ReadResult) (*selectedCredential, error) {
+	summaries := oauthcredentials.Summarize(results)
+	var selected *oauthcredentials.ReadResult
 	for i := range results {
 		candidate := &results[i]
 		if !candidateRefreshable(candidate) {
@@ -70,12 +70,12 @@ func selectRefreshableCredential(results []claude.OAuthCredentialReadResult) (*s
 }
 
 func writeCredentials(ctx context.Context, dir string, tokens *Tokens) error {
-	if err := claude.WriteOAuthCredentialsFile(ctx, dir, tokens); err != nil {
+	if err := oauthcredentials.WriteFile(ctx, dir, tokens); err != nil {
 		return err
 	}
 	oauthLog.Logger().InfoContext(ctx, "oauth.credentials.refreshed_file_written",
 		"subcomponent", "oauth",
-		"credential_source", claude.OAuthCredentialSourceFile,
+		"credential_source", oauthcredentials.SourceFile,
 		"expires_at_ms", tokens.ExpiresAt,
 	)
 	return nil
@@ -94,7 +94,7 @@ func snapshotForCredential(selected *selectedCredential) credentialSnapshot {
 	}
 }
 
-func summariesAsStrings(summaries []claude.OAuthCredentialSummary) []string {
+func summariesAsStrings(summaries []oauthcredentials.Summary) []string {
 	values := make([]string, 0, len(summaries))
 	for _, summary := range summaries {
 		values = append(values, fmt.Sprintf("%s:present=%t:access=%t:refresh=%t:expired=%t:error=%s",
@@ -109,15 +109,15 @@ func summariesAsStrings(summaries []claude.OAuthCredentialSummary) []string {
 	return values
 }
 
-func candidateUsable(candidate *claude.OAuthCredentialReadResult) bool {
+func candidateUsable(candidate *oauthcredentials.ReadResult) bool {
 	return candidate != nil && candidate.Err == nil && candidate.Tokens != nil && candidate.Metadata.AccessTokenPresent
 }
 
-func candidateRefreshable(candidate *claude.OAuthCredentialReadResult) bool {
+func candidateRefreshable(candidate *oauthcredentials.ReadResult) bool {
 	return candidateUsable(candidate) && candidate.Metadata.RefreshTokenPresent
 }
 
-func credentialCandidateBetter(candidate, selected *claude.OAuthCredentialReadResult) bool {
+func credentialCandidateBetter(candidate, selected *oauthcredentials.ReadResult) bool {
 	if candidate.Metadata.Expired != selected.Metadata.Expired {
 		return !candidate.Metadata.Expired
 	}
@@ -125,7 +125,7 @@ func credentialCandidateBetter(candidate, selected *claude.OAuthCredentialReadRe
 		return candidate.Metadata.RefreshTokenPresent
 	}
 	if candidate.Source != selected.Source {
-		return candidate.Source == claude.OAuthCredentialSourceKeychain
+		return candidate.Source == oauthcredentials.SourceKeychain
 	}
 	return candidate.Metadata.ExpiresAt > selected.Metadata.ExpiresAt
 }

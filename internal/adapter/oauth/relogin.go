@@ -138,12 +138,12 @@ func (m *Manager) autoRelogin(ctx context.Context, originalErr error) error {
 	defer func() { _ = lock.Unlock() }()
 
 	// Post-lock re-read: another process may have already relogged.
-	if disk, rerr := readCredentials(m.credentialsDir, m.oauthCfg.KeychainService); rerr == nil && disk != nil && !isExpired(disk) {
+	if selected, rerr := m.reselectCredential(ctx); rerr == nil && selected != nil && !isExpired(selected.Tokens) {
 		log.InfoContext(ctx, "oauth.relogin.raced",
 			"subcomponent", "oauth",
-			"expires_at_ms", disk.ExpiresAt,
+			"credential_source", selected.Source,
+			"expires_at_ms", selected.Tokens.ExpiresAt,
 		)
-		m.cached = disk
 		return nil
 	}
 
@@ -186,9 +186,9 @@ func (m *Manager) autoRelogin(ctx context.Context, originalErr error) error {
 		"duration_ms", durationMs,
 	)
 
-	// Force a re-read on the next Token() call by dropping cache and
-	// resetting mtime tracking. Caller should retry refresh once.
+	// Force a re-read on the next Token() call by dropping cache.
+	// Caller should retry refresh once.
 	m.cached = nil
-	m.credsMtime = 0
+	m.snapshot = credentialSnapshot{}
 	return nil
 }

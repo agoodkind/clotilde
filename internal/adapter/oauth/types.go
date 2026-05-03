@@ -6,17 +6,17 @@ import (
 	"strings"
 	"time"
 
-	"goodkind.io/clyde/internal/claude"
+	"goodkind.io/clyde/internal/claude/oauthcredentials"
 )
 
 // refreshSafetyWindow is how far before expiresAt we proactively refresh.
 const refreshSafetyWindow = 30 * time.Second
 
 // Tokens is the Claude Code OAuth credential payload used by the adapter.
-type Tokens = claude.OAuthTokens
+type Tokens = oauthcredentials.Tokens
 
 type credentialSnapshot struct {
-	Source              claude.OAuthCredentialSource
+	Source              oauthcredentials.Source
 	Fingerprint         string
 	ExpiresAt           int64
 	RefreshTokenPresent bool
@@ -24,16 +24,16 @@ type credentialSnapshot struct {
 }
 
 type selectedCredential struct {
-	Source    claude.OAuthCredentialSource
+	Source    oauthcredentials.Source
 	Tokens    *Tokens
-	Metadata  claude.OAuthCredentialMetadata
-	Summaries []claude.OAuthCredentialSummary
+	Metadata  oauthcredentials.Metadata
+	Summaries []oauthcredentials.Summary
 }
 
 // OAuthCredentialError describes an unusable local Claude OAuth credential set.
 type OAuthCredentialError struct {
 	Message   string
-	Summaries []claude.OAuthCredentialSummary
+	Summaries []oauthcredentials.Summary
 }
 
 func (e *OAuthCredentialError) Error() string {

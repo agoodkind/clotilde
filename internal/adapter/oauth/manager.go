@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"goodkind.io/clyde/internal/claude"
+	"goodkind.io/clyde/internal/claude/oauthcredentials"
 	"goodkind.io/clyde/internal/config"
 )
 
@@ -127,7 +127,7 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 				)
 				return "", fmt.Errorf("post-relogin refresh: %w", retryErr)
 			}
-			m.cacheTokens(claude.OAuthCredentialSourceFile, retried)
+			m.cacheTokens(oauthcredentials.SourceFile, retried)
 			log.InfoContext(ctx, "oauth.auth.refreshed_via_relogin",
 				"subcomponent", "oauth",
 				"duration_ms", time.Since(refreshStarted).Milliseconds(),
@@ -137,7 +137,7 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 		}
 		return "", err
 	}
-	m.cacheTokens(claude.OAuthCredentialSourceFile, refreshed)
+	m.cacheTokens(oauthcredentials.SourceFile, refreshed)
 	log.InfoContext(ctx, "oauth.auth.refreshed",
 		"subcomponent", "oauth",
 		"duration_ms", time.Since(refreshStarted).Milliseconds(),
@@ -152,7 +152,7 @@ func (m *Manager) selectedCredential(ctx context.Context) (*selectedCredential, 
 	if m.cached == nil || m.cachedNeedsReselect() {
 		return m.reselectCredential(ctx)
 	}
-	metadata := claude.NewOAuthCredentialMetadata(m.cached, oauthClock.Now(), m.snapshot.FileMtime)
+	metadata := oauthcredentials.NewMetadata(m.cached, oauthClock.Now(), m.snapshot.FileMtime)
 	return &selectedCredential{
 		Source:   m.snapshot.Source,
 		Tokens:   m.cached.Clone(),
@@ -188,7 +188,7 @@ func (m *Manager) cachedNeedsReselect() bool {
 	if m.cached.RefreshToken == "" {
 		return true
 	}
-	if m.snapshot.Source == claude.OAuthCredentialSourceFile {
+	if m.snapshot.Source == oauthcredentials.SourceFile {
 		mtime := credentialsFileMtime(m.credentialsDir)
 		return mtime != 0 && m.snapshot.FileMtime != 0 && mtime != m.snapshot.FileMtime
 	}
@@ -215,9 +215,9 @@ func (m *Manager) ensureRefreshableCandidate(ctx context.Context, selected *sele
 	return refreshable, nil
 }
 
-func (m *Manager) cacheTokens(source claude.OAuthCredentialSource, tokens *Tokens) {
+func (m *Manager) cacheTokens(source oauthcredentials.Source, tokens *Tokens) {
 	m.cached = tokens.Clone()
-	metadata := claude.NewOAuthCredentialMetadata(tokens, oauthClock.Now(), credentialsFileMtime(m.credentialsDir))
+	metadata := oauthcredentials.NewMetadata(tokens, oauthClock.Now(), credentialsFileMtime(m.credentialsDir))
 	m.snapshot = credentialSnapshot{
 		Source:              source,
 		Fingerprint:         metadata.Fingerprint,

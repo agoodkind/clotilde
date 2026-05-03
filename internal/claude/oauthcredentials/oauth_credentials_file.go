@@ -1,4 +1,4 @@
-package claude
+package oauthcredentials
 
 import (
 	"context"
@@ -10,24 +10,24 @@ import (
 	"time"
 )
 
-type fileOAuthCredentialStore struct {
+type fileStore struct {
 	credentialsDir string
 	now            time.Time
 }
 
-func (s fileOAuthCredentialStore) Source() OAuthCredentialSource {
-	return OAuthCredentialSourceFile
+func (s fileStore) Source() Source {
+	return SourceFile
 }
 
-func (s fileOAuthCredentialStore) Read(_ context.Context) OAuthCredentialReadResult {
+func (s fileStore) Read(_ context.Context) ReadResult {
 	path := filepath.Join(s.credentialsDir, ".credentials.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return OAuthCredentialReadResult{Source: OAuthCredentialSourceFile}
+			return ReadResult{Source: SourceFile}
 		}
-		return OAuthCredentialReadResult{
-			Source: OAuthCredentialSourceFile,
+		return ReadResult{
+			Source: SourceFile,
 			Err:    fmt.Errorf("read %s: %w", path, err),
 		}
 	}
@@ -35,9 +35,9 @@ func (s fileOAuthCredentialStore) Read(_ context.Context) OAuthCredentialReadRes
 	if info, statErr := os.Stat(path); statErr == nil {
 		fileMtime = info.ModTime().UnixNano()
 	}
-	tokens, metadata, parseErr := parseOAuthCredentialsBlob(data, s.now, fileMtime)
-	return OAuthCredentialReadResult{
-		Source:   OAuthCredentialSourceFile,
+	tokens, metadata, parseErr := parseBlob(data, s.now, fileMtime)
+	return ReadResult{
+		Source:   SourceFile,
 		Tokens:   tokens,
 		Present:  tokens != nil,
 		Err:      parseErr,
@@ -45,10 +45,10 @@ func (s fileOAuthCredentialStore) Read(_ context.Context) OAuthCredentialReadRes
 	}
 }
 
-func (s fileOAuthCredentialStore) Write(_ context.Context, tokens *OAuthTokens) OAuthCredentialWriteResult {
+func (s fileStore) Write(_ context.Context, tokens *Tokens) WriteResult {
 	if tokens == nil {
-		return OAuthCredentialWriteResult{
-			Source: OAuthCredentialSourceFile,
+		return WriteResult{
+			Source: SourceFile,
 			Err:    fmt.Errorf("write credentials: tokens are nil"),
 		}
 	}
@@ -59,37 +59,37 @@ func (s fileOAuthCredentialStore) Write(_ context.Context, tokens *OAuthTokens) 
 	}
 	encoded, err := json.Marshal(tokens)
 	if err != nil {
-		return OAuthCredentialWriteResult{
-			Source: OAuthCredentialSourceFile,
+		return WriteResult{
+			Source: SourceFile,
 			Err:    fmt.Errorf("marshal tokens: %w", err),
 		}
 	}
 	merged["claudeAiOauth"] = encoded
 	out, err := json.MarshalIndent(merged, "", "  ")
 	if err != nil {
-		return OAuthCredentialWriteResult{
-			Source: OAuthCredentialSourceFile,
+		return WriteResult{
+			Source: SourceFile,
 			Err:    fmt.Errorf("marshal merged credentials: %w", err),
 		}
 	}
 	if err := os.MkdirAll(s.credentialsDir, 0o700); err != nil {
-		return OAuthCredentialWriteResult{
-			Source: OAuthCredentialSourceFile,
+		return WriteResult{
+			Source: SourceFile,
 			Err:    fmt.Errorf("mkdir credentials dir: %w", err),
 		}
 	}
 	tmp := credsPath + ".tmp"
 	if err := os.WriteFile(tmp, out, 0o600); err != nil {
-		return OAuthCredentialWriteResult{
-			Source: OAuthCredentialSourceFile,
+		return WriteResult{
+			Source: SourceFile,
 			Err:    fmt.Errorf("write temp credentials: %w", err),
 		}
 	}
 	if err := os.Rename(tmp, credsPath); err != nil {
-		return OAuthCredentialWriteResult{
-			Source: OAuthCredentialSourceFile,
+		return WriteResult{
+			Source: SourceFile,
 			Err:    fmt.Errorf("rename temp credentials: %w", err),
 		}
 	}
-	return OAuthCredentialWriteResult{Source: OAuthCredentialSourceFile}
+	return WriteResult{Source: SourceFile}
 }
