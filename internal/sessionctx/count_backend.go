@@ -39,6 +39,9 @@ func newCountBackend(sessionID, defaultModel, apiKey string) *countBackend {
 // key or missing model surface as TokenCounter's native errors; the
 // layer passes them up unchanged.
 func (c *countBackend) Count(ctx context.Context, content []compact.OutputBlock, model string) (int, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	effectiveModel := model
 	if effectiveModel == "" {
 		effectiveModel = c.defaultModel
@@ -52,7 +55,7 @@ func (c *countBackend) Count(ctx context.Context, content []compact.OutputBlock,
 
 	counter := c.builder(c.apiKey, effectiveModel)
 	started := currentTime()
-	sessionContextLog.Logger().Debug("session.context.count.started",
+	sessionContextLog.Logger().DebugContext(ctx, "session.context.count.started",
 		"component", "sessionctx",
 		"subcomponent", "count",
 		"session_id", c.sessionID,
@@ -62,7 +65,7 @@ func (c *countBackend) Count(ctx context.Context, content []compact.OutputBlock,
 	tokens, err := counter.CountSyntheticUser(ctx, content)
 	duration := time.Since(started)
 	if err != nil {
-		sessionContextLog.Logger().Warn("session.context.count.failed",
+		sessionContextLog.Logger().WarnContext(ctx, "session.context.count.failed",
 			"component", "sessionctx",
 			"subcomponent", "count",
 			"session_id", c.sessionID,
@@ -72,7 +75,7 @@ func (c *countBackend) Count(ctx context.Context, content []compact.OutputBlock,
 		)
 		return 0, err
 	}
-	sessionContextLog.Logger().Info("session.context.count.completed",
+	sessionContextLog.Logger().InfoContext(ctx, "session.context.count.completed",
 		"component", "sessionctx",
 		"subcomponent", "count",
 		"session_id", c.sessionID,

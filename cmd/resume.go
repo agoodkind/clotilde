@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -27,12 +26,13 @@ func NewResumeCmd() *cobra.Command {
 		Args:               cobra.ExactArgs(1),
 		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := newCommandContext("cli.resume")
 			query := args[0]
-			cmdResumeLog.Logger().Info("cli.resume.invoked",
+			cmdResumeLog.Logger().InfoContext(ctx, "cli.resume.invoked",
 				"component", "cli",
 				"query", query,
 			)
-			store, err := globalStore()
+			store, err := globalStore(ctx)
 			if err != nil {
 				return err
 			}
@@ -41,7 +41,7 @@ func NewResumeCmd() *cobra.Command {
 				return err
 			}
 			if sess == nil {
-				cmdResumeLog.Logger().Info("cli.resume.unknown_session.forwarding_to_provider",
+				cmdResumeLog.Logger().InfoContext(ctx, "cli.resume.unknown_session.forwarding_to_provider",
 					"component", "cli",
 					"query", query,
 				)
@@ -51,17 +51,17 @@ func NewResumeCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return runtime.ResumeOpaqueInteractive(context.Background(), session.OpaqueResumeRequest{
+				return runtime.ResumeOpaqueInteractive(ctx, session.OpaqueResumeRequest{
 					Query: query,
 				})
 			}
-			cmdResumeLog.Logger().Info("cli.resume.resolved",
+			cmdResumeLog.Logger().InfoContext(ctx, "cli.resume.resolved",
 				"component", "cli",
 				"query", query,
 				"session", sess.Name,
 				"session_id", sess.Metadata.ProviderSessionID(),
 			)
-			return resumeSession(sess, store, false)
+			return resumeSession(ctx, sess, store, false)
 		},
 	}
 }

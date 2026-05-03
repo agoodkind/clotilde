@@ -654,6 +654,28 @@ unconcerned logger calls are migrated. If a package cannot import
 `internal/slogger` because it would create an import cycle, attach the
 literal `concern` attribute at the boundary and leave a narrow note.
 
+### Trace/span correlation
+
+The full contract lives in `docs/SLOG.md`. In short: every operation
+that has a `context.Context` should carry `internal/correlation.Context`,
+and every log at that boundary should use `slog.*Context` or `LogAttrs`
+with that context. `slogger` automatically injects missing
+`trace_id`, `span_id`, `parent_span_id`, request ids, Cursor ids, and
+upstream ids from the context; explicit event attributes win and must
+not be overwritten.
+
+Ingress boundaries own correlation creation. HTTP and gRPC boundaries
+must parse or emit `traceparent` plus Clyde correlation headers, then
+create child spans for provider calls, daemon jobs, and other nested
+work. Lower-level helpers should not invent independent trace ids when
+a caller context exists; thread the caller context down instead.
+
+Package-level `slog.Info`/`Warn`/`Error` and `context.Background()`
+logs are acceptable only for bootstrap, process-global loops, panic
+recovery without an originating operation, or old helper APIs that do
+not accept context yet. When touching those APIs, prefer adding
+`context.Context` and preserving the existing caller's correlation.
+
 ### What to log **THIS LIST IS NON-EXHAUSTIVE**
 
 Prefer events at these points:
@@ -673,6 +695,8 @@ Prefer fields that make those events queryable and comparable:
 | `subcomponent` | Narrower emitter inside that subsystem                      |
 | `request_id`   | Correlation id for one incoming request or job              |
 | `trace_id`     | Distributed trace or upstream correlation id when available |
+| `span_id`      | Current Clyde boundary or child operation id                |
+| `parent_span_id` | Parent operation span id when available                   |
 | `session`      | Human-oriented session, tenant, or job name when relevant   |
 | `session_id`   | Stable UUID or internal identifier when relevant            |
 | `model`        | Resolved model or backend choice when applicable            |

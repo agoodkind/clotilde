@@ -88,11 +88,12 @@ type adapterProcess struct {
 }
 
 type adapterController struct {
-	log     *slog.Logger
-	deps    adapter.Deps
-	mu      sync.Mutex
-	current adapterLaunchConfig
-	proc    *adapterProcess
+	log            *slog.Logger
+	deps           adapter.Deps
+	runtimeLogging *adapter.RuntimeLogging
+	mu             sync.Mutex
+	current        adapterLaunchConfig
+	proc           *adapterProcess
 }
 
 type inheritedListenerSpec struct {
@@ -1002,7 +1003,8 @@ func startAdapter(log *slog.Logger, srv *Server, inherited net.Listener) (*adapt
 	}
 
 	ctrl := &adapterController{
-		log: log,
+		log:            log,
+		runtimeLogging: adapter.NewRuntimeLogging(cfg.Logging),
 		deps: adapter.Deps{
 			ResolveClaude:                findRealClaude,
 			ScratchDir:                   adapterScratchDir,
@@ -1163,10 +1165,16 @@ func (c *adapterController) apply(next adapterLaunchConfig, startup bool, inheri
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	prev := c.current
-	if !startup && reflect.DeepEqual(prev, next) {
+	if c.runtimeLogging == nil {
+		c.runtimeLogging = adapter.NewRuntimeLogging(next.Logging)
+	}
+	c.deps.RuntimeLogging = c.runtimeLogging
+	if !startup && adapterLaunchEquivalent(prev, next) {
+		c.runtimeLogging.Set(next.Logging)
 		if inherited != nil {
 			_ = inherited.Close()
 		}
+		c.current = next
 		c.log.Debug("adapter.config_reload.noop",
 			"component", "adapter",
 		)
@@ -1202,6 +1210,7 @@ func (c *adapterController) apply(next adapterLaunchConfig, startup bool, inheri
 	}
 
 	if !next.Enabled {
+		c.runtimeLogging.Set(next.Logging)
 		c.proc = nil
 		c.current = next
 		c.log.Info("adapter.config_reload.disabled",
@@ -1218,6 +1227,7 @@ func (c *adapterController) apply(next adapterLaunchConfig, startup bool, inheri
 		}
 	}
 	proc := startAdapterProcess(c.log, srv, lis)
+	c.runtimeLogging.Set(next.Logging)
 	c.proc = proc
 	c.current = next
 	c.log.Info("adapter.config_reload.applied",
@@ -1228,6 +1238,12 @@ func (c *adapterController) apply(next adapterLaunchConfig, startup bool, inheri
 		"default_model", next.Adapter.DefaultModel,
 	)
 	return nil
+}
+
+func adapterLaunchEquivalent(a, b adapterLaunchConfig) bool {
+	a.Logging.Body = config.LoggingBody{}
+	b.Logging.Body = config.LoggingBody{}
+	return reflect.DeepEqual(a, b)
 }
 
 func (c *adapterController) listener() net.Listener {

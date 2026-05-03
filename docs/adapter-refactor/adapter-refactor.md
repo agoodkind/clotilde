@@ -35,7 +35,8 @@ evidence shows a regression.
 ## Next Slice
 
 1. Continue `CLYDE-157`: finish trace/span propagation across adapter,
-   daemon, provider, and capture logs.
+   daemon, provider, and capture logs. The repo-wide correlation contract and
+   non-adapter audit are in [`../SLOG.md`](../SLOG.md).
 
 ## Global Remaining Set
 
@@ -54,7 +55,8 @@ evidence shows a regression.
 - `CLYDE-155`: Todo. Generate provider wire types from `research/` and remove
   raw payload probing.
 - `CLYDE-157`: In Progress. Add trace/span IDs across adapter, daemon,
-  provider, and capture logs.
+  provider, and capture logs. Contract and non-adapter audit documented in
+  [`../SLOG.md`](../SLOG.md).
 - `CLYDE-158`: In Progress. Fix or explain context-window mismatch behavior for
   Cursor adapter models.
 - `CLYDE-159`: Todo. Reproduce Codex long-running tasks stopping too early.

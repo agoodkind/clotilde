@@ -210,7 +210,9 @@ func TestStartRemoteSessionLaunchesWorkerWithSessionAndBasedir(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, err := os.Stat(argsFile); err == nil {
+		_, argsErr := os.Stat(argsFile)
+		_, pwdErr := os.Stat(pwdFile)
+		if argsErr == nil && pwdErr == nil {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)

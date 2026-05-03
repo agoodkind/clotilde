@@ -57,22 +57,23 @@ func RunDashboard(cmd *cobra.Command, args []string) int {
 // runDashboardTUI opens the session dashboard. Caller must ensure stdin and
 // stdout are TTYs (see RunDashboard).
 func runDashboardTUI() int {
+	ctx := newCommandContext("dashboard")
 	daemon.NudgeDiscoveryScan()
-	cmdUILog.Logger().Info("dashboard.opened", "component", "tui")
+	cmdUILog.Logger().InfoContext(ctx, "dashboard.opened", "component", "tui")
 
 	dashboardCwd, _ := os.Getwd()
-	cb := buildAppCallbacks(dashboardCwd)
-	app := ui.NewApp(nil, cb, dashboardAppOptions(dashboardCwd, "", consumeTUIReturnSession()))
+	cb := buildAppCallbacks(ctx, dashboardCwd)
+	app := ui.NewApp(nil, cb, dashboardAppOptions(ctx, dashboardCwd, "", consumeTUIReturnSession()))
 
 	if err := app.Run(); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
-		cmdUILog.Logger().Error("dashboard.tui_error",
+		cmdUILog.Logger().ErrorContext(ctx, "dashboard.tui_error",
 			"component", "tui",
 			"err", err,
 		)
 		return 1
 	}
-	cmdUILog.Logger().Info("dashboard.closed", "component", "tui")
+	cmdUILog.Logger().InfoContext(ctx, "dashboard.closed", "component", "tui")
 	return 0
 }
 
@@ -82,35 +83,37 @@ func RunBasedirLaunch(basedir string) int {
 	if !isatty.IsTerminal(os.Stdin.Fd()) || !isatty.IsTerminal(os.Stdout.Fd()) {
 		return ForwardToClaude(os.Args[1:])
 	}
+	ctx := newCommandContext("dashboard.basedir")
 	daemon.NudgeDiscoveryScan()
 	canonical := session.CanonicalWorkspaceRoot(basedir)
-	cmdUILog.Logger().Info("dashboard.basedir.opened",
+	cmdUILog.Logger().InfoContext(ctx, "dashboard.basedir.opened",
 		"component", "tui",
 		"basedir", canonical,
 	)
 
 	dashboardCwd, _ := os.Getwd()
-	cb := buildAppCallbacks(dashboardCwd)
-	app := ui.NewApp(nil, cb, dashboardAppOptions(canonical, canonical, consumeTUIReturnSession()))
+	cb := buildAppCallbacks(ctx, dashboardCwd)
+	app := ui.NewApp(nil, cb, dashboardAppOptions(ctx, canonical, canonical, consumeTUIReturnSession()))
 
 	if err := app.Run(); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
-		cmdUILog.Logger().Error("dashboard.basedir.tui_error",
+		cmdUILog.Logger().ErrorContext(ctx, "dashboard.basedir.tui_error",
 			"component", "tui",
 			"basedir", canonical,
 			"err", err,
 		)
 		return 1
 	}
-	cmdUILog.Logger().Info("dashboard.basedir.closed",
+	cmdUILog.Logger().InfoContext(ctx, "dashboard.basedir.closed",
 		"component", "tui",
 		"basedir", canonical,
 	)
 	return 0
 }
 
-func dashboardAppOptions(launchCWD, launchBasedir string, returnTo *session.Session) ui.AppOptions {
+func dashboardAppOptions(ctx context.Context, launchCWD, launchBasedir string, returnTo *session.Session) ui.AppOptions {
 	return ui.AppOptions{
+		Context:            ctx,
 		DashboardLaunchCWD: launchCWD,
 		LaunchBasedir:      launchBasedir,
 		ReturnTo:           returnTo,
@@ -157,23 +160,25 @@ func consumeTUIReturnSession() *session.Session {
 // buildAppCallbacks wires store + helpers into a ui.AppCallbacks.
 // dashboardLaunchCWD is the process cwd when RunDashboard started; it
 // is the default basedir for "new session" without picking a folder.
-func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
+func buildAppCallbacks(parentCtx context.Context, dashboardLaunchCWD string) ui.AppCallbacks {
 	openStore := func() (session.Store, error) {
 		return session.NewGlobalFileStore()
 	}
 	return ui.AppCallbacks{
 		ListSessions: func() (ui.SessionSnapshot, error) {
-			resp, err := daemon.ListSessionsViaDaemon(context.Background())
+			ctx := childCommandContext(parentCtx, "dashboard.list_sessions")
+			resp, err := daemon.ListSessionsViaDaemon(ctx)
 			if err != nil {
 				return ui.SessionSnapshot{}, err
 			}
 			return sessionSnapshotFromProto(resp), nil
 		},
 		LoadStats: func() (ui.DashboardStats, error) {
-			return loadDashboardStats(context.Background())
+			return loadDashboardStats(childCommandContext(parentCtx, "dashboard.load_stats"))
 		},
 		SubscribeProviderStats: func() (<-chan ui.ProviderStats, func(), error) {
-			raw, cancel, err := daemon.SubscribeProviderStats(context.Background())
+			ctx := childCommandContext(parentCtx, "dashboard.provider_stats.subscribe")
+			raw, cancel, err := daemon.SubscribeProviderStats(ctx)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -181,7 +186,7 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			go func() {
 				defer func() {
 					if recovered := recover(); recovered != nil {
-						cmdUILog.Logger().Error("dashboard.provider_stats.forwarder_panic",
+						cmdUILog.Logger().ErrorContext(ctx, "dashboard.provider_stats.forwarder_panic",
 							"component", "tui",
 							"err", fmt.Errorf("panic: %v", recovered),
 						)
@@ -202,17 +207,18 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			return out, cancel, nil
 		},
 		RestartDaemon: func() error {
-			return daemon.RestartManagedDaemon(context.Background())
+			return daemon.RestartManagedDaemon(childCommandContext(parentCtx, "dashboard.daemon.restart"))
 		},
 		StartSessionWithBasedir: func(basedir string) error {
 			store, err := openStore()
 			if err != nil {
 				return err
 			}
-			return startNewSessionInDir(basedir, store, dashboardLaunchCWD, false)
+			return startNewSessionInDir(childCommandContext(parentCtx, "dashboard.session.start"), basedir, store, dashboardLaunchCWD, false)
 		},
 		StartLiveSession: func(req ui.LiveSessionStartRequest) (ui.LiveSession, error) {
-			resp, err := daemon.StartLiveSessionViaDaemon(context.Background(), &clydev1.StartLiveSessionRequest{
+			ctx := childCommandContext(parentCtx, "dashboard.live_session.start")
+			resp, err := daemon.StartLiveSessionViaDaemon(ctx, &clydev1.StartLiveSessionRequest{
 				Provider:  req.Provider,
 				Name:      req.Name,
 				Basedir:   req.Basedir,
@@ -241,12 +247,13 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			if err != nil {
 				return err
 			}
-			return resumeSession(sess, store, true)
+			return resumeSession(childCommandContext(parentCtx, "dashboard.session.resume"), sess, store, true)
 		},
 		DeleteSession: func(sess *session.Session) error {
-			outcome, err := daemon.DeleteSessionViaDaemonOutcome(context.Background(), sess.Name)
+			ctx := childCommandContext(parentCtx, "dashboard.session.delete")
+			outcome, err := daemon.DeleteSessionViaDaemonOutcome(ctx, sess.Name)
 			if outcome != daemon.LifecycleOutcomeReady {
-				return daemonLifecycleError("delete", outcome, err)
+				return daemonLifecycleError(ctx, "delete", outcome, err)
 			}
 			return nil
 		},
@@ -256,9 +263,10 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			if oldName == "" || oldName == newName {
 				return newName, nil
 			}
-			outcome, err := daemon.RenameSessionViaDaemonOutcome(context.Background(), oldName, newName)
+			ctx := childCommandContext(parentCtx, "dashboard.session.rename")
+			outcome, err := daemon.RenameSessionViaDaemonOutcome(ctx, oldName, newName)
 			if outcome != daemon.LifecycleOutcomeReady {
-				return newName, daemonLifecycleError("rename", outcome, err)
+				return newName, daemonLifecycleError(ctx, "rename", outcome, err)
 			}
 			return newName, nil
 		},
@@ -266,9 +274,10 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			if sess == nil || sess.Name == "" {
 				return fmt.Errorf("nil session")
 			}
-			outcome, err := daemon.UpdateSessionWorkspaceRootViaDaemonOutcome(context.Background(), sess.Name, newPath)
+			ctx := childCommandContext(parentCtx, "dashboard.session.set_basedir")
+			outcome, err := daemon.UpdateSessionWorkspaceRootViaDaemonOutcome(ctx, sess.Name, newPath)
 			if outcome != daemon.LifecycleOutcomeReady {
-				return daemonLifecycleError("update_session_workspace_root", outcome, err)
+				return daemonLifecycleError(ctx, "update_session_workspace_root", outcome, err)
 			}
 			return nil
 		},
@@ -276,10 +285,11 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			if sess == nil || sess.Name == "" {
 				return fmt.Errorf("nil session")
 			}
+			ctx := childCommandContext(parentCtx, "dashboard.summary.refresh")
 			go func(name, workspaceRoot string) {
 				defer func() {
 					if recovered := recover(); recovered != nil {
-						cmdUILog.Logger().Error("dashboard.refresh_summary.worker_panic",
+						cmdUILog.Logger().ErrorContext(ctx, "dashboard.refresh_summary.worker_panic",
 							"component", "tui",
 							"session", name,
 							"err", fmt.Errorf("panic: %v", recovered),
@@ -291,7 +301,7 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 						onDone(nil)
 					}
 				}()
-				resp, err := daemon.GetSessionDetailViaDaemon(context.Background(), name)
+				resp, err := daemon.GetSessionDetailViaDaemon(ctx, name)
 				if err != nil {
 					return
 				}
@@ -323,7 +333,7 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 				if len(messages) == 0 {
 					return
 				}
-				client, err := daemon.ConnectOrStart(context.Background())
+				client, err := daemon.ConnectOrStart(ctx)
 				if err != nil {
 					return
 				}
@@ -333,7 +343,7 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			return nil
 		},
 		ViewContent: func(sess *session.Session) string {
-			resp, err := daemon.GetSessionDetailViaDaemon(context.Background(), sess.Name)
+			resp, err := daemon.GetSessionDetailViaDaemon(childCommandContext(parentCtx, "dashboard.session.view_content"), sess.Name)
 			if err != nil || len(resp.GetAllMessages()) == 0 {
 				return ""
 			}
@@ -351,7 +361,7 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 		},
 		ExportSession: func(sess *session.Session, req ui.SessionExportRequest) ([]byte, error) {
 			rpcReq := exportRequestToProto(sess, req)
-			resp, err := daemon.ExportSessionViaDaemon(context.Background(), rpcReq)
+			resp, err := daemon.ExportSessionViaDaemon(childCommandContext(parentCtx, "dashboard.session.export"), rpcReq)
 			if err != nil {
 				return nil, err
 			}
@@ -361,14 +371,15 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			if sess == nil {
 				return ui.SessionExportStats{}, fmt.Errorf("nil session")
 			}
-			resp, err := daemon.GetSessionExportStatsViaDaemon(context.Background(), sess.Name)
+			resp, err := daemon.GetSessionExportStatsViaDaemon(childCommandContext(parentCtx, "dashboard.session.export_stats"), sess.Name)
 			if err != nil {
 				return ui.SessionExportStats{}, err
 			}
 			return exportStatsFromProto(resp), nil
 		},
 		SubscribeRegistry: func() (<-chan ui.SessionEvent, func(), error) {
-			raw, cancel, err := daemon.SubscribeRegistry(context.Background())
+			ctx := childCommandContext(parentCtx, "dashboard.registry.subscribe")
+			raw, cancel, err := daemon.SubscribeRegistry(ctx)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -376,7 +387,7 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			go func() {
 				defer func() {
 					if recovered := recover(); recovered != nil {
-						cmdUILog.Logger().Error("dashboard.registry.forwarder_panic",
+						cmdUILog.Logger().ErrorContext(ctx, "dashboard.registry.forwarder_panic",
 							"component", "tui",
 							"err", fmt.Errorf("panic: %v", recovered),
 						)
@@ -390,18 +401,18 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			return out, cancel, nil
 		},
 		LoadConfigControls: func() ([]ui.ConfigControl, error) {
-			raw, err := daemon.ListConfigControlsViaDaemon(context.Background())
+			raw, err := daemon.ListConfigControlsViaDaemon(childCommandContext(parentCtx, "dashboard.config_controls.list"))
 			if err != nil {
 				return nil, err
 			}
 			return configControlsFromProto(raw), nil
 		},
 		UpdateConfigControl: func(key, value string) error {
-			_, err := daemon.UpdateConfigControlViaDaemon(context.Background(), key, value)
+			_, err := daemon.UpdateConfigControlViaDaemon(childCommandContext(parentCtx, "dashboard.config_controls.update"), key, value)
 			return err
 		},
 		SendLiveSession: func(sessionID, text string) error {
-			ok, err := daemon.SendLiveSessionViaDaemon(context.Background(), sessionID, text)
+			ok, err := daemon.SendLiveSessionViaDaemon(childCommandContext(parentCtx, "dashboard.live_session.send"), sessionID, text)
 			if err != nil {
 				return err
 			}
@@ -411,7 +422,8 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			return nil
 		},
 		StreamLiveSession: func(sessionID string) (<-chan ui.LiveSessionEvent, func(), error) {
-			raw, cancel, err := daemon.StreamLiveSessionViaDaemon(context.Background(), sessionID)
+			ctx := childCommandContext(parentCtx, "dashboard.live_session.stream")
+			raw, cancel, err := daemon.StreamLiveSessionViaDaemon(ctx, sessionID)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -419,7 +431,7 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			go func() {
 				defer func() {
 					if recovered := recover(); recovered != nil {
-						cmdUILog.Logger().Error("dashboard.live_session.forwarder_panic",
+						cmdUILog.Logger().ErrorContext(ctx, "dashboard.live_session.forwarder_panic",
 							"component", "tui",
 							"session_id", sessionID,
 							"err", fmt.Errorf("panic: %v", recovered),
@@ -444,7 +456,8 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			return out, cancel, nil
 		},
 		CompactPreview: func(req ui.CompactRunRequest) (<-chan ui.CompactEvent, <-chan error, func(), error) {
-			raw, done, cancel, err := daemon.CompactPreviewViaDaemon(context.Background(), daemon.CompactRunOptions{
+			ctx := childCommandContext(parentCtx, "dashboard.compact.preview")
+			raw, done, cancel, err := daemon.CompactPreviewViaDaemon(ctx, daemon.CompactRunOptions{
 				SessionName:    req.SessionName,
 				TargetTokens:   req.TargetTokens,
 				ReservedTokens: req.ReservedTokens,
@@ -464,7 +477,7 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			go func() {
 				defer func() {
 					if recovered := recover(); recovered != nil {
-						cmdUILog.Logger().Error("dashboard.compact_preview.forwarder_panic",
+						cmdUILog.Logger().ErrorContext(ctx, "dashboard.compact_preview.forwarder_panic",
 							"component", "tui",
 							"session", req.SessionName,
 							"err", fmt.Errorf("panic: %v", recovered),
@@ -479,7 +492,8 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			return out, done, cancel, nil
 		},
 		CompactApply: func(req ui.CompactRunRequest) (<-chan ui.CompactEvent, <-chan error, func(), error) {
-			raw, done, cancel, err := daemon.CompactApplyViaDaemon(context.Background(), daemon.CompactRunOptions{
+			ctx := childCommandContext(parentCtx, "dashboard.compact.apply")
+			raw, done, cancel, err := daemon.CompactApplyViaDaemon(ctx, daemon.CompactRunOptions{
 				SessionName:    req.SessionName,
 				TargetTokens:   req.TargetTokens,
 				ReservedTokens: req.ReservedTokens,
@@ -499,7 +513,7 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			go func() {
 				defer func() {
 					if recovered := recover(); recovered != nil {
-						cmdUILog.Logger().Error("dashboard.compact_apply.forwarder_panic",
+						cmdUILog.Logger().ErrorContext(ctx, "dashboard.compact_apply.forwarder_panic",
 							"component", "tui",
 							"session", req.SessionName,
 							"err", fmt.Errorf("panic: %v", recovered),
@@ -514,7 +528,7 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			return out, done, cancel, nil
 		},
 		CompactUndo: func(sessionName string) (*ui.CompactUndoResult, error) {
-			resp, err := daemon.CompactUndoViaDaemon(context.Background(), sessionName)
+			resp, err := daemon.CompactUndoViaDaemon(childCommandContext(parentCtx, "dashboard.compact.undo"), sessionName)
 			if err != nil {
 				return nil, err
 			}
@@ -525,7 +539,7 @@ func buildAppCallbacks(dashboardLaunchCWD string) ui.AppCallbacks {
 			}, nil
 		},
 		GetSessionDetail: func(sess *session.Session) (ui.SessionDetail, error) {
-			resp, err := daemon.GetSessionDetailViaDaemon(context.Background(), sess.Name)
+			resp, err := daemon.GetSessionDetailViaDaemon(childCommandContext(parentCtx, "dashboard.session.detail"), sess.Name)
 			if err != nil {
 				return ui.SessionDetail{}, err
 			}
@@ -816,20 +830,21 @@ func timeFromNanos(n int64) time.Time {
 // the exit code. Used by the dispatch path and by RunDashboard's
 // piped-input shortcut.
 func ForwardToClaude(args []string) int {
-	return runClaudeWithEnv(args, applyClaudeMITMEnv(os.Environ()))
+	ctx := newCommandContext("forward.claude")
+	return runClaudeWithEnv(ctx, args, applyClaudeMITMEnv(ctx, os.Environ()))
 }
 
-func runClaudeWithEnv(args []string, env []string) int {
+func runClaudeWithEnv(ctx context.Context, args []string, env []string) int {
 	claudePath, err := exec.LookPath("claude")
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "clyde: cannot find claude binary: %v\n", err)
-		cmdUILog.Logger().Error("forward.claude_not_found",
+		cmdUILog.Logger().ErrorContext(ctx, "forward.claude_not_found",
 			"component", "cli",
 			"err", err,
 		)
 		return 1
 	}
-	cmdUILog.Logger().Debug("forward.claude.invoked",
+	cmdUILog.Logger().DebugContext(ctx, "forward.claude.invoked",
 		"component", "cli",
 		"argc", len(args),
 	)
@@ -847,14 +862,14 @@ func runClaudeWithEnv(args []string, env []string) int {
 	return 0
 }
 
-func applyClaudeMITMEnv(env []string) []string {
+func applyClaudeMITMEnv(ctx context.Context, env []string) []string {
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
 		return env
 	}
-	extra, err := mitm.ClaudeEnv(context.Background(), cfg.MITM, slog.Default())
+	extra, err := mitm.ClaudeEnv(ctx, cfg.MITM, slog.Default())
 	if err != nil {
-		cmdLog.Warn("forward.mitm.claude_env_failed", "component", "cli", "err", err)
+		cmdDispatchLog.Logger().WarnContext(ctx, "forward.mitm.claude_env_failed", "component", "cli", "err", err)
 		return env
 	}
 	out := append([]string(nil), env...)
@@ -924,6 +939,7 @@ func ForwardToClaudeThenDashboard(args []string) int {
 	if !shouldOpenDashboardAfterPassthrough(args) {
 		return ForwardToClaude(args)
 	}
+	ctx := newCommandContext("forward.claude.dashboard")
 	env := withEnvValue(os.Environ(), "CLYDE_LAUNCH_CWD", currentWorkingDirectory())
 	if os.Getenv("CLYDE_SESSION_NAME") == "" {
 		store, serr := session.NewGlobalFileStore()
@@ -931,14 +947,14 @@ func ForwardToClaudeThenDashboard(args []string) int {
 			name, nerr := nextChatSessionName(store)
 			if nerr == nil {
 				env = append(env, "CLYDE_SESSION_NAME="+name)
-				cmdUILog.Logger().Info("forward.passthrough_wrapped",
+				cmdUILog.Logger().InfoContext(ctx, "forward.passthrough_wrapped",
 					"component", "cli",
 					"session", name,
 				)
 			}
 		}
 	}
-	_ = runClaudeWithEnv(args, env)
+	_ = runClaudeWithEnv(ctx, args, applyClaudeMITMEnv(ctx, env))
 	_ = runDashboardTUI()
 	return 0
 }
@@ -995,7 +1011,10 @@ func nextChatSessionName(store session.Store) (string, error) {
 // startNewSessionInDir launches the default interactive provider for a new named
 // session in workDir.
 // basedir may be empty; dashboardFallbackCWD is used when the trimmed path is empty.
-func startNewSessionInDir(basedir string, store session.Store, dashboardFallbackCWD string, enableRemoteControl bool) error {
+func startNewSessionInDir(ctx context.Context, basedir string, store session.Store, dashboardFallbackCWD string, enableRemoteControl bool) error {
+	if ctx == nil {
+		ctx = newCommandContext("session.new")
+	}
 	workDir := strings.TrimSpace(basedir)
 	if workDir == "" {
 		workDir = strings.TrimSpace(dashboardFallbackCWD)
@@ -1003,7 +1022,7 @@ func startNewSessionInDir(basedir string, store session.Store, dashboardFallback
 	if workDir == "" {
 		wd, err := os.Getwd()
 		if err != nil {
-			cmdLog.Warn("session.new.workdir_resolve_failed",
+			slog.WarnContext(ctx, "session.new.workdir_resolve_failed",
 				"component", "cli",
 				"err", err,
 			)
@@ -1017,7 +1036,7 @@ func startNewSessionInDir(basedir string, store session.Store, dashboardFallback
 		return err
 	}
 	_, _ = fmt.Fprintf(os.Stdout, "Starting new session %q in %s\n\n", name, workDir)
-	cmdUILog.Logger().Info("session.new.started",
+	cmdUILog.Logger().InfoContext(ctx, "session.new.started",
 		"component", "cli",
 		"session", name,
 		"workdir", workDir,
@@ -1028,7 +1047,7 @@ func startNewSessionInDir(basedir string, store session.Store, dashboardFallback
 	if err != nil {
 		return err
 	}
-	err = runtime.StartInteractive(context.Background(), session.StartRequest{
+	err = runtime.StartInteractive(ctx, session.StartRequest{
 		SessionName: name,
 		Launch: session.LaunchOptions{
 			WorkDir:             workDir,
@@ -1042,9 +1061,9 @@ func startNewSessionInDir(basedir string, store session.Store, dashboardFallback
 	sess, gerr := store.Get(name)
 	if gerr == nil && sess != nil {
 		if fs, ok := store.(*session.FileStore); ok {
-			autoUpdateContext(fs, sess)
+			autoUpdateContext(ctx, fs, sess)
 		}
-		printResumeInstructions(sess)
+		printResumeInstructions(ctx, sess)
 	}
 	return nil
 }
@@ -1053,7 +1072,10 @@ func startNewSessionInDir(basedir string, store session.Store, dashboardFallback
 // lifecycle, reattaching its workspace add-dir if the user invoked from a
 // different cwd. Shared by the resume cobra verb and the TUI dashboard's
 // resume callback.
-func resumeSession(sess *session.Session, store session.Store, allowSelfReload bool) error {
+func resumeSession(ctx context.Context, sess *session.Session, store session.Store, allowSelfReload bool) error {
+	if ctx == nil {
+		ctx = newCommandContext("session.resume")
+	}
 	currentWorkDir := ""
 	if cwd, cwdErr := os.Getwd(); cwdErr == nil {
 		currentWorkDir = cwd
@@ -1062,7 +1084,7 @@ func resumeSession(sess *session.Session, store session.Store, allowSelfReload b
 	_, _ = fmt.Fprintf(os.Stdout, "Resuming session '%s' (%s)\n\n", sess.Name, sess.Metadata.ProviderSessionID())
 	_, _ = fmt.Fprintln(os.Stdout, "Dashboard is suspended while Claude runs. Exit Claude to return.")
 	_, _ = fmt.Fprintln(os.Stdout)
-	cmdUILog.Logger().Info("session.resume.started",
+	cmdUILog.Logger().InfoContext(ctx, "session.resume.started",
 		"component", "cli",
 		"session", sess.Name,
 		"session_id", sess.Metadata.ProviderSessionID(),
@@ -1073,12 +1095,13 @@ func resumeSession(sess *session.Session, store session.Store, allowSelfReload b
 		return err
 	}
 	leaseToken := ""
-	if lease, leaseErr := daemon.AcquireForegroundSessionViaDaemon(context.Background(), &clydev1.AcquireForegroundSessionRequest{
+	leaseCtx := childCommandContext(ctx, "session.foreground.acquire")
+	if lease, leaseErr := daemon.AcquireForegroundSessionViaDaemon(leaseCtx, &clydev1.AcquireForegroundSessionRequest{
 		SessionName: sess.Name,
 		SessionId:   sess.Metadata.ProviderSessionID(),
 		Provider:    string(sess.ProviderID()),
 	}); leaseErr != nil {
-		cmdUILog.Logger().Warn("session.foreground.acquire_failed",
+		cmdUILog.Logger().WarnContext(leaseCtx, "session.foreground.acquire_failed",
 			"component", "cli",
 			"session", sess.Name,
 			"session_id", sess.Metadata.ProviderSessionID(),
@@ -1093,8 +1116,9 @@ func resumeSession(sess *session.Session, store session.Store, allowSelfReload b
 		if leaseToken == "" {
 			return
 		}
-		if _, releaseErr := daemon.ReleaseForegroundSessionViaDaemon(context.Background(), leaseToken, exitState); releaseErr != nil {
-			cmdUILog.Logger().Warn("session.foreground.release_failed",
+		releaseCtx := childCommandContext(ctx, "session.foreground.release")
+		if _, releaseErr := daemon.ReleaseForegroundSessionViaDaemon(releaseCtx, leaseToken, exitState); releaseErr != nil {
+			cmdUILog.Logger().WarnContext(releaseCtx, "session.foreground.release_failed",
 				"component", "cli",
 				"session", sess.Name,
 				"session_id", sess.Metadata.ProviderSessionID(),
@@ -1103,7 +1127,7 @@ func resumeSession(sess *session.Session, store session.Store, allowSelfReload b
 			)
 		}
 	}()
-	err = runtime.ResumeInteractive(context.Background(), session.ResumeRequest{
+	err = runtime.ResumeInteractive(ctx, session.ResumeRequest{
 		Session: sess,
 		Options: session.ResumeOptions{
 			CurrentWorkDir:   currentWorkDir,
@@ -1114,17 +1138,17 @@ func resumeSession(sess *session.Session, store session.Store, allowSelfReload b
 		exitState = "error"
 	}
 	if fs, ok := store.(*session.FileStore); ok {
-		autoUpdateContext(fs, sess)
+		autoUpdateContext(ctx, fs, sess)
 	}
-	printResumeInstructions(sess)
+	printResumeInstructions(ctx, sess)
 	return err
 }
 
-func daemonLifecycleError(action string, outcome daemon.LifecycleOutcome, err error) error {
+func daemonLifecycleError(ctx context.Context, action string, outcome daemon.LifecycleOutcome, err error) error {
 	if err == nil {
 		return fmt.Errorf("daemon %s %s", action, outcome)
 	}
-	cmdLog.Warn("daemon.lifecycle.failed",
+	slog.WarnContext(ctx, "daemon.lifecycle.failed",
 		"component", "cli",
 		"action", action,
 		"outcome", outcome,

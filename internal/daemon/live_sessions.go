@@ -179,7 +179,7 @@ func (s *Server) AcquireForegroundSession(ctx context.Context, req *clydev1.Acqu
 			return nil, err
 		}
 	case session.ProviderClaude:
-		if err := s.suspendClaudeRemoteForForeground(lease); err != nil {
+		if err := s.suspendClaudeRemoteForForeground(ctx, lease); err != nil {
 			return nil, err
 		}
 	default:
@@ -236,7 +236,7 @@ func (s *Server) ReleaseForegroundSession(ctx context.Context, req *clydev1.Rele
 	case session.ProviderCodex:
 		live, err = s.restoreCodexLiveAfterForeground(ctx, lease)
 	case session.ProviderClaude:
-		live, err = s.restoreClaudeRemoteAfterForeground(lease)
+		live, err = s.restoreClaudeRemoteAfterForeground(ctx, lease)
 	default:
 		err = fmt.Errorf("unsupported provider %q", lease.provider)
 	}
@@ -449,7 +449,7 @@ func (s *Server) restoreCodexLiveAfterForeground(ctx context.Context, lease *for
 	return protoLiveSessionFromRecord(record), nil
 }
 
-func (s *Server) suspendClaudeRemoteForForeground(lease *foregroundLease) error {
+func (s *Server) suspendClaudeRemoteForForeground(ctx context.Context, lease *foregroundLease) error {
 	if lease == nil {
 		return nil
 	}
@@ -472,7 +472,7 @@ func (s *Server) suspendClaudeRemoteForForeground(lease *foregroundLease) error 
 	}
 	s.remoteMu.Unlock()
 	if worker == nil || worker.cmd == nil || worker.cmd.Process == nil {
-		return s.suspendClaudeRemoteByInjectSocket(lease)
+		return s.suspendClaudeRemoteByInjectSocket(ctx, lease)
 	}
 	if err := worker.cmd.Process.Signal(os.Interrupt); err != nil {
 		if killErr := worker.cmd.Process.Kill(); killErr != nil {
@@ -498,7 +498,7 @@ func (s *Server) suspendClaudeRemoteForForeground(lease *foregroundLease) error 
 	return nil
 }
 
-func (s *Server) suspendClaudeRemoteByInjectSocket(lease *foregroundLease) error {
+func (s *Server) suspendClaudeRemoteByInjectSocket(ctx context.Context, lease *foregroundLease) error {
 	if lease == nil || !injectSocketExists(lease.sessionID) {
 		return nil
 	}
@@ -518,7 +518,7 @@ func (s *Server) suspendClaudeRemoteByInjectSocket(lease *foregroundLease) error
 		<-timer.C
 	}
 	if released {
-		s.log.Info("daemon.foreground_session.claude_socket_suspended",
+		s.log.InfoContext(ctx, "daemon.foreground_session.claude_socket_suspended",
 			"component", "daemon",
 			"provider", session.ProviderClaude,
 			"session", lease.sessionName,
@@ -529,12 +529,14 @@ func (s *Server) suspendClaudeRemoteByInjectSocket(lease *foregroundLease) error
 	return status.Errorf(codes.FailedPrecondition, "claude remote worker for %q did not release inject socket", lease.sessionID)
 }
 
-func (s *Server) restoreClaudeRemoteAfterForeground(lease *foregroundLease) (*clydev1.LiveSession, error) {
+func (s *Server) restoreClaudeRemoteAfterForeground(ctx context.Context, lease *foregroundLease) (*clydev1.LiveSession, error) {
+	_, _ = peer.FromContext(ctx)
+
 	basedir := strings.TrimSpace(lease.basedir)
 	if basedir == "" {
 		return nil, fmt.Errorf("missing basedir for claude remote restore")
 	}
-	cmd, err := s.startRemoteWorkerProcess(lease.sessionName, lease.sessionID, basedir, lease.incognito)
+	cmd, err := s.startRemoteWorkerProcess(ctx, lease.sessionName, lease.sessionID, basedir, lease.incognito)
 	if err != nil {
 		return nil, fmt.Errorf("launch claude remote worker: %w", err)
 	}
@@ -549,10 +551,11 @@ func (s *Server) restoreClaudeRemoteAfterForeground(lease *foregroundLease) (*cl
 	s.remoteMu.Lock()
 	s.remoteWorkers[worker.sessionName] = worker
 	s.remoteMu.Unlock()
+	workerCtx := daemonDetachedCorrelationContext(ctx, s.log)
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				s.log.WarnContext(context.Background(), "daemon.remote_session.wait_panicked",
+				s.log.WarnContext(workerCtx, "daemon.remote_session.wait_panicked",
 					"component", "daemon",
 					"session", worker.sessionName,
 					"session_id", worker.sessionID,
@@ -560,7 +563,7 @@ func (s *Server) restoreClaudeRemoteAfterForeground(lease *foregroundLease) (*cl
 				)
 			}
 		}()
-		s.waitRemoteWorker(worker)
+		s.waitRemoteWorker(workerCtx, worker)
 	}()
 	return &clydev1.LiveSession{
 		Provider:       string(session.ProviderClaude),

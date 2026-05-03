@@ -54,10 +54,13 @@ func (l *defaultLayer) SessionID() string { return l.sessionID }
 // first hit that satisfies opts. A successful probe populates both
 // cache tiers before returning.
 func (l *defaultLayer) Usage(ctx context.Context, opts UsageOptions) (Usage, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if opts.Refresh {
 		l.memCache.invalidate()
 		l.diskCache.invalidate()
-		sessionContextLog.Logger().Debug("session.context.usage.cache_miss",
+		sessionContextLog.Logger().DebugContext(ctx, "session.context.usage.cache_miss",
 			"component", "sessionctx",
 			"subcomponent", "usage",
 			"session_id", l.sessionID,
@@ -67,7 +70,7 @@ func (l *defaultLayer) Usage(ctx context.Context, opts UsageOptions) (Usage, err
 
 	if !opts.Refresh {
 		if hit := l.memCache.get(l.transcriptPath, opts); hit != nil {
-			sessionContextLog.Logger().Debug("session.context.usage.cache_hit",
+			sessionContextLog.Logger().DebugContext(ctx, "session.context.usage.cache_hit",
 				"component", "sessionctx",
 				"subcomponent", "usage",
 				"session_id", l.sessionID,
@@ -82,14 +85,14 @@ func (l *defaultLayer) Usage(ctx context.Context, opts UsageOptions) (Usage, err
 		}
 
 		if hit, err := l.diskCache.read(opts); err != nil {
-			sessionContextLog.Logger().Warn("session.context.disk_cache.read_failed",
+			sessionContextLog.Logger().WarnContext(ctx, "session.context.disk_cache.read_failed",
 				"component", "sessionctx",
 				"subcomponent", "disk_cache",
 				"session_id", l.sessionID,
 				"err", err,
 			)
 		} else if hit != nil {
-			sessionContextLog.Logger().Debug("session.context.usage.cache_hit",
+			sessionContextLog.Logger().DebugContext(ctx, "session.context.usage.cache_hit",
 				"component", "sessionctx",
 				"subcomponent", "usage",
 				"session_id", l.sessionID,
@@ -107,7 +110,7 @@ func (l *defaultLayer) Usage(ctx context.Context, opts UsageOptions) (Usage, err
 		}
 	}
 
-	sessionContextLog.Logger().Debug("session.context.usage.cache_miss",
+	sessionContextLog.Logger().DebugContext(ctx, "session.context.usage.cache_miss",
 		"component", "sessionctx",
 		"subcomponent", "usage",
 		"session_id", l.sessionID,

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,7 +73,7 @@ func TestApplyClaudeMITMEnvAddsAnthropicBaseURLForPassthrough(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	got := applyClaudeMITMEnv([]string{"ANTHROPIC_BASE_URL=https://old.example", "KEEP=1"})
+	got := applyClaudeMITMEnv(context.Background(), []string{"ANTHROPIC_BASE_URL=https://old.example", "KEEP=1"})
 
 	if !envContains(got, "KEEP", "1") {
 		t.Fatalf("KEEP env missing: %v", got)

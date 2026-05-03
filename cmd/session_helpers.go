@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -14,10 +15,10 @@ import (
 
 // globalStore returns the global session store, or panics on error.
 // Used by commands that always need the global store and treat an error as fatal.
-func globalStore() (*session.FileStore, error) {
+func globalStore(ctx context.Context) (*session.FileStore, error) {
 	store, err := session.NewGlobalFileStore()
 	if err != nil {
-		cmdLog.Warn("cmd.session.global_store_failed",
+		slog.WarnContext(ctx, "cmd.session.global_store_failed",
 			"component", "cli",
 			"err", err,
 		)
@@ -29,7 +30,7 @@ func globalStore() (*session.FileStore, error) {
 // printResumeInstructions prints how to resume a session after the interactive
 // provider exits.
 // Skipped for incognito sessions (they auto-delete).
-func printResumeInstructions(sess *session.Session) {
+func printResumeInstructions(ctx context.Context, sess *session.Session) {
 	if sess.Metadata.IsIncognito {
 		return
 	}
@@ -38,7 +39,7 @@ func printResumeInstructions(sess *session.Session) {
 	_, _ = fmt.Fprintf(os.Stdout, "  clyde resume %s\n", sess.Name)
 	runtime, err := sessionlifecycle.ForSession(sess, nil)
 	if err != nil {
-		cmdLog.Warn("cmd.session.resume_instructions_provider_failed",
+		cmdDispatchLog.Logger().WarnContext(ctx, "cmd.session.resume_instructions_provider_failed",
 			"component", "cli",
 			"session", sess.Name,
 			"provider", sess.ProviderID(),
@@ -49,14 +50,14 @@ func printResumeInstructions(sess *session.Session) {
 			_, _ = fmt.Fprintf(os.Stdout, "  %s\n", line)
 		}
 	}
-	cmdResumeLog.Logger().Info("cmd.session.resume_instructions", "session", sess.Name, "session_id", sess.Metadata.ProviderSessionID())
+	cmdResumeLog.Logger().InfoContext(ctx, "cmd.session.resume_instructions", "session", sess.Name, "session_id", sess.Metadata.ProviderSessionID())
 }
 
 // autoUpdateContext sends a fire-and-forget request to the daemon to generate
 // a context summary for the session. Extracts recent messages here (avoiding
 // import cycles in the daemon package), then sends them via gRPC. The daemon
 // runs the LLM call in the background so the wrapper can exit immediately.
-func autoUpdateContext(_ *session.FileStore, sess *session.Session) {
+func autoUpdateContext(parentCtx context.Context, _ *session.FileStore, sess *session.Session) {
 	if sess.Metadata.IsIncognito {
 		return
 	}
@@ -80,7 +81,7 @@ func autoUpdateContext(_ *session.FileStore, sess *session.Session) {
 		messages = append(messages, fmt.Sprintf("[%s] %s", role, msg.Text))
 	}
 
-	ctx := context.Background()
+	ctx := childCommandContext(parentCtx, "session.context.auto_update")
 	client, err := daemon.ConnectOrStart(ctx)
 	if err != nil {
 		return

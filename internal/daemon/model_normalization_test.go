@@ -43,7 +43,7 @@ func TestResolveSessionSettingsNormalizesStoredModel(t *testing.T) {
 		globalSettings: map[string]json.RawMessage{},
 	}
 
-	model, effort := srv.resolveSessionSettings("chat-1")
+	model, effort := srv.resolveSessionSettings(context.Background(), "chat-1")
 	if model != "clyde-gpt-5.4-1m-medium" {
 		t.Fatalf("model=%q want %q", model, "clyde-gpt-5.4-1m-medium")
 	}
@@ -168,7 +168,7 @@ func TestWriteSettingsJSONPersistsNormalizedModel(t *testing.T) {
 		globalSettings: map[string]json.RawMessage{},
 	}
 
-	settingsPath, err := srv.writeSettingsJSON("wrapper-2", "clyde-codex-5.5-xhigh", "xhigh")
+	settingsPath, err := srv.writeSettingsJSON(context.Background(), "wrapper-2", "clyde-codex-5.5-xhigh", "xhigh")
 	if err != nil {
 		t.Fatalf("writeSettingsJSON: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestSessionSummaryNormalizesSettingsModelFallback(t *testing.T) {
 		contextStates: make(map[string]sessionContextState),
 	}
 
-	summary := srv.sessionSummary(store, sess)
+	summary := srv.sessionSummary(context.Background(), store, sess)
 	if summary.GetModel() != "clyde-gpt-5.4-1m-medium" {
 		t.Fatalf("summary.Model=%q want %q", summary.GetModel(), "clyde-gpt-5.4-1m-medium")
 	}

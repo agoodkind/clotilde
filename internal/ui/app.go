@@ -42,6 +42,10 @@ import (
 // AppOptions tweaks the startup behavior of the main TUI. Every field is
 // optional. Zero values preserve the normal dashboard flow.
 type AppOptions struct {
+	// Context carries command-level request, trace, and span identifiers into
+	// TUI lifecycle logs. Callback-specific daemon work should create child
+	// spans before making RPC calls.
+	Context context.Context
 	// ReturnTo, when non-nil, pre-selects the given session in the table.
 	// The header banner prompts the user to resume or pick something else.
 	ReturnTo *session.Session
@@ -376,6 +380,7 @@ type App struct {
 	screen   tcell.Screen
 	cb       AppCallbacks
 	clock    uiClock
+	ctx      context.Context
 
 	// Widgets
 	tabs    *TabBarWidget
@@ -598,6 +603,7 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	a := &App{
 		cb:                 cb,
 		clock:              clock,
+		ctx:                opt.Context,
 		sessions:           sessions,
 		mode:               StatusBrowse,
 		modelCache:         make(map[string]string),
@@ -624,6 +630,9 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 		buildHash:          shortStableHash(gklogversion.String()),
 		executableHash:     currentExecutableHash(),
 		runHash:            shortStableHash(fmt.Sprintf("%d:%d", os.Getpid(), now.UnixNano())),
+	}
+	if a.ctx == nil {
+		a.ctx = context.Background()
 	}
 	// Default suspendImpl: real teardown / exec / reinit. Tests
 	// replace this before driving events so the resume cycle can be
@@ -907,7 +916,7 @@ func (a *App) Run() (err error) {
 	if err := a.initScreen(); err != nil {
 		return err
 	}
-	tuiLog.Logger().Info("tui.run.started", "screen", fmt.Sprintf("%p", a.screen))
+	tuiLog.Logger().InfoContext(a.ctx, "tui.run.started", "screen", fmt.Sprintf("%p", a.screen))
 	stopSIGQUITDump := installSIGQUITDumpHandler()
 	defer stopSIGQUITDump()
 	// Defer a sequenced teardown that always disables the alt-screen
@@ -923,7 +932,7 @@ func (a *App) Run() (err error) {
 		if r := recover(); r != nil {
 			a.teardownScreen()
 			err = fmt.Errorf("tui panic: %v", r)
-			tuiLog.Logger().Error("tui.run.panic",
+			tuiLog.Logger().ErrorContext(a.ctx, "tui.run.panic",
 				"component", "tui",
 				"recover", fmt.Sprint(r),
 				"err", err)
@@ -932,7 +941,7 @@ func (a *App) Run() (err error) {
 		a.teardownScreen()
 		if a.reloadExecPath != "" {
 			if err := execCurrentProcess(a.reloadExecPath); err != nil {
-				tuiLog.Logger().Error("tui.self_reload.exec_failed",
+				tuiLog.Logger().ErrorContext(a.ctx, "tui.self_reload.exec_failed",
 					"component", "tui",
 					"path", a.reloadExecPath,
 					"err", err)
@@ -946,7 +955,7 @@ func (a *App) Run() (err error) {
 	a.requestSessionsAsync("startup")
 
 	if err := a.refreshExecutableBaseline(); err != nil {
-		tuiLog.Logger().Warn("tui.self_reload.snapshot_failed",
+		tuiLog.Logger().WarnContext(a.ctx, "tui.self_reload.snapshot_failed",
 			"component", "tui",
 			"err", err)
 	}
@@ -1044,7 +1053,7 @@ func (a *App) Run() (err error) {
 	reinitAttemptedAfterNil := false
 	for a.running {
 		if a.screen == nil {
-			tuiLog.Logger().Error("tui.loop screen is nil, exiting", "err", "screen_nil")
+			tuiLog.Logger().ErrorContext(a.ctx, "tui.loop screen is nil, exiting", "err", "screen_nil")
 			return nil
 		}
 		pollStartedAt := a.now()
@@ -1062,7 +1071,7 @@ func (a *App) Run() (err error) {
 				return nil
 			}
 			nilEventStreak++
-			tuiLog.Logger().Warn("tui.loop nil event with running=true",
+			tuiLog.Logger().WarnContext(a.ctx, "tui.loop nil event with running=true",
 				"nil_event_streak", nilEventStreak,
 				"screen", fmt.Sprintf("%p", a.screen),
 				"reinit_attempted", reinitAttemptedAfterNil)
@@ -1076,10 +1085,10 @@ func (a *App) Run() (err error) {
 
 			if !reinitAttemptedAfterNil {
 				reinitAttemptedAfterNil = true
-				tuiLog.Logger().Warn("tui.loop attempting screen reinit after repeated nil events")
+				tuiLog.Logger().WarnContext(a.ctx, "tui.loop attempting screen reinit after repeated nil events")
 				a.teardownScreen()
 				if err := a.initScreen(); err != nil {
-					tuiLog.Logger().Error("tui.loop reinit failed after repeated nil events", "error", err, "err", err)
+					tuiLog.Logger().ErrorContext(a.ctx, "tui.loop reinit failed after repeated nil events", "error", err, "err", err)
 					a.running = false
 					continue
 				}
@@ -1089,7 +1098,7 @@ func (a *App) Run() (err error) {
 				continue
 			}
 
-			tuiLog.Logger().Error("tui.loop repeated nil events with running=true; terminating",
+			tuiLog.Logger().ErrorContext(a.ctx, "tui.loop repeated nil events with running=true; terminating",
 				"screen", fmt.Sprintf("%p", a.screen),
 				"nil_event_streak", nilEventStreak,
 				"err", "repeated_nil_events")
@@ -1156,7 +1165,7 @@ func (a *App) Run() (err error) {
 			if handleDuration > 40*time.Millisecond || drawDuration > 80*time.Millisecond || pollDuration > 1500*time.Millisecond {
 				logLevel = slog.LevelWarn
 			}
-			tuiLog.Logger().Log(context.Background(), logLevel, "tui.loop.event_timing",
+			tuiLog.Logger().Log(a.ctx, logLevel, "tui.loop.event_timing",
 				"event", eventType,
 				"poll_ms", pollDuration.Milliseconds(),
 				"handle_ms", handleDuration.Milliseconds(),
@@ -2546,7 +2555,7 @@ func (a *App) runTerminalCall(call string, fn func()) {
 	if duration > terminalCallWarnThreshold(call) {
 		logLevel = slog.LevelWarn
 	}
-	tuiLog.Logger().Log(context.Background(), logLevel, "tui.terminal_call.done",
+	tuiLog.Logger().Log(a.ctx, logLevel, "tui.terminal_call.done",
 		"component", "tui",
 		"call", call,
 		"started_at", startedAt.Format(time.RFC3339Nano),
@@ -3549,7 +3558,7 @@ func (a *App) draw() {
 		if totalDuration > 75*time.Millisecond || clearDuration > 50*time.Millisecond || showDuration > 30*time.Millisecond {
 			logLevel = slog.LevelWarn
 		}
-		tuiLog.Logger().Log(context.Background(), logLevel, "tui.draw.timing",
+		tuiLog.Logger().Log(a.ctx, logLevel, "tui.draw.timing",
 			"component", "tui",
 			"total_ms", totalDuration.Milliseconds(),
 			"layout_ms", layoutDuration.Milliseconds(),
@@ -3689,7 +3698,7 @@ func (a *App) populateTable() {
 		if duration > 40*time.Millisecond {
 			logLevel = slog.LevelWarn
 		}
-		tuiLog.Logger().Log(context.Background(), logLevel, "tui.table.populate_timing",
+		tuiLog.Logger().Log(a.ctx, logLevel, "tui.table.populate_timing",
 			"component", "tui",
 			"duration_ms", duration.Milliseconds(),
 			"sessions_total", len(a.sessions),

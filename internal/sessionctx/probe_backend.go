@@ -40,8 +40,11 @@ func newProbeBackend(sessionID, workDir string) *probeBackend {
 // wraps this with CapturedAt and Source=SourceProbe before returning
 // to callers and before writing to cache.
 func (p *probeBackend) Fetch(ctx context.Context) (compact.ContextUsage, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	started := currentTime()
-	sessionContextLog.Logger().Debug("session.context.probe.started",
+	sessionContextLog.Logger().DebugContext(ctx, "session.context.probe.started",
 		"component", "sessionctx",
 		"subcomponent", "probe",
 		"session_id", p.sessionID,
@@ -56,7 +59,7 @@ func (p *probeBackend) Fetch(ctx context.Context) (compact.ContextUsage, error) 
 	})
 	duration := time.Since(started)
 	if err != nil {
-		sessionContextLog.Logger().Warn("session.context.probe.failed",
+		sessionContextLog.Logger().WarnContext(ctx, "session.context.probe.failed",
 			"component", "sessionctx",
 			"subcomponent", "probe",
 			"session_id", p.sessionID,
@@ -65,7 +68,7 @@ func (p *probeBackend) Fetch(ctx context.Context) (compact.ContextUsage, error) 
 		)
 		return compact.ContextUsage{}, err
 	}
-	sessionContextLog.Logger().Info("session.context.probe.completed",
+	sessionContextLog.Logger().InfoContext(ctx, "session.context.probe.completed",
 		"component", "sessionctx",
 		"subcomponent", "probe",
 		"session_id", p.sessionID,
