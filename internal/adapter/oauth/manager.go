@@ -3,7 +3,6 @@ package oauth
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"goodkind.io/clyde/internal/claude"
 	"goodkind.io/clyde/internal/config"
 )
 
@@ -19,7 +19,7 @@ import (
 type Manager struct {
 	mu             sync.Mutex
 	cached         *Tokens
-	credsMtime     int64
+	snapshot       credentialSnapshot
 	httpClient     *http.Client
 	credentialsDir string
 	oauthCfg       config.AdapterOAuth
@@ -54,41 +54,37 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.invalidateIfDiskChanged()
-
-	tokens := m.cached
-	if tokens == nil {
-		fresh, err := readCredentials(m.credentialsDir, m.oauthCfg.KeychainService)
-		if err != nil {
-			log.WarnContext(ctx, "oauth.store.read_failed",
-				"subcomponent", "oauth",
-				"store_dir", m.credentialsDir,
-				"keychain_service_present", m.oauthCfg.KeychainService != "",
-				"err", err.Error(),
-			)
-			return "", fmt.Errorf("read credentials: %w", err)
-		}
-		if fresh == nil {
-			return "", errors.New("no claudeAiOauth tokens found; run `claude /login` first")
-		}
-		tokens = fresh
-		m.cached = fresh
+	selected, err := m.selectedCredential(ctx)
+	if err != nil {
+		return "", err
 	}
-
+	tokens := selected.Tokens
 	if !isExpired(tokens) {
 		log.DebugContext(ctx, "oauth.auth.cache_hit",
 			"subcomponent", "oauth",
+			"credential_source", selected.Source,
 			"expires_at_ms", tokens.ExpiresAt,
 		)
 		return tokens.AccessToken, nil
 	}
 
 	refreshStarted := oauthClock.Now()
-	refreshed, err := m.refreshLocked(ctx, tokens)
+	refreshable, refreshableErr := m.ensureRefreshableCandidate(ctx, selected)
+	if refreshableErr != nil {
+		log.ErrorContext(ctx, "oauth.credentials.unrefreshable",
+			"subcomponent", "oauth",
+			"duration_ms", time.Since(refreshStarted).Milliseconds(),
+			"credential_summaries", summariesAsStrings(selected.Summaries),
+			"err", refreshableErr,
+		)
+		return "", refreshableErr
+	}
+	refreshed, err := m.refreshLocked(ctx, refreshable)
 	if err != nil {
 		log.ErrorContext(ctx, "oauth.auth.refresh_failed",
 			"subcomponent", "oauth",
 			"duration_ms", time.Since(refreshStarted).Milliseconds(),
+			"credential_source", refreshable.Source,
 			"err", err,
 		)
 		if isInvalidGrant(err) {
@@ -98,7 +94,7 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 			if reErr := m.autoRelogin(ctx, err); reErr != nil {
 				return "", reErr
 			}
-			fresh, readErr := readCredentials(m.credentialsDir, m.oauthCfg.KeychainService)
+			fresh, readErr := m.reselectCredential(ctx)
 			if readErr != nil {
 				log.WarnContext(ctx, "oauth.store.post_relogin_read_failed",
 					"subcomponent", "oauth",
@@ -108,28 +104,30 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 				)
 				return "", fmt.Errorf("post-relogin read credentials: %w", readErr)
 			}
-			if fresh == nil {
-				return "", errors.New("post-relogin: no tokens found in credentials store")
-			}
-			m.cached = fresh
-			if !isExpired(fresh) {
+			if !isExpired(fresh.Tokens) {
 				log.InfoContext(ctx, "oauth.auth.refreshed_via_relogin",
 					"subcomponent", "oauth",
 					"duration_ms", time.Since(refreshStarted).Milliseconds(),
-					"expires_at_ms", fresh.ExpiresAt,
+					"credential_source", fresh.Source,
+					"expires_at_ms", fresh.Tokens.ExpiresAt,
 				)
-				return fresh.AccessToken, nil
+				return fresh.Tokens.AccessToken, nil
 			}
-			retried, retryErr := m.refreshLocked(ctx, fresh)
+			retryCredential, retrySelectErr := m.ensureRefreshableCandidate(ctx, fresh)
+			if retrySelectErr != nil {
+				return "", fmt.Errorf("post-relogin select refreshable credentials: %w", retrySelectErr)
+			}
+			retried, retryErr := m.refreshLocked(ctx, retryCredential)
 			if retryErr != nil {
 				log.ErrorContext(ctx, "oauth.auth.post_relogin_refresh_failed",
 					"subcomponent", "oauth",
 					"duration_ms", time.Since(refreshStarted).Milliseconds(),
+					"credential_source", retryCredential.Source,
 					"err", retryErr.Error(),
 				)
 				return "", fmt.Errorf("post-relogin refresh: %w", retryErr)
 			}
-			m.cached = retried
+			m.cacheTokens(claude.OAuthCredentialSourceFile, retried)
 			log.InfoContext(ctx, "oauth.auth.refreshed_via_relogin",
 				"subcomponent", "oauth",
 				"duration_ms", time.Since(refreshStarted).Milliseconds(),
@@ -139,38 +137,102 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 		}
 		return "", err
 	}
-	m.cached = refreshed
+	m.cacheTokens(claude.OAuthCredentialSourceFile, refreshed)
 	log.InfoContext(ctx, "oauth.auth.refreshed",
 		"subcomponent", "oauth",
 		"duration_ms", time.Since(refreshStarted).Milliseconds(),
+		"credential_source", refreshable.Source,
 		"expires_at_ms", refreshed.ExpiresAt,
 		"scopes", strings.Join(refreshed.Scopes, " "),
 	)
 	return refreshed.AccessToken, nil
 }
 
-// invalidateIfDiskChanged drops the in-memory cache if the
-// .credentials.json mtime moved (i.e. another process wrote new
-// tokens). Caller must hold m.mu.
-func (m *Manager) invalidateIfDiskChanged() {
-	credsPath := filepath.Join(m.credentialsDir, ".credentials.json")
-	info, err := os.Stat(credsPath)
+func (m *Manager) selectedCredential(ctx context.Context) (*selectedCredential, error) {
+	if m.cached == nil || m.cachedNeedsReselect() {
+		return m.reselectCredential(ctx)
+	}
+	metadata := claude.NewOAuthCredentialMetadata(m.cached, oauthClock.Now(), m.snapshot.FileMtime)
+	return &selectedCredential{
+		Source:   m.snapshot.Source,
+		Tokens:   m.cached.Clone(),
+		Metadata: metadata,
+	}, nil
+}
+
+func (m *Manager) reselectCredential(ctx context.Context) (*selectedCredential, error) {
+	results := readCredentialCandidates(ctx, m.credentialsDir, m.oauthCfg.KeychainService)
+	selected, err := selectCredentialCandidate(results)
 	if err != nil {
-		// File-less keychain path on macOS, or first run. Either way
-		// don't invalidate.
-		return
+		return nil, err
 	}
-	mtime := info.ModTime().UnixNano()
-	if mtime != m.credsMtime {
-		if m.credsMtime != 0 {
-			oauthLog.Logger().Info("oauth.credentials.disk_changed",
-				"subcomponent", "oauth",
-				"path", credsPath,
-			)
-		}
-		m.credsMtime = mtime
-		m.cached = nil
+	m.cached = selected.Tokens.Clone()
+	m.snapshot = snapshotForCredential(selected)
+	oauthLog.Logger().InfoContext(ctx, "oauth.credentials.selected",
+		"subcomponent", "oauth",
+		"credential_source", selected.Source,
+		"expires_at_ms", selected.Metadata.ExpiresAt,
+		"refresh_token_present", selected.Metadata.RefreshTokenPresent,
+		"credential_summaries", summariesAsStrings(selected.Summaries),
+	)
+	return selected, nil
+}
+
+func (m *Manager) cachedNeedsReselect() bool {
+	if m.cached == nil {
+		return true
 	}
+	if isExpired(m.cached) {
+		return true
+	}
+	if m.cached.RefreshToken == "" {
+		return true
+	}
+	if m.snapshot.Source == claude.OAuthCredentialSourceFile {
+		mtime := credentialsFileMtime(m.credentialsDir)
+		return mtime != 0 && m.snapshot.FileMtime != 0 && mtime != m.snapshot.FileMtime
+	}
+	return false
+}
+
+func (m *Manager) ensureRefreshableCandidate(ctx context.Context, selected *selectedCredential) (*selectedCredential, error) {
+	if selected != nil && selected.Tokens != nil && selected.Tokens.RefreshToken != "" {
+		return selected, nil
+	}
+	results := readCredentialCandidates(ctx, m.credentialsDir, m.oauthCfg.KeychainService)
+	refreshable, err := selectRefreshableCredential(results)
+	if err != nil {
+		return nil, err
+	}
+	m.cached = refreshable.Tokens.Clone()
+	m.snapshot = snapshotForCredential(refreshable)
+	oauthLog.Logger().InfoContext(ctx, "oauth.credentials.cache_invalidated",
+		"subcomponent", "oauth",
+		"reason", "cached_token_missing_refresh_token",
+		"credential_source", refreshable.Source,
+		"credential_summaries", summariesAsStrings(refreshable.Summaries),
+	)
+	return refreshable, nil
+}
+
+func (m *Manager) cacheTokens(source claude.OAuthCredentialSource, tokens *Tokens) {
+	m.cached = tokens.Clone()
+	metadata := claude.NewOAuthCredentialMetadata(tokens, oauthClock.Now(), credentialsFileMtime(m.credentialsDir))
+	m.snapshot = credentialSnapshot{
+		Source:              source,
+		Fingerprint:         metadata.Fingerprint,
+		ExpiresAt:           metadata.ExpiresAt,
+		RefreshTokenPresent: metadata.RefreshTokenPresent,
+		FileMtime:           metadata.FileMtime,
+	}
+}
+
+func credentialsFileMtime(credentialsDir string) int64 {
+	info, err := os.Stat(filepath.Join(credentialsDir, ".credentials.json"))
+	if err != nil {
+		return 0
+	}
+	return info.ModTime().UnixNano()
 }
 
 // isExpired returns true when the token is past its expiry minus the
