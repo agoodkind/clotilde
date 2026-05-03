@@ -200,9 +200,9 @@ func (r *EventRenderer) HandleEvent(ev Event) []adapteropenai.StreamChunk {
 	switch ev.Kind {
 	case EventReasoningSignaled:
 		r.reasoningSignaled = true
-		if !r.reasoningVisible && !r.syntheticReasoning {
-			if chunk := r.renderSyntheticReasoningPlaceholder(); chunk != nil {
-				r.syntheticReasoning = true
+		if !r.reasoningVisible && !r.reasoningOpen && !r.syntheticReasoning {
+			if chunk := r.renderReasoningOpen(); chunk != nil {
+				r.reasoningVisible = true
 				out = append(out, *chunk)
 			}
 		}
@@ -339,6 +339,17 @@ func (r *EventRenderer) renderReasoning(ev Event) *adapteropenai.StreamChunk {
 		Content:          contentOut,
 		ReasoningContent: decorated,
 	}
+	if !r.seenRole {
+		delta.Role = "assistant"
+		r.seenRole = true
+	}
+	ch := r.baseChunk(delta)
+	return &ch
+}
+
+func (r *EventRenderer) renderReasoningOpen() *adapteropenai.StreamChunk {
+	r.reasoningOpen = true
+	delta := adapteropenai.StreamDelta{Content: ThinkingInlineOpen()}
 	if !r.seenRole {
 		delta.Role = "assistant"
 		r.seenRole = true

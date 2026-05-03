@@ -1592,15 +1592,15 @@ func TestCodexRendererSeparatesBoldSummaryHeadingWithoutIndexChange(t *testing.T
 	}
 }
 
-func TestCodexRendererEmitsSyntheticThinkingPlaceholderAsReasoningDelta(t *testing.T) {
+func TestCodexRendererOpensThinkingWithoutPlaceholderBody(t *testing.T) {
 	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
-	chunks := r.HandleEvent(adapterrender.Event{Kind: adapterrender.EventReasoningDelta, Text: "Thinking...", ReasoningKind: "summary"})
+	chunks := r.HandleEvent(adapterrender.Event{Kind: adapterrender.EventReasoningSignaled})
 	if len(chunks) != 1 {
 		t.Fatalf("chunks=%d want 1", len(chunks))
 	}
 	got := chunks[0].Choices[0].Delta.Content
-	if !strings.Contains(got, "<!--clyde-thinking-->") || !strings.Contains(got, "Thinking...") {
-		t.Fatalf("missing synthetic thinking marker: %q", got)
+	if !strings.Contains(got, "<!--clyde-thinking-->") || strings.Contains(got, "Thinking...") {
+		t.Fatalf("unexpected thinking marker: %q", got)
 	}
 	if chunks := r.HandleEvent(adapterrender.Event{Kind: adapterrender.EventReasoningFinished}); len(chunks) != 1 {
 		t.Fatalf("finish chunks=%d want close marker", len(chunks))

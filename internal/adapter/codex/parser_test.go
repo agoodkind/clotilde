@@ -69,8 +69,8 @@ func TestParseSSEEmitsThinkingWhenReasoningItemStarts(t *testing.T) {
 	if thinking < 0 {
 		t.Fatalf("missing synthetic thinking envelope: %q", got)
 	}
-	if !strings.Contains(got, "Thinking...") {
-		t.Fatalf("missing visible synthetic thinking text: %q", got)
+	if strings.Contains(got, "Thinking...") {
+		t.Fatalf("thinking block should not include placeholder body: %q", got)
 	}
 	if answer < 0 {
 		t.Fatalf("missing answer: %q", got)
@@ -108,8 +108,8 @@ func TestParseSSEEmitsReasoningSummaryPartAddedAsVisibleThinking(t *testing.T) {
 	if strings.Count(got, "<!--clyde-thinking-->") != 1 {
 		t.Fatalf("thinking marker count mismatch: %q", got)
 	}
-	if !strings.Contains(got, "Thinking...") || !strings.Contains(got, "Answer.") {
-		t.Fatalf("missing thinking placeholder or answer: %q", got)
+	if strings.Contains(got, "Thinking...") || !strings.Contains(got, "Answer.") {
+		t.Fatalf("unexpected thinking placeholder or missing answer: %q", got)
 	}
 }
 
@@ -135,10 +135,13 @@ func TestParseSSEEmitsReasoningFromDoneItemContent(t *testing.T) {
 	if !res.ReasoningSignaled || !res.ReasoningVisible {
 		t.Fatalf("reasoning flags=%+v want signaled and visible", res)
 	}
-	for _, want := range []string{"Thinking...", "Checked constraints.", "Raw reasoning detail.", "Additional note.", "Final answer."} {
+	for _, want := range []string{"Checked constraints.", "Raw reasoning detail.", "Additional note.", "Final answer."} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in %q", want, got)
 		}
+	}
+	if strings.Contains(got, "Thinking...") {
+		t.Fatalf("thinking block should not include placeholder body: %q", got)
 	}
 	if strings.Count(got, "<!--clyde-thinking-->") != 1 || strings.Count(got, "<!--/clyde-thinking-->") != 1 {
 		t.Fatalf("thinking envelope count mismatch: %q", got)

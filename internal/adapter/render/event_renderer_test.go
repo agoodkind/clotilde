@@ -111,14 +111,16 @@ func TestEventRendererEmitsSyntheticThinkingWhenReasoningIsSignaled(t *testing.T
 		t.Fatalf("chunks=%d want 1", len(chunks))
 	}
 	got := chunks[0].Choices[0].Delta.Content
-	if got != "> **Thinking...**\n\n" {
-		t.Fatalf("synthetic thinking text=%q", got)
+	if got != ThinkingInlineOpen() {
+		t.Fatalf("thinking open=%q want %q", got, ThinkingInlineOpen())
 	}
-	if strings.Contains(got, "<!--clyde-thinking-->") {
-		t.Fatalf("synthetic thinking should be normal content, got %q", got)
+	if strings.Contains(got, "Thinking...") {
+		t.Fatalf("thinking open should not include placeholder body, got %q", got)
 	}
-	if chunks := r.HandleEvent(Event{Kind: EventReasoningFinished}); len(chunks) != 0 {
-		t.Fatalf("finish emitted duplicate synthetic chunks=%d", len(chunks))
+	if chunks := r.HandleEvent(Event{Kind: EventReasoningFinished}); len(chunks) != 1 {
+		t.Fatalf("finish chunks=%d want close marker", len(chunks))
+	} else if close := chunks[0].Choices[0].Delta.Content; !strings.Contains(close, "<!--/clyde-thinking-->") {
+		t.Fatalf("missing close marker: %q", close)
 	}
 }
 

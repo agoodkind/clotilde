@@ -344,11 +344,9 @@ func ParseSSEEventsWithLogging(ctx context.Context, body io.Reader, emit func(ad
 		reasoningSignaled = true
 		reasoningVisible = true
 		return emitNormalized(upstreamEventType, upstreamSequence, adapterrender.Event{
-			Kind:          adapterrender.EventReasoningDelta,
-			Text:          "Thinking...",
-			ReasoningKind: "summary",
-			ItemID:        strings.TrimSpace(itemID),
-			ItemType:      "reasoning",
+			Kind:     adapterrender.EventReasoningSignaled,
+			ItemID:   strings.TrimSpace(itemID),
+			ItemType: "reasoning",
 		})
 	}
 	emitToolCall := func(upstreamEventType string, upstreamSequence int, state *toolCallState, fn adapteropenai.ToolCallFunction) error {
