@@ -81,6 +81,8 @@ type adapterLaunchConfig struct {
 type adapterProcess struct {
 	cancel        context.CancelFunc
 	drain         func(context.Context) error
+	waitIdle      func(context.Context) int
+	activeCount   func() int
 	forceClose    func() error
 	closeListener func() error
 	done          chan struct{}
@@ -1276,18 +1278,44 @@ func (c *adapterController) drainReloadedProcess(timeout time.Duration) {
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	finalActive := 0
+	if proc.waitIdle != nil {
+		finalActive = proc.waitIdle(ctx)
+	} else if proc.activeCount != nil {
+		finalActive = proc.activeCount()
+	}
+	if finalActive == 0 {
+		cancel()
+		if proc.forceClose != nil {
+			if err := proc.forceClose(); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+				c.log.Warn("daemon.reload.adapter_idle_force_close_failed",
+					"component", "daemon",
+					"addr", listenerAddr(proc.lis),
+					"err", err,
+				)
+			}
+		}
+		c.log.Info("daemon.reload.adapter_drain_complete",
+			"component", "daemon",
+			"addr", listenerAddr(proc.lis),
+			"active_requests", 0,
+		)
+		return
+	}
 	err := proc.drain(ctx)
 	cancel()
 	if err != nil {
 		c.log.Warn("daemon.reload.adapter_drain_timeout",
 			"component", "daemon",
 			"addr", listenerAddr(proc.lis),
+			"active_requests", finalActive,
 			"err", err,
 		)
 	} else {
 		c.log.Info("daemon.reload.adapter_drain_complete",
 			"component", "daemon",
 			"addr", listenerAddr(proc.lis),
+			"active_requests", 0,
 		)
 	}
 	if proc.forceClose != nil {
@@ -1350,6 +1378,8 @@ func startAdapterProcess(log *slog.Logger, srv *adapter.Server, lis net.Listener
 	return &adapterProcess{
 		cancel:        cancel,
 		drain:         srv.Shutdown,
+		waitIdle:      srv.WaitForIdle,
+		activeCount:   srv.ActiveRequestCount,
 		forceClose:    srv.Close,
 		closeListener: lis.Close,
 		done:          done,

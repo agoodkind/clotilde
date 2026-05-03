@@ -154,6 +154,73 @@ func TestStopAdapterProcessWaitsForDone(t *testing.T) {
 	}
 }
 
+func TestAdapterReloadDrainSkipsShutdownWhenNoActiveRequests(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	drained := false
+	forceClosed := false
+	listenerClosed := false
+	proc := &adapterProcess{
+		drain: func(context.Context) error {
+			drained = true
+			return nil
+		},
+		waitIdle: func(context.Context) int {
+			return 0
+		},
+		forceClose: func() error {
+			forceClosed = true
+			return nil
+		},
+		closeListener: func() error {
+			listenerClosed = true
+			return nil
+		},
+	}
+	ctrl := &adapterController{log: log, proc: proc}
+
+	ctrl.drainReloadedProcess(time.Second)
+
+	if drained {
+		t.Fatalf("idle reload drain should not wait on http.Server.Shutdown")
+	}
+	if !forceClosed {
+		t.Fatalf("idle reload drain should force close idle keepalive connections")
+	}
+	if !listenerClosed {
+		t.Fatalf("reload drain should close old listener")
+	}
+}
+
+func TestAdapterReloadDrainUsesShutdownForActiveRequests(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	drained := false
+	forceClosed := false
+	proc := &adapterProcess{
+		drain: func(context.Context) error {
+			drained = true
+			return nil
+		},
+		waitIdle: func(context.Context) int {
+			return 1
+		},
+		forceClose: func() error {
+			forceClosed = true
+			return nil
+		},
+		closeListener: func() error { return nil },
+	}
+	ctrl := &adapterController{log: log, proc: proc}
+
+	ctrl.drainReloadedProcess(time.Second)
+
+	if !drained {
+		t.Fatalf("active reload drain should wait on http.Server.Shutdown")
+	}
+	if !forceClosed {
+		t.Fatalf("active reload drain should force close after bounded drain")
+	}
+}
+
 func TestReloadDaemonCallsReloadFunc(t *testing.T) {
 	called := false
 	srv := &Server{
