@@ -46,8 +46,7 @@ CLAUDE.local.md
 
 
 # Reverse-engineering and decompile artifacts (large, regenerable)
-# research
-# research/
+/research
 tmp
 tmp/
 tmp_*
