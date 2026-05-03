@@ -21,11 +21,11 @@ clyde hook sessionstart     -> Claude Code SessionStart hook
 clyde mcp                   -> MCP stdio server (search/list/context)
 clyde resume <name|uuid>    -> resolve clyde name -> claude --resume <uuid>
 clyde -r / --resume <x>     -> rewritten by dispatch to `clyde resume <x>`
-clyde exec|api ...          -> ClassifyArgs passthrough -> claude (no post-TUI for api; same for -p/--print)
+clyde exec|api ...          -> ClassifyArgs passthrough -> claude (no post-TUI for api; same for print mode)
 anything else               -> cobra; unknown -> ForwardToClaudeThenDashboard (TTY may open TUI after exit)
 ```
 
-`compact`, `daemon`, and `mcp` are **clyde-owned** names; the real `claude` binary also defines `compact`, `daemon`, and `mcp` with different behavior, so users who need the stock subcommands should invoke `claude` directly. After forward, `cmd/root.go` skips the post-claude TUI for `api`, `-p`/`--print`, and a set of common one-shot first-arg subcommands (aligned with Claude Code `cli.tsx` / `main.tsx`).
+`compact`, `daemon`, and `mcp` are **clyde-owned** names; the real `claude` binary also defines `compact`, `daemon`, and `mcp` with different behavior, so users who need the stock subcommands should invoke `claude` directly. After forward, `cmd/root.go` skips the post-claude TUI for `api`, `-p`, the long print flag, and a set of common one-shot first-arg subcommands (aligned with Claude Code `cli.tsx` / `main.tsx`).
 
 Developer tooling: `**cmd/clyde-tui-qa`\*\* drives the real TUI for QA (see the section near the end of this file). It is not part of the default user surface.
 
@@ -41,7 +41,7 @@ background.
 Treat the TUI as a dumb renderer over daemon-owned and domain-owned state.
 
 - Put business logic, normalization, filtering, aggregation, and transcript shaping upstream in shared packages or daemon RPC construction.
-- Do not add TUI-only semantic cleanup, transcript parsing, cache aggregation, provider accounting, or state derivation when the same logic can live in `internal/transcript`, `internal/claude`, `internal/adapter`, or daemon/server code.
+- Do not add TUI-only semantic cleanup, transcript parsing, cache aggregation, provider accounting, or state derivation when the same logic can live in `internal/transcript`, `internal/providers/claude/`, `internal/adapter`, or daemon/server code.
 - Any non-UI-critical work triggered from the TUI must run via a daemon-owned goroutine or daemon-backed async callback. Do not put transcript parsing, filesystem scans, config probing, RPC fan-out, context probes, export aggregation, or similar work directly in TUI draw paths or event handlers.
 - TUI code must never block on non-render work. Open the overlay or screen immediately, show progress through the shared loading spinner primitives, and hydrate the view when the goroutine posts results back into the event loop.
 - The TUI may own presentation concerns only:
@@ -268,7 +268,7 @@ Claude Code stores project data in `~/.claude/projects/` with paths like:
 
 Conversion rule: Replace `/` and `.` with `-`
 
-Implementation in `internal/claude/paths.go`:
+Implementation in `internal/providers/claude/paths.go`:
 
 - `ProjectDir(clydeRoot)` - Converts `.claude/clyde` parent to Claude's project dir format
 - Used for deleting transcripts/agent logs
@@ -423,7 +423,7 @@ state/events/actions to callers.
 
 **Test Organization:**
 
-- Ginkgo specs under `internal/claude/`, `internal/cli/hook/`, `internal/config/`, `internal/notify/`, `internal/session/`, and `internal/util/` (files using `Describe` / `It`).
+- Ginkgo specs under `internal/providers/claude/lifecycle/`, `internal/cli/hook/`, `internal/config/`, `internal/notify/`, `internal/session/`, and `internal/util/` (files using `Describe` / `It`).
 - Standard `testing` tests elsewhere (for example `internal/ui/*_test.go` with `tcell.SimulationScreen`, `internal/adapter/*_test.go`, `internal/tuiqa/keys_test.go`).
 - Integration style coverage where tests fake or stub the `claude` subprocess.
 - Hook tests use `os.Pipe()` for stdin and stdout where applicable.
@@ -533,7 +533,7 @@ foot-gun the agent must not arm.
 
 ### Core Concepts
 
-- **Claude Code settings**: There is no `docs/claude-settings-behavior.md` in this repo. For `--settings`, permissions, and merge order, use Anthropic or Claude Code product documentation. Clyde passes per session `settings.json` paths into `claude` where the invoke path builds the argv list (`internal/claude/invoke.go`).
+- **Claude Code settings**: There is no `docs/claude-settings-behavior.md` in this repo. For `--settings`, permissions, and merge order, use Anthropic or Claude Code product documentation. Clyde passes per session `settings.json` paths into `claude` where the invoke path builds the argv list (`internal/providers/claude/lifecycle/invoke.go`).
 
 ## Key Constraints
 
@@ -656,25 +656,110 @@ literal `concern` attribute at the boundary and leave a narrow note.
 
 ### Trace/span correlation
 
-The full contract lives in `docs/SLOG.md`. In short: every operation
-that has a `context.Context` should carry `internal/correlation.Context`,
-and every log at that boundary should use `slog.*Context` or `LogAttrs`
-with that context. `slogger` automatically injects missing
-`trace_id`, `span_id`, `parent_span_id`, request ids, Cursor ids, and
-upstream ids from the context; explicit event attributes win and must
-not be overwritten.
+Clyde carries request correlation through `internal/correlation.Context`. Every request, RPC, daemon job, provider turn, or background operation that can accept a `context.Context` should carry this shape:
 
-Ingress boundaries own correlation creation. HTTP and gRPC boundaries
-must parse or emit `traceparent` plus Clyde correlation headers, then
-create child spans for provider calls, daemon jobs, and other nested
-work. Lower-level helpers should not invent independent trace ids when
-a caller context exists; thread the caller context down instead.
+| Field                    | Meaning                                                                   |
+| ------------------------ | ------------------------------------------------------------------------- |
+| `trace_id`               | Stable id for the whole user-visible operation or inbound upstream trace. |
+| `span_id`                | Id for the current Clyde boundary or child operation.                     |
+| `parent_span_id`         | Parent span when Clyde entered through HTTP, gRPC, or a nested job.       |
+| `request_id`             | Clyde request/job id, or the best single-operation id available.          |
+| `cursor_request_id`      | Cursor request id when supplied by the client.                            |
+| `cursor_conversation_id` | Cursor conversation id when supplied by the client.                       |
+| `cursor_generation_id`   | Cursor generation id when supplied by the client.                         |
+| `upstream_request_id`    | Provider request id when supplied by the provider.                        |
+| `upstream_response_id`   | Provider response id when supplied by the provider.                       |
 
-Package-level `slog.Info`/`Warn`/`Error` and `context.Background()`
-logs are acceptable only for bootstrap, process-global loops, panic
-recovery without an originating operation, or old helper APIs that do
-not accept context yet. When touching those APIs, prefer adding
-`context.Context` and preserving the existing caller's correlation.
+`traceparent` is accepted and emitted where Clyde crosses HTTP or gRPC boundaries. Clyde treats an inbound `traceparent` span as the parent and creates a fresh child `span_id` for local work.
+
+Required call-site behavior:
+
+- At ingress, call `correlation.Ensure`, `correlation.FromHTTPHeader`, or `correlation.FromIncomingMetadata`, then store the result with `correlation.WithContext`.
+- For child boundaries, call `corr.Child()` and put the child back on the context before logging or dispatching work.
+- For gRPC clients, use `correlation.NewOutgoingContext` so metadata carries `traceparent` and Clyde correlation headers.
+- For HTTP clients or websocket handshakes, set headers with `corr.SetHTTPHeaders` or `corr.HTTPHeaders`.
+- For `slog`, prefer `InfoContext`, `WarnContext`, `ErrorContext`, `DebugContext`, or `LogAttrs` with the active context. The `slogger` correlation handler injects missing correlation attributes automatically.
+- Explicit event attributes win. If a call site intentionally supplies `request_id`, `trace_id`, or `span_id`, `slogger` must not overwrite it.
+- Package-level `slog.Info`, `slog.Warn`, and `context.Background()` logs are allowed only for bootstrap, process-global loops, panic recovery without an originating operation, or older helper APIs that do not accept context yet.
+
+Boundary ownership:
+
+| Boundary                   | Owner                                                         |
+| -------------------------- | ------------------------------------------------------------- |
+| Adapter HTTP request       | Adapter server ingress.                                       |
+| Daemon gRPC request/stream | Daemon correlation interceptors.                              |
+| Daemon client RPC          | Daemon client helpers before outgoing metadata.               |
+| Webapp HTTP request        | Webapp server ingress.                                        |
+| MCP tool call              | MCP handler entrypoint.                                       |
+| CLI command                | Cobra command `cmd.Context()` or a synthetic command context. |
+| Periodic daemon loop       | Loop setup creates one job trace per tick/run.                |
+| Provider request           | Provider dispatcher creates a child span for upstream work.   |
+
+Do not create unrelated trace ids in lower-level helpers when a caller context exists. Thread the context down instead.
+
+#### Non-adapter correlation audit
+
+This audit covers production logs outside `internal/adapter/` as of 2026-05-02. Adapter propagation is tracked separately under `docs/adapter-refactor/`.
+
+These packages already have contextful logging on their main paths and should inherit trace/span once callers provide correlated contexts:
+
+| Package                                                             | Notes                                                                                                                    |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `internal/search`                                                   | Search, embedding, sweep, and LLM calls use `ctx`; one Claude client failure log is contextful.                          |
+| `internal/hook` and `internal/cli/hook`                             | SessionStart processing accepts `ctx`; CLI hook creates a background context when Cobra has none.                        |
+| `internal/prune`                                                    | Prune operations accept `ctx`; daemon scheduling still needs per-tick correlation.                                       |
+| `internal/compact/probe`, `count`, `plan`, `runtime`, `summarize`   | Main expensive compact operations accept `ctx`.                                                                          |
+| `internal/providers/claude/contextusage`                            | Probe and count layers accept `ctx`.                                                                                     |
+| `internal/providers/codex/lifecycle`                                | Appserver runtime logs use `ctx`.                                                                                        |
+| `internal/providers/claude/lifecycle`                               | Public lifecycle APIs accept `ctx`; some helper subprocess paths still create background contexts.                       |
+| `internal/mitm` capture, launcher, drift runner, proxy env          | Main entrypoints accept `ctx`; codegen and drift-file helpers do not.                                                    |
+| `internal/webapp`                                                   | Server lifecycle accepts `ctx`; request ingress should mint/request correlation when handlers are made context-aware.    |
+| `internal/daemon` RPC handlers                                      | Interceptors install correlation for inbound RPCs; background loops and detached goroutines still need manual threading. |
+
+These production logs currently have no operation context available at the log site. They should stay uncorrelated until their public or internal API accepts a `context.Context`, or until the owning daemon/CLI boundary wraps the operation in a synthetic correlated context:
+
+| Package/file                                        | Why it is uncorrelated today                                                         | Suggested owner                                                             |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------- |
+| `cmd/clyde-staticcheck/main.go`                     | Standalone tool entrypoint uses no Cobra command context.                            | Tool main should create a command/job context if needed.                    |
+| `internal/bridge/watch.go`                          | Watcher API is `Start(dir string)` and panic recovery runs in an internal goroutine. | Daemon bridge watcher should pass a context into watcher construction.      |
+| `internal/providers/codex/store/paths.go`           | Pure path expansion helpers have no caller context.                                  | Callers should resolve paths before logging or helpers should accept `ctx`. |
+| `internal/compact/apply.go`                         | `Apply(in ApplyInput)` and validation helpers have no context.                       | Compact orchestrator should pass `ctx` into apply.                          |
+| `internal/compact/backup.go`                        | Backup, snapshot, ledger, restore helpers take session/path only.                    | Compact apply/undo should thread `ctx` into helper calls.                   |
+| `internal/compact/calibrate.go`                     | Calibration file helpers take session/model data only.                               | CLI calibration command should pass `ctx`.                                  |
+| `internal/compact/config.go`                        | Config lookup helper has no context and may be called from several boundaries.       | Caller should pass `ctx` or log at caller boundary.                         |
+| `internal/compact/slice.go`                         | Transcript loading takes only a path.                                                | Compact plan/preview caller should pass `ctx`.                              |
+| `internal/mitm/codegen*.go`                         | Code generators are file helpers with no runtime operation context.                  | Codegen command/caller should pass `ctx` if runtime observability matters.  |
+| `internal/mitm/drift_log.go`                        | Append-only drift writer has no context.                                             | Drift runner should pass `ctx` to writer.                                   |
+| `internal/mitm/launch_profile.go`                   | Launch-profile detection has no context.                                             | MITM launch boundary should pass `ctx`.                                     |
+| `internal/mitm/connect_tunnel.go`                   | Panic recovery happens in tunnel copy goroutines without a stored parent context.    | Tunnel setup should capture and use the parent `ctx`.                       |
+| `internal/notify/log.go`                            | Notification append helper has no context and writes its own audit file.             | Notify caller should pass `ctx` or helper should remain process-level.      |
+| `internal/outputstyle/outputstyle.go`               | Output-style delete helper has no context.                                           | Caller should pass `ctx` when this becomes operationally important.         |
+| `internal/ui/app.go`, `internal/ui/sigquit_unix.go` | TUI render/timing and signal paths are process-local UI telemetry.                   | TUI app can keep process-level logs or mint interaction spans later.        |
+| `internal/util/uuid.go`                             | UUID helper is intentionally tiny and has no operation context.                      | Prefer returning errors to callers; do not add synthetic traces here.       |
+| `internal/slogger/slogger.go` setup failures        | Bootstrap happens before logging/correlation initialization.                         | Leave uncorrelated.                                                         |
+
+These areas already have some context but still use `context.Background()` or detached goroutine logs at meaningful boundaries. They need manual work because blindly replacing `context.Background()` could tie long-lived loops to a request lifetime:
+
+| Area                                                                                 | Remaining work                                                                                                                                                          |
+| ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cmd/root.go`, `cmd/session_helpers.go`, `cmd/resume.go`                             | Create a command-level correlated context and pass it to daemon, runtime, MITM, and dashboard helpers instead of fresh backgrounds.                                     |
+| `internal/cli/daemon/loops.go`                                                       | Create one trace per daemon loop setup and one child span per scheduled tick for prune, OAuth refresh, MITM drift, and MITM listener events.                            |
+| `internal/daemon/client.go`                                                          | Preserve caller correlation through connect/retry goroutines and startup nudges instead of creating fresh background contexts.                                          |
+| `internal/daemon/server.go`                                                          | Thread correlation into discovery scans, global settings watcher, bridge watcher, context usage refresh goroutines, remote-session waiters, and bridge open/close logs. |
+| `internal/daemon/run.go`, `binary_update.go`, `transcripts.go`, `live_sessions.go`   | Distinguish process-lifecycle logs from reload/live-session child operations, then attach the correct daemon process or RPC context.                                    |
+| `internal/mitm/baseline_refresher.go`, `baseline_refresh.go`                         | Carry the runner context into baseline refresh completion and temp-dir failure logs.                                                                                    |
+| `internal/providers/claude/lifecycle/invoke.go`, `pty_invoke.go`                     | Remove helper-created background contexts where invoke callers already have a lifecycle context.                                                                        |
+
+Keep `internal/correlation` and `internal/slogger` tests focused on the contract:
+
+- valid trace/span generation
+- W3C `traceparent` parent-to-child behavior
+- HTTP and gRPC metadata propagation
+- `slogger` auto-injection from context
+- explicit event attributes taking precedence over context attributes
+- concern logs receiving the same correlation fields as the unified log
+
+Do not add production-only test hooks to prove logging behavior. Prefer capturing the JSONL output from `slogger.Setup` in a temp directory.
 
 ### What to log **THIS LIST IS NON-EXHAUSTIVE**
 
@@ -689,23 +774,23 @@ Prefer events at these points:
 
 Prefer fields that make those events queryable and comparable:
 
-| Key            | Meaning                                                     |
-| -------------- | ----------------------------------------------------------- |
-| `component`    | Top-level subsystem (`api`, `worker`, `store`, `adapter`)   |
-| `subcomponent` | Narrower emitter inside that subsystem                      |
-| `request_id`   | Correlation id for one incoming request or job              |
-| `trace_id`     | Distributed trace or upstream correlation id when available |
-| `span_id`      | Current Clyde boundary or child operation id                |
-| `parent_span_id` | Parent operation span id when available                   |
-| `session`      | Human-oriented session, tenant, or job name when relevant   |
-| `session_id`   | Stable UUID or internal identifier when relevant            |
-| `model`        | Resolved model or backend choice when applicable            |
-| `duration_ms`  | Elapsed latency in milliseconds                             |
-| `attempt`      | Retry number or delivery attempt                            |
-| `count`        | Item count for batch work                                   |
-| `path`         | File or route involved in the operation                     |
-| `status`       | Outcome summary (`ok`, `retry`, `timeout`, `dropped`)       |
-| `err`          | Error value on `Warn` or `Error` events                     |
+| Key              | Meaning                                                     |
+| ---------------- | ----------------------------------------------------------- |
+| `component`      | Top-level subsystem (`api`, `worker`, `store`, `adapter`)   |
+| `subcomponent`   | Narrower emitter inside that subsystem                      |
+| `request_id`     | Correlation id for one incoming request or job              |
+| `trace_id`       | Distributed trace or upstream correlation id when available |
+| `span_id`        | Current Clyde boundary or child operation id                |
+| `parent_span_id` | Parent operation span id when available                     |
+| `session`        | Human-oriented session, tenant, or job name when relevant   |
+| `session_id`     | Stable UUID or internal identifier when relevant            |
+| `model`          | Resolved model or backend choice when applicable            |
+| `duration_ms`    | Elapsed latency in milliseconds                             |
+| `attempt`        | Retry number or delivery attempt                            |
+| `count`          | Item count for batch work                                   |
+| `path`           | File or route involved in the operation                     |
+| `status`         | Outcome summary (`ok`, `retry`, `timeout`, `dropped`)       |
+| `err`            | Error value on `Warn` or `Error` events                     |
 
 Use the event message as the event name. Prefer a stable dot-separated form such as `http.request.completed`, `worker.job.retried`, or `store.snapshot.loaded`.
 
