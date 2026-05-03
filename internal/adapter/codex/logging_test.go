@@ -379,3 +379,60 @@ func TestLogWebsocketFrameSummaryDoesNotRequireBodyLogging(t *testing.T) {
 		t.Fatalf("summary should not include raw body or instructions: %s", text)
 	}
 }
+
+func TestLogWebsocketFrameUsesRuntimeBodyLogProvider(t *testing.T) {
+	dir := t.TempDir()
+	sinkPath := filepath.Join(dir, "codex.jsonl")
+	t.Setenv("CLYDE_CODEX_LOG_PATH", sinkPath)
+	resetDedicatedCodexLoggerForTest(t)
+
+	payload := ResponseCreateWsRequest{
+		Type:         "response.create",
+		Model:        "gpt-5.4",
+		Instructions: strings.Repeat("runtime body logging probe ", 80),
+		Input:        []map[string]any{{"type": "message", "role": "user"}},
+		Tools:        []any{map[string]any{"type": "function", "name": "shell_command"}},
+	}
+	frame, err := MarshalResponseCreateWsRequest(payload)
+	if err != nil {
+		t.Fatalf("marshal frame: %v", err)
+	}
+
+	current := BodyLogConfig{Mode: BodyLogSummary, MaxKB: 32}
+	provider := func() BodyLogConfig { return current }
+	cfg := WebsocketTransportConfig{
+		RequestID:       "req-runtime-summary",
+		CursorRequestID: "cursor-runtime",
+		Alias:           "clyde-gpt-5.4-1m-medium",
+		BodyLog:         BodyLogConfig{Mode: BodyLogSummary, MaxKB: 32},
+		BodyLogProvider: provider,
+	}
+
+	logWebsocketFrame(context.Background(), cfg, payload, frame, false)
+	got, err := os.ReadFile(sinkPath)
+	if err != nil {
+		t.Fatalf("read summary sink: %v", err)
+	}
+	text := string(got)
+	if !strings.Contains(text, `"request_id":"req-runtime-summary"`) || !strings.Contains(text, `"body_summary":`) {
+		t.Fatalf("summary event missing body_summary: %s", text)
+	}
+	if strings.Contains(text, `"body_b64":`) {
+		t.Fatalf("summary event should not include body_b64: %s", text)
+	}
+
+	current = BodyLogConfig{Mode: BodyLogRaw, MaxKB: 1}
+	cfg.RequestID = "req-runtime-raw"
+	logWebsocketFrame(context.Background(), cfg, payload, frame, false)
+	got, err = os.ReadFile(sinkPath)
+	if err != nil {
+		t.Fatalf("read raw sink: %v", err)
+	}
+	text = string(got)
+	if !strings.Contains(text, `"request_id":"req-runtime-raw"`) || !strings.Contains(text, `"body_b64":`) {
+		t.Fatalf("raw event missing body_b64 after provider change: %s", text)
+	}
+	if !strings.Contains(text, `"body_truncated":true`) {
+		t.Fatalf("raw event should honor runtime max_kb: %s", text)
+	}
+}

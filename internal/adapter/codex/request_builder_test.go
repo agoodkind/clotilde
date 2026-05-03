@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"slices"
@@ -28,6 +29,10 @@ type managedPromptPlanForTest struct {
 	FullPrompt        string
 	IncrementalPrompt string
 	AssistantAnchor   string
+}
+
+func BuildRequest(req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort string) HTTPTransportRequest {
+	return BuildRequestWithConfig(req, model, effort, RequestBuilderConfig{})
 }
 
 const (
@@ -195,6 +200,9 @@ func TestBuildCodexRequestIncludesReasoningEffort(t *testing.T) {
 	if out.Reasoning.Effort != EffortMedium {
 		t.Fatalf("reasoning.effort=%q want %q", out.Reasoning.Effort, EffortMedium)
 	}
+	if out.Reasoning.Summary != "auto" {
+		t.Fatalf("reasoning.summary=%q want auto", out.Reasoning.Summary)
+	}
 }
 
 func TestBuildCodexRequestUsesNormalizedUpstreamModel(t *testing.T) {
@@ -267,6 +275,58 @@ func TestBuildCodexRequestFallsBackToRequestReasoningEffort(t *testing.T) {
 	out := BuildRequest(req, model, "")
 	if out.Reasoning == nil || out.Reasoning.Effort != EffortHigh {
 		t.Fatalf("reasoning fallback failed: %+v", out.Reasoning)
+	}
+	if out.Reasoning.Summary != "auto" {
+		t.Fatalf("reasoning.summary=%q want auto", out.Reasoning.Summary)
+	}
+}
+
+func TestBuildCodexRequestUsesConfiguredDefaultReasoningSummary(t *testing.T) {
+	req := ChatRequest{
+		ReasoningEffort: "high",
+		Messages: []ChatMessage{{
+			Role:    "user",
+			Content: json.RawMessage(`"hello"`),
+		}},
+	}
+	model := ResolvedModel{Alias: "gpt-5.4"}
+
+	out := BuildRequestWithConfig(req, model, "", RequestBuilderConfig{
+		ReasoningSummary: "detailed",
+	})
+	if out.Reasoning == nil {
+		t.Fatalf("expected reasoning stanza")
+	}
+	if out.Reasoning.Effort != EffortHigh {
+		t.Fatalf("effort=%q want %q", out.Reasoning.Effort, EffortHigh)
+	}
+	if out.Reasoning.Summary != "detailed" {
+		t.Fatalf("summary=%q want detailed", out.Reasoning.Summary)
+	}
+}
+
+func TestBuildCodexRequestAcceptsFullCodexReasoningEnums(t *testing.T) {
+	req := ChatRequest{
+		Reasoning: &adapteropenai.Reasoning{
+			Effort:  "minimal",
+			Summary: "concise",
+		},
+		Messages: []ChatMessage{{
+			Role:    "user",
+			Content: json.RawMessage(`"hello"`),
+		}},
+	}
+	model := ResolvedModel{Alias: "gpt-5.4"}
+
+	out := BuildRequest(req, model, "")
+	if out.Reasoning == nil {
+		t.Fatalf("expected reasoning stanza")
+	}
+	if out.Reasoning.Effort != "minimal" {
+		t.Fatalf("effort=%q want minimal", out.Reasoning.Effort)
+	}
+	if out.Reasoning.Summary != "concise" {
+		t.Fatalf("summary=%q want concise", out.Reasoning.Summary)
 	}
 }
 
@@ -631,7 +691,7 @@ func TestBuildCodexRequestIncludesToolsAndParallelToolCalls(t *testing.T) {
 	}
 }
 
-func TestBuildCodexRequestMapsCursorToolNamesToCodexAliases(t *testing.T) {
+func TestBuildCodexRequestPassesThroughCursorToolNames(t *testing.T) {
 	req := ChatRequest{
 		Tools: []Tool{{
 			Type: "function",
@@ -652,12 +712,12 @@ func TestBuildCodexRequestMapsCursorToolNamesToCodexAliases(t *testing.T) {
 	if !ok {
 		t.Fatalf("tool type=%T", out.Tools[0])
 	}
-	if tool["name"] != "read_file" {
+	if tool["name"] != "ReadFile" {
 		t.Fatalf("tool=%v", tool)
 	}
 }
 
-func TestBuildCodexRequestUsesNativeCodexToolsForShellAndApplyPatch(t *testing.T) {
+func TestBuildCodexRequestPassesThroughShellAndApplyPatchFunctionTools(t *testing.T) {
 	req := ChatRequest{
 		Tools: []Tool{
 			{Type: "function", Function: ToolFunctionSchema{Name: "Shell", Parameters: mustRaw(`{"type":"object"}`)}},
@@ -671,39 +731,37 @@ func TestBuildCodexRequestUsesNativeCodexToolsForShellAndApplyPatch(t *testing.T
 	}
 
 	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
-	var sawShellCommand, sawApplyPatch, sawReadFile bool
+	var sawShell, sawApplyPatch, sawReadFile bool
 	for _, raw := range out.Tools {
 		tool, _ := raw.(map[string]any)
 		switch {
-		case tool["type"] == "function" && tool["name"] == "shell_command":
-			sawShellCommand = true
-		case tool["type"] == "custom" && tool["name"] == "apply_patch":
+		case tool["type"] == "function" && tool["name"] == "Shell":
+			sawShell = true
+		case tool["type"] == "function" && tool["name"] == "ApplyPatch":
 			sawApplyPatch = true
-			format, _ := tool["format"].(map[string]any)
-			if format["type"] != "grammar" || format["syntax"] != "lark" {
-				t.Fatalf("apply_patch format=%v", format)
-			}
-			if !strings.Contains(format["definition"].(string), "begin_patch") {
-				t.Fatalf("apply_patch grammar missing begin_patch")
-			}
-		case tool["type"] == "function" && tool["name"] == "read_file":
+		case tool["type"] == "function" && tool["name"] == "ReadFile":
 			sawReadFile = true
-		case tool["name"] == "shell" || tool["name"] == "apply_patch":
-			t.Fatalf("native tool was also emitted as generic function: %v", tool)
+		case tool["name"] == "shell_command" || tool["name"] == "apply_patch":
+			t.Fatalf("tool was translated instead of passed through: %v", tool)
 		}
 	}
-	if !sawShellCommand || !sawApplyPatch || !sawReadFile {
-		t.Fatalf("native tools shell_command=%v apply_patch=%v read_file=%v tools=%v", sawShellCommand, sawApplyPatch, sawReadFile, out.Tools)
+	if !sawShell || !sawApplyPatch || !sawReadFile {
+		t.Fatalf("tool passthrough Shell=%v ApplyPatch=%v ReadFile=%v tools=%v", sawShell, sawApplyPatch, sawReadFile, out.Tools)
 	}
 }
 
 func TestBuildCodexRequestPreservesCursorProductToolsForWriteIntent(t *testing.T) {
 	req := ChatRequest{
 		Tools: []Tool{
+			{Type: "function", Function: ToolFunctionSchema{Name: "Read", Parameters: mustRaw(`{"type":"object"}`)}},
 			{Type: "function", Function: ToolFunctionSchema{Name: "ReadFile", Parameters: mustRaw(`{"type":"object"}`)}},
+			{Type: "function", Function: ToolFunctionSchema{Name: "Grep", Parameters: mustRaw(`{"type":"object"}`)}},
+			{Type: "function", Function: ToolFunctionSchema{Name: "Write", Parameters: mustRaw(`{"type":"object"}`)}},
+			{Type: "function", Function: ToolFunctionSchema{Name: "StrReplace", Parameters: mustRaw(`{"type":"object"}`)}},
 			{Type: "function", Function: ToolFunctionSchema{Name: "ApplyPatch", Parameters: mustRaw(`{"type":"object"}`)}},
 			{Type: "function", Function: ToolFunctionSchema{Name: "WebSearch", Parameters: mustRaw(`{"type":"object"}`)}},
 			{Type: "function", Function: ToolFunctionSchema{Name: "Subagent", Parameters: mustRaw(`{"type":"object"}`)}},
+			{Type: "function", Function: ToolFunctionSchema{Name: "Task", Parameters: mustRaw(`{"type":"object"}`)}},
 			{Type: "function", Function: ToolFunctionSchema{Name: "SwitchMode", Parameters: mustRaw(`{"type":"object"}`)}},
 			{Type: "function", Function: ToolFunctionSchema{Name: "CreatePlan", Parameters: mustRaw(`{"type":"object"}`)}},
 			{Type: "function", Function: ToolFunctionSchema{Name: "CallMcpTool", Parameters: mustRaw(`{"type":"object"}`)}},
@@ -723,14 +781,44 @@ func TestBuildCodexRequestPreservesCursorProductToolsForWriteIntent(t *testing.T
 		}
 	}
 	got := strings.Join(names, ",")
-	for _, want := range []string{"read_file", "apply_patch", "web_search", "spawn_agent", "switch_mode", "create_plan", "call_mcp_tool"} {
+	for _, want := range []string{"Read", "ReadFile", "Grep", "Write", "StrReplace", "ApplyPatch", "WebSearch", "Subagent", "Task", "SwitchMode", "CreatePlan", "CallMcpTool"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("tool names=%q missing %q", got, want)
 		}
 	}
 }
 
-func TestBuildCodexRequestStillPrunesUnknownToolsForWriteIntent(t *testing.T) {
+func TestBuildCodexRequestPreservesCurrentCursorEditToolsForWriteIntent(t *testing.T) {
+	req := ChatRequest{
+		Tools: []Tool{
+			{Type: "function", Function: ToolFunctionSchema{Name: "Read", Parameters: mustRaw(`{"type":"object"}`)}},
+			{Type: "function", Function: ToolFunctionSchema{Name: "Write", Parameters: mustRaw(`{"type":"object"}`)}},
+			{Type: "function", Function: ToolFunctionSchema{Name: "StrReplace", Parameters: mustRaw(`{"type":"object"}`)}},
+			{Type: "function", Function: ToolFunctionSchema{Name: "Task", Parameters: mustRaw(`{"type":"object"}`)}},
+		},
+		Messages: []ChatMessage{{
+			Role:    "user",
+			Content: mustRaw(`"Implement this by editing the source files"`),
+		}},
+	}
+
+	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	var names []string
+	for _, raw := range out.Tools {
+		tool, _ := raw.(map[string]any)
+		if name, _ := tool["name"].(string); name != "" {
+			names = append(names, name)
+		}
+	}
+	got := strings.Join(names, ",")
+	for _, want := range []string{"Read", "Write", "StrReplace", "Task"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("tool names=%q missing %q", got, want)
+		}
+	}
+}
+
+func TestBuildCodexRequestPreservesUnknownToolsForWriteIntent(t *testing.T) {
 	req := ChatRequest{
 		Tools: []Tool{
 			{Type: "function", Function: ToolFunctionSchema{Name: "ReadFile", Parameters: mustRaw(`{"type":"object"}`)}},
@@ -751,7 +839,7 @@ func TestBuildCodexRequestStillPrunesUnknownToolsForWriteIntent(t *testing.T) {
 		}
 	}
 	got := strings.Join(names, ",")
-	if got != "read_file" {
+	if got != "ReadFile,UntrustedCustomTool" {
 		t.Fatalf("tool names=%q", got)
 	}
 }
@@ -793,24 +881,26 @@ func TestBuildCodexRequestReplaysNativeShellAndApplyPatchHistory(t *testing.T) {
 	for _, item := range out.Input {
 		switch codexItemTypeString(item) {
 		case "function_call":
-			if item["name"] != "shell_command" {
-				continue
+			switch item["call_id"] {
+			case "call_shell":
+				if item["name"] != "Shell" {
+					t.Fatalf("shell call name=%v", item["name"])
+				}
+				if !strings.Contains(item["arguments"].(string), `"command":"pwd"`) {
+					t.Fatalf("shell command call=%v", item)
+				}
+				sawShellCall = true
+			case "call_patch":
+				if item["name"] != "ApplyPatch" || !strings.Contains(item["arguments"].(string), "*** Begin Patch") {
+					t.Fatalf("patch call=%v", item)
+				}
+				sawPatchCall = true
 			}
-			if !strings.Contains(item["arguments"].(string), `"command":"pwd"`) {
-				t.Fatalf("shell command call=%v", item)
-			}
-			sawShellCall = true
 		case "function_call_output":
-			if item["call_id"] == "call_shell" {
+			switch item["call_id"] {
+			case "call_shell":
 				sawShellOutput = true
-			}
-		case "custom_tool_call":
-			sawPatchCall = true
-			if item["name"] != "apply_patch" || !strings.Contains(item["input"].(string), "*** Begin Patch") {
-				t.Fatalf("patch call=%v", item)
-			}
-		case "custom_tool_call_output":
-			if item["call_id"] == "call_patch" {
+			case "call_patch":
 				sawPatchOutput = true
 			}
 		}
@@ -850,8 +940,8 @@ func TestBuildCodexRequestSerializesAssistantToolCallsAndToolOutputs(t *testing.
 		switch codexItemTypeString(item) {
 		case "function_call":
 			sawCall = true
-			if got, _ := item["name"].(string); got != "read_file" {
-				t.Fatalf("function_call name=%q want read_file", got)
+			if got, _ := item["name"].(string); got != "ReadFile" {
+				t.Fatalf("function_call name=%q want ReadFile", got)
 			}
 		case "function_call_output":
 			sawOutput = true
@@ -899,12 +989,12 @@ func TestBuildCodexRequestPreservesResponsesInputToolHistory(t *testing.T) {
 			switch item["call_id"] {
 			case "call_glob":
 				sawGlobCall = true
-				if item["name"] != "glob" {
+				if item["name"] != "Glob" {
 					t.Fatalf("glob call name=%v", item["name"])
 				}
 			case "call_shell":
 				sawShellCommand = true
-				if item["name"] != "shell_command" {
+				if item["name"] != "Shell" {
 					t.Fatalf("shell call name=%v", item["name"])
 				}
 				if !strings.Contains(item["arguments"].(string), `"command":"pwd"`) {
@@ -960,6 +1050,49 @@ func TestBuildCodexRequestUsesStablePromptCacheKeyFromMetadata(t *testing.T) {
 	if out.PromptCache != "meta:thread-123" {
 		t.Fatalf("prompt_cache_key=%q want %q", out.PromptCache, "meta:thread-123")
 	}
+	if out.WebsocketSessionKey != "meta:thread-123" {
+		t.Fatalf("websocket session key=%q want %q", out.WebsocketSessionKey, "meta:thread-123")
+	}
+}
+
+func TestBuildCodexRequestDoesNotUseAccountUserAsSessionKey(t *testing.T) {
+	req := ChatRequest{
+		User: "github|user_123",
+		Messages: []ChatMessage{{
+			Role:    "user",
+			Content: json.RawMessage(`"same account, distinct chat"`),
+		}},
+	}
+	model := ResolvedModel{Alias: "gpt-5.4"}
+
+	out := BuildRequest(req, model, "")
+	if strings.HasPrefix(out.PromptCache, "user:") {
+		t.Fatalf("prompt_cache_key=%q must not use account-level user as conversation key", out.PromptCache)
+	}
+	if !strings.HasPrefix(out.PromptCache, "fingerprint:") {
+		t.Fatalf("prompt_cache_key=%q want fingerprint fallback", out.PromptCache)
+	}
+	if out.WebsocketSessionKey != "" {
+		t.Fatalf("websocket session key=%q want empty for account/content-derived identity", out.WebsocketSessionKey)
+	}
+}
+
+func TestBuildCodexRequestDoesNotUseContentFingerprintAsSessionKey(t *testing.T) {
+	req := ChatRequest{
+		Messages: []ChatMessage{{
+			Role:    "user",
+			Content: json.RawMessage(`"same first prompt can start unrelated chats"`),
+		}},
+	}
+	model := ResolvedModel{Alias: "gpt-5.4"}
+
+	out := BuildRequest(req, model, "")
+	if !strings.HasPrefix(out.PromptCache, "fingerprint:") {
+		t.Fatalf("prompt_cache_key=%q want fingerprint fallback", out.PromptCache)
+	}
+	if out.WebsocketSessionKey != "" {
+		t.Fatalf("websocket session key=%q want empty for content fingerprint", out.WebsocketSessionKey)
+	}
 }
 
 func TestBuildCodexRequestFromCapturedWriteReplay(t *testing.T) {
@@ -1000,6 +1133,9 @@ func TestBuildCodexRequestPrefersCursorConversationPromptCacheKey(t *testing.T) 
 	out := BuildRequest(req, model, "")
 	if out.PromptCache != "cursor:conv-123" {
 		t.Fatalf("prompt_cache_key=%q want %q", out.PromptCache, "cursor:conv-123")
+	}
+	if out.WebsocketSessionKey != "cursor:conv-123" {
+		t.Fatalf("websocket session key=%q want %q", out.WebsocketSessionKey, "cursor:conv-123")
 	}
 }
 
@@ -1111,11 +1247,14 @@ func TestParseCodexSSERetainsReasoningSignalWithoutVisibleText(t *testing.T) {
 	if !res.ReasoningSignaled {
 		t.Fatalf("expected reasoning signal")
 	}
-	if res.ReasoningVisible {
-		t.Fatalf("expected no visible reasoning text")
+	if !res.ReasoningVisible {
+		t.Fatalf("expected synthetic visible reasoning marker")
 	}
-	if got != "Answer." {
-		t.Fatalf("streamed text = %q", got)
+	if !strings.Contains(got, "Answer.") {
+		t.Fatalf("missing streamed answer: %q", got)
+	}
+	if !strings.Contains(got, "<!--clyde-thinking-->") || !strings.Contains(got, "<!--/clyde-thinking-->") {
+		t.Fatalf("missing synthetic thinking envelope: %q", got)
 	}
 }
 
@@ -1148,8 +1287,8 @@ func TestParseCodexSSEEmitsToolCallDeltas(t *testing.T) {
 	if len(deltas) < 2 {
 		t.Fatalf("tool delta len=%d want >=2", len(deltas))
 	}
-	if deltas[0].Function.Name != "ReadFile" {
-		t.Fatalf("first tool name=%q want ReadFile", deltas[0].Function.Name)
+	if deltas[0].Function.Name != "read_file" {
+		t.Fatalf("first tool name=%q want read_file", deltas[0].Function.Name)
 	}
 	if deltas[1].Function.Arguments != `{"path":"out.md"}` {
 		t.Fatalf("second args=%q", deltas[1].Function.Arguments)
@@ -1179,8 +1318,8 @@ func TestParseCodexSSEEmitsToolArgumentsFromDoneWhenNoDeltaArrives(t *testing.T)
 	if len(calls) != 2 {
 		t.Fatalf("tool call chunks=%d want 2: %#v", len(calls), calls)
 	}
-	if calls[0].Function.Name != "ReadFile" {
-		t.Fatalf("tool name=%q want ReadFile", calls[0].Function.Name)
+	if calls[0].Function.Name != "read_file" {
+		t.Fatalf("tool name=%q want read_file", calls[0].Function.Name)
 	}
 	if calls[1].Function.Arguments != `{"path":"out.md"}` {
 		t.Fatalf("args=%q want full JSON", calls[1].Function.Arguments)
@@ -1245,7 +1384,7 @@ func TestParseCodexSSEEmitsToolIdentityOnlyOnce(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("tool call chunks=%d want 2: %#v", len(calls), calls)
 	}
-	if calls[0].ID != "call_1" || calls[0].Type != "function" || calls[0].Function.Name != "ReadFile" {
+	if calls[0].ID != "call_1" || calls[0].Type != "function" || calls[0].Function.Name != "read_file" {
 		t.Fatalf("identity chunk=%#v", calls[0])
 	}
 	if calls[1].ID != "" || calls[1].Type != "" || calls[1].Function.Name != "" {
@@ -1256,7 +1395,7 @@ func TestParseCodexSSEEmitsToolIdentityOnlyOnce(t *testing.T) {
 	}
 }
 
-func TestParseCodexSSEMapsToolAliasesBackToCursorNames(t *testing.T) {
+func TestParseCodexSSEPassesThroughToolNames(t *testing.T) {
 	stream := strings.NewReader(strings.Join([]string{
 		"event: response.output_item.added",
 		`data: {"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"read_file","arguments":""}}`,
@@ -1283,8 +1422,8 @@ func TestParseCodexSSEMapsToolAliasesBackToCursorNames(t *testing.T) {
 			}
 		}
 	}
-	if len(names) != 1 || names[0] != "ReadFile" {
-		t.Fatalf("tool names=%v want [ReadFile]", names)
+	if len(names) != 1 || names[0] != "read_file" {
+		t.Fatalf("tool names=%v want [read_file]", names)
 	}
 }
 
@@ -1349,8 +1488,8 @@ func TestParseCodexSSEMapsShellCommandToCursorShell(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("tool call chunks=%d want 2: %#v", len(calls), calls)
 	}
-	if calls[0].Function.Name != "Shell" {
-		t.Fatalf("tool name=%q want Shell", calls[0].Function.Name)
+	if calls[0].Function.Name != "shell_command" {
+		t.Fatalf("tool name=%q want shell_command", calls[0].Function.Name)
 	}
 	var args map[string]any
 	if err := json.Unmarshal([]byte(calls[1].Function.Arguments), &args); err != nil {
@@ -1453,40 +1592,44 @@ func TestCodexRendererSeparatesBoldSummaryHeadingWithoutIndexChange(t *testing.T
 	}
 }
 
-func TestCodexRendererEmitsSyntheticThinkingPlaceholderWhenSignaledWithoutVisibleText(t *testing.T) {
+func TestCodexRendererEmitsSyntheticThinkingPlaceholderAsReasoningDelta(t *testing.T) {
 	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
-	_ = r.HandleEvent(adapterrender.Event{Kind: adapterrender.EventReasoningSignaled})
-	chunks := r.HandleEvent(adapterrender.Event{Kind: adapterrender.EventReasoningFinished})
+	chunks := r.HandleEvent(adapterrender.Event{Kind: adapterrender.EventReasoningDelta, Text: "Thinking...", ReasoningKind: "summary"})
 	if len(chunks) != 1 {
 		t.Fatalf("chunks=%d want 1", len(chunks))
 	}
 	got := chunks[0].Choices[0].Delta.Content
-	if !strings.Contains(got, "<!--clyde-thinking-->") || !strings.Contains(got, "<!--/clyde-thinking-->") {
-		t.Fatalf("missing synthetic thinking envelope: %q", got)
+	if !strings.Contains(got, "<!--clyde-thinking-->") || !strings.Contains(got, "Thinking...") {
+		t.Fatalf("missing synthetic thinking marker: %q", got)
+	}
+	if chunks := r.HandleEvent(adapterrender.Event{Kind: adapterrender.EventReasoningFinished}); len(chunks) != 1 {
+		t.Fatalf("finish chunks=%d want close marker", len(chunks))
+	} else if close := chunks[0].Choices[0].Delta.Content; !strings.Contains(close, "<!--/clyde-thinking-->") {
+		t.Fatalf("missing close marker: %q", close)
 	}
 }
 
 func collectCodexSSEForTest(stream *strings.Reader) (string, RunResult, error) {
 	renderer := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
 	var got strings.Builder
-	res, err := ParseSSEEvents(stream, func(ev adapterrender.Event) error {
+	res, err := ParseSSEEventsWithLogging(context.Background(), stream, func(ev adapterrender.Event) error {
 		for _, ch := range renderer.HandleEvent(ev) {
 			if len(ch.Choices) > 0 {
 				got.WriteString(ch.Choices[0].Delta.Content)
 			}
 		}
 		return nil
-	})
+	}, sseInstrumentationContext{})
 	return got.String(), res, err
 }
 
 func parseCodexSSEChunksForTest(stream *strings.Reader) ([]adapteropenai.StreamChunk, RunResult, error) {
 	renderer := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
 	var got []adapteropenai.StreamChunk
-	res, err := ParseSSEEvents(stream, func(ev adapterrender.Event) error {
+	res, err := ParseSSEEventsWithLogging(context.Background(), stream, func(ev adapterrender.Event) error {
 		got = append(got, renderer.HandleEvent(ev)...)
 		return nil
-	})
+	}, sseInstrumentationContext{})
 	return got, res, err
 }
 

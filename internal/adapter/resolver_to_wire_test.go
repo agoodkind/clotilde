@@ -189,7 +189,7 @@ func TestResolverToCodexWirePropagatesEffort(t *testing.T) {
 				t.Fatalf("resolver.Resolve(%s): %v", tc.alias, err)
 			}
 			model := codexResolvedModelForTest(resolved)
-			built := adaptercodex.BuildRequest(resolved.OpenAI, model, resolved.Effort.String())
+			built := adaptercodex.BuildRequestWithConfig(resolved.OpenAI, model, resolved.Effort.String(), adaptercodex.RequestBuilderConfig{})
 			if built.Reasoning == nil {
 				t.Fatalf("Reasoning is nil; expected effort=%q", tc.wantEffort)
 			}

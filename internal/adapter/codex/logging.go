@@ -31,6 +31,10 @@ type BodyLogConfig struct {
 	MaxKB int
 }
 
+// BodyLogConfigProvider returns the current body logging config for
+// long-lived Codex providers and websocket transports.
+type BodyLogConfigProvider func() BodyLogConfig
+
 // FileLogRotationConfig controls the dedicated Codex JSONL sidecar sink.
 // It mirrors internal/config.LoggingRotation without importing config into
 // the provider package.
@@ -64,6 +68,13 @@ func (c BodyLogConfig) Resolve() (mode string, maxBytes int) {
 		maxBytes = 32 * 1024
 	}
 	return mode, maxBytes
+}
+
+func resolveBodyLogConfig(cfg BodyLogConfig, provider BodyLogConfigProvider) BodyLogConfig {
+	if provider == nil {
+		return cfg
+	}
+	return provider()
 }
 
 // CodexLogPath returns the JSONL file the codex package double-writes

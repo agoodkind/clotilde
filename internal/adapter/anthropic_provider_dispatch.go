@@ -63,7 +63,7 @@ func (s *Server) dispatchAnthropicProviderStream(
 	resolvedReq adapterresolver.ResolvedRequest,
 ) error {
 	model := anthropicResolvedModelFromRequest(resolvedReq)
-	streamWriter, err := newProviderStreamWriter(s, w, reqID, model.Alias, "anthropic")
+	streamWriter, err := newProviderStreamWriter(ctx, s, w, reqID, model.Alias, "anthropic")
 	if err != nil {
 		return adapterErrInternal(err.Error(), err)
 	}

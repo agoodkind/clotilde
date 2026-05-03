@@ -14,22 +14,8 @@ import (
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
-// Function-pointer defaults that callers (notably tests) may swap.
-// Defaults are sensible for production: real wall clock, real working
-// directory, and the user's $SHELL when set.
-var (
-	GetwdFn     = os.Getwd
-	ShellNameFn = defaultShellName
-)
-
-func defaultShellName() string {
-	shell := strings.TrimSpace(os.Getenv("SHELL"))
-	if shell == "" {
-		return "sh"
-	}
-	parts := strings.Split(shell, "/")
-	return parts[len(parts)-1]
-}
+// GetwdFn lets tests control workspace path rewriting.
+var GetwdFn = os.Getwd
 
 func MessageContent(role, textType, text string) map[string]any {
 	return MessageContentItems(role, []map[string]any{{
@@ -103,18 +89,20 @@ func codexContentFromParts(parts []adaptercontent.Part, textType string) []map[s
 	return content
 }
 
-func BuildRequest(req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort string) HTTPTransportRequest {
+type RequestBuilderConfig struct {
+	ReasoningSummary string
+}
+
+func BuildRequestWithConfig(req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort string, cfg RequestBuilderConfig) HTTPTransportRequest {
 	cursorReq := adaptercursor.TranslateRequest(req)
 	input := make([]map[string]any, 0, len(req.Messages))
 	systemSections := make([]string, 0, 8)
-	toolCallNames := make(map[string]string)
 	modelName := strings.TrimSpace(model.ClaudeModel)
 	if modelName == "" {
 		modelName = model.Alias
 	}
-	shellMode := ShellToolModeForModel(model)
 	workspacePath := cursorReq.WorkspacePath
-	if rawInput, ok := inputFromResponsesInput(req.Input, shellMode, workspacePath, &systemSections); ok {
+	if rawInput, ok := inputFromResponsesInput(req.Input, workspacePath, &systemSections); ok {
 		input = rawInput
 	} else {
 		for _, msg := range req.Messages {
@@ -130,23 +118,14 @@ func BuildRequest(req adapteropenai.ChatRequest, model adaptermodel.ResolvedMode
 					if strings.TrimSpace(tc.Function.Name) == "" {
 						continue
 					}
-					callID := strings.TrimSpace(tc.ID)
-					if callID == "" {
-						callID = fmt.Sprintf("call_%d", tc.Index)
-					}
-					toolCallNames[callID] = ToolCallName(tc)
-					input = append(input, FunctionCallItem(tc, shellMode))
+					input = append(input, FunctionCallItem(tc))
 				}
 				if content := codexContentFromRaw(msg.Content, "output_text"); len(content) > 0 {
 					input = append(input, MessageContentItems("assistant", content))
 				}
 			case "tool", "function":
 				if text != "" && strings.TrimSpace(msg.ToolCallID) != "" {
-					if IsApplyPatchToolName(toolCallNames[strings.TrimSpace(msg.ToolCallID)]) {
-						input = append(input, CustomToolCallOutputItem(msg.ToolCallID, text))
-					} else {
-						input = append(input, FunctionCallOutputItem(msg.ToolCallID, text))
-					}
+					input = append(input, FunctionCallOutputItem(msg.ToolCallID, text))
 				} else if text != "" {
 					input = append(input, MessageContent("user", "input_text", "tool: "+text))
 				}
@@ -161,9 +140,10 @@ func BuildRequest(req adapteropenai.ChatRequest, model adaptermodel.ResolvedMode
 	if len(input) == 0 {
 		input = append(input, MessageContent("user", "input_text", " "))
 	}
-	reasoning := EffectiveReasoning(req, effort)
+	reasoning := EffectiveReasoningWithDefaultSummary(req, effort, cfg.ReasoningSummary)
 	include := RequestInclude(req.Include, reasoning != nil)
 	outputControls := BuildOutputControls(req)
+	identity := requestContextIdentity(cursorReq, model.Alias)
 	return HTTPTransportRequest{
 		Model:        modelName,
 		Instructions: instructions,
@@ -176,10 +156,18 @@ func BuildRequest(req adapteropenai.ChatRequest, model adaptermodel.ResolvedMode
 		// found". Cost savings come from the prompt cache
 		// (prompt_cache_key) instead, which works independently
 		// of stored responses.
-		Store:                false,
-		Stream:               true,
-		Include:              include,
-		PromptCache:          requestContextTrackerKey(cursorReq, model.Alias),
+		Store:   false,
+		Stream:  true,
+		Include: include,
+		// WARNING: prompt_cache_key and websocket session identity are
+		// intentionally not the same field. Codex upstream uses the real
+		// conversation/thread id for websocket headers and
+		// previous_response_id chaining, while prompt_cache_key is only a
+		// cache partition and may be content-derived. Reusing a websocket
+		// session from a cache key can cross-wire unrelated Cursor chats
+		// that share the same account, first prompt, or cache partition.
+		WebsocketSessionKey:  identity.WebsocketSessionKey,
+		PromptCache:          identity.PromptCacheKey,
 		PromptCacheRetention: outputControls.PromptCacheRetention,
 		ServiceTier:          ServiceTierFromRequest(req),
 		Reasoning:            reasoning,
@@ -187,7 +175,7 @@ func BuildRequest(req adapteropenai.ChatRequest, model adaptermodel.ResolvedMode
 		Text:                 outputControls.Text,
 		Truncation:           outputControls.Truncation,
 		Input:                input,
-		Tools:                toolSpecs(req, shellMode),
+		Tools:                toolSpecs(req),
 		ToolChoice:           "auto",
 		ParallelToolCalls:    parallelToolCalls(req),
 	}
@@ -216,64 +204,17 @@ func requestTools(req adapteropenai.ChatRequest) []adapteropenai.Tool {
 			})
 		}
 	}
-	if !HasWriteIntent(req) {
-		return tools
-	}
-	allowed := map[string]bool{
-		"Shell":        true,
-		"AwaitShell":   true,
-		"Glob":         true,
-		"rg":           true,
-		"ReadFile":     true,
-		"Delete":       true,
-		"ApplyPatch":   true,
-		"EditNotebook": true,
-		"ReadLints":    true,
-	}
-	filtered := make([]adapteropenai.Tool, 0, len(tools))
-	for _, tool := range tools {
-		toolName := strings.TrimSpace(tool.Function.Name)
-		if allowed[toolName] || KeepToolForWriteIntent(toolName) {
-			filtered = append(filtered, tool)
-		}
-	}
-	if len(filtered) > 0 {
-		return filtered
-	}
 	return tools
 }
 
-func toolSpecs(req adapteropenai.ChatRequest, shellMode string) []any {
+func toolSpecs(req adapteropenai.ChatRequest) []any {
 	tools := requestTools(req)
 	if len(tools) == 0 {
 		return nil
 	}
 	out := make([]any, 0, len(tools))
-	emittedNativeShell := false
-	emittedNativeApplyPatch := false
 	for _, tool := range tools {
 		toolName := strings.TrimSpace(tool.Function.Name)
-		if IsShellToolName(toolName) {
-			if !emittedNativeShell {
-				switch shellMode {
-				case "local_shell":
-					out = append(out, NativeLocalShellSpec())
-				case "shell_command":
-					out = append(out, ShellCommandSpec())
-				default:
-					out = append(out, FunctionToolSpec("shell", tool.Function.Description, tool.Function.Parameters, tool.Function.Strict))
-				}
-				emittedNativeShell = true
-			}
-			continue
-		}
-		if IsApplyPatchToolName(toolName) {
-			if !emittedNativeApplyPatch {
-				out = append(out, NativeApplyPatchSpec())
-				emittedNativeApplyPatch = true
-			}
-			continue
-		}
 		out = append(out, FunctionToolSpec(OutboundToolName(toolName), tool.Function.Description, tool.Function.Parameters, tool.Function.Strict))
 	}
 	return out
@@ -428,16 +369,7 @@ func isPathSeparatorByte(b byte) bool {
 	return false
 }
 
-func functionCallItem(tc adapteropenai.ToolCall, shellMode string) map[string]any {
-	if IsShellToolName(ToolCallName(tc)) {
-		if shellMode == "shell_command" {
-			return ShellCommandCallItem(tc)
-		}
-		return LocalShellCallItem(tc, ShellNameFn())
-	}
-	if IsApplyPatchToolName(ToolCallName(tc)) {
-		return ApplyPatchCallItem(tc)
-	}
+func functionCallItem(tc adapteropenai.ToolCall) map[string]any {
 	callID := strings.TrimSpace(tc.ID)
 	if callID == "" {
 		callID = fmt.Sprintf("call_%d", tc.Index)
@@ -450,8 +382,8 @@ func functionCallItem(tc adapteropenai.ToolCall, shellMode string) map[string]an
 	}
 }
 
-func FunctionCallItem(tc adapteropenai.ToolCall, shellMode string) map[string]any {
-	return functionCallItem(tc, shellMode)
+func FunctionCallItem(tc adapteropenai.ToolCall) map[string]any {
+	return functionCallItem(tc)
 }
 
 func FunctionCallOutputItem(callID, text string) map[string]any {
@@ -462,7 +394,7 @@ func FunctionCallOutputItem(callID, text string) map[string]any {
 	}
 }
 
-func functionCallFromResponsesItem(item map[string]any, shellMode, workspacePath string) (map[string]any, string) {
+func functionCallFromResponsesItem(item map[string]any, workspacePath string) map[string]any {
 	callID := mapString(item, "call_id")
 	name := mapString(item, "name")
 	args := rewriteWorkspacePath(rawString(item, "arguments"), workspacePath)
@@ -474,12 +406,11 @@ func functionCallFromResponsesItem(item map[string]any, shellMode, workspacePath
 			Arguments: args,
 		},
 	}
-	return functionCallItem(tc, shellMode), tc.Function.Name
+	return functionCallItem(tc)
 }
 
 func inputFromResponsesInput(
 	raw json.RawMessage,
-	shellMode string,
 	workspacePath string,
 	developerSections *[]string,
 ) ([]map[string]any, bool) {
@@ -491,7 +422,7 @@ func inputFromResponsesInput(
 		return nil, false
 	}
 	input := make([]map[string]any, 0, len(items))
-	toolCallNames := make(map[string]string)
+	customToolCallIDs := make(map[string]bool)
 	for _, item := range items {
 		role := strings.ToLower(mapString(item, "role"))
 		itemType := strings.TrimSpace(mapString(item, "type"))
@@ -509,18 +440,14 @@ func inputFromResponsesInput(
 				input = append(input, MessageContentItems("assistant", content))
 			}
 		case itemType == "function_call":
-			call, toolName := functionCallFromResponsesItem(item, shellMode, workspacePath)
-			if callID := mapString(item, "call_id"); callID != "" {
-				toolCallNames[callID] = toolName
-			}
-			input = append(input, call)
+			input = append(input, functionCallFromResponsesItem(item, workspacePath))
 		case itemType == "function_call_output":
 			callID := mapString(item, "call_id")
 			output := strings.TrimSpace(rewriteWorkspacePath(responsesOutputText(item["output"]), workspacePath))
 			if output == "" {
 				continue
 			}
-			if IsApplyPatchToolName(toolCallNames[callID]) {
+			if customToolCallIDs[callID] {
 				input = append(input, CustomToolCallOutputItem(callID, output))
 			} else {
 				input = append(input, FunctionCallOutputItem(callID, output))
@@ -530,7 +457,7 @@ func inputFromResponsesInput(
 			name := mapString(item, "name")
 			inputText := rewriteWorkspacePath(UnwrapApplyPatchInput(rawString(item, "input")), workspacePath)
 			if callID != "" {
-				toolCallNames[callID] = InboundToolName(name)
+				customToolCallIDs[callID] = true
 			}
 			input = append(input, map[string]any{
 				"type":    "custom_tool_call",
@@ -549,15 +476,25 @@ func inputFromResponsesInput(
 	return input, len(input) > 0
 }
 
-func requestContextTrackerKey(req adaptercursor.Request, modelAlias string) string {
+type codexRequestContextIdentity struct {
+	PromptCacheKey      string
+	WebsocketSessionKey string
+}
+
+func requestContextIdentity(req adaptercursor.Request, modelAlias string) codexRequestContextIdentity {
 	if cursor := req.Context(); cursor.StrongConversationKey() != "" {
-		return cursor.StrongConversationKey()
-	}
-	if v := strings.TrimSpace(req.User); v != "" {
-		return "user:" + v
+		key := cursor.StrongConversationKey()
+		return codexRequestContextIdentity{
+			PromptCacheKey:      key,
+			WebsocketSessionKey: key,
+		}
 	}
 	if v := requestMetadataString(req.OpenAI.Metadata, "conversation_id", "conversationId", "composerId", "composer_id", "thread_id", "threadId", "chat_id", "chatId"); v != "" {
-		return "meta:" + v
+		key := "meta:" + v
+		return codexRequestContextIdentity{
+			PromptCacheKey:      key,
+			WebsocketSessionKey: key,
+		}
 	}
 	firstUser := ""
 	for _, msg := range req.OpenAI.Messages {
@@ -569,10 +506,18 @@ func requestContextTrackerKey(req adaptercursor.Request, modelAlias string) stri
 		}
 	}
 	if firstUser == "" {
-		return ""
+		if v := strings.TrimSpace(req.User); v != "" {
+			return codexRequestContextIdentity{PromptCacheKey: "user:" + v}
+		}
+		return codexRequestContextIdentity{}
 	}
 	sum := sha256.Sum256([]byte(modelAlias + "\n" + firstUser))
-	return "fingerprint:" + hex.EncodeToString(sum[:16])
+	// A content fingerprint is useful as an upstream prompt-cache
+	// partition, but it is not proof that two requests are the same
+	// live chat. Do not use it as WebsocketSessionKey: repeated fresh
+	// Cursor chats can start with identical text and must not inherit
+	// each other's previous_response_id.
+	return codexRequestContextIdentity{PromptCacheKey: "fingerprint:" + hex.EncodeToString(sum[:16])}
 }
 
 func requestMetadataString(raw json.RawMessage, keys ...string) string {

@@ -13,6 +13,7 @@ import (
 	"goodkind.io/clyde/internal/adapter/finishreason"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
+	"goodkind.io/clyde/internal/slogger"
 )
 
 type Reasoning struct {
@@ -122,12 +123,14 @@ type CodexUsageTelemetry struct {
 // because Codex emits a broad response-item union here.
 type transportStreamEvent struct {
 	Type         string              `json:"type"`
+	Sequence     int                 `json:"sequence_number,omitempty"`
 	Response     *transportResponse  `json:"response,omitempty"`
 	Item         transportItem       `json:"item,omitempty"`
 	ItemID       string              `json:"item_id,omitempty"`
 	CallID       string              `json:"call_id,omitempty"`
 	Delta        string              `json:"delta,omitempty"`
 	SummaryIndex *int                `json:"summary_index,omitempty"`
+	ContentIndex *int                `json:"content_index,omitempty"`
 	Error        *transportErrorBody `json:"error,omitempty"`
 }
 
@@ -150,6 +153,22 @@ type transportErrorBody struct {
 
 type transportItem map[string]json.RawMessage
 
+type reasoningItemPayload struct {
+	ID      string                 `json:"id,omitempty"`
+	Summary []reasoningSummaryPart `json:"summary,omitempty"`
+	Content []reasoningContentPart `json:"content,omitempty"`
+}
+
+type reasoningSummaryPart struct {
+	Type string `json:"type,omitempty"`
+	Text string `json:"text,omitempty"`
+}
+
+type reasoningContentPart struct {
+	Type string `json:"type,omitempty"`
+	Text string `json:"text,omitempty"`
+}
+
 type toolCallState struct {
 	Index             int
 	ItemID            string
@@ -160,6 +179,7 @@ type toolCallState struct {
 	IdentityEmitted   bool
 	ArgumentDeltaSeen bool
 	ArgumentsEmitted  bool
+	NativeParseLogged bool
 	Arguments         strings.Builder
 	Input             strings.Builder
 }
@@ -222,7 +242,7 @@ func RequestInclude(requested []string, reasoningEnabled bool) []string {
 	return out
 }
 
-func EffectiveReasoning(req adapteropenai.ChatRequest, effort string) *Reasoning {
+func EffectiveReasoningWithDefaultSummary(req adapteropenai.ChatRequest, effort, defaultSummary string) *Reasoning {
 	effort = strings.ToLower(strings.TrimSpace(effort))
 	if effort == "" {
 		effort = strings.ToLower(strings.TrimSpace(req.ReasoningEffort))
@@ -232,13 +252,21 @@ func EffectiveReasoning(req adapteropenai.ChatRequest, effort string) *Reasoning
 	}
 	var out Reasoning
 	switch effort {
-	case "low", "medium", "high", "xhigh":
+	case "none", "minimal", "low", "medium", "high", "xhigh":
 		out.Effort = effort
 	}
 	if req.Reasoning != nil {
 		switch strings.ToLower(strings.TrimSpace(req.Reasoning.Summary)) {
-		case "auto", "detailed", "none":
+		case "auto", "concise", "detailed", "none":
 			out.Summary = strings.ToLower(strings.TrimSpace(req.Reasoning.Summary))
+		}
+	}
+	if out.Effort != "" && out.Summary == "" {
+		switch strings.ToLower(strings.TrimSpace(defaultSummary)) {
+		case "auto", "concise", "detailed", "none":
+			out.Summary = strings.ToLower(strings.TrimSpace(defaultSummary))
+		default:
+			out.Summary = "auto"
 		}
 	}
 	if out.Effort == "" && out.Summary == "" {
@@ -247,7 +275,7 @@ func EffectiveReasoning(req adapteropenai.ChatRequest, effort string) *Reasoning
 	return &out
 }
 
-func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunResult, error) {
+func ParseSSEEventsWithLogging(ctx context.Context, body io.Reader, emit func(adapterrender.Event) error, logCtx sseInstrumentationContext) (RunResult, error) {
 	sc := bufio.NewScanner(body)
 	sc.Buffer(make([]byte, 0, 1024*128), 1024*1024*8)
 
@@ -258,7 +286,72 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 	reasoningVisible := false
 	toolCallsByItemID := make(map[string]*toolCallState)
 	nextToolIndex := 0
-	emitToolCall := func(state *toolCallState, fn adapteropenai.ToolCallFunction) error {
+	aggregate := sseAggregateCollector{}
+	upstreamEventSeq := 0
+	normalizedEventSeq := 0
+	logAggregate := func(responseID, status string, err error) {
+		if !logCtx.Enabled() {
+			return
+		}
+		errText := ""
+		if err != nil {
+			errText = err.Error()
+		}
+		aggregate.Log(ctx, logCtx, responseID, status, errText)
+	}
+	logParserEmit := func(upstreamEventType string, upstreamSequence int, ev adapterrender.Event) {
+		normalizedEventSeq++
+		attrs := []slog.Attr{
+			slog.String("component", "adapter"),
+			slog.String("subcomponent", "codex"),
+			slog.String("request_id", logCtx.RequestID),
+			slog.String("upstream_event_type", strings.TrimSpace(upstreamEventType)),
+			slog.String("normalized_event_kind", string(ev.Kind)),
+			slog.Int("upstream_event_sequence", upstreamEventSeq),
+			slog.Int("normalized_event_sequence", normalizedEventSeq),
+		}
+		if upstreamSequence > 0 {
+			attrs = append(attrs, slog.Int("upstream_sequence_number", upstreamSequence))
+		}
+		if ev.ItemID != "" {
+			attrs = append(attrs, slog.String("item_id", ev.ItemID))
+		}
+		if ev.ItemType != "" {
+			attrs = append(attrs, slog.String("item_type", ev.ItemType))
+		}
+		if ev.ReasoningKind != "" {
+			attrs = append(attrs, slog.String("reasoning_kind", ev.ReasoningKind))
+		}
+		if logCtx.CursorRequestID != "" {
+			attrs = append(attrs, slog.String("cursor_request_id", logCtx.CursorRequestID))
+		}
+		if logCtx.ConversationID != "" {
+			attrs = append(attrs, slog.String("conversation_id", logCtx.ConversationID))
+		}
+		attrs = append(attrs, logCtx.Correlation.Attrs()...)
+		logCodexEventWithConcern(ctx, slog.LevelDebug, "adapter.codex.parser.normalized_event_emitted", slogger.ConcernAdapterProviderCodexWS, attrs)
+	}
+	emitNormalized := func(upstreamEventType string, upstreamSequence int, ev adapterrender.Event) error {
+		logParserEmit(upstreamEventType, upstreamSequence, ev)
+		return emit(ev)
+	}
+	reasoningTextDeltaSeen := false
+	reasoningSummaryDeltaSeen := false
+	emitReasoningPresence := func(upstreamEventType string, upstreamSequence int, itemID string) error {
+		if reasoningSignaled {
+			return nil
+		}
+		reasoningSignaled = true
+		reasoningVisible = true
+		return emitNormalized(upstreamEventType, upstreamSequence, adapterrender.Event{
+			Kind:          adapterrender.EventReasoningDelta,
+			Text:          "Thinking...",
+			ReasoningKind: "summary",
+			ItemID:        strings.TrimSpace(itemID),
+			ItemType:      "reasoning",
+		})
+	}
+	emitToolCall := func(upstreamEventType string, upstreamSequence int, state *toolCallState, fn adapteropenai.ToolCallFunction) error {
 		if state == nil {
 			return nil
 		}
@@ -271,10 +364,23 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 			tc.Type = state.Type
 			state.IdentityEmitted = true
 		}
-		return emit(adapterrender.Event{
+		return emitNormalized(upstreamEventType, upstreamSequence, adapterrender.Event{
 			Kind:      adapterrender.EventToolCallDelta,
 			ToolCalls: []adapteropenai.ToolCall{tc},
 		})
+	}
+	logNativeToolParsed := func(eventName, itemType string, state *toolCallState, toolName string) {
+		if state == nil || state.NativeParseLogged {
+			return
+		}
+		state.NativeParseLogged = true
+		LogToolingEvent(nil, ctx, logCtx.RequestID, "native_tool_item.parsed",
+			slog.String("sse_event", eventName),
+			slog.String("item_type", itemType),
+			slog.String("item_id", state.ItemID),
+			slog.String("call_id", state.CallID),
+			slog.String("tool_name", toolName),
+		)
 	}
 	getToolState := func(itemID, callID, name string) (*toolCallState, bool) {
 		itemID = strings.TrimSpace(itemID)
@@ -317,7 +423,7 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 		}
 		nextToolIndex++
 		out.ToolCallCount = max(out.ToolCallCount, nextToolIndex)
-		if name == "Subagent" || name == "spawn_agent" {
+		if name == "Task" || name == "spawn_agent" {
 			out.HasSubagentToolCall = true
 		}
 		if itemID != "" {
@@ -348,10 +454,12 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 			if err := json.Unmarshal([]byte(payload), &raw); err != nil {
 				continue
 			}
+			upstreamEventSeq++
+			aggregate.observe(eventNameLocal, raw)
 
 			if eventNameLocal == "response.output_text.delta" {
 				if delta := raw.Delta; delta != "" {
-					if err := emit(adapterrender.Event{Kind: adapterrender.EventAssistantTextDelta, Text: delta}); err != nil {
+					if err := emitNormalized(eventNameLocal, raw.Sequence, adapterrender.Event{Kind: adapterrender.EventAssistantTextDelta, Text: delta}); err != nil {
 						return out, err
 					}
 				}
@@ -362,6 +470,23 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 				item := raw.Item
 				itemType := item.string("type")
 				switch itemType {
+				case "reasoning":
+					if err := emitReasoningPresence(eventNameLocal, raw.Sequence, item.string("id")); err != nil {
+						return out, err
+					}
+					if eventNameLocal == "response.output_item.done" && item != nil {
+						for _, ev := range reasoningEventsFromItem(item, reasoningSummaryDeltaSeen, reasoningTextDeltaSeen) {
+							if ev.ReasoningKind == "summary" {
+								reasoningSummaryDeltaSeen = true
+							} else {
+								reasoningTextDeltaSeen = true
+							}
+							if err := emitNormalized(eventNameLocal, raw.Sequence, ev); err != nil {
+								return out, err
+							}
+						}
+						out.OutputItems = append(out.OutputItems, item.cloneMap())
+					}
 				case "function_call":
 					itemID := strings.TrimSpace(item.string("id"))
 					callID := strings.TrimSpace(item.string("call_id"))
@@ -373,20 +498,19 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 					}
 					name := strings.TrimSpace(item.string("name"))
 					args := item.string("arguments")
-					cursorName := InboundToolName(name)
-					state, created := getToolState(itemID, callID, cursorName)
+					state, created := getToolState(itemID, callID, name)
 					if state.NativeName == "" {
 						state.NativeName = name
 					}
 					if created {
-						if err := emitToolCall(state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
+						if err := emitToolCall(eventNameLocal, raw.Sequence, state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
 							return out, err
 						}
 					}
 					if state.Name == "" && name != "" {
-						state.Name = InboundToolName(name)
+						state.Name = name
 					}
-					if state.Name == "Subagent" || state.NativeName == "spawn_agent" {
+					if state.Name == "Task" || state.NativeName == "spawn_agent" {
 						out.HasSubagentToolCall = true
 					}
 					if eventNameLocal == "response.output_item.done" && item != nil {
@@ -402,7 +526,7 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 							args = state.Arguments.String()
 						}
 						if converted, ok := ShellArgsFromShellCommandArguments(args); ok && !state.ArgumentsEmitted {
-							if err := emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: converted}); err != nil {
+							if err := emitToolCall(eventNameLocal, raw.Sequence, state, adapteropenai.ToolCallFunction{Arguments: converted}); err != nil {
 								return out, err
 							}
 							state.ArgumentsEmitted = true
@@ -416,7 +540,7 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 						continue
 					}
 					if eventNameLocal == "response.output_item.done" && args != "" && !state.ArgumentDeltaSeen {
-						if err := emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: args}); err != nil {
+						if err := emitToolCall(eventNameLocal, raw.Sequence, state, adapteropenai.ToolCallFunction{Arguments: args}); err != nil {
 							return out, err
 						}
 						state.ArgumentsEmitted = true
@@ -429,16 +553,19 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 					callID := strings.TrimSpace(item.string("call_id"))
 					state, created := getToolState(itemID, callID, "Shell")
 					if created {
-						if err := emitToolCall(state, adapteropenai.ToolCallFunction{Name: "Shell"}); err != nil {
+						if err := emitToolCall(eventNameLocal, raw.Sequence, state, adapteropenai.ToolCallFunction{Name: "Shell"}); err != nil {
 							return out, err
 						}
 					}
 					out.SetFinishReason("tool_calls")
-					if args, ok := ShellArgsFromLocalShellItem(item.cloneMap()); ok && !state.ArgumentsEmitted {
-						if err := emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: args}); err != nil {
-							return out, err
+					if args, ok := ShellArgsFromLocalShellItem(item.cloneMap()); ok {
+						logNativeToolParsed(eventNameLocal, itemType, state, "Shell")
+						if !state.ArgumentsEmitted {
+							if err := emitToolCall(eventNameLocal, raw.Sequence, state, adapteropenai.ToolCallFunction{Arguments: args}); err != nil {
+								return out, err
+							}
+							state.ArgumentsEmitted = true
 						}
-						state.ArgumentsEmitted = true
 					} else if eventNameLocal == "response.output_item.done" && !state.ArgumentsEmitted {
 						LogToolingEvent(nil, context.Background(), "", "native_local_shell.parse_failed",
 							slog.String("item_type", itemType),
@@ -452,17 +579,17 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 					}
 					itemID := strings.TrimSpace(item.string("id"))
 					callID := strings.TrimSpace(item.string("call_id"))
-					name := item.string("name")
-					cursorName := InboundToolName(name)
+					name := strings.TrimSpace(item.string("name"))
+					cursorName := name
 					if IsApplyPatchToolName(cursorName) || IsApplyPatchToolName(name) {
 						cursorName = "ApplyPatch"
 					}
 					state, created := getToolState(itemID, callID, cursorName)
-					if state.Name == "Subagent" || name == "spawn_agent" {
+					if state.Name == "Task" || name == "spawn_agent" {
 						out.HasSubagentToolCall = true
 					}
 					if created {
-						if err := emitToolCall(state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
+						if err := emitToolCall(eventNameLocal, raw.Sequence, state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
 							return out, err
 						}
 					}
@@ -471,11 +598,14 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 					if input == "" {
 						input = state.Input.String()
 					}
-					if args, ok := ApplyPatchArgs(input); ok && !state.ArgumentsEmitted {
-						if err := emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: args}); err != nil {
-							return out, err
+					if args, ok := ApplyPatchArgs(input); ok {
+						logNativeToolParsed(eventNameLocal, itemType, state, cursorName)
+						if !state.ArgumentsEmitted {
+							if err := emitToolCall(eventNameLocal, raw.Sequence, state, adapteropenai.ToolCallFunction{Arguments: args}); err != nil {
+								return out, err
+							}
+							state.ArgumentsEmitted = true
 						}
-						state.ArgumentsEmitted = true
 					} else if eventNameLocal == "response.output_item.done" && !state.ArgumentsEmitted {
 						LogToolingEvent(nil, context.Background(), "", "native_custom_tool.parse_failed",
 							slog.String("item_type", itemType),
@@ -502,7 +632,7 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 					if state.NativeName == "shell_command" {
 						continue
 					}
-					if err := emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: delta}); err != nil {
+					if err := emitToolCall(eventNameLocal, raw.Sequence, state, adapteropenai.ToolCallFunction{Arguments: delta}); err != nil {
 						return out, err
 					}
 				}
@@ -515,7 +645,7 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 				delta := raw.Delta
 				state, created := getToolState(itemID, callID, "ApplyPatch")
 				if created {
-					if err := emitToolCall(state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
+					if err := emitToolCall(eventNameLocal, raw.Sequence, state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
 						return out, err
 					}
 				}
@@ -523,7 +653,7 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 					state.Input.WriteString(delta)
 					state.ArgumentDeltaSeen = true
 					out.SetFinishReason("tool_calls")
-					if err := emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: delta}); err != nil {
+					if err := emitToolCall(eventNameLocal, raw.Sequence, state, adapteropenai.ToolCallFunction{Arguments: delta}); err != nil {
 						return out, err
 					}
 					state.ArgumentsEmitted = true
@@ -540,8 +670,11 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 					if strings.Contains(eventNameLocal, "summary") {
 						kind = "summary"
 						summaryIdx = raw.SummaryIndex
+						reasoningSummaryDeltaSeen = true
+					} else {
+						reasoningTextDeltaSeen = true
 					}
-					if err := emit(adapterrender.Event{
+					if err := emitNormalized(eventNameLocal, raw.Sequence, adapterrender.Event{
 						Kind:          adapterrender.EventReasoningDelta,
 						Text:          delta,
 						ReasoningKind: kind,
@@ -553,26 +686,38 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 				continue
 			}
 
+			if eventNameLocal == "response.reasoning_summary_part.added" {
+				if err := emitReasoningPresence(eventNameLocal, raw.Sequence, raw.ItemID); err != nil {
+					return out, err
+				}
+				continue
+			}
+
 			if eventNameLocal == "response.completed" {
+				status := ""
 				var c completedResponse
 				if err := json.Unmarshal([]byte(payload), &c); err == nil {
 					if responseID := strings.TrimSpace(c.Response.ID); responseID != "" {
 						out.ResponseID = responseID
 					}
+					status = strings.TrimSpace(c.Response.Status)
 					out.Usage = mapUsage(c)
 					out.UsageTelemetry = usageTelemetry(c)
 					if out.FinishReason != "tool_calls" {
 						out.SetFinishReason(finishreason.FromCodexResponse(c.Response.Status, c.Response.IncompleteDetails.Reason))
 					}
 				}
-				if reasoningTokensFromEvent(raw) > 0 {
-					reasoningSignaled = true
+				if reasoningTokensFromEvent(raw) > 0 && !reasoningSignaled {
+					if err := emitReasoningPresence(eventNameLocal, raw.Sequence, ""); err != nil {
+						return out, err
+					}
 				}
-				if err := emit(adapterrender.Event{Kind: adapterrender.EventReasoningFinished}); err != nil {
+				if err := emitNormalized(eventNameLocal, raw.Sequence, adapterrender.Event{Kind: adapterrender.EventReasoningFinished}); err != nil {
 					return out, err
 				}
 				out.ReasoningSignaled = reasoningSignaled
 				out.ReasoningVisible = reasoningVisible
+				logAggregate(out.ResponseID, status, nil)
 				return out, nil
 			}
 			if eventNameLocal == "response.created" {
@@ -588,8 +733,9 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 				}
 				err := codexResponseFailedError(msg)
 				if strings.TrimSpace(msg) != "" && !isContextWindowError(err) {
-					_ = emit(adapterrender.Event{Kind: adapterrender.EventReasoningFinished})
+					_ = emitNormalized(eventNameLocal, raw.Sequence, adapterrender.Event{Kind: adapterrender.EventReasoningFinished})
 				}
+				logAggregate(out.ResponseID, "failed", err)
 				return out, err
 			}
 			continue
@@ -603,10 +749,12 @@ func ParseSSEEvents(body io.Reader, emit func(adapterrender.Event) error) (RunRe
 		}
 	}
 	if err := sc.Err(); err != nil {
+		logAggregate(out.ResponseID, "scanner_error", err)
 		return out, err
 	}
 	out.ReasoningSignaled = reasoningSignaled
 	out.ReasoningVisible = reasoningVisible
+	logAggregate(out.ResponseID, "eof", nil)
 	return out, nil
 }
 
@@ -673,6 +821,56 @@ func (item transportItem) cloneMap() map[string]any {
 	raw, _ := json.Marshal(item)
 	var out map[string]any
 	_ = json.Unmarshal(raw, &out)
+	return out
+}
+
+func reasoningEventsFromItem(item transportItem, skipSummary, skipText bool) []adapterrender.Event {
+	if item == nil {
+		return nil
+	}
+	raw, err := json.Marshal(item)
+	if err != nil {
+		return nil
+	}
+	var payload reasoningItemPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	itemID := strings.TrimSpace(payload.ID)
+	var out []adapterrender.Event
+	if !skipSummary {
+		for i, part := range payload.Summary {
+			if strings.TrimSpace(part.Type) != "summary_text" || part.Text == "" {
+				continue
+			}
+			idx := i
+			out = append(out, adapterrender.Event{
+				Kind:          adapterrender.EventReasoningDelta,
+				Text:          part.Text,
+				ReasoningKind: "summary",
+				SummaryIndex:  &idx,
+				ItemID:        itemID,
+				ItemType:      "reasoning",
+			})
+		}
+	}
+	if !skipText {
+		for _, part := range payload.Content {
+			switch strings.TrimSpace(part.Type) {
+			case "reasoning_text", "text":
+				if part.Text == "" {
+					continue
+				}
+				out = append(out, adapterrender.Event{
+					Kind:          adapterrender.EventReasoningDelta,
+					Text:          part.Text,
+					ReasoningKind: "text",
+					ItemID:        itemID,
+					ItemType:      "reasoning",
+				})
+			}
+		}
+	}
 	return out
 }
 

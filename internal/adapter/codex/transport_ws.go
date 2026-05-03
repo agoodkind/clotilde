@@ -125,6 +125,7 @@ type WebsocketTransportConfig struct {
 	Prewarm         bool
 	PrewarmTimeout  time.Duration
 	BodyLog         BodyLogConfig
+	BodyLogProvider BodyLogConfigProvider
 
 	// SessionCache enables persistent ws session reuse when set. The
 	// transport takes the cached session for ConversationID, sends a
@@ -171,9 +172,42 @@ func websocketMessageToSyntheticSSE(message []byte) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-func streamWebsocketAsSyntheticSSE(conn *websocket.Conn) io.Reader {
+func logWebsocketFrameReceived(ctx context.Context, logCtx sseInstrumentationContext, frameSeq, payloadBytes int, started time.Time, message []byte) {
+	var raw websocketEventEnvelope
+	upstreamEventType := ""
+	if err := json.Unmarshal(message, &raw); err == nil {
+		upstreamEventType = strings.TrimSpace(raw.Type)
+	}
+	attrs := []slog.Attr{
+		slog.String("component", "adapter"),
+		slog.String("subcomponent", "codex"),
+		slog.String("transport", "responses_websocket"),
+		slog.String("request_id", logCtx.RequestID),
+		slog.Int("websocket_frame_sequence", frameSeq),
+		slog.Int("payload_bytes", payloadBytes),
+		slog.Time("received_at", codexClock.Now()),
+	}
+	if !started.IsZero() {
+		attrs = append(attrs, slog.Int64("elapsed_ms", codexClock.Now().Sub(started).Milliseconds()))
+	}
+	if logCtx.CursorRequestID != "" {
+		attrs = append(attrs, slog.String("cursor_request_id", logCtx.CursorRequestID))
+	}
+	if logCtx.ConversationID != "" {
+		attrs = append(attrs, slog.String("conversation_id", logCtx.ConversationID))
+	}
+	if upstreamEventType != "" {
+		attrs = append(attrs, slog.String("upstream_event_type", upstreamEventType))
+	}
+	attrs = append(attrs, logCtx.Correlation.Attrs()...)
+	logCodexEventWithConcern(ctx, slog.LevelDebug, "adapter.codex.websocket.frame_received", slogger.ConcernAdapterProviderCodexWS, attrs)
+}
+
+func streamWebsocketAsSyntheticSSE(ctx context.Context, conn *websocket.Conn, logCtx sseInstrumentationContext) io.Reader {
 	pr, pw := io.Pipe()
 	go func() {
+		started := codexClock.Now()
+		frameSeq := 0
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				slog.Default().Error("adapter.codex.websocket_reader_panic",
@@ -196,6 +230,8 @@ func streamWebsocketAsSyntheticSSE(conn *websocket.Conn) io.Reader {
 			if messageType != websocket.TextMessage {
 				continue
 			}
+			frameSeq++
+			logWebsocketFrameReceived(ctx, logCtx, frameSeq, len(message), started, message)
 			frame, err := websocketMessageToSyntheticSSE(message)
 			if err != nil {
 				_ = pw.CloseWithError(err)
@@ -232,8 +268,21 @@ func writeAndParseWebsocketRequest(
 	if err := conn.WriteMessage(websocket.TextMessage, raw); err != nil {
 		return NewRunResult("stop"), err
 	}
-	synthetic := streamWebsocketAsSyntheticSSE(conn)
-	result, err := ParseSSEEvents(synthetic, emit)
+	logCtx := sseInstrumentationContext{
+		RequestID:          cfg.RequestID,
+		CursorRequestID:    cfg.CursorRequestID,
+		ConversationID:     cfg.ConversationID,
+		Correlation:        cfg.Correlation,
+		Alias:              cfg.Alias,
+		Model:              payload.Model,
+		Transport:          "responses_websocket",
+		ServiceTier:        payload.ServiceTier,
+		PromptCacheKey:     payload.PromptCacheKey,
+		PreviousResponseID: payload.PreviousResponseID,
+		Warmup:             warmup,
+	}
+	synthetic := streamWebsocketAsSyntheticSSE(ctx, conn, logCtx)
+	result, err := ParseSSEEventsWithLogging(ctx, synthetic, emit, logCtx)
 	if err == nil || strings.TrimSpace(result.ResponseID) != "" || result.UsageTelemetry.UsagePresent {
 		LogUsageTelemetry(ctx, cfg.Log, result.UsageTelemetry, CodexUsageLogContext{
 			RequestID:          cfg.RequestID,
@@ -277,7 +326,7 @@ func logWebsocketFrame(ctx context.Context, cfg WebsocketTransportConfig, payloa
 		summary := summarizeFinalResponseCreateFrame(cfg, payload, frame)
 		logCodexEventWithConcern(ctx, slog.LevelInfo, "adapter.codex.response_create_frame.summary", slogger.ConcernAdapterProviderCodexWS, summary.toSlogAttrs())
 	}
-	mode, maxBytes := cfg.BodyLog.Resolve()
+	mode, maxBytes := resolveBodyLogConfig(cfg.BodyLog, cfg.BodyLogProvider).Resolve()
 	if mode == BodyLogOff {
 		return
 	}
@@ -492,7 +541,17 @@ func runWebsocketWithCache(
 	if !hit {
 		opened, err := openSessionAndWarmup(ctx, cfg, payload, log)
 		if err != nil {
-			return NewRunResult("stop"), err
+			log.WarnContext(ctx, "adapter.codex.ws_session.warmup_fallback_uncached",
+				"component", "adapter",
+				"subcomponent", "codex",
+				"conversation_id", conv,
+				"request_id", cfg.RequestID,
+				"err", err.Error(),
+			)
+			freshCfg := cfg
+			freshCfg.SessionCache = nil
+			freshCfg.Prewarm = false
+			return runWebsocketFreshDial(ctx, freshCfg, payload, emit)
 		}
 		session = opened
 		if strings.TrimSpace(session.LastResponseID) != "" {

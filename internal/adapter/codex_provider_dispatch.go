@@ -55,7 +55,7 @@ func (s *Server) dispatchCodexProviderStream(
 	started time.Time,
 	resolvedReq adapterresolver.ResolvedRequest,
 ) {
-	writer, err := newProviderStreamWriter(s, w, reqID, model.Alias, "codex")
+	writer, err := newProviderStreamWriter(ctx, s, w, reqID, model.Alias, "codex")
 	if err != nil {
 		s.respondAdapterError(w, r, adapterErrInternal(err.Error(), err))
 		return

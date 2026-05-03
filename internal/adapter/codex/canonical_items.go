@@ -45,7 +45,7 @@ func canonicalContinuationEvent(item map[string]any) (continuationEvent, bool) {
 			Text: continuationContentText(item["content"]),
 		}, true
 	case "function_call":
-		name := InboundToolName(mapString(item, "name"))
+		name := strings.TrimSpace(mapString(item, "name"))
 		payload := canonicalContinuationString(mapString(item, "arguments"))
 		if IsShellToolName(name) {
 			payload = canonicalContinuationShellArguments(mapString(item, "arguments"))
@@ -67,7 +67,7 @@ func canonicalContinuationEvent(item map[string]any) (continuationEvent, bool) {
 		return continuationEvent{
 			Kind:     "tool_call",
 			Identity: strings.TrimSpace(mapString(item, "call_id")),
-			Name:     InboundToolName(mapString(item, "name")),
+			Name:     strings.TrimSpace(mapString(item, "name")),
 			Payload:  rawString(item, "input"),
 		}, true
 	case "function_call_output", "custom_tool_call_output":
@@ -97,18 +97,18 @@ func canonicalContinuationItem(item map[string]any) map[string]any {
 		out["text"] = continuationContentText(item["content"])
 	case "function_call":
 		out["call_id"] = strings.TrimSpace(mapString(item, "call_id"))
-		out["name"] = InboundToolName(mapString(item, "name"))
+		out["name"] = strings.TrimSpace(mapString(item, "name"))
 		out["arguments"] = canonicalContinuationString(mapString(item, "arguments"))
 	case "function_call_output":
 		out["call_id"] = strings.TrimSpace(mapString(item, "call_id"))
 		out["output"] = continuationOutputText(item["output"])
 	case "custom_tool_call":
 		out["call_id"] = strings.TrimSpace(mapString(item, "call_id"))
-		out["name"] = InboundToolName(mapString(item, "name"))
+		out["name"] = strings.TrimSpace(mapString(item, "name"))
 		out["input"] = rawString(item, "input")
 	case "custom_tool_call_output":
 		out["call_id"] = strings.TrimSpace(mapString(item, "call_id"))
-		out["name"] = InboundToolName(mapString(item, "name"))
+		out["name"] = strings.TrimSpace(mapString(item, "name"))
 		out["output"] = continuationOutputText(item["output"])
 	case "local_shell_call":
 		out["call_id"] = strings.TrimSpace(mapString(item, "call_id"))

@@ -35,10 +35,12 @@ type DirectConfig struct {
 	// SessionCache enables persistent ws session reuse with chained
 	// previous_response_id and delta input. Constructed once per
 	// Provider. Required: RunDirect refuses to run without it.
-	SessionCache *WebsocketSessionCache
-	Log          *slog.Logger
-	BodyLog      BodyLogConfig
-	FileLog      FileLogRotationConfig
+	SessionCache     *WebsocketSessionCache
+	Log              *slog.Logger
+	BodyLog          BodyLogConfig
+	BodyLogProvider  BodyLogConfigProvider
+	FileLog          FileLogRotationConfig
+	ReasoningSummary string
 }
 
 func RunDirect(
@@ -56,8 +58,15 @@ func RunDirect(
 	if !cfg.WebsocketEnabled {
 		return NewRunResult("stop"), errCodexWebsocketDisabled
 	}
-	transportPayload := BuildRequest(req, model, effort)
-	conversationID := strings.TrimSpace(transportPayload.PromptCache)
+	transportPayload := BuildRequestWithConfig(req, model, effort, RequestBuilderConfig{
+		ReasoningSummary: cfg.ReasoningSummary,
+	})
+	// WARNING: this is the websocket session identity, not the
+	// prompt_cache_key. Codex uses prompt_cache_key for upstream cache
+	// partitioning, but websocket previous_response_id reuse is only safe
+	// when keyed by a real Cursor/Codex conversation/thread id. Content or
+	// account-derived cache keys can be shared by unrelated fresh chats.
+	conversationID := strings.TrimSpace(transportPayload.WebsocketSessionKey)
 	if conversationID != "" {
 		installationID, _ := LoadInstallationID()
 		turnMeta := NewTurnMetadata(conversationID, "")
@@ -84,6 +93,7 @@ func RunDirect(
 		TurnState:       NewTurnState(),
 		TurnMetadata:    transportPayload.ClientMetadata[CodexTurnMetadataHeader],
 		BodyLog:         cfg.BodyLog,
+		BodyLogProvider: cfg.BodyLogProvider,
 		SessionCache:    cfg.SessionCache,
 		Log:             cfg.Log,
 	}

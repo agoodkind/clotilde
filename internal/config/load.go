@@ -220,6 +220,13 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 	if cfg.MITM.CaptureDir == "" {
 		cfg.MITM.CaptureDir = filepath.Join(DefaultStateDir(), "mitm")
 	}
+
+	cfg.Adapter.Codex.ReasoningSummary = normalizeCodexReasoningSummary(cfg.Adapter.Codex.ReasoningSummary)
+	switch cfg.Adapter.Codex.ReasoningSummary {
+	case "auto", "concise", "detailed", "none":
+	default:
+		return fmt.Errorf("adapter.codex.reasoning_summary must be one of auto|concise|detailed|none")
+	}
 	return nil
 }
 
@@ -244,6 +251,21 @@ func normalizeMITMBodyMode(v string) string {
 		return "raw"
 	case "off":
 		return "off"
+	default:
+		return strings.ToLower(strings.TrimSpace(v))
+	}
+}
+
+func normalizeCodexReasoningSummary(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "auto":
+		return "auto"
+	case "concise":
+		return "concise"
+	case "detailed":
+		return "detailed"
+	case "none":
+		return "none"
 	default:
 		return strings.ToLower(strings.TrimSpace(v))
 	}

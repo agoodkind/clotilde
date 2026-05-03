@@ -17,12 +17,26 @@ import (
 	"github.com/gofrs/flock"
 )
 
+type oauthRefreshRequest struct {
+	GrantType    string `json:"grant_type"`
+	RefreshToken string `json:"refresh_token"`
+	ClientID     string `json:"client_id"`
+	Scope        string `json:"scope"`
+}
+
+type oauthRefreshResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int64  `json:"expires_in"`
+	Scope        string `json:"scope"`
+}
+
 // refreshLocked performs the disk lock dance, double-checks for a
 // concurrent refresh by another process, then calls the token
 // endpoint and persists the new tokens. Caller must hold m.mu.
-func (m *Manager) refreshLocked(ctx context.Context, current *Tokens) (*Tokens, error) {
+func (m *Manager) refreshLocked(ctx context.Context, current *selectedCredential) (*Tokens, error) {
 	log := oauthLog.Logger()
-	if current.RefreshToken == "" {
+	if current == nil || current.Tokens == nil || current.Tokens.RefreshToken == "" {
 		return nil, errors.New("oauth token expired and no refresh_token available; re-run `claude /login`")
 	}
 
@@ -57,20 +71,22 @@ func (m *Manager) refreshLocked(ctx context.Context, current *Tokens) (*Tokens, 
 	}
 	defer func() { _ = lock.Unlock() }()
 
-	if disk, err := readCredentials(m.credentialsDir, m.oauthCfg.KeychainService); err == nil && disk != nil && !isExpired(disk) {
-		oauthLog.Logger().Info("oauth.token.refresh_raced",
+	if raced, racedErr := m.reselectCredential(ctx); racedErr == nil && raced != nil && !isExpired(raced.Tokens) {
+		oauthLog.Logger().InfoContext(ctx, "oauth.token.refresh_raced",
 			"subcomponent", "oauth",
-			"expires_at_ms", disk.ExpiresAt,
+			"credential_source", raced.Source,
+			"expires_at_ms", raced.Tokens.ExpiresAt,
 		)
-		return disk, nil
+		return raced.Tokens.Clone(), nil
 	}
 
-	body, err := json.Marshal(map[string]any{
-		"grant_type":    "refresh_token",
-		"refresh_token": current.RefreshToken,
-		"client_id":     m.oauthCfg.ClientID,
-		"scope":         strings.Join(m.oauthCfg.Scopes, " "),
-	})
+	requestPayload := oauthRefreshRequest{
+		GrantType:    "refresh_token",
+		RefreshToken: current.Tokens.RefreshToken,
+		ClientID:     m.oauthCfg.ClientID,
+		Scope:        strings.Join(m.oauthCfg.Scopes, " "),
+	}
+	body, err := json.Marshal(requestPayload)
 	if err != nil {
 		log.WarnContext(ctx, "oauth.refresh.body_marshal_failed",
 			"subcomponent", "oauth",
@@ -110,12 +126,7 @@ func (m *Manager) refreshLocked(ctx context.Context, current *Tokens) (*Tokens, 
 		return nil, fmt.Errorf("refresh failed: %s: %s", resp.Status, truncate(string(respBytes), 400))
 	}
 
-	var refreshResp struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		ExpiresIn    int64  `json:"expires_in"`
-		Scope        string `json:"scope"`
-	}
+	var refreshResp oauthRefreshResponse
 	if err := json.Unmarshal(respBytes, &refreshResp); err != nil {
 		log.WarnContext(ctx, "oauth.refresh.response_decode_failed",
 			"subcomponent", "oauth",
@@ -131,15 +142,15 @@ func (m *Manager) refreshLocked(ctx context.Context, current *Tokens) (*Tokens, 
 
 	newTokens := &Tokens{
 		AccessToken:      refreshResp.AccessToken,
-		RefreshToken:     coalesce(refreshResp.RefreshToken, current.RefreshToken),
+		RefreshToken:     coalesce(refreshResp.RefreshToken, current.Tokens.RefreshToken),
 		ExpiresAt:        oauthClock.Now().UnixMilli() + refreshResp.ExpiresIn*1000,
-		Scopes:           splitScopes(refreshResp.Scope, current.Scopes),
-		SubscriptionType: current.SubscriptionType,
-		RateLimitTier:    current.RateLimitTier,
+		Scopes:           splitScopes(refreshResp.Scope, current.Tokens.Scopes),
+		SubscriptionType: current.Tokens.SubscriptionType,
+		RateLimitTier:    current.Tokens.RateLimitTier,
 	}
 
-	if err := writeCredentials(m.credentialsDir, newTokens); err != nil {
-		oauthLog.Logger().Warn("oauth.credentials.write_failed",
+	if err := writeCredentials(ctx, m.credentialsDir, newTokens); err != nil {
+		oauthLog.Logger().WarnContext(ctx, "oauth.credentials.write_failed",
 			"subcomponent", "oauth",
 			"err", err,
 		)

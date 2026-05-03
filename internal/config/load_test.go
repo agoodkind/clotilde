@@ -95,6 +95,32 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 		Expect(cfg.Adapter.PassthroughOverrides["local"].Model).To(Equal("local-model"))
 	})
 
+	It("loads and normalizes codex reasoning summary", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[adapter.codex]\nreasoning_summary = \"Detailed\"\n"), 0o644)).To(Succeed())
+
+		cfg, err := config.LoadGlobalOrDefault()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.Adapter.Codex.ReasoningSummary).To(Equal("detailed"))
+	})
+
+	It("rejects invalid codex reasoning summary", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[adapter.codex]\nreasoning_summary = \"verbose\"\n"), 0o644)).To(Succeed())
+
+		_, err := config.LoadGlobalOrDefault()
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("adapter.codex.reasoning_summary"))
+	})
+
 	It("ignores legacy global config.json", func() {
 		tmpDir := GinkgoT().TempDir()
 		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)

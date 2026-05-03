@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/slogger"
 )
 
 type EventKind string
@@ -62,6 +64,7 @@ type EventRenderer struct {
 	modelAlias            string
 	reqID                 string
 	backend               string
+	ctx                   context.Context
 	log                   *slog.Logger
 	suppressed            map[EventKind]*deltaSummary
 	seenRole              bool
@@ -72,6 +75,9 @@ type EventRenderer struct {
 	pendingReasoningBreak bool
 	reasoningSignaled     bool
 	reasoningVisible      bool
+	syntheticReasoning    bool
+	assistantText         assistantTextAggregate
+	assistantTextLogged   bool
 }
 
 type deltaSummary struct {
@@ -83,14 +89,23 @@ type deltaSummary struct {
 }
 
 func NewEventRenderer(reqID, modelAlias, backend string, log *slog.Logger) *EventRenderer {
+	return NewEventRendererWithContext(context.Background(), reqID, modelAlias, backend, log)
+}
+
+func NewEventRendererWithContext(ctx context.Context, reqID, modelAlias, backend string, log *slog.Logger) *EventRenderer {
 	if log == nil {
 		log = slog.Default()
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	log = slogger.WithConcern(log, slogger.ConcernAdapterChatRender)
 	return &EventRenderer{
 		createdUnix: renderClock.Now().Unix(),
 		modelAlias:  modelAlias,
 		reqID:       reqID,
 		backend:     backend,
+		ctx:         ctx,
 		log:         log,
 	}
 }
@@ -105,8 +120,72 @@ func (r *EventRenderer) CreatedUnix() int64 { return r.createdUnix }
 
 func (r *EventRenderer) ModelAlias() string { return r.modelAlias }
 
+func (r *EventRenderer) SetContext(ctx context.Context) {
+	if r == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	r.ctx = ctx
+}
+
+func (r *EventRenderer) SetUpstreamResponseID(responseID string) {
+	if r == nil {
+		return
+	}
+	responseID = strings.TrimSpace(responseID)
+	if responseID == "" {
+		return
+	}
+	ctx := r.logContext()
+	corr := correlation.FromContext(ctx).WithUpstreamResponseID(responseID)
+	r.ctx = correlation.WithContext(ctx, corr)
+}
+
 func (r *EventRenderer) Flush() {
 	r.flushSuppressedEventSummaries()
+}
+
+func (r *EventRenderer) LogAssistantTextSummary(finishReason string, usage *adapteropenai.Usage) {
+	if r == nil || r.assistantTextLogged {
+		return
+	}
+	r.assistantTextLogged = true
+	summary := r.assistantText.summary()
+	attrs := []slog.Attr{
+		slog.String("component", "adapter"),
+		slog.String("subcomponent", "renderer"),
+		slog.String("request_id", r.reqID),
+		slog.String("backend", r.backend),
+		slog.String("model", r.modelAlias),
+		slog.String("alias", r.modelAlias),
+		slog.String("finish_reason", strings.TrimSpace(finishReason)),
+		slog.Int("assistant_text_delta_count", summary.DeltaCount),
+		slog.Int("assistant_text_chars", summary.Chars),
+		slog.Int("assistant_text_normalized_chars", summary.NormalizedChars),
+		slog.String("assistant_text_normalized_sha256", summary.NormalizedSHA256),
+		slog.String("assistant_text_first_preview", summary.FirstPreview),
+		slog.String("assistant_text_last_preview", summary.LastPreview),
+		slog.Bool("assistant_text_first_preview_truncated", summary.FirstPreviewTruncated),
+		slog.Bool("assistant_text_last_preview_truncated", summary.LastPreviewTruncated),
+		slog.Bool("assistant_text_repeated_half", summary.RepeatedHalf),
+		slog.Bool("assistant_text_repeated_suffix", summary.RepeatedSuffix),
+		slog.Int("assistant_text_repeated_suffix_chars", summary.RepeatedSuffixChars),
+	}
+	attrs = correlation.AppendAttrs(attrs, correlation.FromContext(r.logContext()))
+	if usage != nil {
+		attrs = append(attrs,
+			slog.Int("usage_prompt_tokens", usage.PromptTokens),
+			slog.Int("usage_completion_tokens", usage.CompletionTokens),
+			slog.Int("usage_total_tokens", usage.TotalTokens),
+			slog.Int("usage_input_tokens", usage.InputTokens),
+			slog.Int("usage_output_tokens", usage.OutputTokens),
+			slog.Int("usage_cache_read_tokens", usage.CacheReadTokens),
+			slog.Int("usage_cache_write_tokens", usage.CacheWriteTokens),
+		)
+	}
+	r.log.LogAttrs(r.logContext(), slog.LevelInfo, "adapter.render.assistant_text_summary", attrs...)
 }
 
 func (r *EventRenderer) HandleEvent(ev Event) []adapteropenai.StreamChunk {
@@ -121,6 +200,12 @@ func (r *EventRenderer) HandleEvent(ev Event) []adapteropenai.StreamChunk {
 	switch ev.Kind {
 	case EventReasoningSignaled:
 		r.reasoningSignaled = true
+		if !r.reasoningVisible && !r.syntheticReasoning {
+			if chunk := r.renderSyntheticReasoningPlaceholder(); chunk != nil {
+				r.syntheticReasoning = true
+				out = append(out, *chunk)
+			}
+		}
 	case EventReasoningDelta:
 		r.reasoningSignaled = true
 		r.reasoningVisible = true
@@ -128,8 +213,9 @@ func (r *EventRenderer) HandleEvent(ev Event) []adapteropenai.StreamChunk {
 			out = append(out, *chunk)
 		}
 	case EventReasoningFinished:
-		if r.reasoningSignaled && !r.reasoningVisible {
+		if r.reasoningSignaled && !r.reasoningVisible && !r.syntheticReasoning {
 			if chunk := r.renderSyntheticReasoningPlaceholder(); chunk != nil {
+				r.syntheticReasoning = true
 				out = append(out, *chunk)
 			}
 		}
@@ -305,7 +391,7 @@ func (r *EventRenderer) renderSyntheticReasoningPlaceholder() *adapteropenai.Str
 	if r.reasoningOpen || r.reasoningVisible {
 		return nil
 	}
-	delta := adapteropenai.StreamDelta{Content: ThinkingInlineOpen() + ThinkingInlineClose()}
+	delta := adapteropenai.StreamDelta{Content: "> **Thinking...**\n\n"}
 	if !r.seenRole {
 		delta.Role = "assistant"
 		r.seenRole = true
@@ -427,7 +513,7 @@ func (r *EventRenderer) logNormalized(ev Event) {
 		slog.Int("delta_len", len(ev.Text)),
 	}
 	attrs = append(attrs, toolCallLogAttrs(ev.ToolCalls)...)
-	r.log.LogAttrs(context.Background(), slog.LevelDebug, "adapter.event.normalized", attrs...)
+	r.log.LogAttrs(r.logContext(), slog.LevelDebug, "adapter.event.normalized", attrs...)
 }
 
 func (r *EventRenderer) logRender(ev Event, ch adapteropenai.StreamChunk) {
@@ -447,7 +533,7 @@ func (r *EventRenderer) logRender(ev Event, ch adapteropenai.StreamChunk) {
 		slog.Int("delta_len", len(delta.Content)+len(delta.Reasoning)+len(delta.ReasoningContent)),
 	}
 	attrs = append(attrs, toolCallLogAttrs(delta.ToolCalls)...)
-	r.log.LogAttrs(context.Background(), slog.LevelDebug, "adapter.render.event", attrs...)
+	r.log.LogAttrs(r.logContext(), slog.LevelDebug, "adapter.render.event", attrs...)
 }
 
 func shouldLogEvent(ev Event) bool {
@@ -532,7 +618,7 @@ func (r *EventRenderer) flushSuppressedEventSummaries() {
 		if summary == nil || summary.Count == 0 {
 			continue
 		}
-		r.log.LogAttrs(context.Background(), slog.LevelDebug, "adapter.event.delta_summary",
+		r.log.LogAttrs(r.logContext(), slog.LevelDebug, "adapter.event.delta_summary",
 			slog.String("component", "adapter"),
 			slog.String("subcomponent", "renderer"),
 			slog.String("request_id", r.reqID),
@@ -551,6 +637,13 @@ func (r *EventRenderer) flushSuppressedEventSummaries() {
 	if len(r.suppressed) == 0 {
 		r.suppressed = nil
 	}
+}
+
+func (r *EventRenderer) logContext() context.Context {
+	if r == nil || r.ctx == nil {
+		return context.Background()
+	}
+	return r.ctx
 }
 
 func renderPolicyForEvent(kind EventKind) string {

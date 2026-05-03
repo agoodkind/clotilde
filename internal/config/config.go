@@ -237,6 +237,11 @@ type AdapterCodex struct {
 	// NativeModelPassthroughOverride is used when NativeModelRouting is
 	// "passthrough_override".
 	NativeModelPassthroughOverride string `json:"nativeModelPassthroughOverride,omitempty" toml:"native_model_passthrough_override,omitempty"`
+	// ReasoningSummary is the default Codex Responses reasoning.summary
+	// value Clyde sends when a reasoning effort is active and the request
+	// did not explicitly set reasoning.summary. Valid values match Codex:
+	// auto, concise, detailed, none. Empty defaults to auto.
+	ReasoningSummary string `json:"reasoningSummary,omitempty" toml:"reasoning_summary,omitempty"`
 	// Models declares the Codex-backed model catalog that Clyde
 	// advertises and resolves for first-party clyde-* aliases.
 	Models []AdapterCodexModel `json:"models,omitempty" toml:"models,omitempty"`

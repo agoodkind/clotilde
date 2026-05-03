@@ -22,16 +22,17 @@ import (
 // stitches the websocket transport, the continuation ledger, and the
 // normalized event emission together.
 type Provider struct {
-	cfg            config.AdapterCodex
-	auth           adapterprovider.AuthLookup
-	log            *slog.Logger
-	httpClient     *http.Client
-	now            func() time.Time
-	sessionCache   *WebsocketSessionCache
-	workspaceProbe *WorkspaceProbe
-	accountID      string
-	bodyLog        BodyLogConfig
-	fileLog        FileLogRotationConfig
+	cfg             config.AdapterCodex
+	auth            adapterprovider.AuthLookup
+	log             *slog.Logger
+	httpClient      *http.Client
+	now             func() time.Time
+	sessionCache    *WebsocketSessionCache
+	workspaceProbe  *WorkspaceProbe
+	accountID       string
+	bodyLog         BodyLogConfig
+	bodyLogProvider BodyLogConfigProvider
+	fileLog         FileLogRotationConfig
 }
 
 // ProviderOptions extends the generic provider.Deps with Codex-only
@@ -41,6 +42,7 @@ type Provider struct {
 type ProviderOptions struct {
 	AccountID        string
 	BodyLog          BodyLogConfig
+	BodyLogProvider  BodyLogConfigProvider
 	FileLog          FileLogRotationConfig
 	WsSessionIdleTTL time.Duration
 }
@@ -67,16 +69,17 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 	}
 	ConfigureCodexFileLogger(opts.FileLog)
 	return &Provider{
-		cfg:            deps.Config.Codex,
-		auth:           deps.Auth,
-		log:            log,
-		httpClient:     httpClient,
-		now:            now,
-		sessionCache:   NewWebsocketSessionCache(log, idleTTL),
-		workspaceProbe: NewWorkspaceProbe(),
-		accountID:      strings.TrimSpace(opts.AccountID),
-		bodyLog:        opts.BodyLog,
-		fileLog:        opts.FileLog,
+		cfg:             deps.Config.Codex,
+		auth:            deps.Auth,
+		log:             log,
+		httpClient:      httpClient,
+		now:             now,
+		sessionCache:    NewWebsocketSessionCache(log, idleTTL),
+		workspaceProbe:  NewWorkspaceProbe(),
+		accountID:       strings.TrimSpace(opts.AccountID),
+		bodyLog:         opts.BodyLog,
+		bodyLogProvider: opts.BodyLogProvider,
+		fileLog:         opts.FileLog,
 	}
 }
 
@@ -136,7 +139,9 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		SessionCache:     p.sessionCache,
 		Log:              p.log,
 		BodyLog:          p.bodyLog,
+		BodyLogProvider:  p.bodyLogProvider,
 		FileLog:          p.fileLog,
+		ReasoningSummary: p.cfg.ReasoningSummary,
 	}
 
 	model := resolvedModelFromRequest(req)

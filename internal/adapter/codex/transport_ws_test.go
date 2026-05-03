@@ -1,11 +1,15 @@
 package codex
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -41,6 +45,35 @@ func mustMarshalTurnMetadataForTest(t *testing.T, metadata TurnMetadata) string 
 		t.Fatalf("marshal turn metadata: %v", err)
 	}
 	return raw
+}
+
+type websocketFrameLog struct {
+	Message                string `json:"msg"`
+	RequestID              string `json:"request_id"`
+	CursorRequestID        string `json:"cursor_request_id"`
+	ConversationID         string `json:"conversation_id"`
+	UpstreamEventType      string `json:"upstream_event_type"`
+	WebsocketFrameSequence int    `json:"websocket_frame_sequence"`
+	PayloadBytes           int    `json:"payload_bytes"`
+	ReceivedAt             string `json:"received_at"`
+}
+
+func websocketFrameLogs(t *testing.T, data []byte) []websocketFrameLog {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(data))
+	var out []websocketFrameLog
+	for {
+		var record websocketFrameLog
+		if err := dec.Decode(&record); err != nil {
+			if errors.Is(err, io.EOF) {
+				return out
+			}
+			t.Fatalf("decode log record: %v\n%s", err, string(data))
+		}
+		if record.Message == "adapter.codex.websocket.frame_received" {
+			out = append(out, record)
+		}
+	}
 }
 
 func TestWebsocketMessageToSyntheticSSEMapsContextWindowError(t *testing.T) {
@@ -80,6 +113,69 @@ func TestWebsocketMessageToSyntheticSSEPreservesGenericError(t *testing.T) {
 	}
 	if err.Error() != "codex websocket read failed" {
 		t.Fatalf("generic error = %q", err.Error())
+	}
+}
+
+func TestStreamWebsocketAsSyntheticSSELogsFrameShapeWithoutPayload(t *testing.T) {
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	t.Setenv("CLYDE_CODEX_LOG_PATH", filepath.Join(t.TempDir(), "codex.jsonl"))
+	resetDedicatedCodexLoggerForTest(t)
+
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.output_text.delta","delta":"secret-ws-content"}`)); err != nil {
+			t.Errorf("write message: %v", err)
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.completed","response":{"id":"resp-ws-log","status":"completed"}}`)); err != nil {
+			t.Errorf("write message: %v", err)
+			return
+		}
+	}))
+	defer srv.Close()
+
+	conn, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	if resp != nil && resp.Body != nil {
+		defer resp.Body.Close()
+	}
+	defer conn.Close()
+
+	reader := streamWebsocketAsSyntheticSSE(context.Background(), conn, sseInstrumentationContext{
+		RequestID:       "req-ws-log",
+		CursorRequestID: "cursor-ws-log",
+		ConversationID:  "conv-ws-log",
+	})
+	if _, err := io.ReadAll(reader); err != nil {
+		t.Fatalf("read synthetic sse: %v", err)
+	}
+	if strings.Contains(buf.String(), "secret-ws-content") {
+		t.Fatalf("websocket frame log leaked payload content: %s", buf.String())
+	}
+	logs := websocketFrameLogs(t, buf.Bytes())
+	if len(logs) != 2 {
+		t.Fatalf("websocket frame logs len=%d want 2\n%s", len(logs), buf.String())
+	}
+	got := logs[0]
+	if got.RequestID != "req-ws-log" || got.CursorRequestID != "cursor-ws-log" || got.ConversationID != "conv-ws-log" {
+		t.Fatalf("identity fields=%+v", got)
+	}
+	if got.UpstreamEventType != "response.output_text.delta" || got.WebsocketFrameSequence != 1 {
+		t.Fatalf("frame fields=%+v", got)
+	}
+	if got.PayloadBytes == 0 || got.ReceivedAt == "" {
+		t.Fatalf("timing/size fields=%+v", got)
 	}
 }
 
@@ -333,6 +429,81 @@ func TestRunWebsocketTransportParsesTextAndCompletion(t *testing.T) {
 	}
 	if got := content.String(); got != "hello world" {
 		t.Fatalf("content=%q want hello world", got)
+	}
+}
+
+func TestRunWebsocketTransportEmitsDelayedDeltasBeforeCompletion(t *testing.T) {
+	t.Parallel()
+
+	upgrader := websocket.Upgrader{}
+	firstDeltaEmitted := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade: %v", err)
+		}
+		defer conn.Close()
+
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Fatalf("read request: %v", err)
+		}
+		for _, event := range []map[string]any{
+			{"type": "response.created", "response": map[string]any{"id": "resp-streaming"}},
+			{"type": "response.output_text.delta", "delta": "first "},
+		} {
+			payload, err := json.Marshal(event)
+			if err != nil {
+				t.Fatalf("marshal event: %v", err)
+			}
+			if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+				t.Fatalf("write event: %v", err)
+			}
+		}
+
+		select {
+		case <-firstDeltaEmitted:
+		case <-time.After(time.Second):
+			t.Fatal("first delta was not emitted before completion")
+		}
+
+		for _, event := range []map[string]any{
+			{"type": "response.output_text.delta", "delta": "second"},
+			{"type": "response.completed", "response": map[string]any{"id": "resp-streaming", "usage": map[string]any{"input_tokens": 1, "output_tokens": 2, "total_tokens": 3, "input_tokens_details": map[string]any{"cached_tokens": 0}, "output_tokens_details": map[string]any{"reasoning_tokens": 0}}}},
+		} {
+			payload, err := json.Marshal(event)
+			if err != nil {
+				t.Fatalf("marshal event: %v", err)
+			}
+			if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+				t.Fatalf("write event: %v", err)
+			}
+		}
+	}))
+	defer server.Close()
+
+	var content strings.Builder
+	result, err := RunWebsocketTransportEvents(context.Background(), WebsocketTransportConfig{
+		URL:       "ws" + strings.TrimPrefix(server.URL, "http"),
+		Token:     "test-token",
+		RequestID: "req-delayed-stream",
+		Alias:     "gpt-5.4",
+	}, ResponseCreateWsRequest{Type: "response.create"}, func(event adapterrender.Event) error {
+		if event.Kind == adapterrender.EventAssistantTextDelta {
+			content.WriteString(event.Text)
+			if event.Text == "first " {
+				close(firstDeltaEmitted)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunWebsocketTransportEvents: %v", err)
+	}
+	if result.ResponseID != "resp-streaming" {
+		t.Fatalf("response_id=%q want resp-streaming", result.ResponseID)
+	}
+	if got := content.String(); got != "first second" {
+		t.Fatalf("content=%q want first second", got)
 	}
 }
 
@@ -893,6 +1064,104 @@ func TestRunWebsocketTransportReconnectsAfterPrewarmFailure(t *testing.T) {
 	}
 	if got := content.String(); got != "recovered" {
 		t.Fatalf("content=%q want recovered", got)
+	}
+}
+
+func TestRunWebsocketTransportCacheFallsBackUncachedAfterWarmupFailure(t *testing.T) {
+	t.Parallel()
+
+	upgrader := websocket.Upgrader{}
+	var handshakes atomic.Int32
+	requestsCh := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connNumber := handshakes.Add(1)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade: %v", err)
+		}
+		defer conn.Close()
+
+		_, requestBody, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("read request: %v", err)
+		}
+		var request map[string]any
+		if err := json.Unmarshal(requestBody, &request); err != nil {
+			t.Fatalf("unmarshal request: %v", err)
+		}
+		if connNumber == 1 {
+			payload, err := json.Marshal(map[string]any{
+				"type":  "response.failed",
+				"error": map[string]any{"message": "Instructions are required"},
+			})
+			if err != nil {
+				t.Fatalf("marshal failure: %v", err)
+			}
+			if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+				t.Fatalf("write failure: %v", err)
+			}
+			return
+		}
+		requestsCh <- request
+		for _, event := range []map[string]any{
+			{"type": "response.created", "response": map[string]any{"id": "resp-uncached"}},
+			{"type": "response.output_text.delta", "delta": "recovered"},
+			{"type": "response.completed", "response": map[string]any{"id": "resp-uncached", "usage": map[string]any{"input_tokens": 10, "output_tokens": 1, "total_tokens": 11, "input_tokens_details": map[string]any{"cached_tokens": 0}, "output_tokens_details": map[string]any{"reasoning_tokens": 0}}}},
+		} {
+			payload, err := json.Marshal(event)
+			if err != nil {
+				t.Fatalf("marshal event: %v", err)
+			}
+			if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+				t.Fatalf("write event: %v", err)
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cache := NewWebsocketSessionCache(nil, time.Minute)
+	var chunks []adapteropenai.StreamChunk
+	result, err := runWebsocketTransportForTest(context.Background(), WebsocketTransportConfig{
+		URL:            wsURL,
+		Token:          "test-token",
+		RequestID:      "req-cache-warmup-fallback",
+		Alias:          "gpt-5.4",
+		ConversationID: "cursor:conv-cache-warmup-fallback",
+		SessionCache:   cache,
+		TurnState:      NewTurnState(),
+	}, ResponseCreateWsRequest{
+		Type:  "response.create",
+		Model: "gpt-5.4",
+		Input: []map[string]any{{"type": "message", "role": "user", "content": "hello"}},
+	}, func(ch adapteropenai.StreamChunk) error {
+		chunks = append(chunks, ch)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunWebsocketTransport: %v", err)
+	}
+	if result.ResponseID != "resp-uncached" {
+		t.Fatalf("response_id=%q want resp-uncached", result.ResponseID)
+	}
+	if handshakes.Load() != 2 {
+		t.Fatalf("handshakes=%d want 2", handshakes.Load())
+	}
+	request := <-requestsCh
+	if _, ok := request["previous_response_id"]; ok {
+		t.Fatalf("fallback request should not use previous_response_id: %v", request)
+	}
+	var content strings.Builder
+	for _, ch := range chunks {
+		if len(ch.Choices) > 0 {
+			content.WriteString(ch.Choices[0].Delta.Content)
+		}
+	}
+	if got := content.String(); got != "recovered" {
+		t.Fatalf("content=%q want recovered", got)
+	}
+	if _, ok := cache.Take("cursor:conv-cache-warmup-fallback"); ok {
+		t.Fatalf("fallback request should not populate cache")
 	}
 }
 
