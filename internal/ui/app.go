@@ -919,36 +919,7 @@ func (a *App) Run() (err error) {
 	tuiLog.Logger().InfoContext(a.ctx, "tui.run.started", "screen", fmt.Sprintf("%p", a.screen))
 	stopSIGQUITDump := installSIGQUITDumpHandler()
 	defer stopSIGQUITDump()
-	// Defer a sequenced teardown that always disables the alt-screen
-	// modes we turned on. macOS Terminal and iTerm both leave the
-	// cursor and mouse-tracking state half-set when only Fini runs.
-	// The recover catches panics so a crash does not leave the user
-	// stuck in alt-screen with mouse mode active.
-	defer func() {
-		if a.sidecarCancel != nil {
-			a.sidecarCancel()
-			a.sidecarCancel = nil
-		}
-		if r := recover(); r != nil {
-			a.teardownScreen()
-			err = fmt.Errorf("tui panic: %v", r)
-			tuiLog.Logger().ErrorContext(a.ctx, "tui.run.panic",
-				"component", "tui",
-				"recover", fmt.Sprint(r),
-				"err", err)
-			return
-		}
-		a.teardownScreen()
-		if a.reloadExecPath != "" {
-			if err := execCurrentProcess(a.reloadExecPath); err != nil {
-				tuiLog.Logger().ErrorContext(a.ctx, "tui.self_reload.exec_failed",
-					"component", "tui",
-					"path", a.reloadExecPath,
-					"err", err)
-				_, _ = fmt.Fprintf(os.Stderr, "clyde self-reload failed: %v\n", err)
-			}
-		}
-	}()
+	defer a.finishRun(&err)
 
 	a.running = true
 	a.draw()
@@ -963,220 +934,254 @@ func (a *App) Run() (err error) {
 	// Ticker that posts a spinner tick every 100ms. The handler only
 	// triggers a redraw when something is actually loading, so an idle
 	// dashboard does not waste CPU.
-	stopTicker := make(chan struct{})
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logUIGoroutinePanic("spinner_ticker", fmt.Sprint(r))
-			}
-		}()
-		a.runSpinnerTicker(stopTicker)
-	}()
+	stopTicker := a.startRunSupervisor("spinner_ticker", a.runSpinnerTicker)
 	defer close(stopTicker)
 
 	// Health ticker posts a low-rate interrupt used to emit liveness
 	// summaries and detect frame stalls even when only spinner interrupts
 	// are flowing.
-	stopHealthTicker := make(chan struct{})
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logUIGoroutinePanic("health_ticker", fmt.Sprint(r))
-			}
-		}()
-		a.runHealthTicker(stopHealthTicker)
-	}()
+	stopHealthTicker := a.startRunSupervisor("health_ticker", a.runHealthTicker)
 	defer close(stopHealthTicker)
 
-	stopReloadWatcher := make(chan struct{})
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logUIGoroutinePanic("self_reload_watcher", fmt.Sprint(r))
-			}
-		}()
-		a.runSelfReloadWatcher(stopReloadWatcher)
-	}()
+	stopReloadWatcher := a.startRunSupervisor("self_reload_watcher", a.runSelfReloadWatcher)
 	defer close(stopReloadWatcher)
 
-	stopSessionRefresh := make(chan struct{})
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logUIGoroutinePanic("session_refresh_ticker", fmt.Sprint(r))
-			}
-		}()
-		a.runSessionRefreshTicker(stopSessionRefresh)
-	}()
+	stopSessionRefresh := a.startRunSupervisor("session_refresh_ticker", a.runSessionRefreshTicker)
 	defer close(stopSessionRefresh)
 
 	// Registry stream supervisor keeps daemon subscriptions healthy even
 	// when the daemon restarts. The dashboard remains usable in offline
 	// mode and the polling watcher above still refreshes snapshots.
-	stopRegistry := make(chan struct{})
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logUIGoroutinePanic("registry_supervisor", fmt.Sprint(r))
-			}
-		}()
-		a.runRegistrySupervisor(stopRegistry)
-	}()
+	stopRegistry := a.startRunSupervisor("registry_supervisor", a.runRegistrySupervisor)
 	defer close(stopRegistry)
 
-	stopProviderStats := make(chan struct{})
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logUIGoroutinePanic("provider_stats_supervisor", fmt.Sprint(r))
-			}
-		}()
-		a.runProviderStatsSupervisor(stopProviderStats)
-	}()
+	stopProviderStats := a.startRunSupervisor("provider_stats_supervisor", a.runProviderStatsSupervisor)
 	defer close(stopProviderStats)
 
 	// Idle sweeper that regenerates stale session summaries one at a
 	// time while the user is inactive. Rate limited so it never floods
 	// the daemon or the upstream LLM.
-	stopSweep := make(chan struct{})
+	stopSweep := a.startRunSupervisor("idle_summary_sweeper", a.runIdleSummarySweeper)
+	defer close(stopSweep)
+
+	a.runEventLoop(stopTicker)
+	return nil
+}
+
+type runSupervisorFunc func(<-chan struct{})
+
+type runEventLoopState struct {
+	nilEventStreak          int
+	reinitAttemptedAfterNil bool
+}
+
+type runEventProfile struct {
+	eventType          string
+	isSpinnerInterrupt bool
+	isHealthInterrupt  bool
+	handleDuration     time.Duration
+	drawDuration       time.Duration
+}
+
+func (a *App) finishRun(err *error) {
+	if a.sidecarCancel != nil {
+		a.sidecarCancel()
+		a.sidecarCancel = nil
+	}
+	if r := recover(); r != nil {
+		a.teardownScreen()
+		*err = fmt.Errorf("tui panic: %v", r)
+		tuiLog.Logger().ErrorContext(a.ctx, "tui.run.panic",
+			"component", "tui",
+			"recover", fmt.Sprint(r),
+			"err", *err)
+		return
+	}
+	a.teardownScreen()
+	a.execReloadAfterRun()
+}
+
+func (a *App) execReloadAfterRun() {
+	if a.reloadExecPath == "" {
+		return
+	}
+	if err := execCurrentProcess(a.reloadExecPath); err != nil {
+		tuiLog.Logger().ErrorContext(a.ctx, "tui.self_reload.exec_failed",
+			"component", "tui",
+			"path", a.reloadExecPath,
+			"err", err)
+		_, _ = fmt.Fprintf(os.Stderr, "clyde self-reload failed: %v\n", err)
+	}
+}
+
+func (a *App) startRunSupervisor(name string, run runSupervisorFunc) chan struct{} {
+	stop := make(chan struct{})
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				logUIGoroutinePanic("idle_summary_sweeper", fmt.Sprint(r))
+				logUIGoroutinePanic(name, fmt.Sprint(r))
 			}
 		}()
-		a.runIdleSummarySweeper(stopSweep)
+		run(stop)
 	}()
-	defer close(stopSweep)
+	return stop
+}
 
-	nilEventStreak := 0
-	reinitAttemptedAfterNil := false
+func (a *App) runEventLoop(stopTicker <-chan struct{}) {
+	state := runEventLoopState{}
 	for a.running {
 		if a.screen == nil {
 			tuiLog.Logger().ErrorContext(a.ctx, "tui.loop screen is nil, exiting", "err", "screen_nil")
-			return nil
+			return
 		}
 		pollStartedAt := a.now()
 		ev := a.pollEvent()
 		pollDuration := time.Since(pollStartedAt)
 		if ev == nil {
-			// PollEvent returns nil when the screen has been Fini'd.
-			// Previously we exited the loop here, which made the
-			// dashboard look "frozen" any time a transient teardown
-			// happened during the suspend/resume cycle. Honor a.running
-			// instead so the only path that quits the loop is an
-			// explicit a.running = false (set by Quit, panic, or init
-			// failure recovery).
-			if !a.running {
-				return nil
+			if !a.handleNilRunEvent(&state, stopTicker) {
+				return
 			}
-			nilEventStreak++
-			tuiLog.Logger().WarnContext(a.ctx, "tui.loop nil event with running=true",
-				"nil_event_streak", nilEventStreak,
-				"screen", fmt.Sprintf("%p", a.screen),
-				"reinit_attempted", reinitAttemptedAfterNil)
-			if nilEventStreak < 2 {
-				tuiLog.Logger().Debug("tui.loop nil event temporary; sleeping briefly")
-				if !waitForTimer(stopTicker, 20*time.Millisecond) {
-					return nil
-				}
-				continue
-			}
-
-			if !reinitAttemptedAfterNil {
-				reinitAttemptedAfterNil = true
-				tuiLog.Logger().WarnContext(a.ctx, "tui.loop attempting screen reinit after repeated nil events")
-				a.teardownScreen()
-				if err := a.initScreen(); err != nil {
-					tuiLog.Logger().ErrorContext(a.ctx, "tui.loop reinit failed after repeated nil events", "error", err, "err", err)
-					a.running = false
-					continue
-				}
-				nilEventStreak = 0
-				tuiLog.Logger().Debug("tui.loop reinit succeeded after repeated nil events", "screen", fmt.Sprintf("%p", a.screen))
-				a.draw()
-				continue
-			}
-
-			tuiLog.Logger().ErrorContext(a.ctx, "tui.loop repeated nil events with running=true; terminating",
-				"screen", fmt.Sprintf("%p", a.screen),
-				"nil_event_streak", nilEventStreak,
-				"err", "repeated_nil_events")
-			a.running = false
 			continue
 		}
-		nilEventStreak = 0
-		reinitAttemptedAfterNil = false
-		eventType := fmt.Sprintf("%T", ev)
-		isSpinnerInterrupt := false
-		isHealthInterrupt := false
-		if interrupt, ok := ev.(*tcell.EventInterrupt); ok {
-			switch interrupt.Data().(type) {
-			case spinnerTick:
-				isSpinnerInterrupt = true
-			case healthTick:
-				isHealthInterrupt = true
-			}
-		}
-		a.lastEventType = eventType
-		a.lastEventAt = a.now()
-		if eventType != "*tcell.EventInterrupt" {
-			a.lastNonInterruptType = eventType
-			a.lastNonInterruptAt = a.lastEventAt
-		}
-		if !isSpinnerInterrupt && !isHealthInterrupt {
-			tuiLog.Logger().Debug("tui.loop dispatching event", "event", eventType)
-		}
+		state.nilEventStreak = 0
+		state.reinitAttemptedAfterNil = false
+		profile := a.prepareRunEventDispatch(ev)
 		if a.screen == nil {
 			tuiLog.Logger().Debug("tui.loop screen became nil before dispatch")
 			continue
 		}
-		handleStartedAt := a.now()
-		a.handleEvent(ev)
-		handleDuration := time.Since(handleStartedAt)
-		drawDuration := time.Duration(0)
-		shouldDraw := a.running
-		_, compactOverlay := a.overlay.(*CompactPanel)
-		if shouldDraw && isSpinnerInterrupt && !a.hasPendingVisualActivity() {
-			shouldDraw = false
-		}
-		if shouldDraw && isSpinnerInterrupt && !a.appFocused && !compactOverlay {
-			shouldDraw = false
-			tuiLog.Logger().Debug("tui.loop.skip_draw.spinner_unfocused",
-				"component", "tui",
-				"active_tab", a.activeTab,
-				"has_overlay", a.overlay != nil,
-				"overlay_type", fmt.Sprintf("%T", a.overlay))
-		}
-		if shouldDraw {
-			drawStartedAt := a.now()
-			a.draw()
-			drawDuration = time.Since(drawStartedAt)
-			if a.pendingResizeDisplaySync && a.screen != nil {
-				a.runTerminalCall("sync", func() {
-					a.screen.Sync()
-				})
-				a.pendingResizeDisplaySync = false
-				tuiLog.Logger().Debug("tui.display.synced_after_resize", "component", "tui")
-			}
-		}
-		if eventType != "*tcell.EventInterrupt" || handleDuration > 20*time.Millisecond || drawDuration > 35*time.Millisecond {
-			logLevel := slog.LevelDebug
-			if handleDuration > 40*time.Millisecond || drawDuration > 80*time.Millisecond || pollDuration > 1500*time.Millisecond {
-				logLevel = slog.LevelWarn
-			}
-			tuiLog.Logger().Log(a.ctx, logLevel, "tui.loop.event_timing",
-				"event", eventType,
-				"poll_ms", pollDuration.Milliseconds(),
-				"handle_ms", handleDuration.Milliseconds(),
-				"draw_ms", drawDuration.Milliseconds(),
-				"active_tab", a.activeTab,
-				"has_overlay", a.overlay != nil,
-				"overlay_type", fmt.Sprintf("%T", a.overlay),
-				"mode", int(a.mode))
+		profile = a.dispatchRunEvent(ev, profile)
+		a.logRunEventTiming(profile, pollDuration)
+	}
+}
+
+func (a *App) handleNilRunEvent(state *runEventLoopState, stopTicker <-chan struct{}) bool {
+	if !a.running {
+		return false
+	}
+	state.nilEventStreak++
+	tuiLog.Logger().WarnContext(a.ctx, "tui.loop nil event with running=true",
+		"nil_event_streak", state.nilEventStreak,
+		"screen", fmt.Sprintf("%p", a.screen),
+		"reinit_attempted", state.reinitAttemptedAfterNil)
+	if state.nilEventStreak < 2 {
+		tuiLog.Logger().Debug("tui.loop nil event temporary; sleeping briefly")
+		return waitForTimer(stopTicker, 20*time.Millisecond)
+	}
+	if !state.reinitAttemptedAfterNil {
+		return a.reinitAfterNilRunEvent(state)
+	}
+	tuiLog.Logger().ErrorContext(a.ctx, "tui.loop repeated nil events with running=true; terminating",
+		"screen", fmt.Sprintf("%p", a.screen),
+		"nil_event_streak", state.nilEventStreak,
+		"err", "repeated_nil_events")
+	a.running = false
+	return true
+}
+
+func (a *App) reinitAfterNilRunEvent(state *runEventLoopState) bool {
+	state.reinitAttemptedAfterNil = true
+	tuiLog.Logger().WarnContext(a.ctx, "tui.loop attempting screen reinit after repeated nil events")
+	a.teardownScreen()
+	if err := a.initScreen(); err != nil {
+		tuiLog.Logger().ErrorContext(a.ctx, "tui.loop reinit failed after repeated nil events", "error", err, "err", err)
+		a.running = false
+		return true
+	}
+	state.nilEventStreak = 0
+	tuiLog.Logger().Debug("tui.loop reinit succeeded after repeated nil events", "screen", fmt.Sprintf("%p", a.screen))
+	a.draw()
+	return true
+}
+
+func (a *App) prepareRunEventDispatch(ev tcell.Event) runEventProfile {
+	profile := runEventProfile{eventType: fmt.Sprintf("%T", ev)}
+	if interrupt, ok := ev.(*tcell.EventInterrupt); ok {
+		switch interrupt.Data().(type) {
+		case spinnerTick:
+			profile.isSpinnerInterrupt = true
+		case healthTick:
+			profile.isHealthInterrupt = true
 		}
 	}
-	return nil
+	a.lastEventType = profile.eventType
+	a.lastEventAt = a.now()
+	if profile.eventType != "*tcell.EventInterrupt" {
+		a.lastNonInterruptType = profile.eventType
+		a.lastNonInterruptAt = a.lastEventAt
+	}
+	if !profile.isSpinnerInterrupt && !profile.isHealthInterrupt {
+		tuiLog.Logger().Debug("tui.loop dispatching event", "event", profile.eventType)
+	}
+	return profile
+}
+
+func (a *App) dispatchRunEvent(ev tcell.Event, profile runEventProfile) runEventProfile {
+	handleStartedAt := a.now()
+	a.handleEvent(ev)
+	profile.handleDuration = time.Since(handleStartedAt)
+	profile.drawDuration = a.drawAfterRunEvent(profile)
+	return profile
+}
+
+func (a *App) drawAfterRunEvent(profile runEventProfile) time.Duration {
+	if !a.shouldDrawAfterRunEvent(profile) {
+		return 0
+	}
+	drawStartedAt := a.now()
+	a.draw()
+	drawDuration := time.Since(drawStartedAt)
+	a.syncAfterResizeDraw()
+	return drawDuration
+}
+
+func (a *App) shouldDrawAfterRunEvent(profile runEventProfile) bool {
+	if !a.running {
+		return false
+	}
+	if profile.isSpinnerInterrupt && !a.hasPendingVisualActivity() {
+		return false
+	}
+	_, compactOverlay := a.overlay.(*CompactPanel)
+	if profile.isSpinnerInterrupt && !a.appFocused && !compactOverlay {
+		tuiLog.Logger().Debug("tui.loop.skip_draw.spinner_unfocused",
+			"component", "tui",
+			"active_tab", a.activeTab,
+			"has_overlay", a.overlay != nil,
+			"overlay_type", fmt.Sprintf("%T", a.overlay))
+		return false
+	}
+	return true
+}
+
+func (a *App) syncAfterResizeDraw() {
+	if !a.pendingResizeDisplaySync || a.screen == nil {
+		return
+	}
+	a.runTerminalCall("sync", func() {
+		a.screen.Sync()
+	})
+	a.pendingResizeDisplaySync = false
+	tuiLog.Logger().Debug("tui.display.synced_after_resize", "component", "tui")
+}
+
+func (a *App) logRunEventTiming(profile runEventProfile, pollDuration time.Duration) {
+	if profile.eventType == "*tcell.EventInterrupt" && profile.handleDuration <= 20*time.Millisecond && profile.drawDuration <= 35*time.Millisecond {
+		return
+	}
+	logLevel := slog.LevelDebug
+	if profile.handleDuration > 40*time.Millisecond || profile.drawDuration > 80*time.Millisecond || pollDuration > 1500*time.Millisecond {
+		logLevel = slog.LevelWarn
+	}
+	tuiLog.Logger().Log(a.ctx, logLevel, "tui.loop.event_timing",
+		"event", profile.eventType,
+		"poll_ms", pollDuration.Milliseconds(),
+		"handle_ms", profile.handleDuration.Milliseconds(),
+		"draw_ms", profile.drawDuration.Milliseconds(),
+		"active_tab", a.activeTab,
+		"has_overlay", a.overlay != nil,
+		"overlay_type", fmt.Sprintf("%T", a.overlay),
+		"mode", int(a.mode))
 }
 
 // spinnerTick is posted periodically while something is loading so the
@@ -2611,282 +2616,11 @@ func (a *App) PreWarmStats() {
 func (a *App) handleEvent(ev tcell.Event) {
 	switch e := ev.(type) {
 	case *tcell.EventResize:
-		a.inResizeEvent = true
-		defer func() { a.inResizeEvent = false }()
-		w, h := e.Size()
-		sw, sh := a.screen.Size()
-		if w != sw || h != sh {
-			tuiLog.Logger().Debug("tui.event.resize.size_mismatch",
-				"component", "tui",
-				"event_w", w, "event_h", h, "screen_w", sw, "screen_h", sh,
-				"overlay_type", fmt.Sprintf("%T", a.overlay))
-		}
-		tuiLog.Logger().Debug("tui.event.resize",
-			"component", "tui",
-			"width", w,
-			"height", h,
-			"overlay_type", fmt.Sprintf("%T", a.overlay),
-			"return_path_state", string(a.returnPathState))
-		// One full Sync after the draw for this event (see main loop), not
-		// on a debounce, so the terminal does not smear during drag resize.
-		a.pendingResizeDisplaySync = true
-		if a.returnPathSession != nil {
-			switch a.returnPathState {
-			case returnPathStateReturnPromptPending, returnPathStateReturnPromptVisible:
-				a.ensureReturnPrompt(a.returnPathSession, "event.resize")
-			}
-		}
+		a.handleResizeEvent(e)
 	case *tcell.EventFocus:
-		tuiLog.Logger().Debug("tui.event.focus",
-			"component", "tui",
-			"focused", e.Focused,
-			"overlay_type", fmt.Sprintf("%T", a.overlay),
-			"return_path_state", string(a.returnPathState))
-		a.appFocused = e.Focused
-		if e.Focused {
-			a.runTerminalCall("sync", func() {
-				a.screen.Sync()
-			})
-			if a.returnPathSession != nil {
-				switch a.returnPathState {
-				case returnPathStateReturnPromptPending, returnPathStateReturnPromptVisible:
-					a.ensureReturnPrompt(a.returnPathSession, "event.focus")
-				}
-			}
-		}
+		a.handleFocusEvent(e)
 	case *tcell.EventInterrupt:
-		interruptType := fmt.Sprintf("%T", e.Data())
-		switch e.Data().(type) {
-		case spinnerTick, healthTick:
-			// Skip per-tick logging for high-frequency heartbeat events.
-		default:
-			tuiLog.Logger().Debug("tui.event.interrupt",
-				"component", "tui",
-				"payload_type", interruptType,
-				"selected", a.selectedSessionName(),
-				"active_tab", a.activeTab,
-				"overlay_type", fmt.Sprintf("%T", a.overlay))
-		}
-		// Interrupts are posted from background goroutines. The Data
-		// payload tells us which cache to refresh.
-		switch d := e.Data().(type) {
-		case sessionsLoaded:
-			a.sessionsLoadingMu.Lock()
-			a.sessionsLoading = false
-			a.sessionsLoadingMu.Unlock()
-			if d.err != nil {
-				if d.reason == "startup" {
-					a.startupLoading = false
-				}
-				tuiLog.Logger().Warn("tui.sessions.load.failed", "component", "tui", "reason", d.reason, "err", d.err)
-				break
-			}
-			a.startupLoading = false
-			a.applySessionSnapshot(d.snapshot)
-		case configControlsLoaded:
-			a.configLoading = false
-			if d.err != nil {
-				a.configErr = d.err.Error()
-				break
-			}
-			a.configErr = ""
-			a.configControls = d.controls
-			if a.configSelected >= len(a.configControls) {
-				a.configSelected = max(0, len(a.configControls)-1)
-			}
-		case detailsLoaded:
-			a.detailMu.Lock()
-			if d.err != nil {
-				if cached, ok := a.detailCache[d.name]; ok {
-					d.detail = cached
-				}
-				if d.detail.TranscriptStatsStatus == "" {
-					d.detail.TranscriptStatsStatus = fmt.Sprintf("failed: %v", d.err)
-				}
-				d.detail.TranscriptStatsLoaded = false
-			}
-			a.detailCache[d.name] = d.detail
-			delete(a.detailLoading, d.name)
-			a.detailMu.Unlock()
-			a.refreshOpenOptionsModalStats(d.name)
-			if a.selected != nil && a.selected.Name == d.name {
-				a.populateDetails()
-			}
-		case exportStatsLoaded:
-			delete(a.exportStatsLoading, d.name)
-			if d.err == nil {
-				a.exportStatsCache[d.name] = d.stats
-			}
-			a.applyExportStatsResult(d.name, d.stats, d.err)
-		case spinnerTick:
-			a.spinnerFrame++
-			if a.selected != nil && a.detailsLoadingNow(a.selected.Name) {
-				a.populateDetails()
-			}
-		case healthTick:
-			a.lastHeartbeatAt = a.now()
-			a.logHealthTick()
-		case modelsPrewarmed:
-			maps.Copy(a.modelCache, d.models)
-			a.populateTable()
-		case summaryRefreshed:
-			// Table was already repopulated by maybeRefreshSummary. The
-			// interrupt exists to trigger a draw cycle from the event loop.
-			_ = d
-		case idleSummarySweepTick:
-			sess := a.pickStaleForSweep()
-			if sess != nil {
-				a.maybeRefreshSummary(sess)
-			}
-		case summaryRefreshDone:
-			a.summaryRefreshing[d.name] = false
-			if d.updated != nil {
-				for i := range a.sessions {
-					if a.sessions[i].Name == d.name {
-						a.sessions[i] = d.updated
-						break
-					}
-				}
-				a.populateTable()
-			}
-		case registryEvent:
-			a.applySessionEvent(d.event)
-		case providerStatsEvent:
-			a.applyProviderStats(d.stats)
-		case selfReloadAvailable:
-			a.requestSelfReload(d.path, d.reason, "local_watcher", "")
-		case compactStreamEvent:
-			if panel, ok := a.overlay.(*CompactPanel); ok {
-				panel.ApplyCompactEvent(d.event)
-			}
-		case compactStreamOpened:
-			if panel, ok := a.overlay.(*CompactPanel); ok {
-				if d.err != nil {
-					panel.SetBusy(d.action, false)
-					panel.ApplyCompactEvent(CompactEvent{
-						Kind:    "status",
-						Message: fmt.Sprintf("%s start failed: %v", d.action, d.err),
-					})
-					break
-				}
-				a.compactCancel = d.cancel
-				go func() {
-					defer func() {
-						if r := recover(); r != nil {
-							logUIGoroutinePanic("compact_stream", fmt.Sprint(r))
-						}
-					}()
-					a.runCompactStream(d.events, d.done, d.action)
-				}()
-			}
-		case compactStreamDone:
-			a.compactCancel = nil
-			if panel, ok := a.overlay.(*CompactPanel); ok {
-				panel.SetBusy(d.action, false)
-				if d.err != nil {
-					panel.ApplyCompactEvent(CompactEvent{
-						Kind:    "status",
-						Message: fmt.Sprintf("%s failed: %v", d.action, d.err),
-					})
-				} else {
-					panel.ApplyCompactEvent(CompactEvent{
-						Kind:    "status",
-						Message: d.action + " completed",
-					})
-				}
-			}
-		case compactUndoDone:
-			if panel, ok := a.overlay.(*CompactPanel); ok {
-				panel.SetBusy("undo", false)
-				panel.SetUndoResult(d.result, d.err)
-			}
-		case sidecarTailOpened:
-			if a.sidecar != nil {
-				if d.err != nil {
-					a.sidecar.status = "tail failed: " + d.err.Error()
-					break
-				}
-				a.sidecarTailPending = false
-				a.sidecarCancel = d.cancel
-				go func() {
-					defer func() {
-						if r := recover(); r != nil {
-							logUIGoroutinePanic("sidecar_tail", fmt.Sprint(r))
-						}
-					}()
-					a.runSidecarTail(d.events, a.sidecar)
-				}()
-			}
-		case sidecarSendDone:
-			if a.sidecar != nil {
-				if d.err != nil {
-					a.sidecar.status = "error: " + d.err.Error()
-				} else {
-					a.sidecar.status = "sent"
-				}
-			}
-		case sidecarLaunchDone:
-			if d.err != nil {
-				if a.sidecar != nil {
-					a.sidecar.status = "launch failed: " + d.err.Error()
-				}
-				break
-			}
-			a.sidecarSessionName = d.sessionName
-			a.sidecarSessionID = d.sessionID
-			a.sidecarTailPending = true
-			panel := NewSidecarPanel(d.sessionName, d.sessionID, d.liveURL)
-			panel.status = "waiting for transcript..."
-			panel.OnSend = func(text string) error {
-				send := a.sidecarSendFunc()
-				if send == nil {
-					return fmt.Errorf("daemon offline")
-				}
-				panel.status = "sending..."
-				go func() {
-					defer func() {
-						if r := recover(); r != nil {
-							logUIGoroutinePanic("sidecar_send", fmt.Sprint(r))
-						}
-					}()
-					err := send(d.sessionID, text)
-					a.postInterrupt(sidecarSendDone{err: err})
-				}()
-				return nil
-			}
-			a.sidecar = panel
-			a.refreshSessions()
-			a.maybeOpenSidecarTail()
-		case sidecarStatusUpdate:
-			if a.sidecar != nil {
-				a.sidecar.status = d.status
-			}
-		case viewContentLoaded:
-			if d.content == "" {
-				break
-			}
-			tb := &TextBox{
-				Title:      "Conversation: " + d.sessionName,
-				TitleStyle: StyleHeader,
-				Wrap:       true,
-				Focused:    true,
-			}
-			tb.SetLines(strings.Split(d.content, "\n"))
-			a.overlay = &ViewerOverlay{Box: tb, OnClose: a.closeOverlay}
-			a.mode = StatusView
-		case exportFinished:
-			if d.stack {
-				a.pushNoticeModal(d.title, d.body)
-			} else {
-				a.openNoticeModal(d.title, d.body)
-			}
-		default:
-			// Several call sites post the *App itself as the payload to
-			// request a generic table repaint (see PostEvent calls in
-			// runDiscoveryScanner, the bridge watcher, and the input
-			// handlers). Treat anything we don't recognise as that.
-			a.populateTable()
-		}
+		a.handleInterruptEvent(e)
 	case *tcell.EventKey:
 		a.handleKey(e)
 	case *tcell.EventMouse:
@@ -2894,10 +2628,401 @@ func (a *App) handleEvent(ev tcell.Event) {
 	}
 }
 
+func (a *App) handleResizeEvent(e *tcell.EventResize) {
+	a.inResizeEvent = true
+	defer func() { a.inResizeEvent = false }()
+	w, h := e.Size()
+	sw, sh := a.screen.Size()
+	if w != sw || h != sh {
+		tuiLog.Logger().Debug("tui.event.resize.size_mismatch",
+			"component", "tui",
+			"event_w", w, "event_h", h, "screen_w", sw, "screen_h", sh,
+			"overlay_type", fmt.Sprintf("%T", a.overlay))
+	}
+	tuiLog.Logger().Debug("tui.event.resize",
+		"component", "tui",
+		"width", w,
+		"height", h,
+		"overlay_type", fmt.Sprintf("%T", a.overlay),
+		"return_path_state", string(a.returnPathState))
+	// One full Sync after the draw for this event (see main loop), not
+	// on a debounce, so the terminal does not smear during drag resize.
+	a.pendingResizeDisplaySync = true
+	a.ensureReturnPromptForEvent("event.resize")
+}
+
+func (a *App) handleFocusEvent(e *tcell.EventFocus) {
+	tuiLog.Logger().Debug("tui.event.focus",
+		"component", "tui",
+		"focused", e.Focused,
+		"overlay_type", fmt.Sprintf("%T", a.overlay),
+		"return_path_state", string(a.returnPathState))
+	a.appFocused = e.Focused
+	if !e.Focused {
+		return
+	}
+	a.runTerminalCall("sync", func() {
+		a.screen.Sync()
+	})
+	a.ensureReturnPromptForEvent("event.focus")
+}
+
+func (a *App) ensureReturnPromptForEvent(reason string) {
+	if a.returnPathSession == nil {
+		return
+	}
+	switch a.returnPathState {
+	case returnPathStateReturnPromptPending, returnPathStateReturnPromptVisible:
+		a.ensureReturnPrompt(a.returnPathSession, reason)
+	}
+}
+
+func (a *App) handleInterruptEvent(e *tcell.EventInterrupt) {
+	a.logInterruptEvent(e)
+	// Interrupts are posted from background goroutines. The Data
+	// payload tells us which cache to refresh.
+	switch d := e.Data().(type) {
+	case sessionsLoaded:
+		a.handleSessionsLoaded(d)
+	case configControlsLoaded:
+		a.handleConfigControlsLoaded(d)
+	case detailsLoaded:
+		a.handleDetailsLoaded(d)
+	case exportStatsLoaded:
+		a.handleExportStatsLoaded(d)
+	case spinnerTick:
+		a.handleSpinnerTick()
+	case healthTick:
+		a.lastHeartbeatAt = a.now()
+		a.logHealthTick()
+	case modelsPrewarmed:
+		maps.Copy(a.modelCache, d.models)
+		a.populateTable()
+	case summaryRefreshed:
+		// Table was already repopulated by maybeRefreshSummary. The
+		// interrupt exists to trigger a draw cycle from the event loop.
+		_ = d
+	case idleSummarySweepTick:
+		a.handleIdleSummarySweepTick()
+	case summaryRefreshDone:
+		a.handleSummaryRefreshDone(d)
+	case registryEvent:
+		a.applySessionEvent(d.event)
+	case providerStatsEvent:
+		a.applyProviderStats(d.stats)
+	case selfReloadAvailable:
+		a.requestSelfReload(d.path, d.reason, "local_watcher", "")
+	case compactStreamEvent:
+		a.handleCompactStreamEvent(d)
+	case compactStreamOpened:
+		a.handleCompactStreamOpened(d)
+	case compactStreamDone:
+		a.handleCompactStreamDone(d)
+	case compactUndoDone:
+		a.handleCompactUndoDone(d)
+	case sidecarTailOpened:
+		a.handleSidecarTailOpened(d)
+	case sidecarSendDone:
+		a.handleSidecarSendDone(d)
+	case sidecarLaunchDone:
+		a.handleSidecarLaunchDone(d)
+	case sidecarStatusUpdate:
+		a.handleSidecarStatusUpdate(d)
+	case viewContentLoaded:
+		a.handleViewContentLoaded(d)
+	case exportFinished:
+		a.handleExportFinished(d)
+	default:
+		// Several call sites post the *App itself as the payload to
+		// request a generic table repaint (see PostEvent calls in
+		// runDiscoveryScanner, the bridge watcher, and the input
+		// handlers). Treat anything we don't recognise as that.
+		a.populateTable()
+	}
+}
+
+func (a *App) logInterruptEvent(e *tcell.EventInterrupt) {
+	interruptType := fmt.Sprintf("%T", e.Data())
+	switch e.Data().(type) {
+	case spinnerTick, healthTick:
+		return
+	default:
+		tuiLog.Logger().Debug("tui.event.interrupt",
+			"component", "tui",
+			"payload_type", interruptType,
+			"selected", a.selectedSessionName(),
+			"active_tab", a.activeTab,
+			"overlay_type", fmt.Sprintf("%T", a.overlay))
+	}
+}
+
+func (a *App) handleSessionsLoaded(d sessionsLoaded) {
+	a.sessionsLoadingMu.Lock()
+	a.sessionsLoading = false
+	a.sessionsLoadingMu.Unlock()
+	if d.err != nil {
+		if d.reason == "startup" {
+			a.startupLoading = false
+		}
+		tuiLog.Logger().Warn("tui.sessions.load.failed", "component", "tui", "reason", d.reason, "err", d.err)
+		return
+	}
+	a.startupLoading = false
+	a.applySessionSnapshot(d.snapshot)
+}
+
+func (a *App) handleConfigControlsLoaded(d configControlsLoaded) {
+	a.configLoading = false
+	if d.err != nil {
+		a.configErr = d.err.Error()
+		return
+	}
+	a.configErr = ""
+	a.configControls = d.controls
+	if a.configSelected >= len(a.configControls) {
+		a.configSelected = max(0, len(a.configControls)-1)
+	}
+}
+
+func (a *App) handleDetailsLoaded(d detailsLoaded) {
+	a.detailMu.Lock()
+	if d.err != nil {
+		if cached, ok := a.detailCache[d.name]; ok {
+			d.detail = cached
+		}
+		if d.detail.TranscriptStatsStatus == "" {
+			d.detail.TranscriptStatsStatus = fmt.Sprintf("failed: %v", d.err)
+		}
+		d.detail.TranscriptStatsLoaded = false
+	}
+	a.detailCache[d.name] = d.detail
+	delete(a.detailLoading, d.name)
+	a.detailMu.Unlock()
+	a.refreshOpenOptionsModalStats(d.name)
+	if a.selected != nil && a.selected.Name == d.name {
+		a.populateDetails()
+	}
+}
+
+func (a *App) handleExportStatsLoaded(d exportStatsLoaded) {
+	delete(a.exportStatsLoading, d.name)
+	if d.err == nil {
+		a.exportStatsCache[d.name] = d.stats
+	}
+	a.applyExportStatsResult(d.name, d.stats, d.err)
+}
+
+func (a *App) handleSpinnerTick() {
+	a.spinnerFrame++
+	if a.selected != nil && a.detailsLoadingNow(a.selected.Name) {
+		a.populateDetails()
+	}
+}
+
+func (a *App) handleIdleSummarySweepTick() {
+	sess := a.pickStaleForSweep()
+	if sess != nil {
+		a.maybeRefreshSummary(sess)
+	}
+}
+
+func (a *App) handleSummaryRefreshDone(d summaryRefreshDone) {
+	a.summaryRefreshing[d.name] = false
+	if d.updated == nil {
+		return
+	}
+	for i := range a.sessions {
+		if a.sessions[i].Name == d.name {
+			a.sessions[i] = d.updated
+			break
+		}
+	}
+	a.populateTable()
+}
+
+func (a *App) handleCompactStreamEvent(d compactStreamEvent) {
+	if panel, ok := a.overlay.(*CompactPanel); ok {
+		panel.ApplyCompactEvent(d.event)
+	}
+}
+
+func (a *App) handleCompactStreamOpened(d compactStreamOpened) {
+	panel, ok := a.overlay.(*CompactPanel)
+	if !ok {
+		return
+	}
+	if d.err != nil {
+		panel.SetBusy(d.action, false)
+		panel.ApplyCompactEvent(CompactEvent{
+			Kind:    "status",
+			Message: fmt.Sprintf("%s start failed: %v", d.action, d.err),
+		})
+		return
+	}
+	a.compactCancel = d.cancel
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("compact_stream", fmt.Sprint(r))
+			}
+		}()
+		a.runCompactStream(d.events, d.done, d.action)
+	}()
+}
+
+func (a *App) handleCompactStreamDone(d compactStreamDone) {
+	a.compactCancel = nil
+	panel, ok := a.overlay.(*CompactPanel)
+	if !ok {
+		return
+	}
+	panel.SetBusy(d.action, false)
+	if d.err != nil {
+		panel.ApplyCompactEvent(CompactEvent{
+			Kind:    "status",
+			Message: fmt.Sprintf("%s failed: %v", d.action, d.err),
+		})
+		return
+	}
+	panel.ApplyCompactEvent(CompactEvent{
+		Kind:    "status",
+		Message: d.action + " completed",
+	})
+}
+
+func (a *App) handleCompactUndoDone(d compactUndoDone) {
+	if panel, ok := a.overlay.(*CompactPanel); ok {
+		panel.SetBusy("undo", false)
+		panel.SetUndoResult(d.result, d.err)
+	}
+}
+
+func (a *App) handleSidecarTailOpened(d sidecarTailOpened) {
+	if a.sidecar == nil {
+		return
+	}
+	if d.err != nil {
+		a.sidecar.status = "tail failed: " + d.err.Error()
+		return
+	}
+	a.sidecarTailPending = false
+	a.sidecarCancel = d.cancel
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("sidecar_tail", fmt.Sprint(r))
+			}
+		}()
+		a.runSidecarTail(d.events, a.sidecar)
+	}()
+}
+
+func (a *App) handleSidecarSendDone(d sidecarSendDone) {
+	if a.sidecar == nil {
+		return
+	}
+	if d.err != nil {
+		a.sidecar.status = "error: " + d.err.Error()
+		return
+	}
+	a.sidecar.status = "sent"
+}
+
+func (a *App) handleSidecarLaunchDone(d sidecarLaunchDone) {
+	if d.err != nil {
+		if a.sidecar != nil {
+			a.sidecar.status = "launch failed: " + d.err.Error()
+		}
+		return
+	}
+	a.sidecarSessionName = d.sessionName
+	a.sidecarSessionID = d.sessionID
+	a.sidecarTailPending = true
+	panel := NewSidecarPanel(d.sessionName, d.sessionID, d.liveURL)
+	panel.status = "waiting for transcript..."
+	panel.OnSend = func(text string) error {
+		send := a.sidecarSendFunc()
+		if send == nil {
+			return fmt.Errorf("daemon offline")
+		}
+		panel.status = "sending..."
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logUIGoroutinePanic("sidecar_send", fmt.Sprint(r))
+				}
+			}()
+			err := send(d.sessionID, text)
+			a.postInterrupt(sidecarSendDone{err: err})
+		}()
+		return nil
+	}
+	a.sidecar = panel
+	a.refreshSessions()
+	a.maybeOpenSidecarTail()
+}
+
+func (a *App) handleSidecarStatusUpdate(d sidecarStatusUpdate) {
+	if a.sidecar != nil {
+		a.sidecar.status = d.status
+	}
+}
+
+func (a *App) handleViewContentLoaded(d viewContentLoaded) {
+	if d.content == "" {
+		return
+	}
+	tb := &TextBox{
+		Title:      "Conversation: " + d.sessionName,
+		TitleStyle: StyleHeader,
+		Wrap:       true,
+		Focused:    true,
+	}
+	tb.SetLines(strings.Split(d.content, "\n"))
+	a.overlay = &ViewerOverlay{Box: tb, OnClose: a.closeOverlay}
+	a.mode = StatusView
+}
+
+func (a *App) handleExportFinished(d exportFinished) {
+	if d.stack {
+		a.pushNoticeModal(d.title, d.body)
+		return
+	}
+	a.openNoticeModal(d.title, d.body)
+}
+
 // handleKey dispatches keyboard events.
 // Global shortcuts (Ctrl+C) always apply. Overlays take priority over widgets.
 func (a *App) handleKey(e *tcell.EventKey) {
 	a.noteInteraction()
+	a.logKeyEvent(e)
+	// Global: Ctrl+C always quits, regardless of focus.
+	if e.Key() == tcell.KeyCtrlC {
+		a.running = false
+		return
+	}
+	if a.overlay != nil {
+		a.overlay.HandleEvent(e)
+		return
+	}
+	if a.handleSidecarKey(e) {
+		return
+	}
+	if a.handleFocusedDetailsKey(e) {
+		return
+	}
+	if a.handleSettingsKey(e) {
+		return
+	}
+	if a.handleAppKey(e) {
+		return
+	}
+
+	// Fall through: table handles navigation.
+	a.table.HandleEvent(e)
+}
+
+func (a *App) logKeyEvent(e *tcell.EventKey) {
 	tuiLog.Logger().Debug("tui.input.key",
 		"component", "tui",
 		"key", int(e.Key()),
@@ -2908,269 +3033,326 @@ func (a *App) handleKey(e *tcell.EventKey) {
 		"has_overlay", a.overlay != nil,
 		"overlay_type", fmt.Sprintf("%T", a.overlay),
 		"mode", int(a.mode))
-	// Global: Ctrl+C always quits, regardless of focus.
-	if e.Key() == tcell.KeyCtrlC {
-		a.running = false
-		return
-	}
+}
 
-	if a.overlay != nil {
-		a.overlay.HandleEvent(e)
-		return
-	}
-
+func (a *App) handleSidecarKey(e *tcell.EventKey) bool {
 	// When the Sidecar tab is active, the panel owns most key events
 	// so the user can type into the inject input without the global
 	// shortcuts (e.g. "d" for delete) firing while typing a message.
 	// Esc returns to the Sessions tab.
-	if a.activeTab == tabSidecar && a.sidecar != nil {
-		if e.Key() == tcell.KeyEscape {
-			a.activeTab = tabSessions
-			a.tabs.SetActive(tabSessions)
-			return
-		}
-		if a.sidecar.HandleEvent(e) {
-			return
-		}
+	if a.activeTab != tabSidecar || a.sidecar == nil {
+		return false
 	}
+	if e.Key() == tcell.KeyEscape {
+		a.activeTab = tabSessions
+		a.tabs.SetActive(tabSessions)
+		return true
+	}
+	return a.sidecar.HandleEvent(e)
+}
 
+func (a *App) handleFocusedDetailsKey(e *tcell.EventKey) bool {
 	// When a details sub-pane is focused, scroll keys go to that pane.
 	// Escape/Tab are handled globally below; action keys (r/v/s/d/c/etc.)
 	// still work from details focus to avoid mode confusion.
-	if a.detailsHasFocus() {
-		switch e.Key() {
-		case tcell.KeyUp, tcell.KeyDown, tcell.KeyPgUp, tcell.KeyPgDn,
-			tcell.KeyHome, tcell.KeyEnd:
+	if !a.detailsHasFocus() {
+		return false
+	}
+	switch e.Key() {
+	case tcell.KeyUp, tcell.KeyDown, tcell.KeyPgUp, tcell.KeyPgDn,
+		tcell.KeyHome, tcell.KeyEnd:
+		a.details.HandleEvent(e)
+		return true
+	case tcell.KeyRune:
+		r := e.Rune()
+		if r == 'j' || r == 'k' || r == 'g' || r == 'G' {
 			a.details.HandleEvent(e)
-			return
-		case tcell.KeyRune:
-			if r := e.Rune(); r == 'j' || r == 'k' || r == 'g' || r == 'G' {
-				a.details.HandleEvent(e)
-				return
-			}
+			return true
 		}
 	}
+	return false
+}
 
+func (a *App) handleSettingsKey(e *tcell.EventKey) bool {
 	// Mode-specific shortcuts that must fire before the table consumes keys.
-	if a.activeTab == tabSettings && a.overlay == nil && !a.detailsHasFocus() {
-		switch e.Key() {
-		case tcell.KeyUp:
-			a.stepConfigSelection(-1)
-			return
-		case tcell.KeyDown:
-			a.stepConfigSelection(1)
-			return
-		case tcell.KeyEnter:
-			a.activateSelectedConfigControl()
-			return
-		case tcell.KeyRight:
-			a.cycleSelectedConfigControl(1)
-			return
-		case tcell.KeyLeft:
-			a.cycleSelectedConfigControl(-1)
-			return
-		case tcell.KeyRune:
-			switch e.Rune() {
-			case 'j':
-				a.stepConfigSelection(1)
-				return
-			case 'k':
-				a.stepConfigSelection(-1)
-				return
-			case 'l':
-				a.cycleSelectedConfigControl(1)
-				return
-			case 'h':
-				a.cycleSelectedConfigControl(-1)
-				return
-			}
-		}
+	if a.activeTab != tabSettings || a.overlay != nil || a.detailsHasFocus() {
+		return false
 	}
+	switch e.Key() {
+	case tcell.KeyUp:
+		a.stepConfigSelection(-1)
+		return true
+	case tcell.KeyDown:
+		a.stepConfigSelection(1)
+		return true
+	case tcell.KeyEnter:
+		a.activateSelectedConfigControl()
+		return true
+	case tcell.KeyRight:
+		a.cycleSelectedConfigControl(1)
+		return true
+	case tcell.KeyLeft:
+		a.cycleSelectedConfigControl(-1)
+		return true
+	case tcell.KeyRune:
+		return a.handleSettingsRuneKey(e.Rune())
+	}
+	return false
+}
 
+func (a *App) handleSettingsRuneKey(r rune) bool {
+	switch r {
+	case 'j':
+		a.stepConfigSelection(1)
+		return true
+	case 'k':
+		a.stepConfigSelection(-1)
+		return true
+	case 'l':
+		a.cycleSelectedConfigControl(1)
+		return true
+	case 'h':
+		a.cycleSelectedConfigControl(-1)
+		return true
+	}
+	return false
+}
+
+func (a *App) handleAppKey(e *tcell.EventKey) bool {
 	switch e.Key() {
 	case tcell.KeyTab, tcell.KeyBacktab:
-		// When the details pane is open, Tab cycles focus:
-		//   table -> details.left -> details.right -> table
-		// BackTab goes the other way.
-		if a.selected != nil {
-			a.cycleDetailsFocus(e.Key() == tcell.KeyBacktab)
-			return
-		}
+		return a.handleTabFocusKey(e.Key() == tcell.KeyBacktab)
 	case tcell.KeyEscape:
-		if a.detailsHasFocus() {
-			a.details.SetFocus(DetailsFocusNone)
-			return
+		a.handleEscapeKey()
+		return true
+	case tcell.KeyRune:
+		return a.handleAppRuneKey(e.Rune())
+	}
+	return false
+}
+
+func (a *App) handleTabFocusKey(reverse bool) bool {
+	// When the details pane is open, Tab cycles focus:
+	//   table -> details.left -> details.right -> table
+	// BackTab goes the other way.
+	if a.selected == nil {
+		return false
+	}
+	a.cycleDetailsFocus(reverse)
+	return true
+}
+
+func (a *App) handleEscapeKey() {
+	if a.detailsHasFocus() {
+		a.details.SetFocus(DetailsFocusNone)
+		return
+	}
+	if a.selected != nil {
+		a.deselect()
+		return
+	}
+	// Esc on a bare dashboard (no selection, no overlay, no
+	// details focus) used to flip a.running = false here, which
+	// surprised users who pressed Esc expecting "go back" and
+	// got an unexpected quit instead. Quit is on q (or Ctrl-C);
+	// Esc on bare dashboard is now a safe no-op.
+}
+
+func (a *App) handleAppRuneKey(r rune) bool {
+	if a.handlePrimaryRuneKey(r) {
+		return true
+	}
+	if a.handleTabRuneKey(r) {
+		return true
+	}
+	if a.handleSortRuneKey(r) {
+		return true
+	}
+	return a.handleActionRuneKey(r)
+}
+
+func (a *App) handlePrimaryRuneKey(r rune) bool {
+	switch r {
+	case ' ':
+		if a.activeTab == tabSettings {
+			a.activateSelectedConfigControl()
+			return true
 		}
+		if len(a.visibleIdx) > 0 {
+			a.table.Active = true
+			a.openDetails(a.currentSession())
+		}
+		return true
+	case 'q':
 		if a.selected != nil {
 			a.deselect()
-			return
+			return true
 		}
-		// Esc on a bare dashboard (no selection, no overlay, no
-		// details focus) used to flip a.running = false here, which
-		// surprised users who pressed Esc expecting "go back" and
-		// got an unexpected quit instead. Quit is on q (or Ctrl-C);
-		// Esc on bare dashboard is now a safe no-op.
-		return
-	case tcell.KeyRune:
-		switch e.Rune() {
-		case ' ':
-			if a.activeTab == tabSettings {
-				a.activateSelectedConfigControl()
-				return
-			}
-			if len(a.visibleIdx) > 0 {
-				a.table.Active = true
-				a.openDetails(a.currentSession())
-			}
-			return
-		case 'q':
-			if a.selected != nil {
-				a.deselect()
-				return
-			}
-			a.running = false
-			return
-		case '/':
-			// nvim-style: when a session is highlighted, "/" searches
-			// inside that session's transcript. With no selection it
-			// opens the table filter so the same key is always "find".
-			if sess := a.rowSession(); sess != nil {
-				a.openSearchForm()
-				return
-			}
-			a.openFilter()
-			return
-		case '1':
-			a.activeTab = tabSessions
-			a.tabs.SetActive(tabSessions)
-			return
-		case '2':
-			a.activeTab = tabStats
-			a.tabs.SetActive(tabStats)
-			a.requestStatsAsync("tab.switch")
-			return
-		case '3':
-			a.activeTab = tabSettings
-			a.tabs.SetActive(tabSettings)
-			return
-		case '4':
+		a.running = false
+		return true
+	case '/':
+		// nvim-style: when a session is highlighted, "/" searches
+		// inside that session's transcript. With no selection it
+		// opens the table filter so the same key is always "find".
+		if sess := a.rowSession(); sess != nil {
+			a.openSearchForm()
+			return true
+		}
+		a.openFilter()
+		return true
+	}
+	return false
+}
+
+func (a *App) handleTabRuneKey(r rune) bool {
+	switch r {
+	case '1':
+		a.activeTab = tabSessions
+		a.tabs.SetActive(tabSessions)
+		return true
+	case '2':
+		a.activeTab = tabStats
+		a.tabs.SetActive(tabStats)
+		a.requestStatsAsync("tab.switch")
+		return true
+	case '3':
+		a.activeTab = tabSettings
+		a.tabs.SetActive(tabSettings)
+		return true
+	case '4':
+		a.activeTab = tabSidecar
+		a.tabs.SetActive(tabSidecar)
+		return true
+	case 'S':
+		// Pin the highlighted row in the sidecar tab and switch
+		// to it. Useful when the user wants the live transcript
+		// view of a daemon live session one keystroke away.
+		if sess := a.rowSession(); sess != nil && a.sidecarCanDrive(sess) {
+			a.pinSidecar(sess)
 			a.activeTab = tabSidecar
 			a.tabs.SetActive(tabSidecar)
-			return
-		case 'S':
-			// Pin the highlighted row in the sidecar tab and switch
-			// to it. Useful when the user wants the live transcript
-			// view of a daemon live session one keystroke away.
-			if sess := a.rowSession(); sess != nil && a.sidecarCanDrive(sess) {
-				a.pinSidecar(sess)
-				a.activeTab = tabSidecar
-				a.tabs.SetActive(tabSidecar)
-			}
-			return
-		case '!':
-			a.toggleSort(SortColName)
-			return
-		case '@':
-			a.toggleSort(SortColWorkspace)
-			return
-		case '#':
-			a.toggleSort(SortColModel)
-			return
-		case '$':
-			a.toggleSort(SortColUsed)
-			return
-		case '%':
-			a.toggleSort(SortColCreated)
-			return
-		// App-level shortcuts. We avoid binding lowercase letters that
-		// the table uses for nvim-style movement (h/j/k/l/g/G) so the
-		// movement keys fall through to the table widget below.
-		case 'N':
-			if a.activeTab == tabSidecar {
-				a.openSidecarLaunchStarterModal()
-			} else {
-				a.newSession()
-			}
-			return
-		case 'R':
-			if !a.isDaemonOnline() && a.cb.RestartDaemon != nil {
-				a.restartDaemonAsync()
-				return
-			}
-			if a.activeTab == tabStats {
-				a.refreshStats()
-				return
-			}
-			a.refreshSessions()
-			if a.activeTab == tabSettings {
-				a.refreshConfigControls()
-			}
-			return
-		case 'B':
-			if sess := a.rowSession(); sess != nil {
-				a.openBasedirEditor(sess)
-			}
-			return
-		case 'H':
-			a.showEphemeral = !a.showEphemeral
-			a.rebuildVisible()
-			a.populateTable()
-			return
-		case 'O':
-			if sess := a.rowSession(); sess != nil {
-				a.openSessionOptionsFor(sess)
-			}
-			return
-		case 'e':
-			if a.activeTab == tabSettings {
-				a.editConfigFile(false)
-				return
-			}
-		case 'E':
-			if a.activeTab == tabSettings {
-				a.editConfigFile(true)
-				return
-			}
-		case 'G':
-			if a.activeTab == tabSettings {
-				a.activateSelectedConfigControl()
-				return
-			}
-		case 'v':
-			if a.selected != nil {
-				a.viewSelected()
-			}
-			return
-		case 's':
-			if a.selected != nil {
-				a.openSearchForm()
-			}
-			return
-		case 'd':
-			if a.selected != nil {
-				a.openDeleteConfirm()
-			}
-			return
-		case 'f':
-			if a.selected != nil {
-				a.doFork()
-			}
-			return
-		case 'c':
-			if a.selected != nil {
-				a.openCompactForm()
-			}
-			return
-		case '?':
-			// Help screen with the full keymap. Uses the options modal
-			// styling so it looks consistent with other overlays.
-			a.openHelpModal()
-			return
 		}
+		return true
 	}
+	return false
+}
 
-	// Fall through: table handles navigation.
-	a.table.HandleEvent(e)
+func (a *App) handleSortRuneKey(r rune) bool {
+	switch r {
+	case '!':
+		a.toggleSort(SortColName)
+		return true
+	case '@':
+		a.toggleSort(SortColWorkspace)
+		return true
+	case '#':
+		a.toggleSort(SortColModel)
+		return true
+	case '$':
+		a.toggleSort(SortColUsed)
+		return true
+	case '%':
+		a.toggleSort(SortColCreated)
+		return true
+	}
+	return false
+}
+
+func (a *App) handleActionRuneKey(r rune) bool {
+	// App-level shortcuts. We avoid binding lowercase letters that
+	// the table uses for nvim-style movement (h/j/k/l/g/G) so the
+	// movement keys fall through to the table widget below.
+	switch r {
+	case 'N':
+		if a.activeTab == tabSidecar {
+			a.openSidecarLaunchStarterModal()
+		} else {
+			a.newSession()
+		}
+		return true
+	case 'R':
+		return a.handleRefreshRuneKey()
+	case 'B':
+		if sess := a.rowSession(); sess != nil {
+			a.openBasedirEditor(sess)
+		}
+		return true
+	case 'H':
+		a.showEphemeral = !a.showEphemeral
+		a.rebuildVisible()
+		a.populateTable()
+		return true
+	case 'O':
+		if sess := a.rowSession(); sess != nil {
+			a.openSessionOptionsFor(sess)
+		}
+		return true
+	case 'e':
+		if a.activeTab != tabSettings {
+			return false
+		}
+		a.editConfigFile(false)
+		return true
+	case 'E':
+		if a.activeTab != tabSettings {
+			return false
+		}
+		a.editConfigFile(true)
+		return true
+	case 'G':
+		if a.activeTab != tabSettings {
+			return false
+		}
+		a.activateSelectedConfigControl()
+		return true
+	case 'v':
+		if a.selected != nil {
+			a.viewSelected()
+		}
+		return true
+	case 's':
+		if a.selected != nil {
+			a.openSearchForm()
+		}
+		return true
+	case 'd':
+		if a.selected != nil {
+			a.openDeleteConfirm()
+		}
+		return true
+	case 'f':
+		if a.selected != nil {
+			a.doFork()
+		}
+		return true
+	case 'c':
+		if a.selected != nil {
+			a.openCompactForm()
+		}
+		return true
+	case '?':
+		// Help screen with the full keymap. Uses the options modal
+		// styling so it looks consistent with other overlays.
+		a.openHelpModal()
+		return true
+	}
+	return false
+}
+
+func (a *App) handleRefreshRuneKey() bool {
+	if !a.isDaemonOnline() && a.cb.RestartDaemon != nil {
+		a.restartDaemonAsync()
+		return true
+	}
+	if a.activeTab == tabStats {
+		a.refreshStats()
+		return true
+	}
+	a.refreshSessions()
+	if a.activeTab == tabSettings {
+		a.refreshConfigControls()
+	}
+	return true
 }
 
 // handleMouse dispatches mouse events via direct rect hit tests.
@@ -3184,6 +3366,34 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 	}
 	x, y := e.Position()
 	btns := e.Buttons()
+	a.logMouseEvent(x, y, btns)
+	if a.handleOverlayMouse(e) {
+		return
+	}
+	if a.handleStatusMouse(x, y, btns) {
+		return
+	}
+	// Tab strip click takes priority over the rest of the body.
+	if a.tabs != nil && a.tabs.HandleEvent(e) {
+		tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "tabs")
+		return
+	}
+	if btns == 0 {
+		a.grab = grabNone
+	}
+	if a.handleActiveGrabMouse(y, btns) {
+		return
+	}
+	if a.handleTableScrollbarMouse(x, y, btns) {
+		return
+	}
+	if a.handleDetailsMouse(x, y, btns) {
+		return
+	}
+	a.handleTableMouse(e, x, y, btns)
+}
+
+func (a *App) logMouseEvent(x int, y int, btns tcell.ButtonMask) {
 	tuiLog.Logger().Debug("tui.input.mouse",
 		"component", "tui",
 		"x", x,
@@ -3194,174 +3404,195 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 		"has_overlay", a.overlay != nil,
 		"overlay_type", fmt.Sprintf("%T", a.overlay),
 		"mode", int(a.mode))
+}
 
-	if a.overlay != nil {
-		tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "overlay")
-		a.overlay.HandleEvent(e)
-		return
+func (a *App) handleOverlayMouse(e *tcell.EventMouse) bool {
+	if a.overlay == nil {
+		return false
 	}
+	tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "overlay")
+	a.overlay.HandleEvent(e)
+	return true
+}
 
-	if btns&tcell.Button1 != 0 && a.statusRect.Contains(x, y) {
-		if action, ok := legendActionAt(a.status, a.statusRect, x); ok {
-			tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "status_legend", "action", int(action))
-			a.invokeLegendAction(action)
-			return
-		}
+func (a *App) handleStatusMouse(x int, y int, btns tcell.ButtonMask) bool {
+	if btns&tcell.Button1 == 0 || !a.statusRect.Contains(x, y) {
+		return false
 	}
-
-	// Tab strip click takes priority over the rest of the body.
-	if a.tabs != nil && a.tabs.HandleEvent(e) {
-		tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "tabs")
-		return
+	action, ok := legendActionAt(a.status, a.statusRect, x)
+	if !ok {
+		return false
 	}
+	tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "status_legend", "action", int(action))
+	a.invokeLegendAction(action)
+	return true
+}
 
-	// Release clears any active scrollbar grab.
-	if btns == 0 {
-		a.grab = grabNone
-	}
-
+func (a *App) handleActiveGrabMouse(y int, btns tcell.ButtonMask) bool {
 	// If the user is currently dragging a scrollbar, keep routing the
 	// mouse position to that widget until the button is released.
-	if a.grab != grabNone && btns&tcell.Button1 != 0 {
-		tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "grab", "grab", int(a.grab))
-		switch a.grab {
-		case grabTable:
-			a.table.JumpToScrollbarY(y)
-			a.syncTableSelectionWithOffset()
-		case grabDetailsLeft:
-			if a.details != nil {
-				a.details.Left.JumpToScrollbarY(y)
-			}
-		case grabDetailsRight:
-			if a.details != nil {
-				a.details.Right.JumpToScrollbarY(y)
-			}
-		}
-		return
+	if a.grab == grabNone || btns&tcell.Button1 == 0 {
+		return false
 	}
-
-	// Click on the table scrollbar starts a grab and jumps.
-	if btns&tcell.Button1 != 0 && a.table.ScrollbarRect.Contains(x, y) {
-		tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "table_scrollbar")
-		a.grab = grabTable
+	tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "grab", "grab", int(a.grab))
+	switch a.grab {
+	case grabTable:
 		a.table.JumpToScrollbarY(y)
 		a.syncTableSelectionWithOffset()
-		return
+	case grabDetailsLeft:
+		if a.details != nil {
+			a.details.Left.JumpToScrollbarY(y)
+		}
+	case grabDetailsRight:
+		if a.details != nil {
+			a.details.Right.JumpToScrollbarY(y)
+		}
 	}
+	return true
+}
 
+func (a *App) handleTableScrollbarMouse(x int, y int, btns tcell.ButtonMask) bool {
+	// Click on the table scrollbar starts a grab and jumps.
+	if btns&tcell.Button1 == 0 || !a.table.ScrollbarRect.Contains(x, y) {
+		return false
+	}
+	tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "table_scrollbar")
+	a.grab = grabTable
+	a.table.JumpToScrollbarY(y)
+	a.syncTableSelectionWithOffset()
+	return true
+}
+
+func (a *App) handleDetailsMouse(x int, y int, btns tcell.ButtonMask) bool {
 	// Detail panes consume wheel events when the cursor is over them.
 	// Each sub-pane scrolls independently, so hit-test both rects.
-	if a.selected != nil && a.details != nil {
-		// Scrollbar click or drag start on either sub-pane.
-		if btns&tcell.Button1 != 0 && a.details.Left.ScrollbarRect.Contains(x, y) {
-			tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "details_left_scrollbar")
-			a.grab = grabDetailsLeft
-			a.details.SetFocus(DetailsFocusLeft)
-			a.details.Left.JumpToScrollbarY(y)
-			return
-		}
-		if btns&tcell.Button1 != 0 && a.details.Right.ScrollbarRect.Contains(x, y) {
-			tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "details_right_scrollbar")
-			a.grab = grabDetailsRight
-			a.details.SetFocus(DetailsFocusRight)
-			a.details.Right.JumpToScrollbarY(y)
-			return
-		}
-		if a.details.LeftRect.Contains(x, y) {
-			if btns&tcell.WheelUp != 0 {
-				a.details.Left.Offset = imax(0, a.details.Left.Offset-3)
-				return
-			}
-			if btns&tcell.WheelDown != 0 {
-				a.details.Left.Offset += 3
-				return
-			}
-			if btns&tcell.Button1 != 0 {
-				tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "details_left_focus")
-				a.details.SetFocus(DetailsFocusLeft)
-				return
-			}
-		}
-		if a.details.RightRect.Contains(x, y) {
-			if btns&tcell.WheelUp != 0 {
-				a.details.Right.Offset = imax(0, a.details.Right.Offset-3)
-				return
-			}
-			if btns&tcell.WheelDown != 0 {
-				a.details.Right.Offset += 3
-				return
-			}
-			if btns&tcell.Button1 != 0 {
-				tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "details_right_focus")
-				a.details.SetFocus(DetailsFocusRight)
-				return
-			}
-		}
+	if a.selected == nil || a.details == nil {
+		return false
 	}
+	if a.handleDetailsScrollbarMouse(x, y, btns) {
+		return true
+	}
+	if a.handleDetailsPaneMouse(a.details.LeftRect, a.details.Left, DetailsFocusLeft, "details_left_focus", x, y, btns) {
+		return true
+	}
+	return a.handleDetailsPaneMouse(a.details.RightRect, a.details.Right, DetailsFocusRight, "details_right_focus", x, y, btns)
+}
 
-	if a.tableRect.Contains(x, y) {
-		tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "table")
-		// Wheel scroll
-		if btns&tcell.WheelUp != 0 {
-			a.table.ScrollUp(3)
-			return
-		}
-		if btns&tcell.WheelDown != 0 {
-			a.table.ScrollDown(3)
-			return
-		}
-		if btns&tcell.WheelLeft != 0 {
-			a.table.ScrollLeft(6)
-			return
-		}
-		if btns&tcell.WheelRight != 0 {
-			a.table.ScrollRight(6)
-			return
-		}
-		// Left click / double click
-		if btns&tcell.Button1 != 0 {
-			// Header click sorts. The column index matches the display
-			// order (NAME, BASEDIR, LAST ACTIVE, MODEL, MSGS, SUMMARY,
-			// CREATED).
-			if y == a.tableRect.Y {
-				switch a.table.ColAtX(x) {
-				case 0:
-					a.toggleSort(SortColName)
-				case 1:
-					a.toggleSort(SortColWorkspace)
-				case 2:
-					a.toggleSort(SortColUsed)
-				case 3:
-					a.toggleSort(SortColModel)
-				case 4:
-					a.toggleSort(SortColMessages)
-				case 5:
-					a.toggleSort(SortColSummary)
-				case 6:
-					a.toggleSort(SortColCreated)
-				}
-				return
-			}
-			row := a.table.RowAtY(y)
-			if row < 0 {
-				return
-			}
-			now := e.When()
-			isDouble := !a.lastClickTime.IsZero() &&
-				now.Sub(a.lastClickTime) < 400*time.Millisecond &&
-				a.lastClickRow == row
-			a.lastClickTime = now
-			a.lastClickRow = row
+func (a *App) handleDetailsScrollbarMouse(x int, y int, btns tcell.ButtonMask) bool {
+	// Scrollbar click or drag start on either sub-pane.
+	if btns&tcell.Button1 != 0 && a.details.Left.ScrollbarRect.Contains(x, y) {
+		tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "details_left_scrollbar")
+		a.grab = grabDetailsLeft
+		a.details.SetFocus(DetailsFocusLeft)
+		a.details.Left.JumpToScrollbarY(y)
+		return true
+	}
+	if btns&tcell.Button1 != 0 && a.details.Right.ScrollbarRect.Contains(x, y) {
+		tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "details_right_scrollbar")
+		a.grab = grabDetailsRight
+		a.details.SetFocus(DetailsFocusRight)
+		a.details.Right.JumpToScrollbarY(y)
+		return true
+	}
+	return false
+}
 
-			if isDouble {
-				tuiLog.Logger().Debug("tui.input.mouse.double_click_resume", "component", "tui", "row", row)
-				a.resumeRow(row)
-				return
-			}
-			a.table.SelectAt(row)
-			a.openDetails(a.currentSession())
-			return
-		}
+func (a *App) handleDetailsPaneMouse(rect Rect, box *TextBox, focus DetailsFocus, route string, x int, y int, btns tcell.ButtonMask) bool {
+	if !rect.Contains(x, y) {
+		return false
+	}
+	if btns&tcell.WheelUp != 0 {
+		box.Offset = imax(0, box.Offset-3)
+		return true
+	}
+	if btns&tcell.WheelDown != 0 {
+		box.Offset += 3
+		return true
+	}
+	if btns&tcell.Button1 != 0 {
+		tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", route)
+		a.details.SetFocus(focus)
+		return true
+	}
+	return false
+}
+
+func (a *App) handleTableMouse(e *tcell.EventMouse, x int, y int, btns tcell.ButtonMask) {
+	if !a.tableRect.Contains(x, y) {
+		return
+	}
+	tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "table")
+	if a.handleTableWheelMouse(btns) {
+		return
+	}
+	if btns&tcell.Button1 != 0 {
+		a.handleTableClickMouse(e, x, y)
+	}
+}
+
+func (a *App) handleTableWheelMouse(btns tcell.ButtonMask) bool {
+	if btns&tcell.WheelUp != 0 {
+		a.table.ScrollUp(3)
+		return true
+	}
+	if btns&tcell.WheelDown != 0 {
+		a.table.ScrollDown(3)
+		return true
+	}
+	if btns&tcell.WheelLeft != 0 {
+		a.table.ScrollLeft(6)
+		return true
+	}
+	if btns&tcell.WheelRight != 0 {
+		a.table.ScrollRight(6)
+		return true
+	}
+	return false
+}
+
+func (a *App) handleTableClickMouse(e *tcell.EventMouse, x int, y int) {
+	// Header click sorts. The column index matches the display
+	// order (NAME, BASEDIR, LAST ACTIVE, MODEL, MSGS, SUMMARY,
+	// CREATED).
+	if y == a.tableRect.Y {
+		a.toggleSortColumnAtX(x)
+		return
+	}
+	row := a.table.RowAtY(y)
+	if row < 0 {
+		return
+	}
+	now := e.When()
+	isDouble := !a.lastClickTime.IsZero() &&
+		now.Sub(a.lastClickTime) < 400*time.Millisecond &&
+		a.lastClickRow == row
+	a.lastClickTime = now
+	a.lastClickRow = row
+	if isDouble {
+		tuiLog.Logger().Debug("tui.input.mouse.double_click_resume", "component", "tui", "row", row)
+		a.resumeRow(row)
+		return
+	}
+	a.table.SelectAt(row)
+	a.openDetails(a.currentSession())
+}
+
+func (a *App) toggleSortColumnAtX(x int) {
+	switch a.table.ColAtX(x) {
+	case 0:
+		a.toggleSort(SortColName)
+	case 1:
+		a.toggleSort(SortColWorkspace)
+	case 2:
+		a.toggleSort(SortColUsed)
+	case 3:
+		a.toggleSort(SortColModel)
+	case 4:
+		a.toggleSort(SortColMessages)
+	case 5:
+		a.toggleSort(SortColSummary)
+	case 6:
+		a.toggleSort(SortColCreated)
 	}
 }
 

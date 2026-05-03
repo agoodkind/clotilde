@@ -161,391 +161,442 @@ func consumeTUIReturnSession() *session.Session {
 // dashboardLaunchCWD is the process cwd when RunDashboard started; it
 // is the default basedir for "new session" without picking a folder.
 func buildAppCallbacks(parentCtx context.Context, dashboardLaunchCWD string) ui.AppCallbacks {
-	openStore := func() (session.Store, error) {
-		return session.NewGlobalFileStore()
+	builder := appCallbackBuilder{
+		parentCtx:          parentCtx,
+		dashboardLaunchCWD: dashboardLaunchCWD,
 	}
 	return ui.AppCallbacks{
-		ListSessions: func() (ui.SessionSnapshot, error) {
-			ctx := childCommandContext(parentCtx, "dashboard.list_sessions")
-			resp, err := daemon.ListSessionsViaDaemon(ctx)
-			if err != nil {
-				return ui.SessionSnapshot{}, err
-			}
-			return sessionSnapshotFromProto(resp), nil
-		},
-		LoadStats: func() (ui.DashboardStats, error) {
-			return loadDashboardStats(childCommandContext(parentCtx, "dashboard.load_stats"))
-		},
-		SubscribeProviderStats: func() (<-chan ui.ProviderStats, func(), error) {
-			ctx := childCommandContext(parentCtx, "dashboard.provider_stats.subscribe")
-			raw, cancel, err := daemon.SubscribeProviderStats(ctx)
-			if err != nil {
-				return nil, nil, err
-			}
-			out := make(chan ui.ProviderStats, 8)
-			go func() {
-				defer func() {
-					if recovered := recover(); recovered != nil {
-						cmdUILog.Logger().ErrorContext(ctx, "dashboard.provider_stats.forwarder_panic",
-							"component", "tui",
-							"err", fmt.Errorf("panic: %v", recovered),
-						)
-					}
-				}()
-				defer close(out)
-				for ev := range raw {
-					if ev == nil || ev.GetStats() == nil {
-						continue
-					}
-					stats := providerStatsFromProto([]*clydev1.ProviderStats{ev.GetStats()})
-					if len(stats) == 0 {
-						continue
-					}
-					out <- stats[0]
-				}
-			}()
-			return out, cancel, nil
-		},
-		RestartDaemon: func() error {
-			return daemon.RestartManagedDaemon(childCommandContext(parentCtx, "dashboard.daemon.restart"))
-		},
-		StartSessionWithBasedir: func(basedir string) error {
-			store, err := openStore()
-			if err != nil {
-				return err
-			}
-			return startNewSessionInDir(childCommandContext(parentCtx, "dashboard.session.start"), basedir, store, dashboardLaunchCWD, false)
-		},
-		StartLiveSession: func(req ui.LiveSessionStartRequest) (ui.LiveSession, error) {
-			ctx := childCommandContext(parentCtx, "dashboard.live_session.start")
-			resp, err := daemon.StartLiveSessionViaDaemon(ctx, &clydev1.StartLiveSessionRequest{
-				Provider:  req.Provider,
-				Name:      req.Name,
-				Basedir:   req.Basedir,
-				Model:     req.Model,
-				Effort:    req.Effort,
-				Incognito: req.Incognito,
-			})
-			if err != nil {
-				return ui.LiveSession{}, err
-			}
-			live := resp.GetSession()
-			return ui.LiveSession{
-				Provider:       live.GetProvider(),
-				SessionName:    live.GetSessionName(),
-				SessionID:      live.GetSessionId(),
-				Status:         live.GetStatus(),
-				Basedir:        live.GetBasedir(),
-				URL:            live.GetUrl(),
-				SupportsSend:   live.GetSupportsSend(),
-				SupportsStream: live.GetSupportsStream(),
-				SupportsStop:   live.GetSupportsStop(),
-			}, nil
-		},
-		ResumeSession: func(sess *session.Session) error {
-			store, err := openStore()
-			if err != nil {
-				return err
-			}
-			return resumeSession(childCommandContext(parentCtx, "dashboard.session.resume"), sess, store, true)
-		},
-		DeleteSession: func(sess *session.Session) error {
-			ctx := childCommandContext(parentCtx, "dashboard.session.delete")
-			outcome, err := daemon.DeleteSessionViaDaemonOutcome(ctx, sess.Name)
-			if outcome != daemon.LifecycleOutcomeReady {
-				return daemonLifecycleError(ctx, "delete", outcome, err)
-			}
-			return nil
-		},
-		RenameSession: func(sess *session.Session) (string, error) {
-			newName := sess.Name
-			oldName := sess.Metadata.Name
-			if oldName == "" || oldName == newName {
-				return newName, nil
-			}
-			ctx := childCommandContext(parentCtx, "dashboard.session.rename")
-			outcome, err := daemon.RenameSessionViaDaemonOutcome(ctx, oldName, newName)
-			if outcome != daemon.LifecycleOutcomeReady {
-				return newName, daemonLifecycleError(ctx, "rename", outcome, err)
-			}
-			return newName, nil
-		},
-		SetBasedir: func(sess *session.Session, newPath string) error {
-			if sess == nil || sess.Name == "" {
-				return fmt.Errorf("nil session")
-			}
-			ctx := childCommandContext(parentCtx, "dashboard.session.set_basedir")
-			outcome, err := daemon.UpdateSessionWorkspaceRootViaDaemonOutcome(ctx, sess.Name, newPath)
-			if outcome != daemon.LifecycleOutcomeReady {
-				return daemonLifecycleError(ctx, "update_session_workspace_root", outcome, err)
-			}
-			return nil
-		},
-		RefreshSummary: func(sess *session.Session, onDone func(*session.Session)) error {
-			if sess == nil || sess.Name == "" {
-				return fmt.Errorf("nil session")
-			}
-			ctx := childCommandContext(parentCtx, "dashboard.summary.refresh")
-			go func(name, workspaceRoot string) {
-				defer func() {
-					if recovered := recover(); recovered != nil {
-						cmdUILog.Logger().ErrorContext(ctx, "dashboard.refresh_summary.worker_panic",
-							"component", "tui",
-							"session", name,
-							"err", fmt.Errorf("panic: %v", recovered),
-						)
-					}
-				}()
-				defer func() {
-					if onDone != nil {
-						onDone(nil)
-					}
-				}()
-				resp, err := daemon.GetSessionDetailViaDaemon(ctx, name)
-				if err != nil {
-					return
-				}
-				all := resp.GetAllMessages()
-				if len(all) == 0 {
-					return
-				}
-				start := 0
-				if len(all) > 100 {
-					start = len(all) - 100
-				}
-				messages := make([]string, 0, len(all)-start)
-				for _, m := range all[start:] {
-					role := strings.TrimSpace(m.GetRole())
-					text := strings.TrimSpace(m.GetText())
-					if role == "" || text == "" {
-						continue
-					}
-					roleLabel := "User"
-					if strings.EqualFold(role, "assistant") {
-						roleLabel = "Assistant"
-					}
-					runes := []rune(text)
-					if len(runes) > 300 {
-						text = string(runes[:300])
-					}
-					messages = append(messages, fmt.Sprintf("[%s] %s", roleLabel, text))
-				}
-				if len(messages) == 0 {
-					return
-				}
-				client, err := daemon.ConnectOrStart(ctx)
-				if err != nil {
-					return
-				}
-				defer func() { _ = client.Close() }()
-				_ = client.UpdateContext(name, workspaceRoot, messages)
-			}(sess.Name, sess.Metadata.WorkspaceRoot)
-			return nil
-		},
-		ViewContent: func(sess *session.Session) string {
-			resp, err := daemon.GetSessionDetailViaDaemon(childCommandContext(parentCtx, "dashboard.session.view_content"), sess.Name)
-			if err != nil || len(resp.GetAllMessages()) == 0 {
-				return ""
-			}
-			var b strings.Builder
-			for _, m := range resp.GetAllMessages() {
-				if m.GetRole() == "" || m.GetText() == "" {
-					continue
-				}
-				b.WriteString(strings.ToUpper(m.GetRole()))
-				b.WriteString(":\n")
-				b.WriteString(m.GetText())
-				b.WriteString("\n\n")
-			}
-			return strings.TrimSpace(b.String())
-		},
-		ExportSession: func(sess *session.Session, req ui.SessionExportRequest) ([]byte, error) {
-			rpcReq := exportRequestToProto(sess, req)
-			resp, err := daemon.ExportSessionViaDaemon(childCommandContext(parentCtx, "dashboard.session.export"), rpcReq)
-			if err != nil {
-				return nil, err
-			}
-			return resp.GetBody(), nil
-		},
-		LoadExportStats: func(sess *session.Session) (ui.SessionExportStats, error) {
-			if sess == nil {
-				return ui.SessionExportStats{}, fmt.Errorf("nil session")
-			}
-			resp, err := daemon.GetSessionExportStatsViaDaemon(childCommandContext(parentCtx, "dashboard.session.export_stats"), sess.Name)
-			if err != nil {
-				return ui.SessionExportStats{}, err
-			}
-			return exportStatsFromProto(resp), nil
-		},
-		SubscribeRegistry: func() (<-chan ui.SessionEvent, func(), error) {
-			ctx := childCommandContext(parentCtx, "dashboard.registry.subscribe")
-			raw, cancel, err := daemon.SubscribeRegistry(ctx)
-			if err != nil {
-				return nil, nil, err
-			}
-			out := make(chan ui.SessionEvent, 8)
-			go func() {
-				defer func() {
-					if recovered := recover(); recovered != nil {
-						cmdUILog.Logger().ErrorContext(ctx, "dashboard.registry.forwarder_panic",
-							"component", "tui",
-							"err", fmt.Errorf("panic: %v", recovered),
-						)
-					}
-				}()
-				defer close(out)
-				for ev := range raw {
-					out <- sessionEventFromProto(ev)
-				}
-			}()
-			return out, cancel, nil
-		},
-		LoadConfigControls: func() ([]ui.ConfigControl, error) {
-			raw, err := daemon.ListConfigControlsViaDaemon(childCommandContext(parentCtx, "dashboard.config_controls.list"))
-			if err != nil {
-				return nil, err
-			}
-			return configControlsFromProto(raw), nil
-		},
-		UpdateConfigControl: func(key, value string) error {
-			_, err := daemon.UpdateConfigControlViaDaemon(childCommandContext(parentCtx, "dashboard.config_controls.update"), key, value)
-			return err
-		},
-		SendLiveSession: func(sessionID, text string) error {
-			ok, err := daemon.SendLiveSessionViaDaemon(childCommandContext(parentCtx, "dashboard.live_session.send"), sessionID, text)
-			if err != nil {
-				return err
-			}
-			if !ok {
-				return fmt.Errorf("session not listening on inject socket")
-			}
-			return nil
-		},
-		StreamLiveSession: func(sessionID string) (<-chan ui.LiveSessionEvent, func(), error) {
-			ctx := childCommandContext(parentCtx, "dashboard.live_session.stream")
-			raw, cancel, err := daemon.StreamLiveSessionViaDaemon(ctx, sessionID)
-			if err != nil {
-				return nil, nil, err
-			}
-			out := make(chan ui.LiveSessionEvent, 32)
-			go func() {
-				defer func() {
-					if recovered := recover(); recovered != nil {
-						cmdUILog.Logger().ErrorContext(ctx, "dashboard.live_session.forwarder_panic",
-							"component", "tui",
-							"session_id", sessionID,
-							"err", fmt.Errorf("panic: %v", recovered),
-						)
-					}
-				}()
-				defer close(out)
-				for event := range raw {
-					ts := time.Time{}
-					if event.GetTimestampNanos() > 0 {
-						ts = time.Unix(0, event.GetTimestampNanos())
-					}
-					out <- ui.LiveSessionEvent{
-						SessionID: event.GetSessionId(),
-						Kind:      event.GetKind(),
-						Role:      event.GetRole(),
-						Text:      event.GetText(),
-						Timestamp: ts,
-					}
-				}
-			}()
-			return out, cancel, nil
-		},
-		CompactPreview: func(req ui.CompactRunRequest) (<-chan ui.CompactEvent, <-chan error, func(), error) {
-			ctx := childCommandContext(parentCtx, "dashboard.compact.preview")
-			raw, done, cancel, err := daemon.CompactPreviewViaDaemon(ctx, daemon.CompactRunOptions{
-				SessionName:    req.SessionName,
-				TargetTokens:   req.TargetTokens,
-				ReservedTokens: req.ReservedTokens,
-				Model:          req.Model,
-				ModelExplicit:  req.ModelExplicit,
-				Thinking:       req.Thinking,
-				Images:         req.Images,
-				Tools:          req.Tools,
-				Chat:           req.Chat,
-				Summarize:      req.Summarize,
-				Force:          req.Force,
-			})
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			out := make(chan ui.CompactEvent, 64)
-			go func() {
-				defer func() {
-					if recovered := recover(); recovered != nil {
-						cmdUILog.Logger().ErrorContext(ctx, "dashboard.compact_preview.forwarder_panic",
-							"component", "tui",
-							"session", req.SessionName,
-							"err", fmt.Errorf("panic: %v", recovered),
-						)
-					}
-				}()
-				defer close(out)
-				for ev := range raw {
-					out <- compactEventFromProto(ev)
-				}
-			}()
-			return out, done, cancel, nil
-		},
-		CompactApply: func(req ui.CompactRunRequest) (<-chan ui.CompactEvent, <-chan error, func(), error) {
-			ctx := childCommandContext(parentCtx, "dashboard.compact.apply")
-			raw, done, cancel, err := daemon.CompactApplyViaDaemon(ctx, daemon.CompactRunOptions{
-				SessionName:    req.SessionName,
-				TargetTokens:   req.TargetTokens,
-				ReservedTokens: req.ReservedTokens,
-				Model:          req.Model,
-				ModelExplicit:  req.ModelExplicit,
-				Thinking:       req.Thinking,
-				Images:         req.Images,
-				Tools:          req.Tools,
-				Chat:           req.Chat,
-				Summarize:      req.Summarize,
-				Force:          req.Force,
-			})
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			out := make(chan ui.CompactEvent, 64)
-			go func() {
-				defer func() {
-					if recovered := recover(); recovered != nil {
-						cmdUILog.Logger().ErrorContext(ctx, "dashboard.compact_apply.forwarder_panic",
-							"component", "tui",
-							"session", req.SessionName,
-							"err", fmt.Errorf("panic: %v", recovered),
-						)
-					}
-				}()
-				defer close(out)
-				for ev := range raw {
-					out <- compactEventFromProto(ev)
-				}
-			}()
-			return out, done, cancel, nil
-		},
-		CompactUndo: func(sessionName string) (*ui.CompactUndoResult, error) {
-			resp, err := daemon.CompactUndoViaDaemon(childCommandContext(parentCtx, "dashboard.compact.undo"), sessionName)
-			if err != nil {
-				return nil, err
-			}
-			return &ui.CompactUndoResult{
-				AppliedAt:     resp.GetAppliedAt(),
-				BoundaryUUID:  resp.GetBoundaryUuid(),
-				SyntheticUUID: resp.GetSyntheticUuid(),
-			}, nil
-		},
-		GetSessionDetail: func(sess *session.Session) (ui.SessionDetail, error) {
-			resp, err := daemon.GetSessionDetailViaDaemon(childCommandContext(parentCtx, "dashboard.session.detail"), sess.Name)
-			if err != nil {
-				return ui.SessionDetail{}, err
-			}
-			return sessionDetailFromProto(resp), nil
-		},
+		ListSessions:            builder.listSessions,
+		LoadStats:               builder.loadStats,
+		SubscribeProviderStats:  builder.subscribeProviderStats,
+		RestartDaemon:           builder.restartDaemon,
+		StartSessionWithBasedir: builder.startSessionWithBasedir,
+		StartLiveSession:        builder.startLiveSession,
+		ResumeSession:           builder.resumeSession,
+		DeleteSession:           builder.deleteSession,
+		RenameSession:           builder.renameSession,
+		SetBasedir:              builder.setBasedir,
+		RefreshSummary:          builder.refreshSummary,
+		ViewContent:             builder.viewContent,
+		ExportSession:           builder.exportSession,
+		LoadExportStats:         builder.loadExportStats,
+		SubscribeRegistry:       builder.subscribeRegistry,
+		LoadConfigControls:      builder.loadConfigControls,
+		UpdateConfigControl:     builder.updateConfigControl,
+		SendLiveSession:         builder.sendLiveSession,
+		StreamLiveSession:       builder.streamLiveSession,
+		CompactPreview:          builder.compactPreview,
+		CompactApply:            builder.compactApply,
+		CompactUndo:             builder.compactUndo,
+		GetSessionDetail:        builder.getSessionDetail,
 	}
+}
+
+type appCallbackBuilder struct {
+	parentCtx          context.Context
+	dashboardLaunchCWD string
+}
+
+func (builder appCallbackBuilder) childContext(operation string) context.Context {
+	return childCommandContext(builder.parentCtx, operation)
+}
+
+func (builder appCallbackBuilder) openStore() (session.Store, error) {
+	return session.NewGlobalFileStore()
+}
+
+func (builder appCallbackBuilder) listSessions() (ui.SessionSnapshot, error) {
+	resp, err := daemon.ListSessionsViaDaemon(builder.childContext("dashboard.list_sessions"))
+	if err != nil {
+		return ui.SessionSnapshot{}, err
+	}
+	return sessionSnapshotFromProto(resp), nil
+}
+
+func (builder appCallbackBuilder) loadStats() (ui.DashboardStats, error) {
+	return loadDashboardStats(builder.childContext("dashboard.load_stats"))
+}
+
+func (builder appCallbackBuilder) subscribeProviderStats() (<-chan ui.ProviderStats, func(), error) {
+	ctx := builder.childContext("dashboard.provider_stats.subscribe")
+	raw, cancel, err := daemon.SubscribeProviderStats(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	out := make(chan ui.ProviderStats, 8)
+	go forwardProviderStats(ctx, raw, out)
+	return out, cancel, nil
+}
+
+func forwardProviderStats(ctx context.Context, raw <-chan *clydev1.ProviderStatsEvent, out chan<- ui.ProviderStats) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			cmdUILog.Logger().ErrorContext(ctx, "dashboard.provider_stats.forwarder_panic",
+				"component", "tui",
+				"err", fmt.Errorf("panic: %v", recovered),
+			)
+		}
+	}()
+	defer close(out)
+	for ev := range raw {
+		if ev == nil || ev.GetStats() == nil {
+			continue
+		}
+		stats := providerStatsFromProto([]*clydev1.ProviderStats{ev.GetStats()})
+		if len(stats) == 0 {
+			continue
+		}
+		out <- stats[0]
+	}
+}
+
+func (builder appCallbackBuilder) restartDaemon() error {
+	return daemon.RestartManagedDaemon(builder.childContext("dashboard.daemon.restart"))
+}
+
+func (builder appCallbackBuilder) startSessionWithBasedir(basedir string) error {
+	store, err := builder.openStore()
+	if err != nil {
+		return err
+	}
+	return startNewSessionInDir(builder.childContext("dashboard.session.start"), basedir, store, builder.dashboardLaunchCWD, false)
+}
+
+func (builder appCallbackBuilder) startLiveSession(req ui.LiveSessionStartRequest) (ui.LiveSession, error) {
+	ctx := builder.childContext("dashboard.live_session.start")
+	resp, err := daemon.StartLiveSessionViaDaemon(ctx, &clydev1.StartLiveSessionRequest{
+		Provider:  req.Provider,
+		Name:      req.Name,
+		Basedir:   req.Basedir,
+		Model:     req.Model,
+		Effort:    req.Effort,
+		Incognito: req.Incognito,
+	})
+	if err != nil {
+		return ui.LiveSession{}, err
+	}
+	live := resp.GetSession()
+	return ui.LiveSession{
+		Provider:       live.GetProvider(),
+		SessionName:    live.GetSessionName(),
+		SessionID:      live.GetSessionId(),
+		Status:         live.GetStatus(),
+		Basedir:        live.GetBasedir(),
+		URL:            live.GetUrl(),
+		SupportsSend:   live.GetSupportsSend(),
+		SupportsStream: live.GetSupportsStream(),
+		SupportsStop:   live.GetSupportsStop(),
+	}, nil
+}
+
+func (builder appCallbackBuilder) resumeSession(sess *session.Session) error {
+	store, err := builder.openStore()
+	if err != nil {
+		return err
+	}
+	return resumeSession(builder.childContext("dashboard.session.resume"), sess, store, true)
+}
+
+func (builder appCallbackBuilder) deleteSession(sess *session.Session) error {
+	ctx := builder.childContext("dashboard.session.delete")
+	outcome, err := daemon.DeleteSessionViaDaemonOutcome(ctx, sess.Name)
+	if outcome != daemon.LifecycleOutcomeReady {
+		return daemonLifecycleError(ctx, "delete", outcome, err)
+	}
+	return nil
+}
+
+func (builder appCallbackBuilder) renameSession(sess *session.Session) (string, error) {
+	newName := sess.Name
+	oldName := sess.Metadata.Name
+	if oldName == "" || oldName == newName {
+		return newName, nil
+	}
+	ctx := builder.childContext("dashboard.session.rename")
+	outcome, err := daemon.RenameSessionViaDaemonOutcome(ctx, oldName, newName)
+	if outcome != daemon.LifecycleOutcomeReady {
+		return newName, daemonLifecycleError(ctx, "rename", outcome, err)
+	}
+	return newName, nil
+}
+
+func (builder appCallbackBuilder) setBasedir(sess *session.Session, newPath string) error {
+	if sess == nil || sess.Name == "" {
+		return fmt.Errorf("nil session")
+	}
+	ctx := builder.childContext("dashboard.session.set_basedir")
+	outcome, err := daemon.UpdateSessionWorkspaceRootViaDaemonOutcome(ctx, sess.Name, newPath)
+	if outcome != daemon.LifecycleOutcomeReady {
+		return daemonLifecycleError(ctx, "update_session_workspace_root", outcome, err)
+	}
+	return nil
+}
+
+func (builder appCallbackBuilder) refreshSummary(sess *session.Session, onDone func(*session.Session)) error {
+	if sess == nil || sess.Name == "" {
+		return fmt.Errorf("nil session")
+	}
+	ctx := builder.childContext("dashboard.summary.refresh")
+	go refreshSummaryWorker(ctx, sess.Name, sess.Metadata.WorkspaceRoot, onDone)
+	return nil
+}
+
+func refreshSummaryWorker(ctx context.Context, name, workspaceRoot string, onDone func(*session.Session)) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			cmdUILog.Logger().ErrorContext(ctx, "dashboard.refresh_summary.worker_panic",
+				"component", "tui",
+				"session", name,
+				"err", fmt.Errorf("panic: %v", recovered),
+			)
+		}
+	}()
+	defer func() {
+		if onDone != nil {
+			onDone(nil)
+		}
+	}()
+	resp, err := daemon.GetSessionDetailViaDaemon(ctx, name)
+	if err != nil {
+		return
+	}
+	messages := summaryMessagesFromProto(resp.GetAllMessages())
+	if len(messages) == 0 {
+		return
+	}
+	client, err := daemon.ConnectOrStart(ctx)
+	if err != nil {
+		return
+	}
+	defer func() { _ = client.Close() }()
+	_ = client.UpdateContext(name, workspaceRoot, messages)
+}
+
+func summaryMessagesFromProto(all []*clydev1.DetailMessage) []string {
+	if len(all) == 0 {
+		return nil
+	}
+	start := 0
+	if len(all) > 100 {
+		start = len(all) - 100
+	}
+	messages := make([]string, 0, len(all)-start)
+	for _, message := range all[start:] {
+		role := strings.TrimSpace(message.GetRole())
+		text := strings.TrimSpace(message.GetText())
+		if role == "" || text == "" {
+			continue
+		}
+		roleLabel := "User"
+		if strings.EqualFold(role, "assistant") {
+			roleLabel = "Assistant"
+		}
+		runes := []rune(text)
+		if len(runes) > 300 {
+			text = string(runes[:300])
+		}
+		messages = append(messages, fmt.Sprintf("[%s] %s", roleLabel, text))
+	}
+	return messages
+}
+
+func (builder appCallbackBuilder) viewContent(sess *session.Session) string {
+	resp, err := daemon.GetSessionDetailViaDaemon(builder.childContext("dashboard.session.view_content"), sess.Name)
+	if err != nil || len(resp.GetAllMessages()) == 0 {
+		return ""
+	}
+	var content strings.Builder
+	for _, message := range resp.GetAllMessages() {
+		if message.GetRole() == "" || message.GetText() == "" {
+			continue
+		}
+		content.WriteString(strings.ToUpper(message.GetRole()))
+		content.WriteString(":\n")
+		content.WriteString(message.GetText())
+		content.WriteString("\n\n")
+	}
+	return strings.TrimSpace(content.String())
+}
+
+func (builder appCallbackBuilder) exportSession(sess *session.Session, req ui.SessionExportRequest) ([]byte, error) {
+	rpcReq := exportRequestToProto(sess, req)
+	resp, err := daemon.ExportSessionViaDaemon(builder.childContext("dashboard.session.export"), rpcReq)
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetBody(), nil
+}
+
+func (builder appCallbackBuilder) loadExportStats(sess *session.Session) (ui.SessionExportStats, error) {
+	if sess == nil {
+		return ui.SessionExportStats{}, fmt.Errorf("nil session")
+	}
+	resp, err := daemon.GetSessionExportStatsViaDaemon(builder.childContext("dashboard.session.export_stats"), sess.Name)
+	if err != nil {
+		return ui.SessionExportStats{}, err
+	}
+	return exportStatsFromProto(resp), nil
+}
+
+func (builder appCallbackBuilder) subscribeRegistry() (<-chan ui.SessionEvent, func(), error) {
+	ctx := builder.childContext("dashboard.registry.subscribe")
+	raw, cancel, err := daemon.SubscribeRegistry(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	out := make(chan ui.SessionEvent, 8)
+	go forwardRegistryEvents(ctx, raw, out)
+	return out, cancel, nil
+}
+
+func forwardRegistryEvents(ctx context.Context, raw <-chan *clydev1.SubscribeRegistryResponse, out chan<- ui.SessionEvent) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			cmdUILog.Logger().ErrorContext(ctx, "dashboard.registry.forwarder_panic",
+				"component", "tui",
+				"err", fmt.Errorf("panic: %v", recovered),
+			)
+		}
+	}()
+	defer close(out)
+	for ev := range raw {
+		out <- sessionEventFromProto(ev)
+	}
+}
+
+func (builder appCallbackBuilder) loadConfigControls() ([]ui.ConfigControl, error) {
+	raw, err := daemon.ListConfigControlsViaDaemon(builder.childContext("dashboard.config_controls.list"))
+	if err != nil {
+		return nil, err
+	}
+	return configControlsFromProto(raw), nil
+}
+
+func (builder appCallbackBuilder) updateConfigControl(key, value string) error {
+	_, err := daemon.UpdateConfigControlViaDaemon(builder.childContext("dashboard.config_controls.update"), key, value)
+	return err
+}
+
+func (builder appCallbackBuilder) sendLiveSession(sessionID, text string) error {
+	ok, err := daemon.SendLiveSessionViaDaemon(builder.childContext("dashboard.live_session.send"), sessionID, text)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("session not listening on inject socket")
+	}
+	return nil
+}
+
+func (builder appCallbackBuilder) streamLiveSession(sessionID string) (<-chan ui.LiveSessionEvent, func(), error) {
+	ctx := builder.childContext("dashboard.live_session.stream")
+	raw, cancel, err := daemon.StreamLiveSessionViaDaemon(ctx, sessionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	out := make(chan ui.LiveSessionEvent, 32)
+	go forwardLiveSessionEvents(ctx, sessionID, raw, out)
+	return out, cancel, nil
+}
+
+func forwardLiveSessionEvents(ctx context.Context, sessionID string, raw <-chan *clydev1.StreamLiveSessionResponse, out chan<- ui.LiveSessionEvent) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			cmdUILog.Logger().ErrorContext(ctx, "dashboard.live_session.forwarder_panic",
+				"component", "tui",
+				"session_id", sessionID,
+				"err", fmt.Errorf("panic: %v", recovered),
+			)
+		}
+	}()
+	defer close(out)
+	for event := range raw {
+		timestamp := time.Time{}
+		if event.GetTimestampNanos() > 0 {
+			timestamp = time.Unix(0, event.GetTimestampNanos())
+		}
+		out <- ui.LiveSessionEvent{
+			SessionID: event.GetSessionId(),
+			Kind:      event.GetKind(),
+			Role:      event.GetRole(),
+			Text:      event.GetText(),
+			Timestamp: timestamp,
+		}
+	}
+}
+
+func (builder appCallbackBuilder) compactPreview(req ui.CompactRunRequest) (<-chan ui.CompactEvent, <-chan error, func(), error) {
+	ctx := builder.childContext("dashboard.compact.preview")
+	return builder.streamCompactEvents(ctx, req, daemon.CompactPreviewViaDaemon, "dashboard.compact_preview.forwarder_panic")
+}
+
+func (builder appCallbackBuilder) compactApply(req ui.CompactRunRequest) (<-chan ui.CompactEvent, <-chan error, func(), error) {
+	ctx := builder.childContext("dashboard.compact.apply")
+	return builder.streamCompactEvents(ctx, req, daemon.CompactApplyViaDaemon, "dashboard.compact_apply.forwarder_panic")
+}
+
+type compactRunner func(context.Context, daemon.CompactRunOptions) (<-chan *clydev1.CompactEvent, <-chan error, context.CancelFunc, error)
+
+func (builder appCallbackBuilder) streamCompactEvents(ctx context.Context, req ui.CompactRunRequest, run compactRunner, panicEvent string) (<-chan ui.CompactEvent, <-chan error, func(), error) {
+	raw, done, cancel, err := run(ctx, compactRunOptionsFromUI(req))
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	out := make(chan ui.CompactEvent, 64)
+	go forwardCompactEvents(ctx, req.SessionName, raw, out, panicEvent)
+	return out, done, cancel, nil
+}
+
+func compactRunOptionsFromUI(req ui.CompactRunRequest) daemon.CompactRunOptions {
+	return daemon.CompactRunOptions{
+		SessionName:    req.SessionName,
+		TargetTokens:   req.TargetTokens,
+		ReservedTokens: req.ReservedTokens,
+		Model:          req.Model,
+		ModelExplicit:  req.ModelExplicit,
+		Thinking:       req.Thinking,
+		Images:         req.Images,
+		Tools:          req.Tools,
+		Chat:           req.Chat,
+		Summarize:      req.Summarize,
+		Force:          req.Force,
+	}
+}
+
+func forwardCompactEvents(ctx context.Context, sessionName string, raw <-chan *clydev1.CompactEvent, out chan<- ui.CompactEvent, panicEvent string) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			cmdUILog.Logger().ErrorContext(ctx, panicEvent,
+				"component", "tui",
+				"session", sessionName,
+				"err", fmt.Errorf("panic: %v", recovered),
+			)
+		}
+	}()
+	defer close(out)
+	for ev := range raw {
+		out <- compactEventFromProto(ev)
+	}
+}
+
+func (builder appCallbackBuilder) compactUndo(sessionName string) (*ui.CompactUndoResult, error) {
+	resp, err := daemon.CompactUndoViaDaemon(builder.childContext("dashboard.compact.undo"), sessionName)
+	if err != nil {
+		return nil, err
+	}
+	return &ui.CompactUndoResult{
+		AppliedAt:     resp.GetAppliedAt(),
+		BoundaryUUID:  resp.GetBoundaryUuid(),
+		SyntheticUUID: resp.GetSyntheticUuid(),
+	}, nil
+}
+
+func (builder appCallbackBuilder) getSessionDetail(sess *session.Session) (ui.SessionDetail, error) {
+	resp, err := daemon.GetSessionDetailViaDaemon(builder.childContext("dashboard.session.detail"), sess.Name)
+	if err != nil {
+		return ui.SessionDetail{}, err
+	}
+	return sessionDetailFromProto(resp), nil
 }
 
 func compactEventFromProto(ev *clydev1.CompactEvent) ui.CompactEvent {

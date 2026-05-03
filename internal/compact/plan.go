@@ -101,27 +101,11 @@ type IterationRecord struct {
 // when it reaches target exactly or cannot reduce further without
 // crossing below target.
 func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
-	if in.Slice == nil {
-		return nil, fmt.Errorf("plan: nil slice")
-	}
-	if in.BatchSize <= 0 {
-		in.BatchSize = 32
-	}
-	if in.ChatBatchSize <= 0 {
-		in.ChatBatchSize = 4
-	}
-	if in.Target > 0 && in.Counter == nil {
-		return nil, fmt.Errorf("plan: target set but no token counter")
+	if err := normalizePlanInput(&in); err != nil {
+		return nil, err
 	}
 
-	opts := SynthOptions{
-		ToolDefault:          ToolDetailFull,
-		ToolDetailOverride:   map[string]ToolDetail{},
-		DroppedChatEntries:   map[int]bool{},
-		DroppedSummaryChunks: map[int]map[string]bool{},
-	}
-	// Strippers without a target: apply the full effect of each flag
-	// and return without any count_tokens iterations.
+	opts := newSynthOptions()
 	if in.Target == 0 {
 		applyStrippersFully(in.Slice, in.Strippers, &opts)
 		result := &PlanResult{
@@ -131,321 +115,402 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 		return result, nil
 	}
 
-	// Target loop.
 	if in.StopTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, in.StopTimeout)
 		defer cancel()
 	}
 
-	// Precompute totals that do not change across iterations. The
-	// breakdown in each IterationRecord references these so the CLI
-	// dashboard can render progress bars.
-	totalToolPairs := len(in.Slice.PairIndex)
-	totalChatTurns := 0
-	for _, e := range in.Slice.PostBoundary {
-		if e.Type == "user" || e.Type == "assistant" {
-			totalChatTurns++
+	runner := newPlanRunner(ctx, in, opts)
+	return runner.runTarget()
+}
+
+func normalizePlanInput(in *PlanInput) error {
+	if in.Slice == nil {
+		return fmt.Errorf("plan: nil slice")
+	}
+	if in.BatchSize <= 0 {
+		in.BatchSize = 32
+	}
+	if in.ChatBatchSize <= 0 {
+		in.ChatBatchSize = 4
+	}
+	if in.Target > 0 && in.Counter == nil {
+		return fmt.Errorf("plan: target set but no token counter")
+	}
+	return nil
+}
+
+func newSynthOptions() SynthOptions {
+	return SynthOptions{
+		ToolDefault:          ToolDetailFull,
+		ToolDetailOverride:   map[string]ToolDetail{},
+		DroppedChatEntries:   map[int]bool{},
+		DroppedSummaryChunks: map[int]map[string]bool{},
+	}
+}
+
+type planRunner struct {
+	ctx            context.Context
+	in             PlanInput
+	opts           SynthOptions
+	totalToolPairs int
+	totalChatTurns int
+	baseline       int
+	tail           int
+	ctxTotal       int
+	log            []IterationRecord
+}
+
+func newPlanRunner(ctx context.Context, in PlanInput, opts SynthOptions) *planRunner {
+	return &planRunner{
+		ctx:            ctx,
+		in:             in,
+		opts:           opts,
+		totalToolPairs: len(in.Slice.PairIndex),
+		totalChatTurns: countChatTurns(in.Slice),
+	}
+}
+
+func countChatTurns(slice *Slice) int {
+	total := 0
+	for _, entry := range slice.PostBoundary {
+		if entry.Type == "user" || entry.Type == "assistant" {
+			total++
 		}
 	}
+	return total
+}
 
-	emitRecord := func(record IterationRecord) {
-		if in.OnIteration != nil {
-			in.OnIteration(record)
-		} else if in.Out != nil {
-			tag := "OK"
-			if record.Delta > 0 {
-				tag = fmt.Sprintf("+%d over", record.Delta)
-			} else if record.Delta < 0 {
-				tag = fmt.Sprintf("-%d under", -record.Delta)
-			}
-			fmt.Fprintf(in.Out, "  iter  %-44s tail=%d  ctx=%d  %s\n",
-				record.Step, record.TailTokens, record.CtxTotal, tag)
-		}
-	}
-
-	measure := func(label string) (IterationRecord, error) {
-		array := Synthesize(in.Slice, opts)
-		tail, err := in.Counter.CountSyntheticUser(ctx, array)
-		if err != nil {
-			slog.ErrorContext(ctx, "compact.plan.count_failed", "component", "compact", "step", label, "err", err)
-			return IterationRecord{}, fmt.Errorf("count_tokens after %q: %w", label, err)
-		}
-		ctxTotal := in.StaticOverhead + tail + in.Reserved
-
-		// Compute current fidelity breakdown from opts. ToolsFull is
-		// the implicit residual after counting overrides so the three
-		// tool counts always sum to totalToolPairs.
-		toolsLineOnly, toolsDropped := 0, 0
-		for _, lvl := range opts.ToolDetailOverride {
-			switch lvl {
-			case ToolDetailLineOnly:
-				toolsLineOnly++
-			case ToolDetailDrop:
-				toolsDropped++
-			}
-		}
-		toolsFull := totalToolPairs - toolsLineOnly - toolsDropped
-		chatDropped := len(opts.DroppedChatEntries) + droppedSummaryChunkCount(opts)
-
-		record := IterationRecord{
-			Step:              label,
-			TailTokens:        tail,
-			CtxTotal:          ctxTotal,
-			Delta:             ctxTotal - in.Target,
-			ThinkingDropped:   opts.DropThinking,
-			ImagesPlaceholder: opts.ImagesAsPlaceholder,
-			ToolsFull:         toolsFull,
-			ToolsLineOnly:     toolsLineOnly,
-			ToolsDropped:      toolsDropped,
-			ChatTurnsTotal:    totalChatTurns,
-			ChatTurnsDropped:  chatDropped,
-		}
-		return record, nil
-	}
-
-	var log []IterationRecord
-	rec, err := measure("baseline (no transforms)")
-	if err != nil {
+func (r *planRunner) runTarget() (*PlanResult, error) {
+	if err := r.measureBaseline(); err != nil {
 		return nil, err
 	}
-	tail, ctxTotal := rec.TailTokens, rec.CtxTotal
-	log = append(log, rec)
-	emitRecord(rec)
-	baseline := tail
-
-	accept := func(next IterationRecord) {
-		tail, ctxTotal = next.TailTokens, next.CtxTotal
-		log = append(log, next)
-		emitRecord(next)
+	if r.hitTarget() {
+		return r.finalize(true), nil
 	}
-
-	if ctxTotal <= in.Target {
-		return &PlanResult{
-			Options:      opts,
-			BaselineTail: baseline,
-			FinalTail:    tail,
-			Iterations:   log,
-			HitTarget:    true,
-			BoundaryTail: Synthesize(in.Slice, opts),
-		}, nil
+	if err := r.dropThinking(); err != nil {
+		return nil, err
 	}
-
-	// Step 1: thinking is dropped unconditionally for target loops.
-	// It carries no signal across turn boundaries in the live API.
-	if !opts.DropThinking {
-		opts.DropThinking = true
-		rec, err = measure("drop thinking")
-		if err != nil {
+	if r.hitTarget() {
+		return r.finalize(true), nil
+	}
+	if err := r.replaceImagesWithPlaceholders(); err != nil {
+		return nil, err
+	}
+	if r.hitTarget() {
+		return r.finalize(true), nil
+	}
+	if r.in.Strippers.Tools {
+		if err := r.runToolDemotions(); err != nil {
 			return nil, err
 		}
-		if rec.CtxTotal < in.Target {
-			// Skip this coarse step if it would cross below the floor.
-			opts.DropThinking = false
-		} else {
-			accept(rec)
-		}
-		if ctxTotal <= in.Target {
-			return finalize(in, opts, baseline, tail, log, true), nil
+		if r.hitTarget() {
+			return r.finalize(true), nil
 		}
 	}
-
-	// Step 2: images.
-	if (in.Strippers.Images || in.Strippers.Any() && allImpliedByTarget(in.Strippers)) && !opts.ImagesAsPlaceholder {
-		opts.ImagesAsPlaceholder = true
-		rec, err = measure("replace images with placeholders")
-		if err != nil {
+	if r.in.Strippers.Chat {
+		if err := r.runChatDrops(); err != nil {
 			return nil, err
 		}
-		if rec.CtxTotal < in.Target {
-			// Skip this coarse step if it would cross below the floor.
-			opts.ImagesAsPlaceholder = false
+	}
+	return r.finalize(r.hitTarget()), nil
+}
+
+func (r *planRunner) measureBaseline() error {
+	record, err := r.measure("baseline (no transforms)")
+	if err != nil {
+		return err
+	}
+	r.tail = record.TailTokens
+	r.ctxTotal = record.CtxTotal
+	r.baseline = record.TailTokens
+	r.accept(record)
+	return nil
+}
+
+func (r *planRunner) measure(label string) (IterationRecord, error) {
+	array := Synthesize(r.in.Slice, r.opts)
+	tail, err := r.in.Counter.CountSyntheticUser(r.ctx, array)
+	if err != nil {
+		slog.ErrorContext(r.ctx, "compact.plan.count_failed", "component", "compact", "step", label, "err", err)
+		return IterationRecord{}, fmt.Errorf("count_tokens after %q: %w", label, err)
+	}
+	ctxTotal := r.in.StaticOverhead + tail + r.in.Reserved
+	toolCounts := r.countToolFidelity()
+	chatDropped := len(r.opts.DroppedChatEntries) + droppedSummaryChunkCount(r.opts)
+
+	record := IterationRecord{
+		Step:              label,
+		TailTokens:        tail,
+		CtxTotal:          ctxTotal,
+		Delta:             ctxTotal - r.in.Target,
+		ThinkingDropped:   r.opts.DropThinking,
+		ImagesPlaceholder: r.opts.ImagesAsPlaceholder,
+		ToolsFull:         toolCounts.Full,
+		ToolsLineOnly:     toolCounts.LineOnly,
+		ToolsDropped:      toolCounts.Dropped,
+		ChatTurnsTotal:    r.totalChatTurns,
+		ChatTurnsDropped:  chatDropped,
+	}
+	return record, nil
+}
+
+type toolFidelityCounts struct {
+	Full     int
+	LineOnly int
+	Dropped  int
+}
+
+func (r *planRunner) countToolFidelity() toolFidelityCounts {
+	counts := toolFidelityCounts{}
+	for _, level := range r.opts.ToolDetailOverride {
+		switch level {
+		case ToolDetailLineOnly:
+			counts.LineOnly++
+		case ToolDetailDrop:
+			counts.Dropped++
+		}
+	}
+	counts.Full = r.totalToolPairs - counts.LineOnly - counts.Dropped
+	return counts
+}
+
+func (r *planRunner) accept(record IterationRecord) {
+	r.tail = record.TailTokens
+	r.ctxTotal = record.CtxTotal
+	r.log = append(r.log, record)
+	r.emitRecord(record)
+}
+
+func (r *planRunner) emitRecord(record IterationRecord) {
+	if r.in.OnIteration != nil {
+		r.in.OnIteration(record)
+		return
+	}
+	if r.in.Out == nil {
+		return
+	}
+	tag := "OK"
+	if record.Delta > 0 {
+		tag = fmt.Sprintf("+%d over", record.Delta)
+	} else if record.Delta < 0 {
+		tag = fmt.Sprintf("-%d under", -record.Delta)
+	}
+	fmt.Fprintf(r.in.Out, "  iter  %-44s tail=%d  ctx=%d  %s\n",
+		record.Step, record.TailTokens, record.CtxTotal, tag)
+}
+
+func (r *planRunner) hitTarget() bool {
+	return r.ctxTotal <= r.in.Target
+}
+
+func (r *planRunner) finalize(hit bool) *PlanResult {
+	return finalize(r.in, r.opts, r.baseline, r.tail, r.log, hit)
+}
+
+func (r *planRunner) dropThinking() error {
+	if r.opts.DropThinking {
+		return nil
+	}
+	r.opts.DropThinking = true
+	record, err := r.measure("drop thinking")
+	if err != nil {
+		return err
+	}
+	if record.CtxTotal < r.in.Target {
+		r.opts.DropThinking = false
+		return nil
+	}
+	r.accept(record)
+	return nil
+}
+
+func (r *planRunner) replaceImagesWithPlaceholders() error {
+	if !r.shouldReplaceImagesWithPlaceholders() {
+		return nil
+	}
+	r.opts.ImagesAsPlaceholder = true
+	record, err := r.measure("replace images with placeholders")
+	if err != nil {
+		return err
+	}
+	if record.CtxTotal < r.in.Target {
+		r.opts.ImagesAsPlaceholder = false
+		return nil
+	}
+	r.accept(record)
+	return nil
+}
+
+func (r *planRunner) shouldReplaceImagesWithPlaceholders() bool {
+	imagesSelected := r.in.Strippers.Images || r.in.Strippers.Any() && allImpliedByTarget(r.in.Strippers)
+	return imagesSelected && !r.opts.ImagesAsPlaceholder
+}
+
+func (r *planRunner) runToolDemotions() error {
+	toolIDs := orderedToolUseIDs(r.in.Slice)
+	nearTargetBrake := maxInt(20_000, r.in.Target/10)
+	passes := []toolDemotionPass{
+		{
+			Detail:         ToolDetailLineOnly,
+			RevertDetail:   ToolDetailFull,
+			DeleteOnRevert: true,
+			Label:          "tools full -> line-only",
+		},
+		{
+			Detail:       ToolDetailDrop,
+			RevertDetail: ToolDetailLineOnly,
+			Label:        "tools line-only -> drop",
+		},
+	}
+	for _, pass := range passes {
+		if err := r.runToolDemotionPass(toolIDs, nearTargetBrake, pass); err != nil {
+			return err
+		}
+		if r.hitTarget() {
+			return nil
+		}
+	}
+	return nil
+}
+
+type toolDemotionPass struct {
+	Detail         ToolDetail
+	RevertDetail   ToolDetail
+	DeleteOnRevert bool
+	Label          string
+}
+
+func (r *planRunner) runToolDemotionPass(toolIDs []string, nearTargetBrake int, pass toolDemotionPass) error {
+	index := 0
+	lastStepUnits := 0
+	lastStepAmount := 0
+	for index < len(toolIDs) && !r.hitTarget() {
+		batchSize := adaptiveToolBatchSize(r.in.BatchSize, r.ctxTotal-r.in.Target, nearTargetBrake, lastStepUnits, lastStepAmount)
+		batchEnd := minInt(index+batchSize, len(toolIDs))
+		stepUnits := batchEnd - index
+		r.applyToolDetail(toolIDs[index:batchEnd], pass.Detail)
+		record, err := r.measure(fmt.Sprintf("%s (oldest %d)", pass.Label, stepUnits))
+		if err != nil {
+			return err
+		}
+		if record.CtxTotal < r.in.Target {
+			r.revertToolDetail(toolIDs[index:batchEnd], pass)
+			if batchSize > 1 {
+				lastStepUnits = 0
+				lastStepAmount = 0
+				continue
+			}
+			break
+		}
+		lastStepUnits = stepUnits
+		lastStepAmount = maxInt(r.ctxTotal-record.CtxTotal, 0)
+		r.accept(record)
+		index = batchEnd
+	}
+	return nil
+}
+
+func adaptiveToolBatchSize(defaultBatchSize, deltaOver, nearTargetBrake, lastStepUnits, lastStepAmount int) int {
+	batchSize := defaultBatchSize
+	if lastStepUnits > 0 && lastStepAmount > 0 {
+		tokensPerUnit := maxInt(lastStepAmount/lastStepUnits, 1)
+		needed := maxInt(deltaOver/tokensPerUnit, 1)
+		if needed < batchSize {
+			batchSize = needed
+		}
+	}
+	if deltaOver <= nearTargetBrake {
+		batchSize = minInt(batchSize, 4)
+	}
+	if deltaOver <= nearTargetBrake/2 {
+		batchSize = minInt(batchSize, 2)
+	}
+	if deltaOver <= nearTargetBrake/4 {
+		batchSize = 1
+	}
+	return batchSize
+}
+
+func (r *planRunner) applyToolDetail(toolIDs []string, detail ToolDetail) {
+	for _, id := range toolIDs {
+		r.opts.ToolDetailOverride[id] = detail
+	}
+}
+
+func (r *planRunner) revertToolDetail(toolIDs []string, pass toolDemotionPass) {
+	for _, id := range toolIDs {
+		if pass.DeleteOnRevert {
+			delete(r.opts.ToolDetailOverride, id)
 		} else {
-			accept(rec)
-		}
-		if ctxTotal <= in.Target {
-			return finalize(in, opts, baseline, tail, log, true), nil
+			r.opts.ToolDetailOverride[id] = pass.RevertDetail
 		}
 	}
+}
 
-	// Steps 3 and 4: tools (full -> line-only, then line-only -> drop).
-	if in.Strippers.Tools {
-		toolIDs := orderedToolUseIDs(in.Slice)
-		nearTargetBrake := maxInt(20_000, in.Target/10)
-		// Demote oldest first to line-only.
-		i := 0
-		lastStepUnits := 0
-		lastStepAmount := 0
-		for i < len(toolIDs) && ctxTotal > in.Target {
-			deltaOver := ctxTotal - in.Target
-			batchSize := in.BatchSize
-			if lastStepUnits > 0 && lastStepAmount > 0 {
-				tokensPerUnit := maxInt(lastStepAmount/lastStepUnits, 1)
-				needed := maxInt(deltaOver/tokensPerUnit, 1)
-				if needed < batchSize {
-					batchSize = needed
-				}
-			}
-			if deltaOver <= nearTargetBrake {
-				batchSize = minInt(batchSize, 4)
-			}
-			if deltaOver <= nearTargetBrake/2 {
-				batchSize = minInt(batchSize, 2)
-			}
-			if deltaOver <= nearTargetBrake/4 {
-				batchSize = 1
-			}
-			batchEnd := min(i+batchSize, len(toolIDs))
-			stepUnits := batchEnd - i
-			for _, id := range toolIDs[i:batchEnd] {
-				opts.ToolDetailOverride[id] = ToolDetailLineOnly
-			}
-			label := fmt.Sprintf("tools full -> line-only (oldest %d)", stepUnits)
-			rec, err = measure(label)
-			if err != nil {
-				return nil, err
-			}
-			if rec.CtxTotal < in.Target {
-				// Revert this batch and hand off to later phases
-				// (chat) for finer-grained steps.
-				for _, id := range toolIDs[i:batchEnd] {
-					delete(opts.ToolDetailOverride, id)
-				}
-				if batchSize > 1 {
-					lastStepUnits = 0
-					lastStepAmount = 0
-					continue
-				}
-				break
-			}
-			lastStepUnits = stepUnits
-			lastStepAmount = maxInt(ctxTotal-rec.CtxTotal, 0)
-			accept(rec)
-			i = batchEnd
+func (r *planRunner) runChatDrops() error {
+	dropOrder := chatDropOrder(r.in.Slice)
+	index := 0
+	prevCtx := r.ctxTotal
+	lastDropTurns := 0
+	lastDropAmount := 0
+	nearTargetBrake := maxInt(20_000, r.in.Target/10)
+	for index < len(dropOrder) && !r.hitTarget() {
+		batchSize := adaptiveChatBatchSize(r.in.ChatBatchSize, r.ctxTotal-r.in.Target, nearTargetBrake, lastDropTurns, lastDropAmount)
+		batchEnd := minInt(index+batchSize, len(dropOrder))
+		r.applyChatDropSteps(dropOrder[index:batchEnd])
+		record, err := r.measure(fmt.Sprintf("drop oldest chat turns (%d)", batchEnd-index))
+		if err != nil {
+			return err
 		}
-		if ctxTotal <= in.Target {
-			return finalize(in, opts, baseline, tail, log, true), nil
+		if record.CtxTotal < r.in.Target {
+			r.revertChatDropSteps(dropOrder[index:batchEnd])
+			if batchSize > 1 {
+				lastDropTurns = 0
+				lastDropAmount = 0
+				continue
+			}
+			break
 		}
-		// Demote oldest first to drop.
-		i = 0
-		lastStepUnits = 0
-		lastStepAmount = 0
-		for i < len(toolIDs) && ctxTotal > in.Target {
-			deltaOver := ctxTotal - in.Target
-			batchSize := in.BatchSize
-			if lastStepUnits > 0 && lastStepAmount > 0 {
-				tokensPerUnit := maxInt(lastStepAmount/lastStepUnits, 1)
-				needed := maxInt(deltaOver/tokensPerUnit, 1)
-				if needed < batchSize {
-					batchSize = needed
-				}
-			}
-			if deltaOver <= nearTargetBrake {
-				batchSize = minInt(batchSize, 4)
-			}
-			if deltaOver <= nearTargetBrake/2 {
-				batchSize = minInt(batchSize, 2)
-			}
-			if deltaOver <= nearTargetBrake/4 {
-				batchSize = 1
-			}
-			batchEnd := min(i+batchSize, len(toolIDs))
-			stepUnits := batchEnd - i
-			for _, id := range toolIDs[i:batchEnd] {
-				opts.ToolDetailOverride[id] = ToolDetailDrop
-			}
-			label := fmt.Sprintf("tools line-only -> drop (oldest %d)", stepUnits)
-			rec, err = measure(label)
-			if err != nil {
-				return nil, err
-			}
-			if rec.CtxTotal < in.Target {
-				// Revert this batch and hand off to chat for finer
-				// control near the floor.
-				for _, id := range toolIDs[i:batchEnd] {
-					opts.ToolDetailOverride[id] = ToolDetailLineOnly
-				}
-				if batchSize > 1 {
-					lastStepUnits = 0
-					lastStepAmount = 0
-					continue
-				}
-				break
-			}
-			lastStepUnits = stepUnits
-			lastStepAmount = maxInt(ctxTotal-rec.CtxTotal, 0)
-			accept(rec)
-			i = batchEnd
-		}
-		if ctxTotal <= in.Target {
-			return finalize(in, opts, baseline, tail, log, true), nil
-		}
+		r.accept(record)
+		lastDropTurns = batchEnd - index
+		lastDropAmount = maxInt(prevCtx-r.ctxTotal, 0)
+		prevCtx = r.ctxTotal
+		index = batchEnd
 	}
+	return nil
+}
 
-	// Step 5: chat. Drop oldest text turns while preserving the most
-	// recent assistant + its preceding user. Uses an adaptive batch
-	// size: starts at ChatBatchSize, then shrinks as we approach the
-	// target so we land near target rather than punching through.
-	// If a candidate drop would cross below target, the planner reverts
-	// it and stops (or retries with a smaller batch).
-	if in.Strippers.Chat {
-		dropOrder := chatDropOrder(in.Slice)
-		i := 0
-		prevCtx := ctxTotal
-		lastDropTurns := 0
-		lastDropAmount := 0
-		nearTargetBrake := maxInt(20_000, in.Target/10)
-		for i < len(dropOrder) && ctxTotal > in.Target {
-			deltaOver := ctxTotal - in.Target
-			batchSize := in.ChatBatchSize
-			// First chat drop has no prior estimate; keep it
-			// conservative. Also apply a near-target brake so chat
-			// drops walk one turn at a time before crossing under.
-			if lastDropTurns == 0 || deltaOver <= nearTargetBrake {
-				batchSize = 1
-			} else if lastDropAmount > 0 {
-				// Estimate tokens per turn from the last observed drop
-				// and size the batch so it should land within one batch
-				// of the target.
-				tokensPerTurn := lastDropAmount / lastDropTurns
-				if tokensPerTurn > 0 {
-					estNeeded := (deltaOver / tokensPerTurn) + 1
-					if estNeeded < batchSize {
-						batchSize = maxInt(estNeeded, 1)
-					}
-				}
-			}
-			batchEnd := min(i+batchSize, len(dropOrder))
-			for _, step := range dropOrder[i:batchEnd] {
-				applyChatDropStep(opts.DroppedChatEntries, opts.DroppedSummaryChunks, step)
-			}
-			label := fmt.Sprintf("drop oldest chat turns (%d)", batchEnd-i)
-			rec, err = measure(label)
-			if err != nil {
-				return nil, err
-			}
-			if rec.CtxTotal < in.Target {
-				// Undo this drop; near the floor we must not cross below.
-				for _, step := range dropOrder[i:batchEnd] {
-					revertChatDropStep(opts.DroppedChatEntries, opts.DroppedSummaryChunks, step)
-				}
-				if batchSize > 1 {
-					lastDropTurns = 0
-					lastDropAmount = 0
-					continue
-				}
-				break
-			}
-			accept(rec)
-			lastDropTurns = batchEnd - i
-			lastDropAmount = maxInt(prevCtx-ctxTotal, 0)
-			prevCtx = ctxTotal
-			i = batchEnd
-		}
+func adaptiveChatBatchSize(defaultBatchSize, deltaOver, nearTargetBrake, lastDropTurns, lastDropAmount int) int {
+	batchSize := defaultBatchSize
+	if lastDropTurns == 0 || deltaOver <= nearTargetBrake {
+		return 1
 	}
+	if lastDropAmount <= 0 {
+		return batchSize
+	}
+	tokensPerTurn := lastDropAmount / lastDropTurns
+	if tokensPerTurn <= 0 {
+		return batchSize
+	}
+	estimatedNeeded := deltaOver/tokensPerTurn + 1
+	if estimatedNeeded < batchSize {
+		batchSize = maxInt(estimatedNeeded, 1)
+	}
+	return batchSize
+}
 
-	hit := ctxTotal <= in.Target
-	return finalize(in, opts, baseline, tail, log, hit), nil
+func (r *planRunner) applyChatDropSteps(steps []chatDropStep) {
+	for _, step := range steps {
+		applyChatDropStep(r.opts.DroppedChatEntries, r.opts.DroppedSummaryChunks, step)
+	}
+}
+
+func (r *planRunner) revertChatDropSteps(steps []chatDropStep) {
+	for _, step := range steps {
+		revertChatDropStep(r.opts.DroppedChatEntries, r.opts.DroppedSummaryChunks, step)
+	}
 }
 
 // maxInt is a tiny helper to avoid importing golang.org/x/exp or

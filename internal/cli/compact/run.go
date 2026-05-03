@@ -3,6 +3,7 @@ package compact
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -82,6 +83,22 @@ func resolveModelLikeTUI(
 	return fallback, fallback, "fallback"
 }
 
+type compactCommandInput struct {
+	Name          string
+	Session       *session.Session
+	Store         session.Store
+	Transcript    string
+	Target        int
+	Strippers     compactengine.Strippers
+	Apply         bool
+	Force         bool
+	Reserved      int
+	Model         string
+	ModelDisplay  string
+	ModelExplicit bool
+	ShowPasses    bool
+}
+
 func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 	name := args[0]
 	cliCompactLog.Logger().Info("cli.compact.invoked", "session", name)
@@ -91,64 +108,116 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 		return err
 	}
 
+	input, err := prepareCompactCommandInput(f, name)
+	if err != nil {
+		return err
+	}
 	out := f.IOStreams.Out
+
+	if handled, err := runCompactMaintenanceAction(cmd, out, input); handled || err != nil {
+		return err
+	}
+	input, err = completeCompactCommandInput(cmd, input, args)
+	if err != nil {
+		return err
+	}
+	if !input.Strippers.Any() && input.Target == 0 {
+		refresh, _ := cmd.Flags().GetBool("refresh")
+		return runMetricsDashboard(cmd.Context(), out, input.Session, input.Transcript, refresh)
+	}
+	if input.Target > 0 {
+		return runTargetCompactViaDaemon(cmd, out, input)
+	}
+	return runLocalCompact(cmd, out, input)
+}
+
+func prepareCompactCommandInput(f *cli.Factory, name string) (compactCommandInput, error) {
 	store, err := f.Store()
 	if err != nil {
 		cliCompactLog.Logger().Error("cli.compact.store_failed", "session", name, "err", err)
-		return err
+		return compactCommandInput{}, err
 	}
+	sess, err := resolveCompactSession(store, name)
+	if err != nil {
+		return compactCommandInput{}, err
+	}
+	path, err := validateCompactTranscript(name, sess)
+	if err != nil {
+		return compactCommandInput{}, err
+	}
+	return compactCommandInput{
+		Name:       name,
+		Session:    sess,
+		Store:      store,
+		Transcript: path,
+	}, nil
+}
+
+func completeCompactCommandInput(cmd *cobra.Command, input compactCommandInput, args []string) (compactCommandInput, error) {
+	target, err := parseCompactTarget(cmd, input.Name, args)
+	if err != nil {
+		return compactCommandInput{}, err
+	}
+	flags, err := readCompactFlags(cmd, input.Store, input.Session, target)
+	if err != nil {
+		return compactCommandInput{}, err
+	}
+	input.Target = target
+	input.Strippers = flags.Strippers
+	input.Apply = flags.Apply
+	input.Force = flags.Force
+	input.Reserved = flags.Reserved
+	input.Model = flags.Model
+	input.ModelDisplay = flags.ModelDisplay
+	input.ModelExplicit = flags.ModelExplicit
+	input.ShowPasses = flags.ShowPasses
+	return input, nil
+}
+
+func resolveCompactSession(store session.Store, name string) (*session.Session, error) {
 	sess, err := store.Resolve(name)
 	if err != nil {
 		cliCompactLog.Logger().Error("cli.compact.resolve_failed", "session", name, "err", err)
-		return err
+		return nil, err
 	}
 	if sess == nil {
 		cliCompactLog.Logger().Warn("cli.compact.session_not_found", "session", name)
-		return fmt.Errorf("session %q not found", name)
+		return nil, fmt.Errorf("session %q not found", name)
 	}
+	return sess, nil
+}
+
+func validateCompactTranscript(name string, sess *session.Session) (string, error) {
 	path := sess.Metadata.ProviderTranscriptPath()
 	if path == "" {
 		cliCompactLog.Logger().Warn("cli.compact.no_transcript_path", "session", name, "session_id", sess.Metadata.ProviderSessionID())
-		return fmt.Errorf("session %q has no transcript path", name)
+		return "", fmt.Errorf("session %q has no transcript path", name)
 	}
 	if _, err := os.Stat(path); err != nil {
 		cliCompactLog.Logger().Error("cli.compact.transcript_stat_failed", "session", name, "transcript", path, "err", err)
-		return fmt.Errorf("transcript not found: %s", path)
+		return "", fmt.Errorf("transcript not found: %s", path)
 	}
+	return path, nil
+}
 
-	if listB, _ := cmd.Flags().GetBool("list-backups"); listB {
-		return runListBackups(out, sess)
-	}
-	if undo, _ := cmd.Flags().GetBool("undo"); undo {
-		return runUndo(out, sess, path)
-	}
-	if cal, _ := cmd.Flags().GetInt("calibrate"); cal > 0 {
-		model, _ := cmd.Flags().GetString("model")
-		return runCalibrate(out, sess, cal, model)
-	}
-	if auto, _ := cmd.Flags().GetBool("auto-calibrate"); auto {
-		model, _ := cmd.Flags().GetString("model")
-		return runAutoCalibrate(cmd.Context(), out, sess, model)
-	}
-
-	// Target can come from either the positional [target] arg or the
-	// --target flag. The flag wins when both are present so scripts
-	// can be position-independent.
-	target := 0
+func parseCompactTarget(cmd *cobra.Command, name string, args []string) (int, error) {
 	targetFlag, _ := cmd.Flags().GetString("target")
 	targetRaw := strings.TrimSpace(targetFlag)
 	if targetRaw == "" && len(args) == 2 {
 		targetRaw = args[1]
 	}
-	if targetRaw != "" {
-		n, perr := ParseTokenCount(targetRaw)
-		if perr != nil {
-			slog.WarnContext(cmd.Context(), "cli.compact.invalid_target", "session", name, "target_raw", targetRaw, "err", perr)
-			return fmt.Errorf("invalid target %q: %w", targetRaw, perr)
-		}
-		target = n
+	if targetRaw == "" {
+		return 0, nil
 	}
+	target, err := ParseTokenCount(targetRaw)
+	if err != nil {
+		slog.WarnContext(cmd.Context(), "cli.compact.invalid_target", "session", name, "target_raw", targetRaw, "err", err)
+		return 0, fmt.Errorf("invalid target %q: %w", targetRaw, err)
+	}
+	return target, nil
+}
 
+func readCompactFlags(cmd *cobra.Command, store session.Store, sess *session.Session, target int) (compactCommandInput, error) {
 	flagTools, _ := cmd.Flags().GetBool("tools")
 	flagThinking, _ := cmd.Flags().GetBool("thinking")
 	flagImages, _ := cmd.Flags().GetBool("images")
@@ -167,7 +236,7 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 		model = resolvedModel
 		modelDisplay = resolvedDisplayModel
 		cliCompactLog.Logger().Info("cli.compact.model_resolved",
-			"session", name,
+			"session", sess.Name,
 			"model_count", model,
 			"model_display", modelDisplay,
 			"source", resolvedSource,
@@ -184,165 +253,228 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 		strippers.SetAll()
 	}
 	if err := mergeTypeFlag(&strippers, flagTypes); err != nil {
-		cliCompactLog.Logger().Warn("cli.compact.type_flag_invalid", "session", name, "err", err)
-		return err
-	}
-	if !strippers.Any() && target == 0 {
-		refresh, _ := cmd.Flags().GetBool("refresh")
-		return runMetricsDashboard(cmd.Context(), out, sess, path, refresh)
+		cliCompactLog.Logger().Warn("cli.compact.type_flag_invalid", "session", sess.Name, "err", err)
+		return compactCommandInput{}, err
 	}
 	if target > 0 && !strippers.Any() {
 		strippers.SetAll()
 	}
 	if strippers.Chat && target == 0 {
-		cliCompactLog.Logger().Warn("cli.compact.chat_requires_target", "session", name)
-		return fmt.Errorf("--chat requires a positive target token count")
-	}
-	if target > 0 {
-		mode := ModePreview
-		if apply {
-			mode = ModeApply
-		}
-		isTTY := isTerminal(out)
-		summarize, _ := cmd.Flags().GetBool("summarize")
-		_, _ = fmt.Fprintf(out, "starting compact %s for %s; gathering startup stats...\n",
-			strings.ToLower(mode.Label()), sess.Name)
-		daemonErr := runCompactViaDaemon(cmd.Context(), out, compactDaemonRunInput{
-			SessionName:    sess.Name,
-			Mode:           mode,
-			Target:         target,
-			Reserved:       reserved,
-			Model:          model,
-			ModelExplicit:  modelExplicit,
-			Strippers:      strippers,
-			Summarize:      summarize,
-			Force:          force,
-			ShowPasses:     showPasses && !isTTY,
-			IsTTY:          isTTY,
-			TranscriptPath: path,
-		})
-		if daemonErr == nil {
-			cliCompactLog.Logger().Info("cli.compact.completed_via_daemon", "session", name, "mode", mode.Label())
-			return nil
-		}
-		cliCompactLog.Logger().Error("cli.compact.daemon_path_failed", "session", name, slog.Any("err", daemonErr))
-		return daemonErr
+		cliCompactLog.Logger().Warn("cli.compact.chat_requires_target", "session", sess.Name)
+		return compactCommandInput{}, fmt.Errorf("--chat requires a positive target token count")
 	}
 
-	slice, err := compactengine.LoadSlice(path)
+	return compactCommandInput{
+		Strippers:     strippers,
+		Apply:         apply,
+		Force:         force,
+		Reserved:      reserved,
+		Model:         model,
+		ModelDisplay:  modelDisplay,
+		ModelExplicit: modelExplicit,
+		ShowPasses:    showPasses,
+	}, nil
+}
+
+func runCompactMaintenanceAction(cmd *cobra.Command, out io.Writer, input compactCommandInput) (bool, error) {
+	if listBackups, _ := cmd.Flags().GetBool("list-backups"); listBackups {
+		return true, runListBackups(out, input.Session)
+	}
+	if undo, _ := cmd.Flags().GetBool("undo"); undo {
+		return true, runUndo(out, input.Session, input.Transcript)
+	}
+	if calibrationTarget, _ := cmd.Flags().GetInt("calibrate"); calibrationTarget > 0 {
+		model, _ := cmd.Flags().GetString("model")
+		return true, runCalibrate(out, input.Session, calibrationTarget, model)
+	}
+	if autoCalibrate, _ := cmd.Flags().GetBool("auto-calibrate"); autoCalibrate {
+		model, _ := cmd.Flags().GetString("model")
+		return true, runAutoCalibrate(cmd.Context(), out, input.Session, model)
+	}
+	return false, nil
+}
+
+func runTargetCompactViaDaemon(cmd *cobra.Command, out io.Writer, input compactCommandInput) error {
+	mode := compactMode(input.Apply)
+	isTTY := isTerminal(out)
+	summarize, _ := cmd.Flags().GetBool("summarize")
+	_, _ = fmt.Fprintf(out, "starting compact %s for %s; gathering startup stats...\n",
+		strings.ToLower(mode.Label()), input.Session.Name)
+	daemonErr := runCompactViaDaemon(cmd.Context(), out, compactDaemonRunInput{
+		SessionName:    input.Session.Name,
+		Mode:           mode,
+		Target:         input.Target,
+		Reserved:       input.Reserved,
+		Model:          input.Model,
+		ModelExplicit:  input.ModelExplicit,
+		Strippers:      input.Strippers,
+		Summarize:      summarize,
+		Force:          input.Force,
+		ShowPasses:     input.ShowPasses && !isTTY,
+		IsTTY:          isTTY,
+		TranscriptPath: input.Transcript,
+	})
+	if daemonErr == nil {
+		cliCompactLog.Logger().Info("cli.compact.completed_via_daemon", "session", input.Name, "mode", mode.Label())
+		return nil
+	}
+	cliCompactLog.Logger().Error("cli.compact.daemon_path_failed", "session", input.Name, slog.Any("err", daemonErr))
+	return daemonErr
+}
+
+func compactMode(apply bool) Mode {
+	if apply {
+		return ModeApply
+	}
+	return ModePreview
+}
+
+func runLocalCompact(cmd *cobra.Command, out io.Writer, input compactCommandInput) error {
+	slice, err := compactengine.LoadSlice(input.Transcript)
 	if err != nil {
-		cliCompactLog.Logger().Error("cli.compact.load_slice_failed", "session", name, "transcript", path, "err", err)
+		cliCompactLog.Logger().Error("cli.compact.load_slice_failed", "session", input.Name, "transcript", input.Transcript, "err", err)
 		return err
-	}
-
-	staticOverhead := 0
-	if target > 0 {
-		cal, ok, calErr := compactengine.LoadCalibration(sess.Metadata.ProviderSessionID())
-		if calErr != nil {
-			cliCompactLog.Logger().Error("cli.compact.calibration_load_failed", "session", name, "session_id", sess.Metadata.ProviderSessionID(), slog.Any("err", calErr))
-			return calErr
-		}
-		if !ok {
-			// Auto-probe on miss. Spawning claude with /context is the
-			// only way to learn the session's static overhead and we
-			// know how to do it transparently, so running it
-			// automatically is strictly better than refusing the
-			// command and asking the user to do the probe themselves.
-			cliCompactLog.Logger().Info("cli.compact.calibration_auto_probe", "session", name, "session_id", sess.Metadata.ProviderSessionID())
-			_, _ = fmt.Fprintf(out, "no calibration on file; probing claude /context for static overhead (30-60 seconds)...\n")
-			if err := runAutoCalibrate(cmd.Context(), out, sess, model); err != nil {
-				cliCompactLog.Logger().Error("cli.compact.calibration_auto_probe_failed", "session", name, "session_id", sess.Metadata.ProviderSessionID(), "err", err)
-				return err
-			}
-			cal, ok, calErr = compactengine.LoadCalibration(sess.Metadata.ProviderSessionID())
-			if calErr != nil || !ok {
-				cliCompactLog.Logger().Error("cli.compact.calibration_post_probe_missing", "session", name, "session_id", sess.Metadata.ProviderSessionID(), slog.Any("err", calErr))
-				return fmt.Errorf("auto-probe finished but calibration still missing for %q", name)
-			}
-		}
-		staticOverhead = cal.StaticOverhead
 	}
 
 	ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Minute)
 	defer cancel()
-
-	mode := ModePreview
-	if apply {
-		mode = ModeApply
+	mode := compactMode(input.Apply)
+	staticOverhead, err := loadStaticOverhead(cmd, out, input)
+	if err != nil {
+		return err
 	}
-	if target > 0 {
-		// Emit immediate feedback before any potentially slow context
-		// usage probe or token-count setup work.
-		_, _ = fmt.Fprintf(out, "starting compact %s for %s; gathering startup stats...\n",
-			strings.ToLower(mode.Label()), sess.Name)
-	}
-
-	// Phase 1: upfront info panel. Every number we can show without
-	// touching the network goes here so the user sees the full picture
-	// before the long calculation begins.
-	var upfrontStats UpfrontStats
-	if target > 0 {
-		thinking, images, toolPairs, chatTurns := categoryCounts(slice)
-		currentTotal, maxTokens := 0, 0
-		calibDate := ""
-		layer := contextusage.NewDefault(sess, model, "")
-		if u, uerr := layer.Usage(ctx, contextusage.UsageOptions{MaxAge: 24 * time.Hour}); uerr == nil {
-			currentTotal = u.TotalTokens
-			maxTokens = u.MaxTokens
-		}
-		if cal, ok, _ := compactengine.LoadCalibration(sess.Metadata.ProviderSessionID()); ok {
-			calibDate = cal.CapturedAt.UTC().Format("2006-01-02")
-		}
-		upfrontStats = UpfrontStats{
-			SessionName:   sess.Name,
-			SessionID:     sess.Metadata.ProviderSessionID(),
-			Model:         modelDisplay,
-			Mode:          mode,
-			CurrentTotal:  currentTotal,
-			MaxTokens:     maxTokens,
-			Target:        target,
-			StaticFloor:   staticOverhead,
-			Reserved:      reserved,
-			Thinking:      thinking,
-			Images:        images,
-			ToolPairs:     toolPairs,
-			ChatTurns:     chatTurns,
-			StrippersText: strippersDescribe(strippers),
-			TargetDate:    calibDate,
-		}
-		if !isTerminal(out) {
-			RenderUpfrontPanel(out, upfrontStats)
-		}
+	upfrontStats := renderCompactUpfrontStats(ctx, out, input, slice, mode, staticOverhead)
+	counter, err := newCompactCounter(input)
+	if err != nil {
+		return err
 	}
 
-	var counter compactengine.Counter
-	if target > 0 {
-		key, keyErr := compactengine.AnthropicAPIKey()
-		if keyErr != nil {
-			cliCompactLog.Logger().Error("cli.compact.api_key_failed", "session", name, slog.Any("err", keyErr))
-			return keyErr
-		}
-		layer := contextusage.NewDefault(sess, model, key)
-		counter = &layerCounter{layer: layer, model: model}
+	planResult, isTTY, progress, err := runCompactPlan(ctx, out, input, slice, mode, staticOverhead, counter, upfrontStats)
+	if err != nil {
+		return err
 	}
+	renderCompactResult(out, input, slice, planResult, progress, staticOverhead, isTTY)
+	if !input.Apply {
+		cliCompactLog.Logger().Info("cli.compact.preview.completed", "session", input.Name, "applied", false)
+		return nil
+	}
+	maybeSummarizeCompact(cmd, ctx, out, input, slice, planResult)
+	if err := runApply(out, input.Session, slice, input.Strippers, input.Target, planResult, input.Force); err != nil {
+		return err
+	}
+	if !isTTY {
+		RenderFinalApply(out, planResult, input.Target, staticOverhead, input.Reserved, input.Transcript)
+	}
+	return nil
+}
 
-	// Phase 2: rolling spinner during the target loop. Mode banner
-	// stays visible on every frame so destructive runs cannot be
-	// confused for preview runs.
-	cliCompactLog.Logger().Info("cli.compact.preview.run_plan.started", "session", name, "target", target, "mode", mode.Label())
+func loadStaticOverhead(cmd *cobra.Command, out io.Writer, input compactCommandInput) (int, error) {
+	if input.Target == 0 {
+		return 0, nil
+	}
+	cal, ok, err := compactengine.LoadCalibration(input.Session.Metadata.ProviderSessionID())
+	if err != nil {
+		cliCompactLog.Logger().Error("cli.compact.calibration_load_failed", "session", input.Name, "session_id", input.Session.Metadata.ProviderSessionID(), slog.Any("err", err))
+		return 0, err
+	}
+	if !ok {
+		cliCompactLog.Logger().Info("cli.compact.calibration_auto_probe", "session", input.Name, "session_id", input.Session.Metadata.ProviderSessionID())
+		_, _ = fmt.Fprintf(out, "no calibration on file; probing claude /context for static overhead (30-60 seconds)...\n")
+		if err := runAutoCalibrate(cmd.Context(), out, input.Session, input.Model); err != nil {
+			cliCompactLog.Logger().Error("cli.compact.calibration_auto_probe_failed", "session", input.Name, "session_id", input.Session.Metadata.ProviderSessionID(), "err", err)
+			return 0, err
+		}
+		cal, ok, err = compactengine.LoadCalibration(input.Session.Metadata.ProviderSessionID())
+		if err != nil || !ok {
+			cliCompactLog.Logger().Error("cli.compact.calibration_post_probe_missing", "session", input.Name, "session_id", input.Session.Metadata.ProviderSessionID(), slog.Any("err", err))
+			return 0, fmt.Errorf("auto-probe finished but calibration still missing for %q", input.Name)
+		}
+	}
+	return cal.StaticOverhead, nil
+}
+
+func renderCompactUpfrontStats(
+	ctx context.Context,
+	out io.Writer,
+	input compactCommandInput,
+	slice *compactengine.Slice,
+	mode Mode,
+	staticOverhead int,
+) UpfrontStats {
+	if input.Target == 0 {
+		return UpfrontStats{}
+	}
+	thinking, images, toolPairs, chatTurns := categoryCounts(slice)
+	currentTotal, maxTokens := 0, 0
+	calibDate := ""
+	layer := contextusage.NewDefault(input.Session, input.Model, "")
+	if usage, err := layer.Usage(ctx, contextusage.UsageOptions{MaxAge: 24 * time.Hour}); err == nil {
+		currentTotal = usage.TotalTokens
+		maxTokens = usage.MaxTokens
+	}
+	if cal, ok, _ := compactengine.LoadCalibration(input.Session.Metadata.ProviderSessionID()); ok {
+		calibDate = cal.CapturedAt.UTC().Format("2006-01-02")
+	}
+	upfrontStats := UpfrontStats{
+		SessionName:   input.Session.Name,
+		SessionID:     input.Session.Metadata.ProviderSessionID(),
+		Model:         input.ModelDisplay,
+		Mode:          mode,
+		CurrentTotal:  currentTotal,
+		MaxTokens:     maxTokens,
+		Target:        input.Target,
+		StaticFloor:   staticOverhead,
+		Reserved:      input.Reserved,
+		Thinking:      thinking,
+		Images:        images,
+		ToolPairs:     toolPairs,
+		ChatTurns:     chatTurns,
+		StrippersText: strippersDescribe(input.Strippers),
+		TargetDate:    calibDate,
+	}
+	if !isTerminal(out) {
+		RenderUpfrontPanel(out, upfrontStats)
+	}
+	return upfrontStats
+}
+
+func newCompactCounter(input compactCommandInput) (compactengine.Counter, error) {
+	if input.Target == 0 {
+		return nil, nil
+	}
+	key, err := compactengine.AnthropicAPIKey()
+	if err != nil {
+		cliCompactLog.Logger().Error("cli.compact.api_key_failed", "session", input.Name, slog.Any("err", err))
+		return nil, err
+	}
+	layer := contextusage.NewDefault(input.Session, input.Model, key)
+	return &layerCounter{layer: layer, model: input.Model}, nil
+}
+
+func runCompactPlan(
+	ctx context.Context,
+	out io.Writer,
+	input compactCommandInput,
+	slice *compactengine.Slice,
+	mode Mode,
+	staticOverhead int,
+	counter compactengine.Counter,
+	upfrontStats UpfrontStats,
+) (*compactengine.PlanResult, bool, *progressView, error) {
+	cliCompactLog.Logger().Info("cli.compact.preview.run_plan.started", "session", input.Name, "target", input.Target, "mode", mode.Label())
 	isTTY := isTerminal(out)
 	var progress *progressView
 	var onIter func(compactengine.IterationRecord)
-	if target > 0 {
-		progress = newProgressView(out, target, mode, isTTY, upfrontStats)
+	if input.Target > 0 {
+		progress = newProgressView(out, input.Target, mode, isTTY, upfrontStats)
 		onIter = progress.Update
 	}
 	planRes, err := compactengine.RunPlan(ctx, compactengine.PlanInput{
 		Slice:          slice,
-		Strippers:      strippers,
-		Target:         target,
+		Strippers:      input.Strippers,
+		Target:         input.Target,
 		StaticOverhead: staticOverhead,
-		Reserved:       reserved,
+		Reserved:       input.Reserved,
 		Counter:        counter,
 		OnIteration:    onIter,
 	})
@@ -350,55 +482,60 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 		progress.Finish()
 	}
 	if err != nil {
-		cliCompactLog.Logger().Error("cli.compact.preview.run_plan.failed", "session", name, "err", err)
-		return err
+		cliCompactLog.Logger().Error("cli.compact.preview.run_plan.failed", "session", input.Name, "err", err)
+		return nil, isTTY, progress, err
 	}
-	cliCompactLog.Logger().Info("cli.compact.preview.run_plan.completed", "session", name, "hit_target", planRes.HitTarget)
+	cliCompactLog.Logger().Info("cli.compact.preview.run_plan.completed", "session", input.Name, "hit_target", planRes.HitTarget)
+	return planRes, isTTY, progress, nil
+}
 
-	// Phase 3: result box. Keep TTY focused on the single live pane.
-	// show-passes remains available for non-TTY logs and debugging.
-	if target > 0 && isTTY && progress != nil {
-		progress.Complete(planRes, staticOverhead, reserved, apply, path)
+func renderCompactResult(
+	out io.Writer,
+	input compactCommandInput,
+	slice *compactengine.Slice,
+	planRes *compactengine.PlanResult,
+	progress *progressView,
+	staticOverhead int,
+	isTTY bool,
+) {
+	if input.Target > 0 && isTTY && progress != nil {
+		progress.Complete(planRes, staticOverhead, input.Reserved, input.Apply, input.Transcript)
 	}
-	if target > 0 && showPasses && !isTTY {
+	if input.Target > 0 && input.ShowPasses && !isTTY {
 		RenderIterationLog(out, planRes.Iterations)
 	}
-	if target == 0 {
-		RenderNoTarget(out, mode, sess.Name, strippers, planRes, len(planRes.BoundaryTail), len(slice.PostBoundary))
-	} else if !apply && !isTTY {
-		RenderFinalPreview(out, planRes, target, staticOverhead, reserved)
+	if input.Target == 0 {
+		RenderNoTarget(out, compactMode(input.Apply), input.Session.Name, input.Strippers, planRes, len(planRes.BoundaryTail), len(slice.PostBoundary))
+		return
 	}
+	if !input.Apply && !isTTY {
+		RenderFinalPreview(out, planRes, input.Target, staticOverhead, input.Reserved)
+	}
+}
 
-	if !apply {
-		cliCompactLog.Logger().Info("cli.compact.preview.completed", "session", name, "applied", false)
-		return nil
+func maybeSummarizeCompact(
+	cmd *cobra.Command,
+	ctx context.Context,
+	out io.Writer,
+	input compactCommandInput,
+	slice *compactengine.Slice,
+	planRes *compactengine.PlanResult,
+) {
+	if summarize, _ := cmd.Flags().GetBool("summarize"); !summarize {
+		return
 	}
-
-	// Before mutating the transcript, optionally ask claude -p for a
-	// recap of the dropped portion and inject it into the synthetic
-	// header. The recap helps the continuing agent pick up work the
-	// deterministic header cannot represent (intents, decisions, open
-	// threads).
-	if summarize, _ := cmd.Flags().GetBool("summarize"); summarize {
-		_, _ = fmt.Fprintln(out, "summarizing dropped content via claude -p (30-60s)...")
-		summary, sumErr := compactengine.SummarizeDropped(ctx, slice, planRes.Options, compactengine.SummarizeOptions{
-			Model: model,
-		})
-		if sumErr != nil {
-			cliCompactLog.Logger().Warn("cli.compact.summarize_failed_continuing", "session", name, slog.Any("err", sumErr))
-			_, _ = fmt.Fprintf(out, "summary failed (%v); applying without summary\n", sumErr)
-		} else if summary != "" {
-			planRes.Options.Summary = summary
-			planRes.BoundaryTail = compactengine.Synthesize(slice, planRes.Options)
-			cliCompactLog.Logger().Info("cli.compact.summarize_injected", "session", name, "summary_bytes", len(summary))
-		}
+	_, _ = fmt.Fprintln(out, "summarizing dropped content via claude -p (30-60s)...")
+	summary, err := compactengine.SummarizeDropped(ctx, slice, planRes.Options, compactengine.SummarizeOptions{
+		Model: input.Model,
+	})
+	if err != nil {
+		cliCompactLog.Logger().Warn("cli.compact.summarize_failed_continuing", "session", input.Name, slog.Any("err", err))
+		_, _ = fmt.Fprintf(out, "summary failed (%v); applying without summary\n", err)
+		return
 	}
-
-	if err := runApply(out, sess, slice, strippers, target, planRes, force); err != nil {
-		return err
+	if summary != "" {
+		planRes.Options.Summary = summary
+		planRes.BoundaryTail = compactengine.Synthesize(slice, planRes.Options)
+		cliCompactLog.Logger().Info("cli.compact.summarize_injected", "session", input.Name, "summary_bytes", len(summary))
 	}
-	if !isTTY {
-		RenderFinalApply(out, planRes, target, staticOverhead, reserved, path)
-	}
-	return nil
 }

@@ -293,12 +293,12 @@ deadcode: build ## Check for unreachable functions
 govulncheck: ## Run vulnerability check
 	@go tool govulncheck ./...
 
-audit: ## Run complexity and vulnerability checks (informational)
-	@echo "=== Cyclomatic complexity (>15) ==="
-	@go tool gocyclo -over 15 . || true
+audit: ## Run complexity and vulnerability checks
+	@echo "=== Cyclomatic complexity (>40) ==="
+	@go tool gocyclo -over 40 .
 	@echo ""
 	@echo "=== Vulnerability check ==="
-	@go tool govulncheck ./... || true
+	@go tool govulncheck ./...
 
 release: ## Run a full GoReleaser release with 1Password-backed Apple notarization
 	@[ -f notarize.env ] || { echo "notarize.env not found. Copy notarize.env.example and fill in your 1Password op:// paths."; exit 1; }

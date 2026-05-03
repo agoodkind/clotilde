@@ -276,484 +276,620 @@ func EffectiveReasoningWithDefaultSummary(req adapteropenai.ChatRequest, effort,
 }
 
 func ParseSSEEventsWithLogging(ctx context.Context, body io.Reader, emit func(adapterrender.Event) error, logCtx sseInstrumentationContext) (RunResult, error) {
+	parser := newSSEEventParser(ctx, emit, logCtx)
+	return parser.parse(body)
+}
+
+type ssePayloadAction int
+
+const (
+	ssePayloadContinue ssePayloadAction = iota
+	ssePayloadBreak
+	ssePayloadReturn
+)
+
+type ssePayloadResult struct {
+	Action ssePayloadAction
+	Result RunResult
+	Err    error
+}
+
+type sseEventParser struct {
+	ctx                       context.Context
+	emit                      func(adapterrender.Event) error
+	logCtx                    sseInstrumentationContext
+	out                       RunResult
+	reasoningSignaled         bool
+	reasoningVisible          bool
+	reasoningTextDeltaSeen    bool
+	reasoningSummaryDeltaSeen bool
+	toolCallsByItemID         map[string]*toolCallState
+	nextToolIndex             int
+	aggregate                 sseAggregateCollector
+	upstreamEventSeq          int
+	normalizedEventSeq        int
+}
+
+func newSSEEventParser(ctx context.Context, emit func(adapterrender.Event) error, logCtx sseInstrumentationContext) *sseEventParser {
+	return &sseEventParser{
+		ctx:               ctx,
+		emit:              emit,
+		logCtx:            logCtx,
+		out:               NewRunResult("stop"),
+		toolCallsByItemID: make(map[string]*toolCallState),
+	}
+}
+
+func (p *sseEventParser) parse(body io.Reader) (RunResult, error) {
 	sc := bufio.NewScanner(body)
 	sc.Buffer(make([]byte, 0, 1024*128), 1024*1024*8)
 
 	var eventName string
 	var dataLines []string
-	out := NewRunResult("stop")
-	reasoningSignaled := false
-	reasoningVisible := false
-	toolCallsByItemID := make(map[string]*toolCallState)
-	nextToolIndex := 0
-	aggregate := sseAggregateCollector{}
-	upstreamEventSeq := 0
-	normalizedEventSeq := 0
-	logAggregate := func(responseID, status string, err error) {
-		if !logCtx.Enabled() {
-			return
+	for sc.Scan() {
+		line := strings.TrimRight(sc.Text(), "\r")
+		if line != "" {
+			if value, ok := strings.CutPrefix(line, "event:"); ok {
+				eventName = strings.TrimSpace(value)
+				continue
+			}
+			if value, ok := strings.CutPrefix(line, "data:"); ok {
+				dataLines = append(dataLines, strings.TrimSpace(value))
+			}
+			continue
 		}
-		errText := ""
+
+		if eventName == "" || len(dataLines) == 0 {
+			eventName = ""
+			dataLines = nil
+			continue
+		}
+		payload := strings.Join(dataLines, "\n")
+		eventNameLocal := eventName
+		eventName = ""
+		dataLines = nil
+
+		result := p.processPayload(eventNameLocal, payload)
+		switch result.Action {
+		case ssePayloadBreak:
+			return p.finishEOF(), nil
+		case ssePayloadReturn:
+			return result.Result, result.Err
+		case ssePayloadContinue:
+			continue
+		}
+	}
+	if err := sc.Err(); err != nil {
+		p.logAggregate(p.out.ResponseID, "scanner_error", err)
+		return p.out, err
+	}
+	return p.finishEOF(), nil
+}
+
+func (p *sseEventParser) finishEOF() RunResult {
+	p.out.ReasoningSignaled = p.reasoningSignaled
+	p.out.ReasoningVisible = p.reasoningVisible
+	p.logAggregate(p.out.ResponseID, "eof", nil)
+	return p.out
+}
+
+func (p *sseEventParser) processPayload(eventName, payload string) ssePayloadResult {
+	if strings.TrimSpace(payload) == "[DONE]" {
+		return ssePayloadResult{Action: ssePayloadBreak, Result: p.out}
+	}
+	var raw transportStreamEvent
+	if err := json.Unmarshal([]byte(payload), &raw); err != nil {
+		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+	}
+	p.upstreamEventSeq++
+	p.aggregate.observe(eventName, raw)
+	return p.handleEvent(eventName, payload, raw)
+}
+
+func (p *sseEventParser) handleEvent(eventName, payload string, raw transportStreamEvent) ssePayloadResult {
+	switch {
+	case eventName == "response.output_text.delta":
+		return p.handleOutputTextDelta(eventName, raw)
+	case eventName == "response.output_item.added" || eventName == "response.output_item.done":
+		return p.handleOutputItemEvent(eventName, raw)
+	case eventName == "response.function_call_arguments.delta":
+		return p.handleFunctionCallArgumentsDelta(eventName, raw)
+	case eventName == "response.custom_tool_call_input.delta":
+		return p.handleCustomToolCallInputDelta(eventName, raw)
+	case strings.Contains(eventName, "reasoning") && strings.HasSuffix(eventName, ".delta"):
+		return p.handleReasoningDelta(eventName, raw)
+	case eventName == "response.reasoning_summary_part.added":
+		return p.handleReasoningSummaryPartAdded(eventName, raw)
+	case eventName == "response.completed":
+		return p.handleResponseCompleted(eventName, payload, raw)
+	case eventName == "response.created":
+		return p.handleResponseCreated(raw)
+	case eventName == "response.failed":
+		return p.handleResponseFailed(eventName, raw)
+	default:
+		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+	}
+}
+
+func (p *sseEventParser) handleOutputTextDelta(eventName string, raw transportStreamEvent) ssePayloadResult {
+	if delta := raw.Delta; delta != "" {
+		err := p.emitNormalized(eventName, raw.Sequence, adapterrender.Event{Kind: adapterrender.EventAssistantTextDelta, Text: delta})
 		if err != nil {
-			errText = err.Error()
+			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
-		aggregate.Log(ctx, logCtx, responseID, status, errText)
 	}
-	logParserEmit := func(upstreamEventType string, upstreamSequence int, ev adapterrender.Event) {
-		normalizedEventSeq++
-		attrs := []slog.Attr{
-			slog.String("component", "adapter"),
-			slog.String("subcomponent", "codex"),
-			slog.String("request_id", logCtx.RequestID),
-			slog.String("upstream_event_type", strings.TrimSpace(upstreamEventType)),
-			slog.String("normalized_event_kind", string(ev.Kind)),
-			slog.Int("upstream_event_sequence", upstreamEventSeq),
-			slog.Int("normalized_event_sequence", normalizedEventSeq),
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+}
+
+func (p *sseEventParser) handleOutputItemEvent(eventName string, raw transportStreamEvent) ssePayloadResult {
+	item := raw.Item
+	itemType := item.string("type")
+	switch itemType {
+	case "reasoning":
+		return p.handleReasoningOutputItem(eventName, raw, item)
+	case "function_call":
+		return p.handleFunctionCallOutputItem(eventName, raw, item, itemType)
+	case "local_shell_call":
+		return p.handleLocalShellOutputItem(eventName, raw, item, itemType)
+	case "custom_tool_call":
+		return p.handleCustomToolOutputItem(eventName, raw, item, itemType)
+	default:
+		if eventName == "response.output_item.done" && item != nil {
+			p.out.OutputItems = append(p.out.OutputItems, item.cloneMap())
 		}
-		if upstreamSequence > 0 {
-			attrs = append(attrs, slog.Int("upstream_sequence_number", upstreamSequence))
-		}
-		if ev.ItemID != "" {
-			attrs = append(attrs, slog.String("item_id", ev.ItemID))
-		}
-		if ev.ItemType != "" {
-			attrs = append(attrs, slog.String("item_type", ev.ItemType))
-		}
-		if ev.ReasoningKind != "" {
-			attrs = append(attrs, slog.String("reasoning_kind", ev.ReasoningKind))
-		}
-		if logCtx.CursorRequestID != "" {
-			attrs = append(attrs, slog.String("cursor_request_id", logCtx.CursorRequestID))
-		}
-		if logCtx.ConversationID != "" {
-			attrs = append(attrs, slog.String("conversation_id", logCtx.ConversationID))
-		}
-		attrs = append(attrs, logCtx.Correlation.Attrs()...)
-		logCodexEventWithConcern(ctx, slog.LevelDebug, "adapter.codex.parser.normalized_event_emitted", slogger.ConcernAdapterProviderCodexWS, attrs)
+		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
 	}
-	emitNormalized := func(upstreamEventType string, upstreamSequence int, ev adapterrender.Event) error {
-		logParserEmit(upstreamEventType, upstreamSequence, ev)
-		return emit(ev)
+}
+
+func (p *sseEventParser) handleReasoningOutputItem(eventName string, raw transportStreamEvent, item transportItem) ssePayloadResult {
+	if err := p.emitReasoningPresence(eventName, raw.Sequence, item.string("id")); err != nil {
+		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 	}
-	reasoningTextDeltaSeen := false
-	reasoningSummaryDeltaSeen := false
-	emitReasoningPresence := func(upstreamEventType string, upstreamSequence int, itemID string) error {
-		if reasoningSignaled {
-			return nil
-		}
-		reasoningSignaled = true
-		reasoningVisible = true
-		return emitNormalized(upstreamEventType, upstreamSequence, adapterrender.Event{
-			Kind:     adapterrender.EventReasoningSignaled,
-			ItemID:   strings.TrimSpace(itemID),
-			ItemType: "reasoning",
-		})
+	if eventName != "response.output_item.done" || item == nil {
+		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
 	}
-	emitToolCall := func(upstreamEventType string, upstreamSequence int, state *toolCallState, fn adapteropenai.ToolCallFunction) error {
-		if state == nil {
-			return nil
+	for _, ev := range reasoningEventsFromItem(item, p.reasoningSummaryDeltaSeen, p.reasoningTextDeltaSeen) {
+		if ev.ReasoningKind == "summary" {
+			p.reasoningSummaryDeltaSeen = true
+		} else {
+			p.reasoningTextDeltaSeen = true
 		}
-		tc := adapteropenai.ToolCall{
-			Index:    state.Index,
-			Function: fn,
+		if err := p.emitNormalized(eventName, raw.Sequence, ev); err != nil {
+			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
-		if !state.IdentityEmitted {
-			tc.ID = state.CallID
-			tc.Type = state.Type
-			state.IdentityEmitted = true
-		}
-		return emitNormalized(upstreamEventType, upstreamSequence, adapterrender.Event{
-			Kind:      adapterrender.EventToolCallDelta,
-			ToolCalls: []adapteropenai.ToolCall{tc},
-		})
 	}
-	logNativeToolParsed := func(eventName, itemType string, state *toolCallState, toolName string) {
-		if state == nil || state.NativeParseLogged {
-			return
+	p.out.OutputItems = append(p.out.OutputItems, item.cloneMap())
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+}
+
+func (p *sseEventParser) handleFunctionCallOutputItem(eventName string, raw transportStreamEvent, item transportItem, itemType string) ssePayloadResult {
+	itemID := strings.TrimSpace(item.string("id"))
+	callID := strings.TrimSpace(item.string("call_id"))
+	itemID, callID = normalizedToolIDs(itemID, callID)
+	name := strings.TrimSpace(item.string("name"))
+	args := item.string("arguments")
+	state, created := p.getToolState(itemID, callID, name)
+	if state.NativeName == "" {
+		state.NativeName = name
+	}
+	if created {
+		if err := p.emitToolCall(eventName, raw.Sequence, state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
+			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
-		state.NativeParseLogged = true
-		LogToolingEvent(nil, ctx, logCtx.RequestID, "native_tool_item.parsed",
-			slog.String("sse_event", eventName),
+	}
+	if state.Name == "" && name != "" {
+		state.Name = name
+	}
+	if state.Name == "Task" || state.NativeName == "spawn_agent" {
+		p.out.HasSubagentToolCall = true
+	}
+	p.appendCompletedFunctionCallItem(eventName, item, state)
+	p.out.SetFinishReason("tool_calls")
+	return p.finishFunctionCallOutputItem(eventName, raw, itemType, itemID, args, state)
+}
+
+func normalizedToolIDs(itemID, callID string) (string, string) {
+	if itemID == "" {
+		itemID = callID
+	}
+	if callID == "" {
+		callID = itemID
+	}
+	return itemID, callID
+}
+
+func (p *sseEventParser) appendCompletedFunctionCallItem(eventName string, item transportItem, state *toolCallState) {
+	if eventName != "response.output_item.done" || item == nil {
+		return
+	}
+	completed := item.cloneMap()
+	if strings.TrimSpace(mapString(completed, "arguments")) == "" && state.Arguments.Len() > 0 {
+		completed["arguments"] = state.Arguments.String()
+	}
+	p.out.OutputItems = append(p.out.OutputItems, completed)
+}
+
+func (p *sseEventParser) finishFunctionCallOutputItem(eventName string, raw transportStreamEvent, itemType, itemID, args string, state *toolCallState) ssePayloadResult {
+	if eventName == "response.output_item.done" && state.NativeName == "shell_command" {
+		return p.finishShellCommandOutputItem(eventName, raw, itemType, itemID, args, state)
+	}
+	if eventName == "response.output_item.done" && args != "" && !state.ArgumentDeltaSeen {
+		if err := p.emitToolCall(eventName, raw.Sequence, state, adapteropenai.ToolCallFunction{Arguments: args}); err != nil {
+			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
+		}
+		state.ArgumentsEmitted = true
+	}
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+}
+
+func (p *sseEventParser) finishShellCommandOutputItem(eventName string, raw transportStreamEvent, itemType, itemID, args string, state *toolCallState) ssePayloadResult {
+	if args == "" {
+		args = state.Arguments.String()
+	}
+	if converted, ok := ShellArgsFromShellCommandArguments(args); ok && !state.ArgumentsEmitted {
+		if err := p.emitToolCall(eventName, raw.Sequence, state, adapteropenai.ToolCallFunction{Arguments: converted}); err != nil {
+			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
+		}
+		state.ArgumentsEmitted = true
+	} else if !state.ArgumentsEmitted {
+		LogToolingEvent(nil, context.Background(), "", "shell_command.parse_failed",
 			slog.String("item_type", itemType),
-			slog.String("item_id", state.ItemID),
-			slog.String("call_id", state.CallID),
-			slog.String("tool_name", toolName),
+			slog.String("item_id", itemID),
+			slog.String("tool_name", "Shell"),
 		)
 	}
-	getToolState := func(itemID, callID, name string) (*toolCallState, bool) {
-		itemID = strings.TrimSpace(itemID)
-		callID = strings.TrimSpace(callID)
-		if itemID == "" {
-			itemID = callID
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+}
+
+func (p *sseEventParser) handleLocalShellOutputItem(eventName string, raw transportStreamEvent, item transportItem, itemType string) ssePayloadResult {
+	if eventName == "response.output_item.done" && item != nil {
+		p.out.OutputItems = append(p.out.OutputItems, item.cloneMap())
+	}
+	itemID := strings.TrimSpace(item.string("id"))
+	callID := strings.TrimSpace(item.string("call_id"))
+	state, created := p.getToolState(itemID, callID, "Shell")
+	if created {
+		if err := p.emitToolCall(eventName, raw.Sequence, state, adapteropenai.ToolCallFunction{Name: "Shell"}); err != nil {
+			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
-		if callID == "" {
-			callID = itemID
+	}
+	p.out.SetFinishReason("tool_calls")
+	if args, ok := ShellArgsFromLocalShellItem(item.cloneMap()); ok {
+		return p.emitNativeParsedArguments(eventName, raw, itemType, state, "Shell", args)
+	}
+	if eventName == "response.output_item.done" && !state.ArgumentsEmitted {
+		LogToolingEvent(nil, context.Background(), "", "native_local_shell.parse_failed",
+			slog.String("item_type", itemType),
+			slog.String("item_id", itemID),
+			slog.String("tool_name", "Shell"),
+		)
+	}
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+}
+
+func (p *sseEventParser) handleCustomToolOutputItem(eventName string, raw transportStreamEvent, item transportItem, itemType string) ssePayloadResult {
+	if eventName == "response.output_item.done" && item != nil {
+		p.out.OutputItems = append(p.out.OutputItems, item.cloneMap())
+	}
+	itemID := strings.TrimSpace(item.string("id"))
+	callID := strings.TrimSpace(item.string("call_id"))
+	name := strings.TrimSpace(item.string("name"))
+	cursorName := name
+	if IsApplyPatchToolName(cursorName) || IsApplyPatchToolName(name) {
+		cursorName = "ApplyPatch"
+	}
+	state, created := p.getToolState(itemID, callID, cursorName)
+	if state.Name == "Task" || name == "spawn_agent" {
+		p.out.HasSubagentToolCall = true
+	}
+	if created {
+		if err := p.emitToolCall(eventName, raw.Sequence, state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
+			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
-		if state := toolCallsByItemID[itemID]; state != nil {
-			if state.CallID == "" {
-				state.CallID = callID
+	}
+	p.out.SetFinishReason("tool_calls")
+	input := item.string("input")
+	if input == "" {
+		input = state.Input.String()
+	}
+	if args, ok := ApplyPatchArgs(input); ok {
+		return p.emitNativeParsedArguments(eventName, raw, itemType, state, cursorName, args)
+	}
+	if eventName == "response.output_item.done" && !state.ArgumentsEmitted {
+		LogToolingEvent(nil, context.Background(), "", "native_custom_tool.parse_failed",
+			slog.String("item_type", itemType),
+			slog.String("item_id", itemID),
+			slog.String("tool_name", cursorName),
+		)
+	}
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+}
+
+func (p *sseEventParser) emitNativeParsedArguments(eventName string, raw transportStreamEvent, itemType string, state *toolCallState, toolName, args string) ssePayloadResult {
+	p.logNativeToolParsed(eventName, itemType, state, toolName)
+	if state.ArgumentsEmitted {
+		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+	}
+	if err := p.emitToolCall(eventName, raw.Sequence, state, adapteropenai.ToolCallFunction{Arguments: args}); err != nil {
+		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
+	}
+	state.ArgumentsEmitted = true
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+}
+
+func (p *sseEventParser) handleFunctionCallArgumentsDelta(eventName string, raw transportStreamEvent) ssePayloadResult {
+	itemID := strings.TrimSpace(raw.ItemID)
+	delta := raw.Delta
+	state := p.toolCallsByItemID[itemID]
+	if state == nil || delta == "" {
+		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+	}
+	state.ArgumentDeltaSeen = true
+	state.Arguments.WriteString(delta)
+	p.out.SetFinishReason("tool_calls")
+	if state.NativeName == "shell_command" {
+		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+	}
+	if err := p.emitToolCall(eventName, raw.Sequence, state, adapteropenai.ToolCallFunction{Arguments: delta}); err != nil {
+		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
+	}
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+}
+
+func (p *sseEventParser) handleCustomToolCallInputDelta(eventName string, raw transportStreamEvent) ssePayloadResult {
+	itemID := strings.TrimSpace(raw.ItemID)
+	callID := strings.TrimSpace(raw.CallID)
+	delta := raw.Delta
+	state, created := p.getToolState(itemID, callID, "ApplyPatch")
+	if created {
+		if err := p.emitToolCall(eventName, raw.Sequence, state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
+			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
+		}
+	}
+	if delta == "" {
+		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+	}
+	state.Input.WriteString(delta)
+	state.ArgumentDeltaSeen = true
+	p.out.SetFinishReason("tool_calls")
+	if err := p.emitToolCall(eventName, raw.Sequence, state, adapteropenai.ToolCallFunction{Arguments: delta}); err != nil {
+		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
+	}
+	state.ArgumentsEmitted = true
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+}
+
+func (p *sseEventParser) handleReasoningDelta(eventName string, raw transportStreamEvent) ssePayloadResult {
+	if raw.Delta == "" {
+		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+	}
+	p.reasoningSignaled = true
+	p.reasoningVisible = true
+	kind := "text"
+	var summaryIdx *int
+	if strings.Contains(eventName, "summary") {
+		kind = "summary"
+		summaryIdx = raw.SummaryIndex
+		p.reasoningSummaryDeltaSeen = true
+	} else {
+		p.reasoningTextDeltaSeen = true
+	}
+	err := p.emitNormalized(eventName, raw.Sequence, adapterrender.Event{
+		Kind:          adapterrender.EventReasoningDelta,
+		Text:          raw.Delta,
+		ReasoningKind: kind,
+		SummaryIndex:  summaryIdx,
+	})
+	if err != nil {
+		return ssePayloadResult{Action: ssePayloadReturn, Result: RunResult{}, Err: err}
+	}
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+}
+
+func (p *sseEventParser) handleReasoningSummaryPartAdded(eventName string, raw transportStreamEvent) ssePayloadResult {
+	if err := p.emitReasoningPresence(eventName, raw.Sequence, raw.ItemID); err != nil {
+		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
+	}
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+}
+
+func (p *sseEventParser) handleResponseCompleted(eventName, payload string, raw transportStreamEvent) ssePayloadResult {
+	status := ""
+	var c completedResponse
+	if err := json.Unmarshal([]byte(payload), &c); err == nil {
+		if responseID := strings.TrimSpace(c.Response.ID); responseID != "" {
+			p.out.ResponseID = responseID
+		}
+		status = strings.TrimSpace(c.Response.Status)
+		p.out.Usage = mapUsage(c)
+		p.out.UsageTelemetry = usageTelemetry(c)
+		if p.out.FinishReason != "tool_calls" {
+			p.out.SetFinishReason(finishreason.FromCodexResponse(c.Response.Status, c.Response.IncompleteDetails.Reason))
+		}
+	}
+	if reasoningTokensFromEvent(raw) > 0 && !p.reasoningSignaled {
+		if err := p.emitReasoningPresence(eventName, raw.Sequence, ""); err != nil {
+			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
+		}
+	}
+	if err := p.emitNormalized(eventName, raw.Sequence, adapterrender.Event{Kind: adapterrender.EventReasoningFinished}); err != nil {
+		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
+	}
+	p.out.ReasoningSignaled = p.reasoningSignaled
+	p.out.ReasoningVisible = p.reasoningVisible
+	p.logAggregate(p.out.ResponseID, status, nil)
+	return ssePayloadResult{Action: ssePayloadReturn, Result: p.out}
+}
+
+func (p *sseEventParser) handleResponseCreated(raw transportStreamEvent) ssePayloadResult {
+	if raw.Response != nil {
+		p.out.ResponseID = strings.TrimSpace(raw.Response.ID)
+	}
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+}
+
+func (p *sseEventParser) handleResponseFailed(eventName string, raw transportStreamEvent) ssePayloadResult {
+	msg := "codex response failed"
+	if raw.Error != nil && raw.Error.Message != "" {
+		msg = raw.Error.Message
+	}
+	err := codexResponseFailedError(msg)
+	if strings.TrimSpace(msg) != "" && !isContextWindowError(err) {
+		_ = p.emitNormalized(eventName, raw.Sequence, adapterrender.Event{Kind: adapterrender.EventReasoningFinished})
+	}
+	p.logAggregate(p.out.ResponseID, "failed", err)
+	return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
+}
+
+func (p *sseEventParser) logAggregate(responseID, status string, err error) {
+	if !p.logCtx.Enabled() {
+		return
+	}
+	errText := ""
+	if err != nil {
+		errText = err.Error()
+	}
+	p.aggregate.Log(p.ctx, p.logCtx, responseID, status, errText)
+}
+
+func (p *sseEventParser) emitNormalized(upstreamEventType string, upstreamSequence int, ev adapterrender.Event) error {
+	p.logParserEmit(upstreamEventType, upstreamSequence, ev)
+	return p.emit(ev)
+}
+
+func (p *sseEventParser) logParserEmit(upstreamEventType string, upstreamSequence int, ev adapterrender.Event) {
+	p.normalizedEventSeq++
+	attrs := []slog.Attr{
+		slog.String("component", "adapter"),
+		slog.String("subcomponent", "codex"),
+		slog.String("request_id", p.logCtx.RequestID),
+		slog.String("upstream_event_type", strings.TrimSpace(upstreamEventType)),
+		slog.String("normalized_event_kind", string(ev.Kind)),
+		slog.Int("upstream_event_sequence", p.upstreamEventSeq),
+		slog.Int("normalized_event_sequence", p.normalizedEventSeq),
+	}
+	if upstreamSequence > 0 {
+		attrs = append(attrs, slog.Int("upstream_sequence_number", upstreamSequence))
+	}
+	if ev.ItemID != "" {
+		attrs = append(attrs, slog.String("item_id", ev.ItemID))
+	}
+	if ev.ItemType != "" {
+		attrs = append(attrs, slog.String("item_type", ev.ItemType))
+	}
+	if ev.ReasoningKind != "" {
+		attrs = append(attrs, slog.String("reasoning_kind", ev.ReasoningKind))
+	}
+	if p.logCtx.CursorRequestID != "" {
+		attrs = append(attrs, slog.String("cursor_request_id", p.logCtx.CursorRequestID))
+	}
+	if p.logCtx.ConversationID != "" {
+		attrs = append(attrs, slog.String("conversation_id", p.logCtx.ConversationID))
+	}
+	attrs = append(attrs, p.logCtx.Correlation.Attrs()...)
+	logCodexEventWithConcern(p.ctx, slog.LevelDebug, "adapter.codex.parser.normalized_event_emitted", slogger.ConcernAdapterProviderCodexWS, attrs)
+}
+
+func (p *sseEventParser) emitReasoningPresence(upstreamEventType string, upstreamSequence int, itemID string) error {
+	if p.reasoningSignaled {
+		return nil
+	}
+	p.reasoningSignaled = true
+	p.reasoningVisible = true
+	return p.emitNormalized(upstreamEventType, upstreamSequence, adapterrender.Event{
+		Kind:     adapterrender.EventReasoningSignaled,
+		ItemID:   strings.TrimSpace(itemID),
+		ItemType: "reasoning",
+	})
+}
+
+func (p *sseEventParser) emitToolCall(upstreamEventType string, upstreamSequence int, state *toolCallState, fn adapteropenai.ToolCallFunction) error {
+	if state == nil {
+		return nil
+	}
+	tc := adapteropenai.ToolCall{
+		Index:    state.Index,
+		Function: fn,
+	}
+	if !state.IdentityEmitted {
+		tc.ID = state.CallID
+		tc.Type = state.Type
+		state.IdentityEmitted = true
+	}
+	return p.emitNormalized(upstreamEventType, upstreamSequence, adapterrender.Event{
+		Kind:      adapterrender.EventToolCallDelta,
+		ToolCalls: []adapteropenai.ToolCall{tc},
+	})
+}
+
+func (p *sseEventParser) logNativeToolParsed(eventName, itemType string, state *toolCallState, toolName string) {
+	if state == nil || state.NativeParseLogged {
+		return
+	}
+	state.NativeParseLogged = true
+	LogToolingEvent(nil, p.ctx, p.logCtx.RequestID, "native_tool_item.parsed",
+		slog.String("sse_event", eventName),
+		slog.String("item_type", itemType),
+		slog.String("item_id", state.ItemID),
+		slog.String("call_id", state.CallID),
+		slog.String("tool_name", toolName),
+	)
+}
+
+func (p *sseEventParser) getToolState(itemID, callID, name string) (*toolCallState, bool) {
+	itemID = strings.TrimSpace(itemID)
+	callID = strings.TrimSpace(callID)
+	itemID, callID = normalizedToolIDs(itemID, callID)
+	if state := p.toolCallsByItemID[itemID]; state != nil {
+		p.updateToolState(state, callID, name)
+		return state, false
+	}
+	if callID != "" {
+		if state := p.toolCallsByItemID[callID]; state != nil {
+			if itemID != "" {
+				p.toolCallsByItemID[itemID] = state
 			}
 			if state.Name == "" {
 				state.Name = name
 			}
-			if callID != "" {
-				toolCallsByItemID[callID] = state
-			}
 			return state, false
 		}
-		if callID != "" {
-			if state := toolCallsByItemID[callID]; state != nil {
-				if itemID != "" {
-					toolCallsByItemID[itemID] = state
-				}
-				if state.Name == "" {
-					state.Name = name
-				}
-				return state, false
-			}
-		}
-		state := &toolCallState{
-			Index:  nextToolIndex,
-			ItemID: itemID,
-			CallID: callID,
-			Name:   name,
-			Type:   "function",
-		}
-		nextToolIndex++
-		out.ToolCallCount = max(out.ToolCallCount, nextToolIndex)
-		if name == "Task" || name == "spawn_agent" {
-			out.HasSubagentToolCall = true
-		}
-		if itemID != "" {
-			toolCallsByItemID[itemID] = state
-		}
-		if callID != "" {
-			toolCallsByItemID[callID] = state
-		}
-		return state, true
 	}
-	for sc.Scan() {
-		line := strings.TrimRight(sc.Text(), "\r")
-		if line == "" {
-			if eventName == "" || len(dataLines) == 0 {
-				eventName = ""
-				dataLines = nil
-				continue
-			}
-			payload := strings.Join(dataLines, "\n")
-			eventNameLocal := eventName
-			eventName = ""
-			dataLines = nil
+	return p.createToolState(itemID, callID, name), true
+}
 
-			if strings.TrimSpace(payload) == "[DONE]" {
-				break
-			}
-			var raw transportStreamEvent
-			if err := json.Unmarshal([]byte(payload), &raw); err != nil {
-				continue
-			}
-			upstreamEventSeq++
-			aggregate.observe(eventNameLocal, raw)
-
-			if eventNameLocal == "response.output_text.delta" {
-				if delta := raw.Delta; delta != "" {
-					if err := emitNormalized(eventNameLocal, raw.Sequence, adapterrender.Event{Kind: adapterrender.EventAssistantTextDelta, Text: delta}); err != nil {
-						return out, err
-					}
-				}
-				continue
-			}
-
-			if eventNameLocal == "response.output_item.added" || eventNameLocal == "response.output_item.done" {
-				item := raw.Item
-				itemType := item.string("type")
-				switch itemType {
-				case "reasoning":
-					if err := emitReasoningPresence(eventNameLocal, raw.Sequence, item.string("id")); err != nil {
-						return out, err
-					}
-					if eventNameLocal == "response.output_item.done" && item != nil {
-						for _, ev := range reasoningEventsFromItem(item, reasoningSummaryDeltaSeen, reasoningTextDeltaSeen) {
-							if ev.ReasoningKind == "summary" {
-								reasoningSummaryDeltaSeen = true
-							} else {
-								reasoningTextDeltaSeen = true
-							}
-							if err := emitNormalized(eventNameLocal, raw.Sequence, ev); err != nil {
-								return out, err
-							}
-						}
-						out.OutputItems = append(out.OutputItems, item.cloneMap())
-					}
-				case "function_call":
-					itemID := strings.TrimSpace(item.string("id"))
-					callID := strings.TrimSpace(item.string("call_id"))
-					if itemID == "" {
-						itemID = callID
-					}
-					if callID == "" {
-						callID = itemID
-					}
-					name := strings.TrimSpace(item.string("name"))
-					args := item.string("arguments")
-					state, created := getToolState(itemID, callID, name)
-					if state.NativeName == "" {
-						state.NativeName = name
-					}
-					if created {
-						if err := emitToolCall(eventNameLocal, raw.Sequence, state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
-							return out, err
-						}
-					}
-					if state.Name == "" && name != "" {
-						state.Name = name
-					}
-					if state.Name == "Task" || state.NativeName == "spawn_agent" {
-						out.HasSubagentToolCall = true
-					}
-					if eventNameLocal == "response.output_item.done" && item != nil {
-						completed := item.cloneMap()
-						if strings.TrimSpace(mapString(completed, "arguments")) == "" && state.Arguments.Len() > 0 {
-							completed["arguments"] = state.Arguments.String()
-						}
-						out.OutputItems = append(out.OutputItems, completed)
-					}
-					out.SetFinishReason("tool_calls")
-					if eventNameLocal == "response.output_item.done" && state.NativeName == "shell_command" {
-						if args == "" {
-							args = state.Arguments.String()
-						}
-						if converted, ok := ShellArgsFromShellCommandArguments(args); ok && !state.ArgumentsEmitted {
-							if err := emitToolCall(eventNameLocal, raw.Sequence, state, adapteropenai.ToolCallFunction{Arguments: converted}); err != nil {
-								return out, err
-							}
-							state.ArgumentsEmitted = true
-						} else if !state.ArgumentsEmitted {
-							LogToolingEvent(nil, context.Background(), "", "shell_command.parse_failed",
-								slog.String("item_type", itemType),
-								slog.String("item_id", itemID),
-								slog.String("tool_name", "Shell"),
-							)
-						}
-						continue
-					}
-					if eventNameLocal == "response.output_item.done" && args != "" && !state.ArgumentDeltaSeen {
-						if err := emitToolCall(eventNameLocal, raw.Sequence, state, adapteropenai.ToolCallFunction{Arguments: args}); err != nil {
-							return out, err
-						}
-						state.ArgumentsEmitted = true
-					}
-				case "local_shell_call":
-					if eventNameLocal == "response.output_item.done" && item != nil {
-						out.OutputItems = append(out.OutputItems, item.cloneMap())
-					}
-					itemID := strings.TrimSpace(item.string("id"))
-					callID := strings.TrimSpace(item.string("call_id"))
-					state, created := getToolState(itemID, callID, "Shell")
-					if created {
-						if err := emitToolCall(eventNameLocal, raw.Sequence, state, adapteropenai.ToolCallFunction{Name: "Shell"}); err != nil {
-							return out, err
-						}
-					}
-					out.SetFinishReason("tool_calls")
-					if args, ok := ShellArgsFromLocalShellItem(item.cloneMap()); ok {
-						logNativeToolParsed(eventNameLocal, itemType, state, "Shell")
-						if !state.ArgumentsEmitted {
-							if err := emitToolCall(eventNameLocal, raw.Sequence, state, adapteropenai.ToolCallFunction{Arguments: args}); err != nil {
-								return out, err
-							}
-							state.ArgumentsEmitted = true
-						}
-					} else if eventNameLocal == "response.output_item.done" && !state.ArgumentsEmitted {
-						LogToolingEvent(nil, context.Background(), "", "native_local_shell.parse_failed",
-							slog.String("item_type", itemType),
-							slog.String("item_id", itemID),
-							slog.String("tool_name", "Shell"),
-						)
-					}
-				case "custom_tool_call":
-					if eventNameLocal == "response.output_item.done" && item != nil {
-						out.OutputItems = append(out.OutputItems, item.cloneMap())
-					}
-					itemID := strings.TrimSpace(item.string("id"))
-					callID := strings.TrimSpace(item.string("call_id"))
-					name := strings.TrimSpace(item.string("name"))
-					cursorName := name
-					if IsApplyPatchToolName(cursorName) || IsApplyPatchToolName(name) {
-						cursorName = "ApplyPatch"
-					}
-					state, created := getToolState(itemID, callID, cursorName)
-					if state.Name == "Task" || name == "spawn_agent" {
-						out.HasSubagentToolCall = true
-					}
-					if created {
-						if err := emitToolCall(eventNameLocal, raw.Sequence, state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
-							return out, err
-						}
-					}
-					out.SetFinishReason("tool_calls")
-					input := item.string("input")
-					if input == "" {
-						input = state.Input.String()
-					}
-					if args, ok := ApplyPatchArgs(input); ok {
-						logNativeToolParsed(eventNameLocal, itemType, state, cursorName)
-						if !state.ArgumentsEmitted {
-							if err := emitToolCall(eventNameLocal, raw.Sequence, state, adapteropenai.ToolCallFunction{Arguments: args}); err != nil {
-								return out, err
-							}
-							state.ArgumentsEmitted = true
-						}
-					} else if eventNameLocal == "response.output_item.done" && !state.ArgumentsEmitted {
-						LogToolingEvent(nil, context.Background(), "", "native_custom_tool.parse_failed",
-							slog.String("item_type", itemType),
-							slog.String("item_id", itemID),
-							slog.String("tool_name", cursorName),
-						)
-					}
-				default:
-					if eventNameLocal == "response.output_item.done" && item != nil {
-						out.OutputItems = append(out.OutputItems, item.cloneMap())
-					}
-				}
-				continue
-			}
-
-			if eventNameLocal == "response.function_call_arguments.delta" {
-				itemID := strings.TrimSpace(raw.ItemID)
-				delta := raw.Delta
-				state := toolCallsByItemID[itemID]
-				if state != nil && delta != "" {
-					state.ArgumentDeltaSeen = true
-					state.Arguments.WriteString(delta)
-					out.SetFinishReason("tool_calls")
-					if state.NativeName == "shell_command" {
-						continue
-					}
-					if err := emitToolCall(eventNameLocal, raw.Sequence, state, adapteropenai.ToolCallFunction{Arguments: delta}); err != nil {
-						return out, err
-					}
-				}
-				continue
-			}
-
-			if eventNameLocal == "response.custom_tool_call_input.delta" {
-				itemID := strings.TrimSpace(raw.ItemID)
-				callID := strings.TrimSpace(raw.CallID)
-				delta := raw.Delta
-				state, created := getToolState(itemID, callID, "ApplyPatch")
-				if created {
-					if err := emitToolCall(eventNameLocal, raw.Sequence, state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
-						return out, err
-					}
-				}
-				if delta != "" {
-					state.Input.WriteString(delta)
-					state.ArgumentDeltaSeen = true
-					out.SetFinishReason("tool_calls")
-					if err := emitToolCall(eventNameLocal, raw.Sequence, state, adapteropenai.ToolCallFunction{Arguments: delta}); err != nil {
-						return out, err
-					}
-					state.ArgumentsEmitted = true
-				}
-				continue
-			}
-
-			if strings.Contains(eventNameLocal, "reasoning") && strings.HasSuffix(eventNameLocal, ".delta") {
-				if delta := raw.Delta; delta != "" {
-					reasoningSignaled = true
-					reasoningVisible = true
-					kind := "text"
-					var summaryIdx *int
-					if strings.Contains(eventNameLocal, "summary") {
-						kind = "summary"
-						summaryIdx = raw.SummaryIndex
-						reasoningSummaryDeltaSeen = true
-					} else {
-						reasoningTextDeltaSeen = true
-					}
-					if err := emitNormalized(eventNameLocal, raw.Sequence, adapterrender.Event{
-						Kind:          adapterrender.EventReasoningDelta,
-						Text:          delta,
-						ReasoningKind: kind,
-						SummaryIndex:  summaryIdx,
-					}); err != nil {
-						return RunResult{}, err
-					}
-				}
-				continue
-			}
-
-			if eventNameLocal == "response.reasoning_summary_part.added" {
-				if err := emitReasoningPresence(eventNameLocal, raw.Sequence, raw.ItemID); err != nil {
-					return out, err
-				}
-				continue
-			}
-
-			if eventNameLocal == "response.completed" {
-				status := ""
-				var c completedResponse
-				if err := json.Unmarshal([]byte(payload), &c); err == nil {
-					if responseID := strings.TrimSpace(c.Response.ID); responseID != "" {
-						out.ResponseID = responseID
-					}
-					status = strings.TrimSpace(c.Response.Status)
-					out.Usage = mapUsage(c)
-					out.UsageTelemetry = usageTelemetry(c)
-					if out.FinishReason != "tool_calls" {
-						out.SetFinishReason(finishreason.FromCodexResponse(c.Response.Status, c.Response.IncompleteDetails.Reason))
-					}
-				}
-				if reasoningTokensFromEvent(raw) > 0 && !reasoningSignaled {
-					if err := emitReasoningPresence(eventNameLocal, raw.Sequence, ""); err != nil {
-						return out, err
-					}
-				}
-				if err := emitNormalized(eventNameLocal, raw.Sequence, adapterrender.Event{Kind: adapterrender.EventReasoningFinished}); err != nil {
-					return out, err
-				}
-				out.ReasoningSignaled = reasoningSignaled
-				out.ReasoningVisible = reasoningVisible
-				logAggregate(out.ResponseID, status, nil)
-				return out, nil
-			}
-			if eventNameLocal == "response.created" {
-				if raw.Response != nil {
-					out.ResponseID = strings.TrimSpace(raw.Response.ID)
-				}
-				continue
-			}
-			if eventNameLocal == "response.failed" {
-				msg := "codex response failed"
-				if raw.Error != nil && raw.Error.Message != "" {
-					msg = raw.Error.Message
-				}
-				err := codexResponseFailedError(msg)
-				if strings.TrimSpace(msg) != "" && !isContextWindowError(err) {
-					_ = emitNormalized(eventNameLocal, raw.Sequence, adapterrender.Event{Kind: adapterrender.EventReasoningFinished})
-				}
-				logAggregate(out.ResponseID, "failed", err)
-				return out, err
-			}
-			continue
-		}
-		if value, ok := strings.CutPrefix(line, "event:"); ok {
-			eventName = strings.TrimSpace(value)
-			continue
-		}
-		if value, ok := strings.CutPrefix(line, "data:"); ok {
-			dataLines = append(dataLines, strings.TrimSpace(value))
-		}
+func (p *sseEventParser) updateToolState(state *toolCallState, callID, name string) {
+	if state.CallID == "" {
+		state.CallID = callID
 	}
-	if err := sc.Err(); err != nil {
-		logAggregate(out.ResponseID, "scanner_error", err)
-		return out, err
+	if state.Name == "" {
+		state.Name = name
 	}
-	out.ReasoningSignaled = reasoningSignaled
-	out.ReasoningVisible = reasoningVisible
-	logAggregate(out.ResponseID, "eof", nil)
-	return out, nil
+	if callID != "" {
+		p.toolCallsByItemID[callID] = state
+	}
+}
+
+func (p *sseEventParser) createToolState(itemID, callID, name string) *toolCallState {
+	state := &toolCallState{
+		Index:  p.nextToolIndex,
+		ItemID: itemID,
+		CallID: callID,
+		Name:   name,
+		Type:   "function",
+	}
+	p.nextToolIndex++
+	p.out.ToolCallCount = max(p.out.ToolCallCount, p.nextToolIndex)
+	if name == "Task" || name == "spawn_agent" {
+		p.out.HasSubagentToolCall = true
+	}
+	if itemID != "" {
+		p.toolCallsByItemID[itemID] = state
+	}
+	if callID != "" {
+		p.toolCallsByItemID[callID] = state
+	}
+	return state
 }
 
 func isContextWindowError(err error) bool {
