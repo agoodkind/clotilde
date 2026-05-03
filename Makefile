@@ -1,6 +1,6 @@
 .PHONY: help build test test-watch coverage clean fmt lint staticcheck staticcheck-extra staticcheck-extra-baseline staticcheck-extra-bin deadcode govulncheck audit \
         install-build-guard uninstall-build-guard setup-hooks \
-        deploy install-launch-agent uninstall-launch-agent install-hook uninstall-hook \
+        deploy install-launch-agent uninstall-launch-agent install-systemd-user uninstall-systemd-user install-hook uninstall-hook \
         release release-snapshot sign notarize dist/clyde
 
 # Optional local overrides (signing creds, never committed). Copy config.mk.example.
@@ -32,13 +32,17 @@ LDFLAGS := -X '$(GKLOG_VPKG).Commit=$(COMMIT)' \
 GO_SRC := $(shell find . -name '*.go' -not -path './vendor/*')
 
 # ---------------------------------------------------------------------------
-# macOS install paths
+# Daemon install paths
 # ---------------------------------------------------------------------------
 
 LAUNCH_AGENT_LABEL    := io.goodkind.clyde.daemon
 LAUNCH_AGENT_PLIST    := $(HOME)/Library/LaunchAgents/$(LAUNCH_AGENT_LABEL).plist
 LAUNCH_AGENT_TEMPLATE := packaging/macos/io.goodkind.clyde.daemon.plist.in
 DAEMON_LOG            := $(HOME)/Library/Logs/clyde-daemon.log
+SYSTEMD_USER_SERVICE  := clyde-daemon.service
+SYSTEMD_USER_DIR      := $(HOME)/.config/systemd/user
+SYSTEMD_USER_UNIT     := $(SYSTEMD_USER_DIR)/$(SYSTEMD_USER_SERVICE)
+SYSTEMD_USER_TEMPLATE := packaging/systemd/clyde-daemon.service.in
 CLYDE_BIN             := $(HOME)/.local/bin/clyde
 CLYDE_DAEMON_BIN      := $(CLYDE_BIN)
 CLYDE_DEV_RUN         := $(CLYDE_BIN)
@@ -55,7 +59,7 @@ help: ## Show this help message
 	@echo 'Usage: make [target]'
 	@echo ''
 	@echo 'Available targets:'
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sort
 
 # ---------------------------------------------------------------------------
 # Build
@@ -345,7 +349,7 @@ uninstall-build-guard: ## Remove the repo staticcheck toolexec from GOFLAGS
 	@./scripts/install-go-build-guard.sh --uninstall
 
 # ---------------------------------------------------------------------------
-# Install / deploy (macOS)
+# Install / deploy daemon
 # ---------------------------------------------------------------------------
 
 setup-hooks: ## Configure git hooks
@@ -353,15 +357,24 @@ setup-hooks: ## Configure git hooks
 	@chmod +x .githooks/*
 	@echo "✓ Git hooks configured"
 
-deploy: install ## Install/start the daemon if needed; otherwise hand it off to the new binary
-	@if [ "$$(uname)" != "Darwin" ]; then \
-		echo "deploy currently manages the macOS LaunchAgent; use $(CLYDE_BIN) daemon reload on this platform"; \
-		exit 1; \
-	fi
-	@if [ ! -f "$(LAUNCH_AGENT_PLIST)" ] || ! launchctl list "$(LAUNCH_AGENT_LABEL)" >/dev/null 2>&1 || ! launchctl list "$(LAUNCH_AGENT_LABEL)" 2>/dev/null | grep -q '"PID" = [0-9]'; then \
-		$(MAKE) install-launch-agent; \
+deploy: ## Install/start the daemon if needed; otherwise hand it off to the new binary
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		if [ ! -f "$(LAUNCH_AGENT_PLIST)" ] || ! launchctl list "$(LAUNCH_AGENT_LABEL)" >/dev/null 2>&1 || ! launchctl list "$(LAUNCH_AGENT_LABEL)" 2>/dev/null | grep -q '"PID" = [0-9]'; then \
+			$(MAKE) install-launch-agent; \
+		else \
+			$(MAKE) install; \
+			"$(CLYDE_BIN)" daemon reload; \
+		fi; \
+	elif command -v systemctl >/dev/null 2>&1; then \
+		if [ ! -f "$(SYSTEMD_USER_UNIT)" ] || ! systemctl --user is-active --quiet "$(SYSTEMD_USER_SERVICE)"; then \
+			$(MAKE) install-systemd-user; \
+		else \
+			$(MAKE) install; \
+			"$(CLYDE_BIN)" daemon reload; \
+		fi; \
 	else \
-		"$(CLYDE_BIN)" daemon reload; \
+		echo "deploy needs launchctl on macOS or systemctl on Linux"; \
+		exit 1; \
 	fi
 
 install-launch-agent: install ## Render and install the daemon LaunchAgent (runs OAuth refresh + adapter + prune in-process)
@@ -380,6 +393,25 @@ uninstall-launch-agent: ## Remove the clyde daemon LaunchAgent
 	@launchctl bootout gui/$(UID) "$(LAUNCH_AGENT_PLIST)" 2>/dev/null; true
 	@rm -f "$(LAUNCH_AGENT_PLIST)"
 	@echo "✓ LaunchAgent removed"
+
+install-systemd-user: install ## Render and install the daemon systemd user unit
+	@command -v systemctl >/dev/null 2>&1 || { echo "systemctl not found"; exit 1; }
+	@mkdir -p "$(SYSTEMD_USER_DIR)"
+	@sed -e 's|@@CLYDE_DAEMON_BIN@@|$(CLYDE_DAEMON_BIN)|g' \
+	     -e 's|@@HOME@@|$(HOME)|g' \
+	     "$(SYSTEMD_USER_TEMPLATE)" > "$(SYSTEMD_USER_UNIT)"
+	@systemctl --user daemon-reload
+	@systemctl --user enable "$(SYSTEMD_USER_SERVICE)"
+	@systemctl --user restart "$(SYSTEMD_USER_SERVICE)"
+	@echo "✓ systemd user unit installed: $(SYSTEMD_USER_UNIT)"
+	@echo "  Logs: journalctl --user -u $(SYSTEMD_USER_SERVICE) -f"
+
+uninstall-systemd-user: ## Remove the clyde daemon systemd user unit
+	@command -v systemctl >/dev/null 2>&1 || { echo "systemctl not found"; exit 1; }
+	@systemctl --user disable --now "$(SYSTEMD_USER_SERVICE)" 2>/dev/null; true
+	@rm -f "$(SYSTEMD_USER_UNIT)"
+	@systemctl --user daemon-reload
+	@echo "✓ systemd user unit removed"
 
 install-hook: ## Register the SessionStart hook in ~/.claude/settings.json
 	@mkdir -p "$(HOME)/.claude"
