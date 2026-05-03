@@ -274,11 +274,9 @@ On macOS, grant Full Disk Access to the installed binary path when using daemon-
 ~/.local/bin/clyde
 ```
 
-## About the Name
+## Original Credit
 
-Clyde is a short ASCII project name that stays easy to type.
-
-Built with [Claude Code](https://claude.ai/code).
+Clyde is forked from Fabio Rehm's original [clotilde](https://github.com/fgrehm/clotilde) project.
 
 ## License
 
