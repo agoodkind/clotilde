@@ -13,14 +13,14 @@ import (
 // that hit the resolver within a short window of each other. Sixty
 // seconds is long enough that repeated compact or resume calls during a
 // single work session share one walk, and short enough that a newly
-// named Claude Code chat is discoverable almost immediately.
+// named provider session is discoverable almost immediately.
 const defaultDiscoveryCacheTTL = 60 * time.Second
 
 // discoveryCache memoizes the result of provider scanners so tier-4
-// resolve misses do not re-walk provider transcript roots on every
-// call. Access is serialized
-// with a mutex; refreshes block concurrent callers rather than racing
-// multiple scans, which would multiply the disk cost during a burst.
+// resolve misses do not re-walk provider history roots on every call.
+// Access is serialized with a mutex; refreshes block concurrent callers
+// rather than racing multiple scans, which would multiply the disk cost
+// during a burst.
 type discoveryCache struct {
 	mu       sync.Mutex
 	scanners []DiscoveryScanner

@@ -10,8 +10,8 @@ import (
 	"time"
 
 	compactengine "goodkind.io/clyde/internal/compact"
+	contextusage "goodkind.io/clyde/internal/providers/claude/contextusage"
 	"goodkind.io/clyde/internal/session"
-	"goodkind.io/clyde/internal/sessionctx"
 	"goodkind.io/clyde/internal/util"
 )
 
@@ -74,8 +74,8 @@ func runMetricsDashboard(ctx context.Context, out io.Writer, sess *session.Sessi
 	// Probe Claude for the exact /context breakdown. Numbers here are
 	// what Claude itself reports, not rough estimates. A 5 minute
 	// MaxAge keeps repeat invocations cheap; refresh busts the cache.
-	layer := sessionctx.NewDefault(sess, "", "")
-	usage, usageErr := layer.Usage(ctx, sessionctx.UsageOptions{
+	layer := contextusage.NewDefault(sess, "", "")
+	usage, usageErr := layer.Usage(ctx, contextusage.UsageOptions{
 		Refresh: refresh,
 		MaxAge:  5 * time.Minute,
 	})

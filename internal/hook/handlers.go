@@ -11,6 +11,7 @@ import (
 
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/notify"
+	claudediscovery "goodkind.io/clyde/internal/providers/claude/discovery"
 	"goodkind.io/clyde/internal/session"
 )
 
@@ -79,7 +80,7 @@ func autoAdoptSession(
 	var header session.DiscoveryResult
 	var headerOK bool
 	if hookData.TranscriptPath != "" {
-		header, headerOK = session.ReadTranscriptHeader(hookData.TranscriptPath)
+		header, headerOK = claudediscovery.ReadTranscriptHeader(hookData.TranscriptPath)
 	}
 
 	if headerOK && strings.TrimSpace(header.WorkspaceRoot) != "" {

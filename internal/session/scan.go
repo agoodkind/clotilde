@@ -14,30 +14,24 @@ type DiscoveryScanner interface {
 	Scan() ([]DiscoveryResult, error)
 }
 
-// ClaudeDiscoveryState captures discovery details that only the Claude scanner
-// understands. Generic adoption code should use DiscoveryResult methods instead
-// of reaching into this state directly.
-type ClaudeDiscoveryState struct {
-	TranscriptPath string
-}
-
 // DiscoveryResult captures the outcome of a single provider discovery scan.
 type DiscoveryResult struct {
-	Provider       ProviderID
-	Identity       ProviderSessionID
-	WorkspaceRoot  string
-	Entrypoint     string
-	FirstEntryTime time.Time
-	CustomTitle    string // user-given chat name from provider metadata
-	ForkParent     ProviderSessionID
-	IsAutoName     bool // provider invocation that looks like a clyde auto-name call
-	IsForked       bool // provider metadata carries fork lineage
-	IsSubagent     bool // provider artifact belongs to a subagent/background worker
-	Claude         ClaudeDiscoveryState
+	Provider            ProviderID
+	Identity            ProviderSessionID
+	WorkspaceRoot       string
+	Entrypoint          string
+	FirstEntryTime      time.Time
+	CustomTitle         string // user-given chat name from provider metadata
+	ForkParent          ProviderSessionID
+	IsAutoName          bool // provider invocation that looks like a clyde auto-name call
+	IsForked            bool // provider metadata carries fork lineage
+	IsSubagent          bool // provider artifact belongs to a subagent/background worker
+	PrimaryArtifact     string
+	PrimaryArtifactKind string
 }
 
 // AdoptedSession is the registry entry created for a previously-unknown
-// transcript. It includes the auto-generated name so callers can report.
+// provider session. It includes the auto-generated name so callers can report.
 type AdoptedSession struct {
 	Name     string
 	Metadata Metadata
@@ -74,21 +68,13 @@ func isClydeScratch(path string) bool {
 	return false
 }
 
-// looksLikeAutoNamePrompt heuristically detects the prompts clyde
-// dispatches to haiku for session naming. The prompt always asks for a
-// kebab-case label and includes the words "kebab-case" and "Output ONLY".
-func looksLikeAutoNamePrompt(content string) bool {
-	if content == "" {
-		return false
-	}
-	c := strings.ToLower(content)
-	return strings.Contains(c, "kebab-case") && strings.Contains(c, "output only")
-}
-
 // AdoptUnknown creates registry stubs for transcripts that no existing
-// session knows about. Sessions that are tagged as auto-name or subagent
-// are skipped so the dashboard does not fill with noise. The function
-// returns the list of adopted sessions.
+// session knows about. Provider packages keep provider-specific scanner
+// implementations and path parsing outside this package. The generic adoption
+// layer only depends on PrimaryArtifactPath for durable history metadata and
+// stable tie-breaking. Sessions that are tagged as auto-name or subagent are
+// skipped so the dashboard does not fill with noise. The function returns the
+// list of adopted sessions.
 func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession, error) {
 	known, err := buildKnownIdentitySet(store)
 	if err != nil {
@@ -245,9 +231,9 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 	return adopted, nil
 }
 
-// pickAdoptedName chooses a session name for an adopted transcript. It
-// prefers the sanitized Claude Code customTitle so clyde verbs accept
-// the user-given chat name directly. Collisions with existing names are
+// pickAdoptedName chooses a session name for an adopted provider session. It
+// prefers the sanitized provider customTitle so clyde verbs accept the
+// user-given chat name directly. Collisions with existing names are
 // resolved with UniqueName. When customTitle is absent or sanitizes to
 // empty (for example an emoji-only title) the function falls back to
 // the workspace-plus-UUID scheme in uniqueAdoptedName. The second return
@@ -373,8 +359,5 @@ func (r DiscoveryResult) ParentProviderSessionKey() string {
 }
 
 func (r DiscoveryResult) PrimaryArtifactPath() string {
-	if r.Claude.TranscriptPath != "" {
-		return r.Claude.TranscriptPath
-	}
-	return ""
+	return r.PrimaryArtifact
 }

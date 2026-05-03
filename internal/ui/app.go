@@ -1466,6 +1466,19 @@ func (a *App) requestSelfReload(path, reason, source, hash string) {
 	if path == "" {
 		path = a.executableBaselinePath()
 	}
+	if source == "daemon_registry" && hash != "" && strings.TrimSpace(a.executableHash) != "" {
+		pathHash := executableHashForPath(path)
+		if pathHash != "" && pathHash != "unknown" && pathHash != hash {
+			tuiLog.Logger().Warn("tui.self_reload.stale_daemon_event_ignored",
+				"component", "tui",
+				"source", source,
+				"path", path,
+				"reason", reason,
+				"event_hash", hash,
+				"path_hash", pathHash)
+			return
+		}
+	}
 	if err := validateSelfReloadCandidate(path); err != nil {
 		tuiLog.Logger().Warn("tui.self_reload.rejected",
 			"component", "tui",
@@ -6394,6 +6407,10 @@ func currentExecutableHash() string {
 			"err", err)
 		return "unknown"
 	}
+	return executableHashForPath(path)
+}
+
+func executableHashForPath(path string) string {
 	body, err := os.ReadFile(path)
 	if err != nil {
 		tuiLog.Logger().Debug("tui.executable_hash.read_failed",

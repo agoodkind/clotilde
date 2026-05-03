@@ -10,20 +10,20 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"goodkind.io/clyde/internal/claude"
 	"goodkind.io/clyde/internal/cli"
 	compactengine "goodkind.io/clyde/internal/compact"
+	contextusage "goodkind.io/clyde/internal/providers/claude/contextusage"
+	claudelifecycle "goodkind.io/clyde/internal/providers/claude/lifecycle"
 	"goodkind.io/clyde/internal/session"
 	sessionsettings "goodkind.io/clyde/internal/session/settings"
-	"goodkind.io/clyde/internal/sessionctx"
 )
 
-// layerCounter adapts sessionctx.Layer to the planner's Counter
+// layerCounter adapts contextusage.Layer to the planner's Counter
 // interface. Every count_tokens call from the target loop goes
 // through the unified layer so future backend swaps (local
 // tokenizer, cached responses, etc.) need to change only one place.
 type layerCounter struct {
-	layer sessionctx.Layer
+	layer contextusage.Layer
 	model string
 }
 
@@ -31,7 +31,7 @@ type layerCounter struct {
 // model. The planner never overrides the model per call, so
 // CountOptions stays empty.
 func (c *layerCounter) CountSyntheticUser(ctx context.Context, contentArray []compactengine.OutputBlock) (int, error) {
-	return c.layer.Count(ctx, contentArray, sessionctx.CountOptions{Model: c.model})
+	return c.layer.Count(ctx, contentArray, contextusage.CountOptions{Model: c.model})
 }
 
 func mergeTypeFlag(s *compactengine.Strippers, csv string) error {
@@ -66,10 +66,10 @@ func resolveModelLikeTUI(
 	fallback string,
 ) (countModel string, displayModel string, source string) {
 	if sess != nil && sess.Metadata.ProviderTranscriptPath() != "" {
-		rawModel, _ := claude.ExtractRawModelAndLastTime(sess.Metadata.ProviderTranscriptPath())
+		rawModel, _ := claudelifecycle.ExtractRawModelAndLastTime(sess.Metadata.ProviderTranscriptPath())
 		rawModel = strings.TrimSpace(rawModel)
 		if rawModel != "" {
-			return rawModel, claude.FormatModelFamily(rawModel), "transcript"
+			return rawModel, claudelifecycle.FormatModelFamily(rawModel), "transcript"
 		}
 	}
 	if store != nil && sess != nil && strings.TrimSpace(sess.Name) != "" {
@@ -285,8 +285,8 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 		thinking, images, toolPairs, chatTurns := categoryCounts(slice)
 		currentTotal, maxTokens := 0, 0
 		calibDate := ""
-		layer := sessionctx.NewDefault(sess, model, "")
-		if u, uerr := layer.Usage(ctx, sessionctx.UsageOptions{MaxAge: 24 * time.Hour}); uerr == nil {
+		layer := contextusage.NewDefault(sess, model, "")
+		if u, uerr := layer.Usage(ctx, contextusage.UsageOptions{MaxAge: 24 * time.Hour}); uerr == nil {
 			currentTotal = u.TotalTokens
 			maxTokens = u.MaxTokens
 		}
@@ -322,7 +322,7 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 			cliCompactLog.Logger().Error("cli.compact.api_key_failed", "session", name, slog.Any("err", keyErr))
 			return keyErr
 		}
-		layer := sessionctx.NewDefault(sess, model, key)
+		layer := contextusage.NewDefault(sess, model, key)
 		counter = &layerCounter{layer: layer, model: model}
 	}
 

@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"goodkind.io/clyde/internal/claude/oauthcredentials"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/providers/claude/oauthcredentials"
 )
 
 // Manager is goroutine-safe. One instance per daemon is enough.
@@ -62,7 +62,7 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 	if !isExpired(tokens) {
 		log.DebugContext(ctx, "oauth.auth.cache_hit",
 			"subcomponent", "oauth",
-			"credential_source", selected.Source,
+			"store_kind", selected.Source,
 			"expires_at_ms", tokens.ExpiresAt,
 		)
 		return tokens.AccessToken, nil
@@ -71,10 +71,10 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 	refreshStarted := oauthClock.Now()
 	refreshable, refreshableErr := m.ensureRefreshableCandidate(ctx, selected)
 	if refreshableErr != nil {
-		log.ErrorContext(ctx, "oauth.credentials.unrefreshable",
+		log.ErrorContext(ctx, "oauth.store.unrefreshable",
 			"subcomponent", "oauth",
 			"duration_ms", time.Since(refreshStarted).Milliseconds(),
-			"credential_summaries", summariesAsStrings(selected.Summaries),
+			"store_kind_summaries", summariesAsStrings(selected.Summaries),
 			"err", refreshableErr,
 		)
 		return "", refreshableErr
@@ -84,7 +84,7 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 		log.ErrorContext(ctx, "oauth.auth.refresh_failed",
 			"subcomponent", "oauth",
 			"duration_ms", time.Since(refreshStarted).Milliseconds(),
-			"credential_source", refreshable.Source,
+			"store_kind", refreshable.Source,
 			"err", err,
 		)
 		if isInvalidGrant(err) {
@@ -108,7 +108,7 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 				log.InfoContext(ctx, "oauth.auth.refreshed_via_relogin",
 					"subcomponent", "oauth",
 					"duration_ms", time.Since(refreshStarted).Milliseconds(),
-					"credential_source", fresh.Source,
+					"store_kind", fresh.Source,
 					"expires_at_ms", fresh.Tokens.ExpiresAt,
 				)
 				return fresh.Tokens.AccessToken, nil
@@ -122,7 +122,7 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 				log.ErrorContext(ctx, "oauth.auth.post_relogin_refresh_failed",
 					"subcomponent", "oauth",
 					"duration_ms", time.Since(refreshStarted).Milliseconds(),
-					"credential_source", retryCredential.Source,
+					"store_kind", retryCredential.Source,
 					"err", retryErr.Error(),
 				)
 				return "", fmt.Errorf("post-relogin refresh: %w", retryErr)
@@ -141,7 +141,7 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 	log.InfoContext(ctx, "oauth.auth.refreshed",
 		"subcomponent", "oauth",
 		"duration_ms", time.Since(refreshStarted).Milliseconds(),
-		"credential_source", refreshable.Source,
+		"store_kind", refreshable.Source,
 		"expires_at_ms", refreshed.ExpiresAt,
 		"scopes", strings.Join(refreshed.Scopes, " "),
 	)
@@ -170,10 +170,10 @@ func (m *Manager) reselectCredential(ctx context.Context) (*selectedCredential, 
 	m.snapshot = snapshotForCredential(selected)
 	oauthLog.Logger().InfoContext(ctx, "oauth.credentials.selected",
 		"subcomponent", "oauth",
-		"credential_source", selected.Source,
+		"store_kind", selected.Source,
 		"expires_at_ms", selected.Metadata.ExpiresAt,
 		"refresh_token_present", selected.Metadata.RefreshTokenPresent,
-		"credential_summaries", summariesAsStrings(selected.Summaries),
+		"store_kind_summaries", summariesAsStrings(selected.Summaries),
 	)
 	return selected, nil
 }
@@ -209,8 +209,8 @@ func (m *Manager) ensureRefreshableCandidate(ctx context.Context, selected *sele
 	oauthLog.Logger().InfoContext(ctx, "oauth.credentials.cache_invalidated",
 		"subcomponent", "oauth",
 		"reason", "cached_token_missing_refresh_token",
-		"credential_source", refreshable.Source,
-		"credential_summaries", summariesAsStrings(refreshable.Summaries),
+		"store_kind", refreshable.Source,
+		"store_kind_summaries", summariesAsStrings(refreshable.Summaries),
 	)
 	return refreshable, nil
 }

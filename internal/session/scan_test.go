@@ -7,6 +7,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"goodkind.io/clyde/internal/providers/registry"
 	"goodkind.io/clyde/internal/session"
 )
 
@@ -17,6 +18,7 @@ var _ = Describe("ScanProjects", func() {
 	)
 
 	BeforeEach(func() {
+		registry.RegisterDefaultDiscoveryScanners()
 		projectsRoot = GinkgoT().TempDir()
 		// One project dir under ~/.claude/projects.
 		projDir = filepath.Join(projectsRoot, "-Users-agoodkind-Sites-foo")
@@ -100,6 +102,7 @@ var _ = Describe("AdoptUnknown", func() {
 	)
 
 	BeforeEach(func() {
+		registry.RegisterDefaultDiscoveryScanners()
 		projectsRoot = GinkgoT().TempDir()
 		clydeRoot := GinkgoT().TempDir()
 		store = session.NewFileStore(clydeRoot)

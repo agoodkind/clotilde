@@ -221,6 +221,53 @@ func TestAdapterReloadDrainUsesShutdownForActiveRequests(t *testing.T) {
 	}
 }
 
+func TestAdapterReloadDrainBoundsWaitIdle(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	const timeout = 20 * time.Millisecond
+	drained := false
+	forceClosed := false
+	proc := &adapterProcess{
+		drain: func(context.Context) error {
+			drained = true
+			return nil
+		},
+		waitIdle: func(ctx context.Context) int {
+			<-ctx.Done()
+			return 1
+		},
+		forceClose: func() error {
+			forceClosed = true
+			return nil
+		},
+		closeListener: func() error { return nil },
+	}
+	ctrl := &adapterController{log: log, proc: proc}
+	started := time.Now()
+
+	ctrl.drainReloadedProcess(timeout)
+
+	elapsed := time.Since(started)
+	if elapsed < timeout {
+		t.Fatalf("reload drain elapsed=%s, want at least %s", elapsed, timeout)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("reload drain elapsed=%s, want bounded wait", elapsed)
+	}
+	if !drained {
+		t.Fatalf("active reload drain should call shutdown after idle wait times out")
+	}
+	if !forceClosed {
+		t.Fatalf("active reload drain should force close after bounded drain")
+	}
+}
+
+func TestReloadHTTPDrainWaitFitsReloadCommandDeadline(t *testing.T) {
+	const reloadCommandDeadline = 12 * time.Second
+	if reloadHTTPDrainWait >= reloadCommandDeadline {
+		t.Fatalf("reloadHTTPDrainWait=%s must be less than reload command deadline %s", reloadHTTPDrainWait, reloadCommandDeadline)
+	}
+}
+
 func TestReloadDaemonCallsReloadFunc(t *testing.T) {
 	called := false
 	srv := &Server{

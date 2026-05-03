@@ -9,8 +9,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"goodkind.io/clyde/internal/daemon"
+	"goodkind.io/clyde/internal/providers/registry"
 	"goodkind.io/clyde/internal/session"
-	sessionlifecycle "goodkind.io/clyde/internal/session/lifecycle"
 )
 
 // globalStore returns the global session store, or panics on error.
@@ -37,7 +37,7 @@ func printResumeInstructions(ctx context.Context, sess *session.Session) {
 	_, _ = fmt.Fprintln(os.Stdout)
 	_, _ = fmt.Fprintln(os.Stdout, "Resume this session with:")
 	_, _ = fmt.Fprintf(os.Stdout, "  clyde resume %s\n", sess.Name)
-	runtime, err := sessionlifecycle.ForSession(sess, nil)
+	runtime, err := registry.ForSession(sess, nil)
 	if err != nil {
 		cmdDispatchLog.Logger().WarnContext(ctx, "cmd.session.resume_instructions_provider_failed",
 			"component", "cli",
@@ -62,7 +62,7 @@ func autoUpdateContext(parentCtx context.Context, _ *session.FileStore, sess *se
 		return
 	}
 
-	runtime, err := sessionlifecycle.ForSession(sess, nil)
+	runtime, err := registry.ForSession(sess, nil)
 	if err != nil {
 		return
 	}

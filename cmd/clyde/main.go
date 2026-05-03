@@ -33,6 +33,7 @@ import (
 	hook "goodkind.io/clyde/internal/cli/hook"
 	"goodkind.io/clyde/internal/cli/mcp"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/providers/registry"
 	"goodkind.io/clyde/internal/slogger"
 )
 
@@ -48,6 +49,8 @@ func main() {
 }
 
 func run() int {
+	registry.RegisterDefaultDiscoveryScanners()
+
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "config load failed:", err)

@@ -12,8 +12,8 @@ import (
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/outputstyle"
+	"goodkind.io/clyde/internal/providers/registry/artifacts"
 	"goodkind.io/clyde/internal/session"
-	sessionartifacts "goodkind.io/clyde/internal/session/artifacts"
 	"goodkind.io/clyde/internal/slogger"
 	"goodkind.io/clyde/internal/ui"
 )
@@ -119,7 +119,7 @@ func deleteTrackedSession(
 ) error {
 	projClydeRoot := projectClydeRootForSession(sess)
 
-	deleted, err := sessionartifacts.Delete(ctx, session.DeleteArtifactsRequest{
+	deleted, err := artifacts.Delete(ctx, session.DeleteArtifactsRequest{
 		Session:   sess,
 		ClydeRoot: projClydeRoot,
 	})

@@ -617,36 +617,13 @@ func ConnectOrStart(ctx context.Context) (*Client, error) {
 	return nil, fmt.Errorf("daemon did not become ready after start")
 }
 
+func (c *Client) Connection() *grpc.ClientConn {
+	return c.conn
+}
+
 // Close closes the gRPC connection.
 func (c *Client) Close() error {
 	return c.conn.Close()
-}
-
-// AcquireSession asks the daemon to create a per-session settings file.
-func (c *Client) AcquireSession(wrapperID, sessionName string) (*clydev1.AcquireSessionResponse, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	log := daemonClientLog(ctx)
-	log.DebugContext(ctx, "daemon.client.acquire_session.begin",
-		"wrapper_id", wrapperID,
-		"session_name", sessionName,
-	)
-	return c.rpc.AcquireSession(ctx, &clydev1.AcquireSessionRequest{
-		WrapperId:   wrapperID,
-		SessionName: sessionName,
-	})
-}
-
-// ReleaseSession notifies the daemon that this wrapper process has exited.
-func (c *Client) ReleaseSession(wrapperID string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	log := daemonClientLog(ctx)
-	log.DebugContext(ctx, "daemon.client.release_session.begin", "wrapper_id", wrapperID)
-	_, err := c.rpc.ReleaseSession(ctx, &clydev1.ReleaseSessionRequest{
-		WrapperId: wrapperID,
-	})
-	return err
 }
 
 // UpdateContext asks the daemon to generate a context summary for a session

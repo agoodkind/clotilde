@@ -141,7 +141,7 @@ func (m *Manager) autoRelogin(ctx context.Context, originalErr error) error {
 	if selected, rerr := m.reselectCredential(ctx); rerr == nil && selected != nil && !isExpired(selected.Tokens) {
 		log.InfoContext(ctx, "oauth.relogin.raced",
 			"subcomponent", "oauth",
-			"credential_source", selected.Source,
+			"store_kind", selected.Source,
 			"expires_at_ms", selected.Tokens.ExpiresAt,
 		)
 		return nil

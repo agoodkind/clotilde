@@ -7,12 +7,12 @@ import (
 	"log/slog"
 
 	compactengine "goodkind.io/clyde/internal/compact"
+	contextusage "goodkind.io/clyde/internal/providers/claude/contextusage"
 	"goodkind.io/clyde/internal/session"
-	"goodkind.io/clyde/internal/sessionctx"
 )
 
 // runAutoCalibrate probes the live session via the unified
-// sessionctx.Layer, derives static_overhead from the Usage response,
+// contextusage.Layer, derives static_overhead from the Usage response,
 // and writes the calibration file. The layer routes Usage through
 // Claude's get_context_usage control request so the numbers match
 // /context exactly. --calibrate=auto always passes Refresh so the
@@ -29,8 +29,8 @@ func runAutoCalibrate(ctx context.Context, out io.Writer, sess *session.Session,
 	)
 	_, _ = fmt.Fprintf(out, "probing %s via claude /context (may take 30-60 seconds)...\n", sess.Name)
 
-	layer := sessionctx.NewDefault(sess, model, "")
-	usage, err := layer.Usage(ctx, sessionctx.UsageOptions{Refresh: true})
+	layer := contextusage.NewDefault(sess, model, "")
+	usage, err := layer.Usage(ctx, contextusage.UsageOptions{Refresh: true})
 	if err != nil {
 		slog.ErrorContext(ctx, "cli.compact.auto_calibrate.probe_failed",
 			"session", sess.Name,

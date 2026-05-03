@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"goodkind.io/clyde/internal/config"
+	claudediscovery "goodkind.io/clyde/internal/providers/claude/discovery"
 	"goodkind.io/clyde/internal/session"
 )
 
@@ -63,7 +63,7 @@ func PruneAutoname(
 		log.ErrorContext(ctx, "prune.autoname.home_failed", "component", "prune", "err", err)
 		return Result{}, err
 	}
-	projectsDir := config.ClaudeProjectsRoot(home)
+	projectsDir := claudediscovery.ProjectsRoot(home)
 	results, err := session.ScanProjects(projectsDir)
 	if err != nil {
 		log.ErrorContext(ctx, "prune.autoname.scan_failed", "component", "prune", "err", err)

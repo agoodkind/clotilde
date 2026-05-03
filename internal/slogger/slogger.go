@@ -8,7 +8,7 @@
 //
 // The standard is non-negotiable: every operation in the codebase MUST
 // emit at least one slog event. Free-form fmt.Println / log.Printf are
-// rejected by `make slog-audit`. See docs/SLOG.md for the full spec.
+// rejected by `make slog-audit`. See AGENTS.md for the full spec.
 package slogger
 
 import (

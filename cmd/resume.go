@@ -5,8 +5,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"goodkind.io/clyde/internal/providers/registry"
 	"goodkind.io/clyde/internal/session"
-	sessionlifecycle "goodkind.io/clyde/internal/session/lifecycle"
 )
 
 // NewResumeCmd implements `clyde resume <name|uuid>`. It resolves the
@@ -47,7 +47,7 @@ func NewResumeCmd() *cobra.Command {
 				)
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(),
 					"Session '%s' not in clyde; forwarding to the default provider.\n\n", query)
-				runtime, err := sessionlifecycle.Default(store)
+				runtime, err := registry.Default(store)
 				if err != nil {
 					return err
 				}

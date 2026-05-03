@@ -27,9 +27,9 @@ import (
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/adapter"
-	"goodkind.io/clyde/internal/codex"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/mitm"
+	codex "goodkind.io/clyde/internal/providers/codex/lifecycle"
 	"goodkind.io/clyde/internal/session"
 	"goodkind.io/clyde/internal/slogger"
 	"goodkind.io/clyde/internal/webapp"
@@ -50,14 +50,13 @@ const (
 )
 
 // reloadHTTPDrainWait caps how long the reload waits for in-flight
-// adapter requests to finish before force-closing. The drain polls
-// active-request count rather than a flat sleep, so a tunnel that sits
-// idle (Cloudflare keep-alive with no Cursor traffic) returns
-// immediately. A live agent turn can run for a minute or more, so the
-// max wait is generous; it only matters when a real stream is in
-// flight.
+// adapter or webapp requests to finish before force-closing. The drain
+// polls active-request count rather than sleeping, so idle tunnel
+// keepalives return immediately. Active streams get a short grace
+// period because the reload RPC is invoked by deploy and must return
+// before the CLI deadline.
 const (
-	reloadHTTPDrainWait         = 10 * time.Minute
+	reloadHTTPDrainWait         = adapterShutdownWait
 	reloadGRPCDrainWait         = 10 * time.Minute
 	envDaemonReloadChild        = "CLYDE_DAEMON_RELOAD_CHILD"
 	envDaemonInheritedListeners = "CLYDE_DAEMON_INHERITED_LISTENERS"

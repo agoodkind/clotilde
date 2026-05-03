@@ -8,14 +8,16 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
-	clydev1 "goodkind.io/clyde/api/clyde/v1"
-	"goodkind.io/clyde/internal/codex"
+	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	clydev1 "goodkind.io/clyde/api/clyde/v1"
+	codex "goodkind.io/clyde/internal/providers/codex/lifecycle"
 	"goodkind.io/clyde/internal/session"
 )
 
@@ -57,6 +59,42 @@ func TestLiveSessionLaunchBasedirRequiresExplicitOrStoredDirectory(t *testing.T)
 	}
 	if got != stored.Metadata.WorkDir {
 		t.Fatalf("stored basedir = %q want %q", got, stored.Metadata.WorkDir)
+	}
+}
+
+func TestForegroundLeaseReturnsInternalWhenUUIDAllocationFails(t *testing.T) {
+	tmp := setupDaemonTestHome(t)
+	uuid.DisableRandPool()
+	uuid.SetRand(strings.NewReader(""))
+	t.Cleanup(func() {
+		uuid.SetRand(nil)
+		uuid.DisableRandPool()
+	})
+
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	sess := session.NewSession("codex-chat", "codex-thread")
+	setTestProviderIdentity(sess, session.ProviderCodex, "codex-thread")
+	sess.Metadata.WorkDir = filepath.Join(tmp, "work")
+	if err := store.Create(sess); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	srv := newTestServer(t)
+
+	_, err = srv.AcquireForegroundSession(context.Background(), &clydev1.AcquireForegroundSessionRequest{
+		SessionName: "codex-chat",
+		Provider:    string(session.ProviderCodex),
+	})
+	if err == nil {
+		t.Fatal("acquire returned nil error, want UUID allocation error")
+	}
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("acquire code = %v, want %v", status.Code(err), codes.Internal)
+	}
+	if !strings.Contains(err.Error(), "generate lease token") {
+		t.Fatalf("acquire error = %q, want lease token allocation error", err.Error())
 	}
 }
 

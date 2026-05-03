@@ -95,6 +95,7 @@ func CodexLogPath() string {
 }
 
 var (
+	codexFileLoggerMu   sync.Mutex
 	codexFileLoggerOnce sync.Once
 	codexFileLogger     *slog.Logger
 	codexFileCloser     io.Closer
@@ -110,6 +111,8 @@ var (
 // the first Codex event is emitted. Later calls are ignored because slog
 // handlers bind their writer path and lumberjack settings at construction.
 func ConfigureCodexFileLogger(rotation FileLogRotationConfig) {
+	codexFileLoggerMu.Lock()
+	defer codexFileLoggerMu.Unlock()
 	if codexFileLogger != nil {
 		return
 	}
@@ -120,6 +123,8 @@ func ConfigureCodexFileLogger(rotation FileLogRotationConfig) {
 // CodexLogPath(). Best effort: a missing log dir never blocks traffic. The
 // handler is bound to the path and rotation config observed at first call.
 func dedicatedCodexLogger() *slog.Logger {
+	codexFileLoggerMu.Lock()
+	defer codexFileLoggerMu.Unlock()
 	codexFileLoggerOnce.Do(func() {
 		path := CodexLogPath()
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

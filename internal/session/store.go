@@ -74,9 +74,9 @@ type Store interface {
 type FileStore struct {
 	clydeRoot string
 
-	// discoveryCache memoizes ScanProjects results so tier-4 Resolve
-	// misses do not re-walk ~/.claude/projects on every call. nil when
-	// auto-adoption is disabled (NewFileStoreReadOnly or NewFileStore).
+	// discoveryCache memoizes provider discovery results so tier-4 Resolve misses
+	// do not re-walk provider history roots on every call. nil when auto-adoption
+	// is disabled (NewFileStoreReadOnly or NewFileStore).
 	discoveryCache *discoveryCache
 
 	// noAdopt disables tier 4 even when a cache is present. Used by

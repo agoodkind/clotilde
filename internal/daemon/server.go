@@ -33,16 +33,17 @@ import (
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	"goodkind.io/clyde/internal/bridge"
-	"goodkind.io/clyde/internal/codex"
-	codexstore "goodkind.io/clyde/internal/codex/store"
 	compactengine "goodkind.io/clyde/internal/compact"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/outputstyle"
+	contextusage "goodkind.io/clyde/internal/providers/claude/contextusage"
+	claudediscovery "goodkind.io/clyde/internal/providers/claude/discovery"
+	codex "goodkind.io/clyde/internal/providers/codex/lifecycle"
+	codexstore "goodkind.io/clyde/internal/providers/codex/store"
+	sessionartifacts "goodkind.io/clyde/internal/providers/registry/artifacts"
 	"goodkind.io/clyde/internal/session"
-	sessionartifacts "goodkind.io/clyde/internal/session/artifacts"
 	sessionsettings "goodkind.io/clyde/internal/session/settings"
-	"goodkind.io/clyde/internal/sessionctx"
 	"goodkind.io/clyde/internal/slogger"
 	"goodkind.io/clyde/internal/util"
 )
@@ -169,7 +170,7 @@ type contextRefreshPermit struct {
 }
 
 type sessionContextState struct {
-	Usage      sessionctx.Usage
+	Usage      contextusage.Usage
 	Loaded     bool
 	Status     string
 	Refreshing bool
@@ -371,7 +372,7 @@ func (s *Server) runDiscoveryOnce(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	projects := config.ClaudeProjectsRoot(home)
+	projects := claudediscovery.ProjectsRoot(home)
 	if _, err := os.Stat(projects); err != nil {
 		return
 	}
@@ -706,7 +707,7 @@ func (s *Server) AcquireSession(ctx context.Context, req *clydev1.AcquireSession
 
 	var model, effortLevel string
 	if existingModel != "" || existingEffort != "" {
-		// Re-registering after daemon restart  --  keep what claude has.
+		// Re-registering after daemon restart. Preserve what claude has.
 		model = existingModel
 		effortLevel = existingEffort
 		s.log.LogAttrs(ctx, slog.LevelInfo, "re-acquired session with preserved settings",
@@ -716,7 +717,7 @@ func (s *Server) AcquireSession(ctx context.Context, req *clydev1.AcquireSession
 			slog.String("effort", effortLevel),
 		)
 	} else {
-		// Fresh session  --  resolve from clyde session settings + global.
+		// Fresh session. Resolve from clyde session settings and global config.
 		model, effortLevel = s.resolveSessionSettings(ctx, req.SessionName)
 	}
 
@@ -1449,7 +1450,7 @@ func (s *Server) refreshContextUsage(parent context.Context, sess *session.Sessi
 	ctx, cancel := context.WithTimeout(parent, 75*time.Second)
 	defer cancel()
 
-	usage, err := sessionctx.NewDefault(&workSess, "", "").Usage(ctx, sessionctx.UsageOptions{})
+	usage, err := contextusage.NewDefault(&workSess, "", "").Usage(ctx, contextusage.UsageOptions{})
 
 	s.contextMu.Lock()
 	state := s.contextStates[sess.Name]

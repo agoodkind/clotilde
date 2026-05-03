@@ -5,8 +5,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"goodkind.io/clyde/internal/claude"
 	"goodkind.io/clyde/internal/cli"
+	claudelifecycle "goodkind.io/clyde/internal/providers/claude/lifecycle"
 )
 
 func newLaunchRemoteWorkerCmd(_ *cli.Factory) *cobra.Command {
@@ -33,7 +33,7 @@ func newLaunchRemoteWorkerCmd(_ *cli.Factory) *cobra.Command {
 				"basedir", basedir,
 				"incognito", incognito,
 			)
-			return claude.StartHeadlessRemoteWorker(env, "", basedir, sessionID)
+			return claudelifecycle.StartHeadlessRemoteWorker(env, "", basedir, sessionID)
 		},
 	}
 	cmd.Flags().StringVar(&sessionName, "session-name", "", "canonical clyde session name")

@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"goodkind.io/clyde/internal/claude/oauthcredentials"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/providers/claude/oauthcredentials"
 )
 
 func TestSelectCredentialCandidate_KeychainWinsWhenEquallyUsable(t *testing.T) {

@@ -3,32 +3,46 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
+type tier4TestScanner struct {
+	results *[]DiscoveryResult
+}
+
+func (scanner tier4TestScanner) Provider() ProviderID {
+	return ProviderClaude
+}
+
+func (scanner tier4TestScanner) Scan() ([]DiscoveryResult, error) {
+	return append([]DiscoveryResult(nil), (*scanner.results)...), nil
+}
+
 var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
 	var (
-		clydeRoot    string
-		projectsRoot string
-		projDir      string
-		store        *FileStore
+		clydeRoot   string
+		projDir     string
+		store       *FileStore
+		discoveries []DiscoveryResult
 	)
 
 	const uuid = "22a95bc5-eb24-4302-8f2f-2253bc587cb5"
 
 	BeforeEach(func() {
 		clydeRoot = GinkgoT().TempDir()
-		projectsRoot = GinkgoT().TempDir()
+		projectsRoot := GinkgoT().TempDir()
 		projDir = filepath.Join(projectsRoot, "-Users-agoodkind-Sites-tack")
 		Expect(os.MkdirAll(projDir, 0o755)).To(Succeed())
 
 		Expect(os.MkdirAll(filepath.Join(clydeRoot, "sessions"), 0o755)).To(Succeed())
+		discoveries = nil
 
 		store = &FileStore{
 			clydeRoot:      clydeRoot,
-			discoveryCache: newDiscoveryCache([]DiscoveryScanner{newClaudeDiscoveryScanner(projectsRoot)}, 0),
+			discoveryCache: newDiscoveryCache([]DiscoveryScanner{tier4TestScanner{results: &discoveries}}, 0),
 		}
 	})
 
@@ -40,6 +54,19 @@ var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
 		body += `{"type":"system","timestamp":"2026-04-12T23:52:12Z","entrypoint":"cli","cwd":"/Users/agoodkind/Sites/tack","sessionId":"` + id + `"}` + "\n"
 		path := filepath.Join(projDir, id+".jsonl")
 		Expect(os.WriteFile(path, []byte(body), 0o600)).To(Succeed())
+		discoveries = append(discoveries, DiscoveryResult{
+			Provider: ProviderClaude,
+			Identity: ProviderSessionID{
+				Provider: ProviderClaude,
+				ID:       id,
+			},
+			WorkspaceRoot:       "/Users/agoodkind/Sites/tack",
+			Entrypoint:          "cli",
+			FirstEntryTime:      time.Date(2026, time.April, 12, 23, 52, 12, 0, time.UTC),
+			CustomTitle:         customTitle,
+			PrimaryArtifact:     path,
+			PrimaryArtifactKind: "transcript",
+		})
 	}
 
 	It("adopts by sanitized customTitle on tier-1 miss", func() {

@@ -13,7 +13,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
-	"goodkind.io/clyde/internal/codex"
+	codex "goodkind.io/clyde/internal/providers/codex/lifecycle"
 	"goodkind.io/clyde/internal/session"
 	"goodkind.io/clyde/internal/util"
 	"goodkind.io/clyde/internal/webapp"

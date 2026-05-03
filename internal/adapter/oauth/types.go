@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"goodkind.io/clyde/internal/claude/oauthcredentials"
+	"goodkind.io/clyde/internal/providers/claude/oauthcredentials"
 )
 
 // refreshSafetyWindow is how far before expiresAt we proactively refresh.

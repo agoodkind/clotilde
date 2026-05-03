@@ -30,8 +30,8 @@ import (
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/mitm"
+	"goodkind.io/clyde/internal/providers/registry"
 	"goodkind.io/clyde/internal/session"
-	sessionlifecycle "goodkind.io/clyde/internal/session/lifecycle"
 	"goodkind.io/clyde/internal/ui"
 )
 
@@ -1043,7 +1043,7 @@ func startNewSessionInDir(ctx context.Context, basedir string, store session.Sto
 		"remote_control", enableRemoteControl,
 	)
 
-	runtime, err := sessionlifecycle.Default(store)
+	runtime, err := registry.Default(store)
 	if err != nil {
 		return err
 	}
@@ -1090,7 +1090,7 @@ func resumeSession(ctx context.Context, sess *session.Session, store session.Sto
 		"session_id", sess.Metadata.ProviderSessionID(),
 	)
 
-	runtime, err := sessionlifecycle.ForSession(sess, store)
+	runtime, err := registry.ForSession(sess, store)
 	if err != nil {
 		return err
 	}

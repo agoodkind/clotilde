@@ -74,7 +74,7 @@ func (m *Manager) refreshLocked(ctx context.Context, current *selectedCredential
 	if raced, racedErr := m.reselectCredential(ctx); racedErr == nil && raced != nil && !isExpired(raced.Tokens) {
 		oauthLog.Logger().InfoContext(ctx, "oauth.token.refresh_raced",
 			"subcomponent", "oauth",
-			"credential_source", raced.Source,
+			"store_kind", raced.Source,
 			"expires_at_ms", raced.Tokens.ExpiresAt,
 		)
 		return raced.Tokens.Clone(), nil

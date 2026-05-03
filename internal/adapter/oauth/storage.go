@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"goodkind.io/clyde/internal/claude/oauthcredentials"
+	"goodkind.io/clyde/internal/providers/claude/oauthcredentials"
 )
 
 func readCredentialCandidates(ctx context.Context, dir, keychainService string) []oauthcredentials.ReadResult {
@@ -75,7 +75,7 @@ func writeCredentials(ctx context.Context, dir string, tokens *Tokens) error {
 	}
 	oauthLog.Logger().InfoContext(ctx, "oauth.credentials.refreshed_file_written",
 		"subcomponent", "oauth",
-		"credential_source", oauthcredentials.SourceFile,
+		"store_kind", oauthcredentials.SourceFile,
 		"expires_at_ms", tokens.ExpiresAt,
 	)
 	return nil

@@ -221,6 +221,8 @@ func TestSummarizeWsRequestPreservesPreviousResponseFlag(t *testing.T) {
 
 func resetDedicatedCodexLoggerForTest(t *testing.T) {
 	t.Helper()
+	codexFileLoggerMu.Lock()
+	defer codexFileLoggerMu.Unlock()
 	if codexFileCloser != nil {
 		_ = codexFileCloser.Close()
 	}
@@ -234,6 +236,8 @@ func resetDedicatedCodexLoggerForTest(t *testing.T) {
 		Compress:   new(true),
 	}
 	t.Cleanup(func() {
+		codexFileLoggerMu.Lock()
+		defer codexFileLoggerMu.Unlock()
 		if codexFileCloser != nil {
 			_ = codexFileCloser.Close()
 		}
