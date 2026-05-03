@@ -7,7 +7,7 @@ concurrency:
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [ main ]
   pull_request:
 
 permissions:
@@ -36,20 +36,11 @@ jobs:
         with:
           go-version-file: go.mod
       - run: make lint
-      - name: Check formatting
-        run: |
-          go tool golangci-lint fmt ./...
-          git diff --exit-code
+      - run: make fmt
+      - run: git diff --exit-code
       - run: make deadcode
-      - name: Complexity report (gocyclo -over 30)
-        run: |
-          out=$(go tool gocyclo -over 30 -ignore '(_test\.go$|cmd/|internal/claude/transcript\.go)' . || true)
-          if [ -n "$out" ]; then
-            echo "Functions exceeding complexity threshold of 30:"
-            echo "$out"
-          fi
-      - name: govulncheck
-        run: make govulncheck
+      - run: make audit
+      - run: make govulncheck
 
   release-snapshot:
     name: Release snapshot
