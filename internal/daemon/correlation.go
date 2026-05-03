@@ -64,6 +64,16 @@ func daemonCorrelationContext(ctx context.Context, log *slog.Logger, corr correl
 	return gklog.WithLogger(ctx, log)
 }
 
+func daemonDetachedCorrelationContext(parent context.Context, log *slog.Logger) context.Context {
+	corr := correlation.FromContext(parent)
+	if corr.TraceID == "" {
+		corr = correlation.New("")
+	} else {
+		corr = corr.Child()
+	}
+	return daemonCorrelationContext(context.Background(), log, corr)
+}
+
 func logDaemonRPCCompleted(ctx context.Context, method string, started time.Time, err error) {
 	code := status.Code(err).String()
 	level := slog.LevelInfo

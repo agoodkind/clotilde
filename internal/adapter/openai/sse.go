@@ -29,8 +29,9 @@ func (sw *SSEWriter) WriteSSEHeaders() {
 		return
 	}
 	sw.w.Header().Set("Content-Type", "text/event-stream")
-	sw.w.Header().Set("Cache-Control", "no-cache")
+	sw.w.Header().Set("Cache-Control", "no-cache, no-transform")
 	sw.w.Header().Set("Connection", "keep-alive")
+	sw.w.Header().Set("X-Accel-Buffering", "no")
 	sw.w.WriteHeader(http.StatusOK)
 	sw.headersCommitted = true
 	sw.f.Flush()

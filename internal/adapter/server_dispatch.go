@@ -163,9 +163,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	var req ChatRequest
 	parseErr := json.Unmarshal(body, &req)
-	bodyLimit := s.logging.Body.MaxKB * 1024
+	bodyLogging := s.bodyLogging()
+	bodyLimit := bodyLogging.MaxKB * 1024
 
-	switch s.logging.Body.Mode {
+	switch bodyLogging.Mode {
 	case "summary":
 		if parseErr == nil {
 			bodySummary := SummarizeChatRequest(req)
@@ -190,7 +191,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	default:
 		rawAttrs.BodyRaw, rawAttrs.BodyTruncated = truncateBody(body, bodyLimit)
 	}
-	if s.logging.Body.Mode != "off" {
+	if bodyLogging.Mode != "off" {
 		slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPRaw).LogAttrs(r.Context(), slog.LevelDebug, "adapter.chat.raw", rawAttrs.asAttrs()...)
 	}
 

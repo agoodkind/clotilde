@@ -107,6 +107,7 @@ type Server struct {
 	deps              Deps
 	log               *slog.Logger
 	logging           config.LoggingConfig
+	runtimeLogging    *RuntimeLogging
 	registry          *Registry
 	sem               chan struct{}
 	token             string
@@ -140,6 +141,10 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 	if logging.Body.MaxKB <= 0 {
 		logging.Body.MaxKB = 32
 	}
+	runtimeLogging := deps.RuntimeLogging
+	if runtimeLogging == nil {
+		runtimeLogging = NewRuntimeLogging(logging)
+	}
 	max := cfg.MaxConcurrent
 	if max <= 0 {
 		max = DefaultMaxConcurrent
@@ -153,14 +158,15 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 		return nil, err
 	}
 	s := &Server{
-		cfg:      cfg,
-		logprobs: cfg.Logprobs,
-		deps:     deps,
-		log:      log.With("subcomponent", "adapter"),
-		logging:  logging,
-		registry: registry,
-		sem:      make(chan struct{}, max),
-		token:    token,
+		cfg:            cfg,
+		logprobs:       cfg.Logprobs,
+		deps:           deps,
+		log:            log.With("subcomponent", "adapter"),
+		logging:        logging,
+		runtimeLogging: runtimeLogging,
+		registry:       registry,
+		sem:            make(chan struct{}, max),
+		token:          token,
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
 		},
@@ -175,6 +181,10 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 			HTTPClient: s.httpClient,
 		}, adaptercodex.ProviderOptions{
 			BodyLog: adaptercodex.BodyLogConfig{Mode: logging.Body.Mode, MaxKB: logging.Body.MaxKB},
+			BodyLogProvider: func() adaptercodex.BodyLogConfig {
+				body := runtimeLogging.Body()
+				return adaptercodex.BodyLogConfig{Mode: body.Mode, MaxKB: body.MaxKB}
+			},
 			FileLog: adaptercodex.FileLogRotationConfig{
 				MaxSizeMB:  logging.Rotation.MaxSizeMB,
 				MaxBackups: logging.Rotation.MaxBackups,

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/slogger"
 )
@@ -24,7 +25,7 @@ func (s *Server) withRequestDebug(next http.HandlerFunc) http.HandlerFunc {
 		ctx := correlation.WithContext(r.Context(), corr)
 		r = r.WithContext(ctx)
 
-		if s.logging.Body.Mode != "off" {
+		if s.bodyLogging().Mode != "off" {
 			s.logHTTPRequestDebug(ctx, r)
 		}
 		next(w, r)
@@ -33,7 +34,8 @@ func (s *Server) withRequestDebug(next http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) logHTTPRequestDebug(ctx context.Context, r *http.Request) {
 	body, readErr := readAndRestoreBody(r)
-	bodyLimit := s.logging.Body.MaxKB * 1024
+	bodyLogging := s.bodyLogging()
+	bodyLimit := bodyLogging.MaxKB * 1024
 	attrs := []slog.Attr{
 		slog.String("method", r.Method),
 		slog.String("path", r.URL.Path),
@@ -42,7 +44,7 @@ func (s *Server) logHTTPRequestDebug(ctx context.Context, r *http.Request) {
 		slog.Any("headers", redactedHeaders(r.Header)),
 		slog.Int("body_bytes", len(body)),
 	}
-	switch s.logging.Body.Mode {
+	switch bodyLogging.Mode {
 	case "raw":
 		raw, truncated := truncateBody(body, bodyLimit)
 		if raw != "" {
@@ -68,6 +70,13 @@ func (s *Server) logHTTPRequestDebug(ctx context.Context, r *http.Request) {
 	}
 	attrs = append(attrs, correlation.AttrsFromContext(ctx)...)
 	slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPRaw).LogAttrs(ctx, slog.LevelDebug, "adapter.request.raw", attrs...)
+}
+
+func (s *Server) bodyLogging() config.LoggingBody {
+	if s == nil || s.runtimeLogging == nil {
+		return normalizeRuntimeLoggingBody(config.LoggingBody{})
+	}
+	return s.runtimeLogging.Body()
 }
 
 func readAndRestoreBody(r *http.Request) ([]byte, error) {

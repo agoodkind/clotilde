@@ -16,6 +16,9 @@ type Deps struct {
 	// RequestEvents receives normalized adapter request lifecycle
 	// updates so the daemon can aggregate live provider stats.
 	RequestEvents adapterruntime.RequestEventSink
+	// RuntimeLogging carries logging settings that can be refreshed by
+	// the daemon without reconstructing the adapter server.
+	RuntimeLogging *RuntimeLogging
 	// AnthropicMessagesURLOverride, when non-empty, replaces the
 	// configured /v1/messages URL on the Anthropic client so its
 	// outbound HTTP rides through the local MITM capture proxy.

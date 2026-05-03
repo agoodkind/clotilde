@@ -1,12 +1,16 @@
 package adapter
 
 import (
+	"context"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
+	"goodkind.io/clyde/internal/slogger"
 )
 
 const defaultProviderFinishReason = "stop"
@@ -22,9 +26,13 @@ type providerStreamWriter struct {
 	renderer          *adapterrender.EventRenderer
 	reqID             string
 	modelAlias        string
+	ctx               context.Context
+	log               *slog.Logger
+	streamChunkSeq    int
 }
 
 func newProviderStreamWriter(
+	ctx context.Context,
 	s *Server,
 	w http.ResponseWriter,
 	reqID string,
@@ -40,9 +48,11 @@ func newProviderStreamWriter(
 		sse:               sse,
 		systemFingerprint: systemFingerprint,
 		flusher:           flusher,
-		renderer:          adapterrender.NewEventRenderer(reqID, modelAlias, backend, s.log),
+		renderer:          adapterrender.NewEventRendererWithContext(ctx, reqID, modelAlias, backend, s.log),
 		reqID:             reqID,
 		modelAlias:        modelAlias,
+		ctx:               ctx,
+		log:               slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPEgress),
 	}, nil
 }
 
@@ -51,17 +61,173 @@ func (p *providerStreamWriter) writeRenderedChunk(chunk adapteropenai.StreamChun
 		p.sse.WriteSSEHeaders()
 		p.headersWritten = true
 	}
-	return p.sse.EmitStreamChunk(p.systemFingerprint, chunk)
+	if err := p.sse.EmitStreamChunk(p.systemFingerprint, chunk); err != nil {
+		return err
+	}
+	p.logStreamChunkFlushed(chunk)
+	return nil
+}
+
+func (p *providerStreamWriter) logStreamChunkFlushed(chunk adapteropenai.StreamChunk) {
+	if p == nil {
+		return
+	}
+	p.streamChunkSeq++
+	p.logStreamFrameFlushed(streamFlushLogShapeFromChunk(chunk, p.streamChunkSeq, p.reqID, p.modelAlias))
+}
+
+func (p *providerStreamWriter) writeStreamDone() error {
+	if p == nil || p.sse == nil {
+		return nil
+	}
+	if err := p.sse.WriteStreamDone(); err != nil {
+		return err
+	}
+	p.streamChunkSeq++
+	p.logStreamFrameFlushed(streamFlushLogShape{
+		RequestID:        p.reqID,
+		Model:            p.modelAlias,
+		Sequence:         p.streamChunkSeq,
+		PayloadKind:      "done",
+		StreamDone:       true,
+		ToolCallIDs:      []string{},
+		ToolCallNames:    []string{},
+		FlushedAtRFC3339: adapterClock.Now().Format(time.RFC3339Nano),
+	})
+	return nil
+}
+
+type streamFlushLogShape struct {
+	RequestID                    string
+	Model                        string
+	Sequence                     int
+	PayloadKind                  string
+	StreamDone                   bool
+	ChoiceCount                  int
+	DeltaRolePresent             bool
+	DeltaContentPresent          bool
+	DeltaToolCallsPresent        bool
+	DeltaRefusalPresent          bool
+	DeltaReasoningContentPresent bool
+	DeltaReasoningPresent        bool
+	UsagePresent                 bool
+	DeltaContentLength           int
+	DeltaReasoningLength         int
+	ToolCallCount                int
+	ToolCallIDs                  []string
+	ToolCallNames                []string
+	FinishReason                 string
+	FlushedAtRFC3339             string
+}
+
+func streamFlushLogShapeFromChunk(chunk adapteropenai.StreamChunk, sequence int, fallbackRequestID string, fallbackModel string) streamFlushLogShape {
+	requestID := strings.TrimSpace(chunk.ID)
+	if requestID == "" {
+		requestID = fallbackRequestID
+	}
+	model := strings.TrimSpace(chunk.Model)
+	if model == "" {
+		model = fallbackModel
+	}
+	payloadKind := strings.TrimSpace(chunk.Object)
+	if payloadKind == "" {
+		payloadKind = "chat.completion.chunk"
+	}
+	shape := streamFlushLogShape{
+		RequestID:        requestID,
+		Model:            model,
+		Sequence:         sequence,
+		PayloadKind:      payloadKind,
+		ChoiceCount:      len(chunk.Choices),
+		UsagePresent:     chunk.Usage != nil,
+		ToolCallIDs:      []string{},
+		ToolCallNames:    []string{},
+		FlushedAtRFC3339: adapterClock.Now().Format(time.RFC3339Nano),
+	}
+	for _, choice := range chunk.Choices {
+		if choice.Delta.Role != "" {
+			shape.DeltaRolePresent = true
+		}
+		if choice.Delta.Content != "" {
+			shape.DeltaContentPresent = true
+		}
+		if choice.Delta.Refusal != "" {
+			shape.DeltaRefusalPresent = true
+		}
+		if choice.Delta.ReasoningContent != "" {
+			shape.DeltaReasoningContentPresent = true
+		}
+		if choice.Delta.Reasoning != "" {
+			shape.DeltaReasoningPresent = true
+		}
+		shape.DeltaContentLength += len(choice.Delta.Content)
+		shape.DeltaReasoningLength += len(choice.Delta.Reasoning) + len(choice.Delta.ReasoningContent)
+		shape.ToolCallCount += len(choice.Delta.ToolCalls)
+		if len(choice.Delta.ToolCalls) > 0 {
+			shape.DeltaToolCallsPresent = true
+		}
+		if shape.FinishReason == "" && choice.FinishReason != nil {
+			shape.FinishReason = strings.TrimSpace(*choice.FinishReason)
+		}
+		for _, toolCall := range choice.Delta.ToolCalls {
+			if id := strings.TrimSpace(toolCall.ID); id != "" {
+				shape.ToolCallIDs = append(shape.ToolCallIDs, id)
+			}
+			if name := strings.TrimSpace(toolCall.Function.Name); name != "" {
+				shape.ToolCallNames = append(shape.ToolCallNames, name)
+			}
+		}
+	}
+	return shape
+}
+
+func (p *providerStreamWriter) logStreamFrameFlushed(shape streamFlushLogShape) {
+	log := p.log
+	if log == nil {
+		log = slogger.WithConcern(slog.Default(), slogger.ConcernAdapterHTTPEgress)
+	}
+	ctx := p.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	log.LogAttrs(ctx, slog.LevelDebug, "adapter.openai.sse.stream_chunk_flushed",
+		slog.String("component", "adapter"),
+		slog.String("subcomponent", "openai_sse"),
+		slog.String("request_id", shape.RequestID),
+		slog.String("model", shape.Model),
+		slog.Int("sse_chunk_sequence", shape.Sequence),
+		slog.String("sse_payload_kind", shape.PayloadKind),
+		slog.Bool("stream_done", shape.StreamDone),
+		slog.String("sse_flushed_at", shape.FlushedAtRFC3339),
+		slog.Int("choice_count", shape.ChoiceCount),
+		slog.Bool("delta_role_present", shape.DeltaRolePresent),
+		slog.Bool("delta_content_present", shape.DeltaContentPresent),
+		slog.Bool("delta_tool_calls_present", shape.DeltaToolCallsPresent),
+		slog.Bool("delta_refusal_present", shape.DeltaRefusalPresent),
+		slog.Bool("delta_reasoning_content_present", shape.DeltaReasoningContentPresent),
+		slog.Bool("delta_reasoning_present", shape.DeltaReasoningPresent),
+		slog.Int("delta_content_length", shape.DeltaContentLength),
+		slog.Int("delta_reasoning_length", shape.DeltaReasoningLength),
+		slog.Int("tool_call_count", shape.ToolCallCount),
+		slog.Any("tool_call_ids", shape.ToolCallIDs),
+		slog.Any("tool_call_names", shape.ToolCallNames),
+		slog.String("finish_reason", shape.FinishReason),
+		slog.Bool("usage_present", shape.UsagePresent),
+	)
 }
 
 func (p *providerStreamWriter) WriteEvent(ev adapterrender.Event) error {
 	if p == nil || p.renderer == nil {
 		return nil
 	}
-	for _, chunk := range p.renderer.HandleEvent(ev) {
+	chunks := p.renderer.HandleEvent(ev)
+	for _, chunk := range chunks {
 		if err := p.writeRenderedChunk(chunk); err != nil {
 			return err
 		}
+	}
+	if ev.Kind == adapterrender.EventAssistantTextDelta && len(chunks) > 0 {
+		p.renderer.RecordAssistantTextDeltaEmitted(ev.Text)
 	}
 	return nil
 }
@@ -81,6 +247,11 @@ func (p *providerStreamWriter) finalizeStream(result adapterprovider.Result, inc
 		return err
 	}
 	finishReason := normalizedProviderFinishReason(result)
+	if p != nil && p.renderer != nil {
+		p.renderer.SetUpstreamResponseID(result.UpstreamResponseID)
+		usage := result.Usage
+		p.renderer.LogAssistantTextSummary(finishReason, &usage)
+	}
 	finishChunk := adapteropenai.StreamChunk{
 		ID:      p.reqID,
 		Object:  "chat.completion.chunk",
@@ -112,7 +283,7 @@ func (p *providerStreamWriter) finalizeStream(result adapterprovider.Result, inc
 			return err
 		}
 	}
-	return p.sse.WriteStreamDone()
+	return p.writeStreamDone()
 }
 
 func (p *providerStreamWriter) writeStreamErrorBody(body adapteropenai.ErrorBody) error {
@@ -122,7 +293,7 @@ func (p *providerStreamWriter) writeStreamErrorBody(body adapteropenai.ErrorBody
 	if err := p.sse.EmitStreamError(body); err != nil {
 		return err
 	}
-	return p.sse.WriteStreamDone()
+	return p.writeStreamDone()
 }
 
 var _ adapterprovider.EventWriter = (*providerStreamWriter)(nil)

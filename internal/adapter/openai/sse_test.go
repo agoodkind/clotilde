@@ -7,6 +7,16 @@ import (
 	"testing"
 )
 
+type countingResponseRecorder struct {
+	*httptest.ResponseRecorder
+	flushes int
+}
+
+func (r *countingResponseRecorder) Flush() {
+	r.flushes++
+	r.ResponseRecorder.Flush()
+}
+
 // TestEmitStreamErrorWritesNativeEnvelope locks in the OpenAI-shaped
 // SSE error frame: `data: {"error":{"message":...,"type":...,"code":...}}\n\n`.
 // Cursor and OpenAI SDK consumers consume this shape directly; the
@@ -47,6 +57,12 @@ func TestEmitStreamErrorWritesNativeEnvelope(t *testing.T) {
 	if rr.Header().Get("Content-Type") != "text/event-stream" {
 		t.Fatalf("Content-Type must be text/event-stream, got %q", rr.Header().Get("Content-Type"))
 	}
+	if rr.Header().Get("Cache-Control") != "no-cache, no-transform" {
+		t.Fatalf("Cache-Control must disable intermediary transforms, got %q", rr.Header().Get("Cache-Control"))
+	}
+	if rr.Header().Get("X-Accel-Buffering") != "no" {
+		t.Fatalf("X-Accel-Buffering must disable proxy buffering, got %q", rr.Header().Get("X-Accel-Buffering"))
+	}
 }
 
 func TestSSEWriterWriteHeadersIdempotent(t *testing.T) {
@@ -62,5 +78,30 @@ func TestSSEWriterWriteHeadersIdempotent(t *testing.T) {
 	}
 	if ct := rec.Header().Get("Content-Type"); ct != "text/event-stream" {
 		t.Fatalf("content-type %q", ct)
+	}
+}
+
+func TestSSEWriterFlushesEveryStreamChunk(t *testing.T) {
+	rec := &countingResponseRecorder{ResponseRecorder: httptest.NewRecorder()}
+	sw, err := NewSSEWriter(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"first", "second"} {
+		if err := sw.EmitStreamChunk("fp_test", StreamChunk{
+			ID:      "req-stream",
+			Object:  "chat.completion.chunk",
+			Created: 1,
+			Model:   "model",
+			Choices: []StreamChoice{{
+				Index: 0,
+				Delta: StreamDelta{Content: text},
+			}},
+		}); err != nil {
+			t.Fatalf("EmitStreamChunk: %v", err)
+		}
+	}
+	if rec.flushes < 3 {
+		t.Fatalf("flushes=%d want at least 3 for headers and two chunks", rec.flushes)
 	}
 }

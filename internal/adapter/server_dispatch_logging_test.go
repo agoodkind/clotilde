@@ -154,6 +154,49 @@ func TestHandleChatLogsRawBody(t *testing.T) {
 	}
 }
 
+func TestHandleChatUsesRuntimeBodyLoggingConfig(t *testing.T) {
+	t.Parallel()
+	runtimeLogging := NewRuntimeLogging(config.LoggingConfig{
+		Body: config.LoggingBody{Mode: "summary", MaxKB: 32},
+	})
+	srv, buf := newLoggingServer(t, config.LoggingConfig{
+		Body: config.LoggingBody{Mode: "summary", MaxKB: 32},
+	})
+	srv.runtimeLogging = runtimeLogging
+
+	body := map[string]any{
+		"model":    "missing-model",
+		"messages": []map[string]string{{"role": "user", "content": strings.Repeat("z", 2048)}},
+	}
+	postChatToServer(t, srv, body)
+	summaryEvt := findRawLogEvent(t, buf)
+	if summaryEvt == nil {
+		t.Fatalf("expected summary adapter.chat.raw event")
+	}
+	if _, hasBody := summaryEvt["body"]; hasBody {
+		t.Fatalf("summary mode should not include raw body")
+	}
+
+	buf.Reset()
+	runtimeLogging.Set(config.LoggingConfig{
+		Body: config.LoggingBody{Mode: "raw", MaxKB: 1},
+	})
+	postChatToServer(t, srv, body)
+	rawEvt := findRawLogEvent(t, buf)
+	if rawEvt == nil {
+		t.Fatalf("expected raw adapter.chat.raw event")
+	}
+	if _, ok := rawEvt["body"].(string); !ok {
+		t.Fatalf("raw mode should include body, got %T", rawEvt["body"])
+	}
+	if _, ok := rawEvt["body_b64"].(string); !ok {
+		t.Fatalf("raw mode should include body_b64")
+	}
+	if truncated, ok := rawEvt["body_truncated"].(bool); !ok || !truncated {
+		t.Fatalf("expected body_truncated=true after runtime max_kb change")
+	}
+}
+
 func TestRequestDebugLogsRawPayloadForEveryRoute(t *testing.T) {
 	t.Parallel()
 	srv, buf := newLoggingServer(t, config.LoggingConfig{

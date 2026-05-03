@@ -166,6 +166,66 @@ func TestSetupInjectsContextCorrelationAttrs(t *testing.T) {
 	}
 }
 
+func TestSetupInjectsCorrelationAttrsIntoConcernLogWithoutOverwritingExplicitAttrs(t *testing.T) {
+	root := t.TempDir()
+	unified := filepath.Join(root, "clyde-daemon.jsonl")
+	t.Setenv(envOverride, unified)
+
+	closer, err := Setup(config.LoggingConfig{
+		Level: "debug",
+		Rotation: config.LoggingRotation{
+			Enabled: new(false),
+		},
+	}, ProcessRoleDaemon)
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	t.Cleanup(func() { _ = closer.Close() })
+
+	corr := correlation.Context{
+		TraceID:            "0123456789abcdef0123456789abcdef",
+		SpanID:             "0123456789abcdef",
+		ParentSpanID:       "fedcba9876543210",
+		RequestID:          "req-ctx",
+		CursorGenerationID: "cursor-gen",
+		UpstreamRequestID:  "upstream-req",
+		UpstreamResponseID: "upstream-resp",
+	}
+	ctx := correlation.WithContext(context.Background(), corr)
+	For(ConcernDaemonRPCRequests).InfoContext(ctx,
+		"daemon.rpc.started",
+		"trace_id", "explicit-trace",
+		"span_id", "explicit-span",
+	)
+	_ = closer.Close()
+
+	event := readSingleEvent(t, filepath.Join(root, "logs", "daemon", "rpc", "requests.jsonl"))
+	if event.Message != "daemon.rpc.started" {
+		t.Fatalf("message = %q", event.Message)
+	}
+	if event.TraceID != "explicit-trace" {
+		t.Fatalf("trace_id = %q, want explicit-trace", event.TraceID)
+	}
+	if event.SpanID != "explicit-span" {
+		t.Fatalf("span_id = %q, want explicit-span", event.SpanID)
+	}
+	if event.ParentSpanID != string(corr.ParentSpanID) {
+		t.Fatalf("parent_span_id = %q, want %q", event.ParentSpanID, corr.ParentSpanID)
+	}
+	if event.RequestID != corr.RequestID {
+		t.Fatalf("request_id = %q, want %q", event.RequestID, corr.RequestID)
+	}
+	if event.CursorGenerationID != corr.CursorGenerationID {
+		t.Fatalf("cursor_generation_id = %q, want %q", event.CursorGenerationID, corr.CursorGenerationID)
+	}
+	if event.UpstreamRequestID != corr.UpstreamRequestID {
+		t.Fatalf("upstream_request_id = %q, want %q", event.UpstreamRequestID, corr.UpstreamRequestID)
+	}
+	if event.UpstreamResponseID != corr.UpstreamResponseID {
+		t.Fatalf("upstream_response_id = %q, want %q", event.UpstreamResponseID, corr.UpstreamResponseID)
+	}
+}
+
 func TestConcernForEventCoversPrimaryTree(t *testing.T) {
 	cases := map[string]string{
 		"adapter.codex.transport.prepared": ConcernAdapterProviderCodexWS,
@@ -203,6 +263,9 @@ type logEvent struct {
 	RequestID            string `json:"request_id"`
 	CursorRequestID      string `json:"cursor_request_id"`
 	CursorConversationID string `json:"cursor_conversation_id"`
+	CursorGenerationID   string `json:"cursor_generation_id"`
+	UpstreamRequestID    string `json:"upstream_request_id"`
+	UpstreamResponseID   string `json:"upstream_response_id"`
 }
 
 func readSingleEvent(t *testing.T, path string) logEvent {
