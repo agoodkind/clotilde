@@ -75,6 +75,7 @@ type EventRenderer struct {
 	pendingReasoningBreak bool
 	reasoningSignaled     bool
 	reasoningVisible      bool
+	reasoningBodyEmitted  bool
 	syntheticReasoning    bool
 	assistantText         assistantTextAggregate
 	assistantTextLogged   bool
@@ -331,10 +332,17 @@ func (r *EventRenderer) renderReasoning(ev Event) *adapteropenai.StreamChunk {
 	if text == "" && ev.Text == "" {
 		return nil
 	}
+	if isThinkingPlaceholder(text) && !r.reasoningBodyEmitted {
+		if !r.reasoningOpen {
+			return r.renderReasoningOpen()
+		}
+		return nil
+	}
 	open := !r.reasoningOpen
 	decorated := r.decorateReasoningDelta(ev)
 	contentOut := FormatThinkingInlineDelta(open, decorated)
 	r.reasoningOpen = true
+	r.reasoningBodyEmitted = true
 	delta := adapteropenai.StreamDelta{
 		Content:          contentOut,
 		ReasoningContent: decorated,
@@ -382,6 +390,15 @@ func (r *EventRenderer) decorateReasoningDelta(ev Event) string {
 	}
 	r.lastReasoningKind = kind
 	return prefix + ev.Text
+}
+
+func isThinkingPlaceholder(text string) bool {
+	switch strings.ToLower(strings.TrimSpace(text)) {
+	case "thinking...", "thinking…":
+		return true
+	default:
+		return false
+	}
 }
 
 // renderReasoningClose emits the closing <!--/clyde-thinking-->

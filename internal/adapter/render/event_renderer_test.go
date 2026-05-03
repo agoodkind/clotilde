@@ -114,13 +114,34 @@ func TestEventRendererEmitsSyntheticThinkingWhenReasoningIsSignaled(t *testing.T
 	if got != ThinkingInlineOpen() {
 		t.Fatalf("thinking open=%q want %q", got, ThinkingInlineOpen())
 	}
-	if strings.Contains(got, "Thinking...") {
-		t.Fatalf("thinking open should not include placeholder body, got %q", got)
-	}
 	if chunks := r.HandleEvent(Event{Kind: EventReasoningFinished}); len(chunks) != 1 {
 		t.Fatalf("finish chunks=%d want close marker", len(chunks))
 	} else if close := chunks[0].Choices[0].Delta.Content; !strings.Contains(close, "<!--/clyde-thinking-->") {
 		t.Fatalf("missing close marker: %q", close)
+	}
+}
+
+func TestEventRendererSuppressesLeadingThinkingPlaceholderBody(t *testing.T) {
+	r := NewEventRenderer("req-thinking-placeholder", "alias", "codex", nil)
+	chunks := r.HandleEvent(Event{Kind: EventReasoningDelta, Text: "Thinking...", ReasoningKind: "summary"})
+	if len(chunks) != 1 {
+		t.Fatalf("chunks=%d want 1", len(chunks))
+	}
+	got := chunks[0].Choices[0].Delta.Content
+	if got != ThinkingInlineOpen() {
+		t.Fatalf("thinking open=%q want %q", got, ThinkingInlineOpen())
+	}
+
+	chunks = r.HandleEvent(Event{Kind: EventReasoningDelta, Text: "Evaluating task strategies", ReasoningKind: "summary"})
+	if len(chunks) != 1 {
+		t.Fatalf("chunks=%d want 1", len(chunks))
+	}
+	got = chunks[0].Choices[0].Delta.Content
+	if strings.Contains(got, "\n> Thinking...") {
+		t.Fatalf("placeholder body leaked: %q", got)
+	}
+	if !strings.Contains(got, "Evaluating task strategies") {
+		t.Fatalf("missing real reasoning: %q", got)
 	}
 }
 

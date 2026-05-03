@@ -1171,7 +1171,7 @@ func TestBuildCodexManagedPromptPlanUsesAssistantAnchorForIncrementalPrompt(t *t
 }
 
 func TestBuildCodexManagedPromptPlanStripsThinkingEnvelopeFromAssistantAnchor(t *testing.T) {
-	assistant := mustRaw(`"<!--clyde-thinking-->\n> **💭 Thinking**\n> \n\n<!--/clyde-thinking-->\n\nFinal answer.\n"`)
+	assistant := mustRaw(`"<!--clyde-thinking-->\n> **💭 Thinking...**\n> \n\n<!--/clyde-thinking-->\n\nFinal answer.\n"`)
 	plan := buildManagedPromptPlanForTest([]ChatMessage{
 		{Role: "user", Content: mustRaw(`"question"`)},
 		{Role: "assistant", Content: assistant},
@@ -1599,7 +1599,7 @@ func TestCodexRendererOpensThinkingWithoutPlaceholderBody(t *testing.T) {
 		t.Fatalf("chunks=%d want 1", len(chunks))
 	}
 	got := chunks[0].Choices[0].Delta.Content
-	if !strings.Contains(got, "<!--clyde-thinking-->") || strings.Contains(got, "Thinking...") {
+	if !strings.Contains(got, "<!--clyde-thinking-->") || strings.Contains(got, "\n> Thinking...") {
 		t.Fatalf("unexpected thinking marker: %q", got)
 	}
 	if chunks := r.HandleEvent(adapterrender.Event{Kind: adapterrender.EventReasoningFinished}); len(chunks) != 1 {

@@ -69,7 +69,7 @@ func TestParseSSEEmitsThinkingWhenReasoningItemStarts(t *testing.T) {
 	if thinking < 0 {
 		t.Fatalf("missing synthetic thinking envelope: %q", got)
 	}
-	if strings.Contains(got, "Thinking...") {
+	if strings.Contains(got, "\n> Thinking...") {
 		t.Fatalf("thinking block should not include placeholder body: %q", got)
 	}
 	if answer < 0 {
@@ -108,7 +108,7 @@ func TestParseSSEEmitsReasoningSummaryPartAddedAsVisibleThinking(t *testing.T) {
 	if strings.Count(got, "<!--clyde-thinking-->") != 1 {
 		t.Fatalf("thinking marker count mismatch: %q", got)
 	}
-	if strings.Contains(got, "Thinking...") || !strings.Contains(got, "Answer.") {
+	if strings.Contains(got, "\n> Thinking...") || !strings.Contains(got, "Answer.") {
 		t.Fatalf("unexpected thinking placeholder or missing answer: %q", got)
 	}
 }
@@ -140,7 +140,7 @@ func TestParseSSEEmitsReasoningFromDoneItemContent(t *testing.T) {
 			t.Fatalf("missing %q in %q", want, got)
 		}
 	}
-	if strings.Contains(got, "Thinking...") {
+	if strings.Contains(got, "\n> Thinking...") {
 		t.Fatalf("thinking block should not include placeholder body: %q", got)
 	}
 	if strings.Count(got, "<!--clyde-thinking-->") != 1 || strings.Count(got, "<!--/clyde-thinking-->") != 1 {
